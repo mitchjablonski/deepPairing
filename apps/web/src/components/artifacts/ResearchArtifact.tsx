@@ -50,6 +50,7 @@ function EvidenceItem({
         filePath={evidence.filePath}
         highlightStart={evidence.lineStart}
         highlightEnd={evidence.lineEnd}
+        artifactId={artifactId}
         onClose={() => setShowFullFile(false)}
       />
     )}

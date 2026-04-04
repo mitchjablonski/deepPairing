@@ -59,10 +59,12 @@ export {
 } from "./schemas/artifact.js";
 
 export {
+  CodeReferenceSchema,
   CommentTargetSchema,
   CommentAuthorSchema,
   CommentSchema,
   CreateCommentRequestSchema,
+  type CodeReference,
   type CommentTarget,
   type Comment,
   type CreateCommentRequest,

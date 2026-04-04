@@ -27,10 +27,28 @@ export function createCheckFeedbackTool(artifactStore: ArtifactStoreInterface) {
       const formatted = comments.map((c) => {
         const target = c.target;
         let location = "";
-        if (target.lineNumber != null) location = ` (line ${target.lineNumber})`;
-        if (target.findingIndex != null) location = ` (finding #${target.findingIndex + 1})`;
-        if (target.stepIndex != null) location = ` (step #${target.stepIndex + 1})`;
-        return `- [${target.artifactId}${location}] ${c.content}`;
+        if (target.filePath && target.lineStart) {
+          location = ` (${target.filePath}:${target.lineStart}${target.lineEnd && target.lineEnd !== target.lineStart ? `-${target.lineEnd}` : ""})`;
+        } else if (target.lineNumber != null) {
+          location = ` (line ${target.lineNumber})`;
+        }
+        if (target.findingIndex != null) location += ` (finding #${target.findingIndex + 1})`;
+        if (target.evidenceIndex != null) location += ` (evidence #${target.evidenceIndex + 1})`;
+        if (target.stepIndex != null) location += ` (step #${target.stepIndex + 1})`;
+
+        let text = `- [${target.artifactId}${location}] ${c.content}`;
+
+        // Include code references so the agent knows exactly what code the human is pointing at
+        if (c.codeReferences && c.codeReferences.length > 0) {
+          for (const ref of c.codeReferences) {
+            text += `\n  Referenced code (${ref.filePath}:${ref.lineStart}-${ref.lineEnd}):`;
+            if (ref.snippet) {
+              text += `\n  \`\`\`\n  ${ref.snippet.split("\n").join("\n  ")}\n  \`\`\``;
+            }
+          }
+        }
+
+        return text;
       }).join("\n");
 
       return {

@@ -17,8 +17,17 @@ export interface ArtifactState {
     sessionId: string,
     artifactId: string,
     content: string,
-    target?: { lineNumber?: number; findingIndex?: number; stepIndex?: number },
+    target?: {
+      lineNumber?: number;
+      lineStart?: number;
+      lineEnd?: number;
+      filePath?: string;
+      findingIndex?: number;
+      evidenceIndex?: number;
+      stepIndex?: number;
+    },
     parentCommentId?: string,
+    codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>,
   ) => Promise<void>;
 
   updateArtifactStatus: (
@@ -60,7 +69,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
 
   selectArtifact: (id) => set({ selectedArtifactId: id }),
 
-  submitComment: async (sessionId, artifactId, content, target, parentCommentId) => {
+  submitComment: async (sessionId, artifactId, content, target, parentCommentId, codeReferences) => {
     await fetch(`${API_BASE}/api/sessions/${sessionId}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -68,6 +77,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         target: { artifactId, ...target },
         content,
         parentCommentId: parentCommentId ?? null,
+        ...(codeReferences ? { codeReferences } : {}),
       }),
     });
     // The comment will arrive via SSE and be added through addComment

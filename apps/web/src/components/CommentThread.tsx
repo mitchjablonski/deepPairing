@@ -11,6 +11,12 @@ interface CommentThreadProps {
 
 function CommentBubble({ comment }: { comment: Comment }) {
   const isHuman = comment.author === "human";
+  const refs = (comment as any).codeReferences as Array<{
+    filePath: string;
+    lineStart: number;
+    lineEnd: number;
+    snippet?: string;
+  }> | undefined;
 
   return (
     <div className={`flex gap-2 ${isHuman ? "" : "flex-row-reverse"}`}>
@@ -25,11 +31,34 @@ function CommentBubble({ comment }: { comment: Comment }) {
           <span className={`font-semibold ${isHuman ? "text-blue-700" : "text-gray-500"}`}>
             {isHuman ? "You" : "Agent"}
           </span>
+          {comment.target.filePath && comment.target.lineStart && (
+            <span className="font-mono text-[10px] text-blue-500">
+              {comment.target.filePath}:{comment.target.lineStart}
+              {comment.target.lineEnd && comment.target.lineEnd !== comment.target.lineStart
+                ? `-${comment.target.lineEnd}` : ""}
+            </span>
+          )}
           {!isHuman && comment.acknowledged && (
             <span className="text-gray-300" title="Acknowledged">&#10003;</span>
           )}
         </div>
         <p className="whitespace-pre-wrap">{comment.content}</p>
+
+        {/* Code reference blocks */}
+        {refs && refs.length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {refs.map((ref, i) => (
+              <div key={i} className="bg-gray-800 text-gray-200 rounded p-1.5 font-mono text-[11px]">
+                <div className="text-gray-400 text-[10px] mb-0.5">
+                  {ref.filePath}:{ref.lineStart}-{ref.lineEnd}
+                </div>
+                {ref.snippet && (
+                  <pre className="whitespace-pre overflow-x-auto">{ref.snippet}</pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
