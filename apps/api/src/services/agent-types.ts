@@ -28,13 +28,22 @@ export const AGENT_EVENTS = {
   error: "agent:error",
 } as const;
 
+/** Max events to keep in the replay buffer. Oldest evicted first. */
+const MAX_BUFFER_SIZE = 500;
+
 /** Emit a typed agent event on a session emitter, and buffer it */
 export function emitAgentEvent(
   emitter: EventEmitter,
   event: AgentEvent,
   buffer?: AgentEvent[],
 ): void {
-  buffer?.push(event);
+  if (buffer) {
+    buffer.push(event);
+    // Evict oldest events if buffer exceeds cap
+    if (buffer.length > MAX_BUFFER_SIZE) {
+      buffer.splice(0, buffer.length - MAX_BUFFER_SIZE);
+    }
+  }
   emitter.emit(AGENT_EVENTS.event, event);
 }
 

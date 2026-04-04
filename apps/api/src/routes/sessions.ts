@@ -103,9 +103,9 @@ export function createSessionRoutes(
 
       onAgentEvent(session.emitter, handler);
 
-      // Wait for completion
+      // Wait for completion — clean up ALL listeners on disconnect
       await new Promise<void>((resolve) => {
-        session.emitter.on(AGENT_EVENTS.done, () => {
+        const onDone = () => {
           stream
             .writeSSE({
               id: String(eventId++),
@@ -113,10 +113,10 @@ export function createSessionRoutes(
               data: JSON.stringify({ status: "completed" }),
             })
             .catch(() => {})
-            .finally(resolve);
-        });
+            .finally(() => { cleanup(); resolve(); });
+        };
 
-        session.emitter.on(AGENT_EVENTS.error, () => {
+        const onError = () => {
           stream
             .writeSSE({
               id: String(eventId++),
@@ -124,11 +124,20 @@ export function createSessionRoutes(
               data: JSON.stringify({ status: "error" }),
             })
             .catch(() => {})
-            .finally(resolve);
-        });
+            .finally(() => { cleanup(); resolve(); });
+        };
+
+        const cleanup = () => {
+          session.emitter.removeListener(AGENT_EVENTS.event, handler);
+          session.emitter.removeListener(AGENT_EVENTS.done, onDone);
+          session.emitter.removeListener(AGENT_EVENTS.error, onError);
+        };
+
+        session.emitter.on(AGENT_EVENTS.done, onDone);
+        session.emitter.on(AGENT_EVENTS.error, onError);
 
         stream.onAbort(() => {
-          session.emitter.removeListener(AGENT_EVENTS.event, handler);
+          cleanup();
           resolve();
         });
       });
