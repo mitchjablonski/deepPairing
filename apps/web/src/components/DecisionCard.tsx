@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { ForkButton } from "./ForkButton";
 
@@ -10,26 +11,28 @@ interface DecisionCardProps {
   onResolved?: () => void;
 }
 
-const effortColors = {
-  low: "bg-green-100 text-green-700",
-  medium: "bg-amber-100 text-amber-700",
-  high: "bg-red-100 text-red-700",
-};
-
-const riskColors = {
-  low: "bg-green-100 text-green-700",
-  medium: "bg-amber-100 text-amber-700",
-  high: "bg-red-100 text-red-700",
+const badgeColors = {
+  low: "bg-accent-green-dim text-accent-green",
+  medium: "bg-accent-amber-dim text-accent-amber",
+  high: "bg-accent-red-dim text-accent-red",
 };
 
 export function DecisionCard({ event, sessionId, onResolved }: DecisionCardProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusedIndex, setFocusedIndex] = useState(
+    event.options.findIndex((o) => o.recommendation) ?? 0,
+  );
   const [reasoning, setReasoning] = useState("");
+  const [showReasoning, setShowReasoning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [resolved, setResolved] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleSubmit = async (optionId: string) => {
+  const handleSelect = async (optionId: string) => {
+    if (submitting || resolved) return;
     setSubmitting(true);
+    setSelectedId(optionId);
+
     try {
       const res = await fetch(
         `${API_BASE}/api/sessions/${sessionId}/decisions/${event.decisionId}`,
@@ -45,33 +48,62 @@ export function DecisionCard({ event, sessionId, onResolved }: DecisionCardProps
 
       if (res.ok) {
         setResolved(true);
-        setSelectedId(optionId);
         onResolved?.();
+      } else {
+        setSelectedId(null);
       }
     } catch {
-      // Connection error — leave submitting state so user can retry
+      setSelectedId(null);
     } finally {
       setSubmitting(false);
     }
   };
 
+  // Keyboard navigation
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || resolved) return;
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault();
+        setFocusedIndex((i) => Math.min(i + 1, event.options.length - 1));
+      } else if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault();
+        setFocusedIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (showReasoning) return; // Let the reasoning input handle Enter
+        handleSelect(event.options[focusedIndex].id);
+      }
+    };
+
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  }, [focusedIndex, resolved, showReasoning, event.options]);
+
+  // Resolved state
   if (resolved) {
     const chosen = event.options.find((o) => o.id === selectedId);
     const rejected = event.options.filter((o) => o.id !== selectedId);
 
     return (
-      <div className="mx-3 my-2 p-4 bg-green-50 border border-green-200 rounded-lg">
+      <motion.div
+        initial={{ opacity: 0.8, scale: 0.98 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="mx-3 my-2 p-4 bg-accent-green-dim border border-accent-green/20 rounded-lg"
+      >
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-green-600 text-lg">&#10003;</span>
-          <span className="text-sm font-semibold text-green-800">Decision Made</span>
+          <span className="text-accent-green text-lg">✓</span>
+          <span className="text-sm font-semibold text-accent-green">Decision Made</span>
         </div>
-        <p className="text-sm text-gray-700">
+        <p className="text-sm text-text-primary">
           <span className="font-medium">{chosen?.title}</span>
-          {reasoning && <span className="text-gray-500"> — {reasoning}</span>}
+          {reasoning && <span className="text-text-muted"> — {reasoning}</span>}
         </p>
         {rejected.length > 0 && (
-          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-green-200">
-            <span className="text-xs text-gray-500">Explore alternatives:</span>
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-accent-green/15">
+            <span className="text-xs text-text-muted">Explore alternatives:</span>
             {rejected.map((opt) => (
               <ForkButton
                 key={opt.id}
@@ -83,93 +115,141 @@ export function DecisionCard({ event, sessionId, onResolved }: DecisionCardProps
             ))}
           </div>
         )}
-      </div>
+      </motion.div>
     );
   }
 
-  return (
-    <div className="mx-3 my-3 p-4 bg-rose-50 border border-rose-200 rounded-lg">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="inline-block w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-        <span className="text-sm font-semibold text-rose-800">Decision Needed</span>
-      </div>
-      <p className="text-sm text-gray-700 mb-4">{event.context}</p>
+  // Grid layout: 2 options → 2 cols, 3+ → 3 cols (max 4)
+  const gridCols =
+    event.options.length === 2
+      ? "grid-cols-2"
+      : event.options.length >= 3
+        ? "grid-cols-3"
+        : "";
 
-      <div className="grid gap-3">
-        {event.options.map((option) => (
-          <div
-            key={option.id}
-            className={`p-3 border rounded-lg cursor-pointer transition-all ${
-              selectedId === option.id
-                ? "border-blue-500 bg-blue-50 ring-2 ring-blue-200"
-                : option.recommendation
-                  ? "border-blue-300 bg-white hover:border-blue-400"
-                  : "border-gray-200 bg-white hover:border-gray-300"
-            }`}
-            onClick={() => !submitting && setSelectedId(option.id)}
-          >
-            <div className="flex items-start justify-between gap-2 mb-1">
-              <div className="flex items-center gap-2">
-                <h4 className="text-sm font-semibold text-gray-900">{option.title}</h4>
-                {option.recommendation && (
-                  <span className="px-1.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">
-                    Recommended
-                  </span>
-                )}
+  return (
+    <div
+      ref={containerRef}
+      tabIndex={0}
+      className="mx-3 my-3 p-4 bg-accent-red-dim/30 border border-accent-red/15 rounded-lg focus:outline-none"
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <span className="inline-block w-2 h-2 rounded-full bg-accent-red animate-pulse" />
+        <span className="text-sm font-semibold text-accent-red">Decision Needed</span>
+        <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter select</span>
+      </div>
+      <p className="text-sm text-text-primary mb-4">{event.context}</p>
+
+      {/* Options grid */}
+      <div className={`grid gap-2 ${gridCols}`}>
+        <AnimatePresence>
+          {event.options.map((option, idx) => (
+            <motion.button
+              key={option.id}
+              layout
+              onClick={() => handleSelect(option.id)}
+              disabled={submitting}
+              className={`text-left p-3 border rounded-lg transition-all disabled:opacity-50 ${
+                idx === focusedIndex
+                  ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
+                  : option.recommendation
+                    ? "border-accent-blue/30 bg-surface-elevated hover:border-accent-blue/50"
+                    : "border-border-default bg-surface-elevated hover:border-border-focus/30"
+              }`}
+              onMouseEnter={() => setFocusedIndex(idx)}
+            >
+              {/* Title + badges */}
+              <div className="flex items-start justify-between gap-2 mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
+                  {option.recommendation && (
+                    <span className="px-1.5 py-0.5 text-2xs font-medium bg-accent-blue-dim text-accent-blue rounded">
+                      ★
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-1 shrink-0">
-                <span className={`px-1.5 py-0.5 text-xs rounded ${effortColors[option.effort]}`}>
-                  {option.effort} effort
+
+              {/* Description */}
+              <p className="text-xs text-text-secondary mb-2">{option.description}</p>
+
+              {/* Pros */}
+              {option.pros.length > 0 && (
+                <div className="space-y-0.5 mb-1.5">
+                  {option.pros.map((pro, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-xs">
+                      <span className="text-accent-green shrink-0 mt-0.5">✓</span>
+                      <span className="text-text-secondary">{pro}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Cons */}
+              {option.cons.length > 0 && (
+                <div className="space-y-0.5 mb-2">
+                  {option.cons.map((con, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-xs">
+                      <span className="text-accent-red shrink-0 mt-0.5">✗</span>
+                      <span className="text-text-secondary">{con}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Effort + Risk badges */}
+              <div className="flex gap-1 mt-auto">
+                <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>
+                  {option.effort}
                 </span>
-                <span className={`px-1.5 py-0.5 text-xs rounded ${riskColors[option.risk]}`}>
+                <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>
                   {option.risk} risk
                 </span>
               </div>
-            </div>
-            <p className="text-xs text-gray-600 mb-2">{option.description}</p>
-            <div className="flex gap-4 text-xs">
-              {option.pros.length > 0 && (
-                <div>
-                  <span className="font-medium text-green-700">Pros: </span>
-                  <span className="text-gray-600">{option.pros.join(", ")}</span>
-                </div>
-              )}
-              {option.cons.length > 0 && (
-                <div>
-                  <span className="font-medium text-red-700">Cons: </span>
-                  <span className="text-gray-600">{option.cons.join(", ")}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
+            </motion.button>
+          ))}
+        </AnimatePresence>
       </div>
 
-      {/* Reasoning input + submit */}
-      {selectedId && (
-        <div className="mt-3 flex gap-2">
-          <input
-            type="text"
-            placeholder="Why? (optional)"
-            value={reasoning}
-            onChange={(e) => setReasoning(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && selectedId) handleSubmit(selectedId);
-            }}
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm
-                       focus:outline-none focus:ring-2 focus:ring-blue-500"
-            disabled={submitting}
-          />
+      {/* Optional reasoning — appears as a link, expands on click */}
+      <div className="mt-3 flex items-center gap-2">
+        {!showReasoning ? (
           <button
-            onClick={() => handleSubmit(selectedId)}
-            disabled={submitting}
-            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md
-                       hover:bg-blue-700 disabled:bg-gray-300 transition-colors"
+            onClick={() => setShowReasoning(true)}
+            className="text-xs text-text-muted hover:text-accent-blue transition-colors"
           >
-            {submitting ? "..." : "Select"}
+            + Add reasoning (optional)
           </button>
-        </div>
-      )}
+        ) : (
+          <div className="flex gap-2 flex-1">
+            <input
+              type="text"
+              placeholder="Why this choice?"
+              value={reasoning}
+              onChange={(e) => setReasoning(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleSelect(event.options[focusedIndex].id);
+                }
+                if (e.key === "Escape") {
+                  setShowReasoning(false);
+                  setReasoning("");
+                }
+              }}
+              autoFocus
+              className="flex-1 px-3 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
+            />
+            <button
+              onClick={() => { setShowReasoning(false); setReasoning(""); }}
+              className="text-xs text-text-muted hover:text-text-secondary"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

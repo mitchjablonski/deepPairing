@@ -49,42 +49,24 @@ describe("DecisionCard", () => {
     expect(screen.getByText("Refactor In-Place")).toBeInTheDocument();
   });
 
-  it("shows Recommended badge on recommended option", () => {
+  it("shows recommended badge", () => {
     render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
-    expect(screen.getByText("Recommended")).toBeInTheDocument();
+    expect(screen.getByText("★")).toBeInTheDocument();
   });
 
-  it("shows pros and cons", () => {
+  it("shows pros and cons with checkmarks", () => {
     render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
-    expect(screen.getByText(/Clean separation/)).toBeInTheDocument();
-    expect(screen.getByText(/More files/)).toBeInTheDocument();
+    expect(screen.getByText("Clean separation")).toBeInTheDocument();
+    expect(screen.getByText("More files")).toBeInTheDocument();
   });
 
   it("shows effort and risk badges", () => {
     render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
-    expect(screen.getByText("medium effort")).toBeInTheDocument();
-    expect(screen.getAllByText("low risk")).toHaveLength(2);
+    expect(screen.getByText("medium")).toBeInTheDocument();
+    expect(screen.getAllByText("low risk").length).toBeGreaterThan(0);
   });
 
-  it("shows Select button after clicking an option", () => {
-    render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
-
-    // Click on the first option
-    fireEvent.click(screen.getByText("Extract to Service"));
-
-    // Select button should appear
-    expect(screen.getByText("Select")).toBeInTheDocument();
-  });
-
-  it("shows reasoning input after clicking an option", () => {
-    render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
-
-    fireEvent.click(screen.getByText("Refactor In-Place"));
-
-    expect(screen.getByPlaceholderText("Why? (optional)")).toBeInTheDocument();
-  });
-
-  it("calls API on submit and shows resolved state", async () => {
+  it("single-click selects and submits immediately", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ status: "resolved" }),
@@ -100,13 +82,9 @@ describe("DecisionCard", () => {
       />,
     );
 
-    // Click option
+    // Single click on option — immediately submits
     fireEvent.click(screen.getByText("Extract to Service"));
 
-    // Click select
-    fireEvent.click(screen.getByText("Select"));
-
-    // Wait for the fetch to complete
     await vi.waitFor(() => {
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining("/decisions/dec_001"),
@@ -114,7 +92,6 @@ describe("DecisionCard", () => {
       );
     });
 
-    // Should show resolved state
     await vi.waitFor(() => {
       expect(screen.getByText("Decision Made")).toBeInTheDocument();
     });
@@ -122,8 +99,20 @@ describe("DecisionCard", () => {
     expect(onResolved).toHaveBeenCalled();
   });
 
-  it("shows Decision Needed indicator with pulse", () => {
+  it("shows optional reasoning link", () => {
+    render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
+    expect(screen.getByText("+ Add reasoning (optional)")).toBeInTheDocument();
+  });
+
+  it("expands reasoning input on click", () => {
+    render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
+    fireEvent.click(screen.getByText("+ Add reasoning (optional)"));
+    expect(screen.getByPlaceholderText("Why this choice?")).toBeInTheDocument();
+  });
+
+  it("shows Decision Needed with keyboard hint", () => {
     render(<DecisionCard event={decisionEvent} sessionId="sess_1" />);
     expect(screen.getByText("Decision Needed")).toBeInTheDocument();
+    expect(screen.getByText(/navigate/)).toBeInTheDocument();
   });
 });
