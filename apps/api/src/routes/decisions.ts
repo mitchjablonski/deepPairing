@@ -13,10 +13,6 @@ export function createDecisionRoutes(
     const sessionId = c.req.param("sessionId");
     const decisionId = c.req.param("decisionId");
 
-    if (!decisionManager.isPending(decisionId)) {
-      return c.json({ error: "No pending decision found" }, 404);
-    }
-
     const body = await c.req.json();
     const parsed = DecisionResponseSchema.safeParse(body);
 
@@ -24,11 +20,20 @@ export function createDecisionRoutes(
       return c.json({ error: parsed.error.flatten() }, 400);
     }
 
-    try {
-      decisionManager.resolveDecision(decisionId, parsed.data);
+    const hasPending = decisionManager.isPending(decisionId);
+    const session = sessionStore?.get(sessionId);
 
-      // Notify the session emitter so the fake agent can continue
-      const session = sessionStore?.get(sessionId);
+    if (!hasPending && !session) {
+      return c.json({ error: "No pending decision found" }, 404);
+    }
+
+    try {
+      // Resolve via DecisionManager if it's tracking this decision
+      if (hasPending) {
+        decisionManager.resolveDecision(decisionId, parsed.data);
+      }
+
+      // Always notify the session emitter (fake agent uses this path)
       if (session) {
         session.emitter.emit("decision:resolved", parsed.data);
       }

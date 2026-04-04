@@ -571,6 +571,22 @@ export class FakeAgentService implements AgentService {
     return this.sessions.get(sessionId);
   }
 
+  private waitForEvent(
+    session: AgentSession,
+    signal: AbortSignal,
+    eventName: string,
+  ): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const onResolved = () => resolve();
+      const onAbort = () => {
+        session.emitter.removeListener(eventName, onResolved);
+        resolve();
+      };
+      session.emitter.once(eventName, onResolved);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
   private async playScenario(
     sessionId: string,
     scenario: FakeScenario,
@@ -589,18 +605,18 @@ export class FakeAgentService implements AgentService {
 
       emitAgentEvent(session.emitter, event);
 
-      // If this is a decision_request and pauseAtDecisions is enabled,
-      // wait for a "decision:resolved" event on the emitter before continuing
+      // Pause at decision points — wait for human to resolve via emitter
       if (event.type === "decision_request" && scenario.pauseAtDecisions) {
-        await new Promise<void>((resolve) => {
-          const onResolved = () => resolve();
-          const onAbort = () => {
-            session.emitter.removeListener("decision:resolved", onResolved);
-            resolve();
-          };
-          session.emitter.once("decision:resolved", onResolved);
-          signal.addEventListener("abort", onAbort, { once: true });
-        });
+        await this.waitForEvent(session, signal, "decision:resolved");
+      }
+
+      // Pause at plan artifacts — wait for human to approve/revise/reject
+      if (
+        event.type === "artifact_created" &&
+        (event as any).artifact?.type === "plan" &&
+        scenario.pauseAtDecisions
+      ) {
+        await this.waitForEvent(session, signal, "plan:resolved");
       }
     }
 
