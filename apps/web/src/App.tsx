@@ -6,22 +6,54 @@ import { SessionList } from "./components/SessionList";
 import { SessionNarrative } from "./components/SessionNarrative";
 import { useArtifactStore } from "./stores/artifact";
 import { useSessionStore } from "./stores/session";
+import { usePreferencesStore } from "./stores/preferences";
 
 function App() {
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
   const status = useSessionStore((s) => s.status);
   const isActive = status !== "idle";
+  const { sidebarCollapsed, toggleSidebar, theme, setTheme } = usePreferencesStore();
 
   return (
-    <div className="flex h-screen font-sans bg-white">
+    <div className="flex h-screen bg-surface-primary text-text-primary">
       {/* Sidebar */}
-      <aside className="w-64 border-r border-gray-200 shrink-0 flex flex-col">
-        <div className="p-4 border-b border-gray-200">
-          <h2 className="text-lg font-bold">deepPairing</h2>
-          <p className="text-xs text-gray-400 mt-1">Collaborative AI framework</p>
+      <aside
+        className={`border-r border-border-default shrink-0 flex flex-col transition-[width] duration-200 ${
+          sidebarCollapsed ? "w-12" : "w-60"
+        }`}
+      >
+        <div className="p-3 border-b border-border-default flex items-center justify-between">
+          {!sidebarCollapsed && (
+            <div>
+              <h2 className="text-sm font-bold">deepPairing</h2>
+              <p className="text-2xs text-text-muted mt-0.5">Collaborative AI</p>
+            </div>
+          )}
+          <button
+            onClick={toggleSidebar}
+            className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-secondary transition-colors"
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? "▶" : "◀"}
+          </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {isActive ? <SessionNarrative /> : <SessionList />}
+
+        {!sidebarCollapsed && (
+          <div className="flex-1 overflow-y-auto p-2">
+            {isActive ? <SessionNarrative /> : <SessionList />}
+          </div>
+        )}
+
+        {/* Theme toggle at bottom */}
+        <div className="border-t border-border-default p-2">
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="w-full flex items-center justify-center gap-2 p-1.5 rounded text-2xs text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          >
+            {theme === "dark" ? "☀" : "🌙"}
+            {!sidebarCollapsed && (theme === "dark" ? "Light mode" : "Dark mode")}
+          </button>
         </div>
       </aside>
 
@@ -32,9 +64,9 @@ function App() {
         <ActivityStream />
       </div>
 
-      {/* Artifact panel — appears when artifacts exist */}
+      {/* Artifact panel */}
       {hasArtifacts && (
-        <div className="w-1/2 border-l border-gray-200 flex flex-col min-h-0">
+        <div className="w-1/2 border-l border-border-default flex flex-col min-h-0">
           <ArtifactPanel />
         </div>
       )}
