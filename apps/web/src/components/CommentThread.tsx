@@ -96,13 +96,16 @@ export function CommentTrigger({
   existingCount,
 }: {
   artifactId: string;
-  target: { lineNumber?: number; findingIndex?: number; stepIndex?: number };
+  target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number };
   existingCount: number;
 }) {
   const [open, setOpen] = useState(false);
   const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
   const comments = allComments.filter((c) => {
     if (target.lineNumber != null) return c.target.lineNumber === target.lineNumber;
+    if (target.evidenceIndex != null) {
+      return c.target.findingIndex === target.findingIndex && c.target.evidenceIndex === target.evidenceIndex;
+    }
     if (target.findingIndex != null) return c.target.findingIndex === target.findingIndex;
     if (target.stepIndex != null) return c.target.stepIndex === target.stepIndex;
     return false;

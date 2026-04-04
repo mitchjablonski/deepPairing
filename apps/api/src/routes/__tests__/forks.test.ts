@@ -18,6 +18,7 @@ function createTestApp() {
     id: "sess_1",
     status: "running",
     emitter: new EventEmitter(),
+    eventBuffer: [],
   });
 
   const app = new Hono();

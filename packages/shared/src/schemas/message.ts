@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ArtifactSchema, ArtifactStatusSchema } from "./artifact.js";
 import { CommentSchema } from "./comment.js";
+import { EvidenceInputSchema } from "./evidence.js";
 
 export const TextEventSchema = z.object({
   type: z.literal("text"),
@@ -76,9 +77,12 @@ export const FindingsEventSchema = z.object({
   findings: z.array(
     z.object({
       category: z.string(),
+      title: z.string().optional(),
       detail: z.string(),
-      evidence: z.string(),
+      evidence: z.union([z.string(), z.array(EvidenceInputSchema)]),
       significance: z.enum(["low", "medium", "high"]),
+      impact: z.string().optional(),
+      recommendation: z.string().optional(),
     }),
   ),
   openQuestions: z.array(z.string()).optional(),
@@ -117,8 +121,10 @@ export const PlanReviewRequestEventSchema = z.object({
   steps: z.array(
     z.object({
       description: z.string(),
-      files: z.array(z.string()),
+      files: z.union([z.array(z.string()), z.array(z.object({ filePath: z.string(), description: z.string().optional(), changeType: z.enum(["create", "modify", "delete"]).optional() }))]),
       reasoning: z.string(),
+      motivatedBy: z.array(z.string()).optional(),
+      preview: z.object({ before: z.string(), after: z.string(), filePath: z.string() }).optional(),
     }),
   ),
 });

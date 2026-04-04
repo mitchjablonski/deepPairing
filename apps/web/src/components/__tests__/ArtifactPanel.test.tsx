@@ -54,10 +54,10 @@ describe("ArtifactPanel", () => {
     });
     render(<ArtifactPanel />);
 
-    // Research content
+    // Research content — findings now have titles and rich evidence
     expect(screen.getByText(/areas for improvement/)).toBeInTheDocument();
-    expect(screen.getByText("Security")).toBeInTheDocument();
-    expect(screen.getByText(/Bcrypt with 10 salt rounds/)).toBeInTheDocument();
+    expect(screen.getAllByText("Security").length).toBeGreaterThan(0);
+    expect(screen.getByText("Weak Password Hashing")).toBeInTheDocument();
   });
 
   it("renders plan artifact detail when selected", () => {
@@ -68,7 +68,7 @@ describe("ArtifactPanel", () => {
     render(<ArtifactPanel />);
 
     expect(screen.getByText(/Implementation Steps/)).toBeInTheDocument();
-    expect(screen.getByText("Create AuthService class")).toBeInTheDocument();
+    expect(screen.getByText(/Create AuthService class/)).toBeInTheDocument();
   });
 
   it("shows approve/revise/reject buttons for draft artifacts", () => {
