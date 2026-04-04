@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE = "";
 
 export interface ArtifactState {
   artifacts: Artifact[];

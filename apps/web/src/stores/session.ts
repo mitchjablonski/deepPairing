@@ -3,7 +3,7 @@ import type { AgentEvent } from "@deeppairing/shared";
 import { useCodeStore } from "./code";
 import { useArtifactStore } from "./artifact";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE = "";
 
 export interface SessionState {
   sessionId: string | null;

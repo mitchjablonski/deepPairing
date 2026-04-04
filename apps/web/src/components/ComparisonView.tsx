@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AgentEvent } from "@deeppairing/shared";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE = "";
 
 interface ForkData {
   id: string;

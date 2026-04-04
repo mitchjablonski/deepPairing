@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE = "";
 
 interface SessionSummary {
   id: string;

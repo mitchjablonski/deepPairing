@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { ForkButton } from "./ForkButton";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE = "";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
