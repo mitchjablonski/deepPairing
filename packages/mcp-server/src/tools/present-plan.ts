@@ -1,6 +1,7 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { ArtifactStoreInterface, PlanReviewCallback } from "../types.js";
+import type { SessionBoundStore } from "../index.js";
+import type { PlanReviewCallback } from "../types.js";
 
 const FileChangeInputSchema = z.object({
   filePath: z.string(),
@@ -9,7 +10,7 @@ const FileChangeInputSchema = z.object({
 });
 
 export function createPresentPlanTool(
-  artifactStore: ArtifactStoreInterface,
+  artifactStore: SessionBoundStore,
   onPlanReview: PlanReviewCallback,
 ) {
   return tool(

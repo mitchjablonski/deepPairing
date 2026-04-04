@@ -13,7 +13,8 @@ export function createCommentRoutes(artifactStore: ArtifactStore) {
       return c.json({ error: parsed.error.flatten() }, 400);
     }
 
-    const comment = await artifactStore.addComment({
+    const sessionId = c.req.param("sessionId");
+    const comment = await artifactStore.addComment(sessionId, {
       artifactId: parsed.data.target.artifactId,
       content: parsed.data.content,
       author: "human",

@@ -4,20 +4,29 @@ import type { ArtifactStoreInterface, DecisionManagerInterface, PlanReviewResult
 let artifactCounter = 0;
 let commentCounter = 0;
 
+/**
+ * Fake artifact store for MCP tool testing.
+ * Note: MCP tools use the session-bound wrapper (bindStoreToSession)
+ * which strips sessionId. But this fake also implements the full
+ * interface for direct testing.
+ */
 export class FakeMcpArtifactStore implements ArtifactStoreInterface {
   artifacts: Artifact[] = [];
   comments: Comment[] = [];
 
-  async createArtifact(params: {
-    type: Artifact["type"];
-    title: string;
-    content: Record<string, unknown>;
-    agentReasoning?: string;
-  }): Promise<Artifact> {
+  async createArtifact(
+    sessionId: string,
+    params: {
+      type: Artifact["type"];
+      title: string;
+      content: Record<string, unknown>;
+      agentReasoning?: string;
+    },
+  ): Promise<Artifact> {
     const now = new Date().toISOString();
     const artifact: Artifact = {
       id: `art_fake_${++artifactCounter}`,
-      sessionId: "sess_fake",
+      sessionId,
       type: params.type,
       version: 1,
       parentId: null,
@@ -32,14 +41,17 @@ export class FakeMcpArtifactStore implements ArtifactStoreInterface {
     return artifact;
   }
 
-  async addComment(params: {
-    artifactId: string;
-    content: string;
-    author: "human" | "agent";
-  }): Promise<Comment> {
+  async addComment(
+    sessionId: string,
+    params: {
+      artifactId: string;
+      content: string;
+      author: "human" | "agent";
+    },
+  ): Promise<Comment> {
     const comment: Comment = {
       id: `cmt_fake_${++commentCounter}`,
-      sessionId: "sess_fake",
+      sessionId,
       target: { artifactId: params.artifactId },
       parentCommentId: null,
       author: params.author,
@@ -51,8 +63,8 @@ export class FakeMcpArtifactStore implements ArtifactStoreInterface {
     return comment;
   }
 
-  async getUnacknowledgedComments(): Promise<Comment[]> {
-    return this.comments.filter((c) => !c.acknowledged);
+  async getUnacknowledgedComments(sessionId: string): Promise<Comment[]> {
+    return this.comments.filter((c) => !c.acknowledged && c.sessionId === sessionId);
   }
 
   async acknowledgeComments(ids: string[]): Promise<void> {
@@ -61,8 +73,8 @@ export class FakeMcpArtifactStore implements ArtifactStoreInterface {
     }
   }
 
-  async getArtifactsBySession(): Promise<Artifact[]> {
-    return this.artifacts;
+  async getArtifactsBySession(sessionId: string): Promise<Artifact[]> {
+    return this.artifacts.filter((a) => a.sessionId === sessionId);
   }
 }
 
@@ -83,7 +95,6 @@ export class FakeMcpDecisionManager implements DecisionManagerInterface {
     });
   }
 
-  /** Test helper: resolve a pending decision */
   resolve(decisionId: string, response: DecisionResponse): void {
     const resolver = this.pendingResolvers.get(decisionId);
     if (resolver) {

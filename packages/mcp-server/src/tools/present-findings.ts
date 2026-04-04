@@ -1,6 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { ArtifactStoreInterface } from "../types.js";
+import type { SessionBoundStore } from "../index.js";
 
 const RichEvidenceSchema = z.object({
   filePath: z.string().describe("Path to the file"),
@@ -13,7 +13,7 @@ const RichEvidenceSchema = z.object({
   relatedPaths: z.array(z.string()).optional().describe("Other files where this pattern appears"),
 });
 
-export function createPresentFindingsTool(artifactStore: ArtifactStoreInterface) {
+export function createPresentFindingsTool(artifactStore: SessionBoundStore) {
   return tool(
     "deepPairing_present_findings",
     `Present your research findings with RICH evidence. The human needs to deeply understand each finding — not just a summary.

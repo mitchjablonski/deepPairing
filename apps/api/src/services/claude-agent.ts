@@ -40,9 +40,9 @@ export class ClaudeAgentService implements AgentService {
     this.sessions.set(id, session);
     this.abortControllers.set(id, abortController);
 
-    // Bind artifact store to this session
-    if ("bind" in this.deps.artifactStore) {
-      (this.deps.artifactStore as any).bind(id, emitter);
+    // Register this session's emitter for artifact events
+    if ("registerSession" in this.deps.artifactStore) {
+      (this.deps.artifactStore as any).registerSession(id, emitter);
     }
 
     // Run agent in background
@@ -80,9 +80,10 @@ export class ClaudeAgentService implements AgentService {
   ): Promise<void> {
     emitAgentEvent(session.emitter, { type: "status", phase: "gathering" });
 
-    // Create in-process MCP server with collaboration tools
+    // Create in-process MCP server scoped to this session
     const mcpServer = createDeepPairingMcpServer(
       {
+        sessionId: session.id,
         artifactStore: this.deps.artifactStore,
         decisionManager: this.deps.decisionManager,
       },
