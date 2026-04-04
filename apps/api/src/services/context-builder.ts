@@ -19,11 +19,11 @@ export async function buildSessionContext(
   if (decisionContext) sections.push(decisionContext);
 
   // Artifact context
-  const artifactContext = await buildArtifactContext(artifactStore);
+  const artifactContext = await buildArtifactContext(artifactStore, sessionId);
   if (artifactContext) sections.push(artifactContext);
 
   // Feedback context
-  const feedbackContext = await buildFeedbackContext(artifactStore);
+  const feedbackContext = await buildFeedbackContext(artifactStore, sessionId);
   if (feedbackContext) sections.push(feedbackContext);
 
   return sections.join("\n\n---\n\n");
@@ -51,8 +51,8 @@ for your continued work. Do not re-propose alternatives that were already reject
 ${lines.join("\n\n")}`;
 }
 
-async function buildArtifactContext(artifactStore: ArtifactStore): Promise<string> {
-  const artifacts = await artifactStore.getArtifactsBySession();
+async function buildArtifactContext(artifactStore: ArtifactStore, sessionId: string): Promise<string> {
+  const artifacts = await artifactStore.getArtifactsBySession(sessionId);
   if (artifacts.length === 0) return "";
 
   const lines = artifacts
@@ -73,8 +73,8 @@ async function buildArtifactContext(artifactStore: ArtifactStore): Promise<strin
 ${lines.join("\n")}`;
 }
 
-async function buildFeedbackContext(artifactStore: ArtifactStore): Promise<string> {
-  const comments = await artifactStore.getUnacknowledgedComments();
+async function buildFeedbackContext(artifactStore: ArtifactStore, sessionId: string): Promise<string> {
+  const comments = await artifactStore.getUnacknowledgedComments(sessionId);
   if (comments.length === 0) return "";
 
   const lines = comments.map((c) => {

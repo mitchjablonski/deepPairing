@@ -17,13 +17,15 @@ export function createArtifactRoutes(
   const router = new Hono();
 
   router.get("/api/sessions/:sessionId/artifacts", async (c) => {
-    const artifacts = await artifactStore.getArtifactsBySession();
+    const sessionId = c.req.param("sessionId");
+    const artifacts = await artifactStore.getArtifactsBySession(sessionId);
     return c.json({ artifacts });
   });
 
   router.get("/api/sessions/:sessionId/artifacts/:id", async (c) => {
+    const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("id");
-    const artifacts = await artifactStore.getArtifactsBySession();
+    const artifacts = await artifactStore.getArtifactsBySession(sessionId);
     const artifact = artifacts.find((a) => a.id === artifactId);
 
     if (!artifact) {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { bindStoreToSession } from "../../index.js";
 import { createPresentFindingsTool } from "../present-findings.js";
 import { createPresentOptionsTool } from "../present-options.js";
 import { createPresentPlanTool } from "../present-plan.js";
@@ -12,7 +13,8 @@ import {
 
 describe("deepPairing_present_findings", () => {
   it("creates a research artifact and returns confirmation", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const tool = createPresentFindingsTool(store);
 
     const result = await (tool.handler as any)({
@@ -22,18 +24,19 @@ describe("deepPairing_present_findings", () => {
       ],
     });
 
-    expect(store.artifacts).toHaveLength(1);
-    expect(store.artifacts[0].type).toBe("research");
+    expect(rawStore.artifacts).toHaveLength(1);
+    expect(rawStore.artifacts[0].type).toBe("research");
     expect(result.content[0]).toHaveProperty("text");
     expect((result.content[0] as any).text).toContain("Findings presented");
   });
 
   it("includes unacknowledged comments in response", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     // Add a pre-existing unacknowledged comment
-    store.comments.push({
+    rawStore.comments.push({
       id: "cmt_prior",
-      sessionId: "sess_fake",
+      sessionId: "sess_test",
       target: { artifactId: "art_old" },
       parentCommentId: null,
       author: "human",
@@ -54,7 +57,8 @@ describe("deepPairing_present_findings", () => {
 
 describe("deepPairing_present_options", () => {
   it("creates a decision artifact and blocks until resolved", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const dm = new FakeMcpDecisionManager();
     dm.autoResolveWith = { optionId: "opt_a", reasoning: "Best fit" };
 
@@ -68,8 +72,8 @@ describe("deepPairing_present_options", () => {
       ],
     });
 
-    expect(store.artifacts).toHaveLength(1);
-    expect(store.artifacts[0].type).toBe("decision");
+    expect(rawStore.artifacts).toHaveLength(1);
+    expect(rawStore.artifacts[0].type).toBe("decision");
     expect((result.content[0] as any).text).toContain("Service");
     expect((result.content[0] as any).text).toContain("Best fit");
   });
@@ -77,7 +81,8 @@ describe("deepPairing_present_options", () => {
 
 describe("deepPairing_present_plan", () => {
   it("creates a plan artifact and returns approved result", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const review = createFakePlanReview({ verdict: "approved" });
 
     const tool = createPresentPlanTool(store, review.callback);
@@ -90,13 +95,14 @@ describe("deepPairing_present_plan", () => {
       estimatedChanges: 2,
     });
 
-    expect(store.artifacts).toHaveLength(1);
-    expect(store.artifacts[0].type).toBe("plan");
+    expect(rawStore.artifacts).toHaveLength(1);
+    expect(rawStore.artifacts[0].type).toBe("plan");
     expect((result.content[0] as any).text).toContain("APPROVED");
   });
 
   it("returns revision feedback when plan is revised", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const review = createFakePlanReview({ verdict: "revised", feedback: "Add error handling step" });
 
     const tool = createPresentPlanTool(store, review.callback);
@@ -112,7 +118,8 @@ describe("deepPairing_present_plan", () => {
   });
 
   it("returns rejection when plan is rejected", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const review = createFakePlanReview({ verdict: "rejected", feedback: "Wrong approach entirely" });
 
     const tool = createPresentPlanTool(store, review.callback);
@@ -130,7 +137,8 @@ describe("deepPairing_present_plan", () => {
 
 describe("deepPairing_log_reasoning", () => {
   it("creates a reasoning artifact", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const tool = createLogReasoningTool(store);
 
     const result = await (tool.handler as any)({
@@ -140,17 +148,18 @@ describe("deepPairing_log_reasoning", () => {
       confidence: "high" as const,
     });
 
-    expect(store.artifacts).toHaveLength(1);
-    expect(store.artifacts[0].type).toBe("reasoning");
-    expect(store.artifacts[0].title).toBe("Refactor auth module");
+    expect(rawStore.artifacts).toHaveLength(1);
+    expect(rawStore.artifacts[0].type).toBe("reasoning");
+    expect(rawStore.artifacts[0].title).toBe("Refactor auth module");
     expect((result.content[0] as any).text).toContain("Reasoning logged");
   });
 
   it("includes pending feedback in response", async () => {
-    const store = new FakeMcpArtifactStore();
-    store.comments.push({
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
+    rawStore.comments.push({
       id: "cmt_fb",
-      sessionId: "sess_fake",
+      sessionId: "sess_test",
       target: { artifactId: "art_x" },
       parentCommentId: null,
       author: "human",
@@ -172,7 +181,8 @@ describe("deepPairing_log_reasoning", () => {
 
 describe("deepPairing_check_feedback", () => {
   it("returns no feedback message when none exists", async () => {
-    const store = new FakeMcpArtifactStore();
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
     const tool = createCheckFeedbackTool(store);
 
     const result = await (tool.handler as any)({});
@@ -181,11 +191,12 @@ describe("deepPairing_check_feedback", () => {
   });
 
   it("returns and acknowledges pending comments", async () => {
-    const store = new FakeMcpArtifactStore();
-    store.comments.push(
+    const rawStore = new FakeMcpArtifactStore();
+    const store = bindStoreToSession(rawStore, "sess_test");
+    rawStore.comments.push(
       {
         id: "c1",
-        sessionId: "sess_fake",
+        sessionId: "sess_test",
         target: { artifactId: "art_1", findingIndex: 0 },
         parentCommentId: null,
         author: "human",
@@ -195,7 +206,7 @@ describe("deepPairing_check_feedback", () => {
       },
       {
         id: "c2",
-        sessionId: "sess_fake",
+        sessionId: "sess_test",
         target: { artifactId: "art_2", lineNumber: 5 },
         parentCommentId: null,
         author: "human",

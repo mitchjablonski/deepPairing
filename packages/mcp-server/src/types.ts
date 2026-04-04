@@ -5,27 +5,34 @@ import type { Artifact, Comment, DecisionResponse } from "@deeppairing/shared";
  * These are interfaces so we can use fakes for testing.
  */
 export interface McpDependencies {
+  sessionId: string;
   artifactStore: ArtifactStoreInterface;
   decisionManager: DecisionManagerInterface;
 }
 
 export interface ArtifactStoreInterface {
-  createArtifact(params: {
-    type: Artifact["type"];
-    title: string;
-    content: Record<string, unknown>;
-    agentReasoning?: string;
-  }): Promise<Artifact>;
+  createArtifact(
+    sessionId: string,
+    params: {
+      type: Artifact["type"];
+      title: string;
+      content: Record<string, unknown>;
+      agentReasoning?: string;
+    },
+  ): Promise<Artifact>;
 
-  addComment(params: {
-    artifactId: string;
-    content: string;
-    author: "human" | "agent";
-  }): Promise<Comment>;
+  addComment(
+    sessionId: string,
+    params: {
+      artifactId: string;
+      content: string;
+      author: "human" | "agent";
+    },
+  ): Promise<Comment>;
 
-  getUnacknowledgedComments(): Promise<Comment[]>;
+  getUnacknowledgedComments(sessionId: string): Promise<Comment[]>;
   acknowledgeComments(ids: string[]): Promise<void>;
-  getArtifactsBySession(): Promise<Artifact[]>;
+  getArtifactsBySession(sessionId: string): Promise<Artifact[]>;
 }
 
 export interface DecisionManagerInterface {
@@ -35,10 +42,6 @@ export interface DecisionManagerInterface {
   ): Promise<DecisionResponse>;
 }
 
-/**
- * Callback for plan review — blocks until human responds.
- * Resolves with { verdict: "approved" | "revised" | "rejected", feedback?: string }
- */
 export interface PlanReviewResult {
   verdict: "approved" | "revised" | "rejected";
   feedback?: string;

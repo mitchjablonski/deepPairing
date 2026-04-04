@@ -1,9 +1,10 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { ArtifactStoreInterface, DecisionManagerInterface } from "../types.js";
+import type { SessionBoundStore } from "../index.js";
+import type { DecisionManagerInterface } from "../types.js";
 
 export function createPresentOptionsTool(
-  artifactStore: ArtifactStoreInterface,
+  artifactStore: SessionBoundStore,
   decisionManager: DecisionManagerInterface,
 ) {
   return tool(

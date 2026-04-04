@@ -15,7 +15,7 @@ function createTestApp() {
   const commentRepo = new FakeCommentRepository();
   const artifactStore = new ArtifactStore(artifactRepo, commentRepo);
   const emitter = new EventEmitter();
-  artifactStore.bind("sess_test", emitter);
+  artifactStore.registerSession("sess_test", emitter);
 
   const pendingPlanReviews = new Map<
     string,
@@ -43,7 +43,7 @@ describe("GET /api/sessions/:sessionId/artifacts", () => {
   it("returns artifacts for the session", async () => {
     const { app, artifactStore } = createTestApp();
 
-    await artifactStore.createArtifact({
+    await artifactStore.createArtifact("sess_test", {
       type: "research",
       title: "Analysis",
       content: { summary: "Found things" },
@@ -60,13 +60,13 @@ describe("GET /api/sessions/:sessionId/artifacts/:id", () => {
   it("returns artifact with comments", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "plan",
       title: "Plan",
       content: { steps: [] },
     });
 
-    await artifactStore.addComment({
+    await artifactStore.addComment("sess_test", {
       artifactId: artifact.id,
       content: "Looks good",
       author: "human",
@@ -96,7 +96,7 @@ describe("POST /api/sessions/:sessionId/artifacts/:id/status", () => {
   it("approves an artifact", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "plan",
       title: "Plan",
       content: {},
@@ -119,7 +119,7 @@ describe("POST /api/sessions/:sessionId/artifacts/:id/status", () => {
   it("revises an artifact with feedback", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "plan",
       title: "Plan",
       content: {},
@@ -148,7 +148,7 @@ describe("POST /api/sessions/:sessionId/artifacts/:id/status", () => {
   it("resolves a pending plan review when status is updated", async () => {
     const { app, artifactStore, pendingPlanReviews } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "plan",
       title: "Plan",
       content: {},
@@ -182,7 +182,7 @@ describe("POST /api/sessions/:sessionId/artifacts/:id/status", () => {
   it("rejects invalid status", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "plan",
       title: "Plan",
       content: {},
@@ -205,7 +205,7 @@ describe("POST /api/sessions/:sessionId/comments", () => {
   it("adds a comment to an artifact", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "research",
       title: "Research",
       content: {},
@@ -230,7 +230,7 @@ describe("POST /api/sessions/:sessionId/comments", () => {
   it("adds a line-level comment", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "code_change",
       title: "Edit auth.ts",
       content: {},
@@ -270,18 +270,18 @@ describe("GET /api/sessions/:sessionId/artifacts/:id/comments", () => {
   it("returns comments for an artifact", async () => {
     const { app, artifactStore } = createTestApp();
 
-    const artifact = await artifactStore.createArtifact({
+    const artifact = await artifactStore.createArtifact("sess_test", {
       type: "research",
       title: "Research",
       content: {},
     });
 
-    await artifactStore.addComment({
+    await artifactStore.addComment("sess_test", {
       artifactId: artifact.id,
       content: "Comment 1",
       author: "human",
     });
-    await artifactStore.addComment({
+    await artifactStore.addComment("sess_test", {
       artifactId: artifact.id,
       content: "Comment 2",
       author: "agent",

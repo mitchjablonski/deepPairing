@@ -1,8 +1,8 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { ArtifactStoreInterface } from "../types.js";
+import type { SessionBoundStore } from "../index.js";
 
-export function createLogReasoningTool(artifactStore: ArtifactStoreInterface) {
+export function createLogReasoningTool(artifactStore: SessionBoundStore) {
   return tool(
     "deepPairing_log_reasoning",
     "Log your reasoning before making any code change (Edit/Write). This is REQUIRED — edits without logged reasoning will be blocked. Explain what you're about to do and why.",

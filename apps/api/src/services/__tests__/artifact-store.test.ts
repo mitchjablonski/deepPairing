@@ -10,7 +10,7 @@ function createStore() {
   const commentRepo = new FakeCommentRepository();
   const store = new ArtifactStore(artifactRepo, commentRepo);
   const emitter = new EventEmitter();
-  store.bind("sess_test", emitter);
+  store.registerSession("sess_test", emitter);
   return { store, emitter, artifactRepo, commentRepo };
 }
 
@@ -26,7 +26,7 @@ describe("ArtifactStore", () => {
       const { store, emitter } = createStore();
       const events = collectEvents(emitter);
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "research",
         title: "Auth Analysis",
         content: { summary: "Found issues", findings: [] },
@@ -45,7 +45,7 @@ describe("ArtifactStore", () => {
     it("includes agent reasoning when provided", async () => {
       const { store } = createStore();
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "plan",
         title: "Refactor Plan",
         content: { steps: [] },
@@ -61,7 +61,7 @@ describe("ArtifactStore", () => {
       const { store, emitter } = createStore();
       const events = collectEvents(emitter);
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "research",
         title: "Test",
         content: {},
@@ -81,7 +81,7 @@ describe("ArtifactStore", () => {
       const { store, emitter } = createStore();
       const events = collectEvents(emitter);
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "plan",
         title: "Plan",
         content: {},
@@ -103,7 +103,7 @@ describe("ArtifactStore", () => {
     it("creates a new version linked to parent", async () => {
       const { store } = createStore();
 
-      const v1 = await store.createArtifact({
+      const v1 = await store.createArtifact("sess_test", {
         type: "plan",
         title: "Plan",
         content: { steps: ["step 1"] },
@@ -119,7 +119,7 @@ describe("ArtifactStore", () => {
     it("supersedes the parent artifact", async () => {
       const { store, artifactRepo } = createStore();
 
-      const v1 = await store.createArtifact({
+      const v1 = await store.createArtifact("sess_test", {
         type: "plan",
         title: "Plan",
         content: {},
@@ -137,13 +137,13 @@ describe("ArtifactStore", () => {
       const { store, emitter } = createStore();
       const events = collectEvents(emitter);
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "research",
         title: "Test",
         content: {},
       });
 
-      const comment = await store.addComment({
+      const comment = await store.addComment("sess_test", {
         artifactId: artifact.id,
         content: "This finding is critical.",
         author: "human",
@@ -162,13 +162,13 @@ describe("ArtifactStore", () => {
     it("agent comments are pre-acknowledged", async () => {
       const { store } = createStore();
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "research",
         title: "Test",
         content: {},
       });
 
-      const comment = await store.addComment({
+      const comment = await store.addComment("sess_test", {
         artifactId: artifact.id,
         content: "Noted, will address this.",
         author: "agent",
@@ -180,25 +180,25 @@ describe("ArtifactStore", () => {
     it("returns unacknowledged comments", async () => {
       const { store } = createStore();
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "research",
         title: "Test",
         content: {},
       });
 
-      await store.addComment({
+      await store.addComment("sess_test", {
         artifactId: artifact.id,
         content: "Human says something",
         author: "human",
       });
 
-      await store.addComment({
+      await store.addComment("sess_test", {
         artifactId: artifact.id,
         content: "Agent responds",
         author: "agent",
       });
 
-      const unack = await store.getUnacknowledgedComments();
+      const unack = await store.getUnacknowledgedComments("sess_test");
       expect(unack).toHaveLength(1);
       expect(unack[0].author).toBe("human");
     });
@@ -206,13 +206,13 @@ describe("ArtifactStore", () => {
     it("acknowledges comments", async () => {
       const { store } = createStore();
 
-      const artifact = await store.createArtifact({
+      const artifact = await store.createArtifact("sess_test", {
         type: "research",
         title: "Test",
         content: {},
       });
 
-      const comment = await store.addComment({
+      const comment = await store.addComment("sess_test", {
         artifactId: artifact.id,
         content: "Feedback",
         author: "human",
@@ -220,7 +220,7 @@ describe("ArtifactStore", () => {
 
       await store.acknowledgeComments([comment.id]);
 
-      const unack = await store.getUnacknowledgedComments();
+      const unack = await store.getUnacknowledgedComments("sess_test");
       expect(unack).toHaveLength(0);
     });
   });
@@ -229,22 +229,22 @@ describe("ArtifactStore", () => {
     it("lists artifacts by session", async () => {
       const { store } = createStore();
 
-      await store.createArtifact({ type: "research", title: "A", content: {} });
-      await store.createArtifact({ type: "plan", title: "B", content: {} });
+      await store.createArtifact("sess_test", { type: "research", title: "A", content: {} });
+      await store.createArtifact("sess_test", { type: "plan", title: "B", content: {} });
 
-      const artifacts = await store.getArtifactsBySession();
+      const artifacts = await store.getArtifactsBySession("sess_test");
       expect(artifacts).toHaveLength(2);
     });
 
     it("gets comments for a specific artifact", async () => {
       const { store } = createStore();
 
-      const a1 = await store.createArtifact({ type: "research", title: "A", content: {} });
-      const a2 = await store.createArtifact({ type: "plan", title: "B", content: {} });
+      const a1 = await store.createArtifact("sess_test", { type: "research", title: "A", content: {} });
+      const a2 = await store.createArtifact("sess_test", { type: "plan", title: "B", content: {} });
 
-      await store.addComment({ artifactId: a1.id, content: "On A", author: "human" });
-      await store.addComment({ artifactId: a2.id, content: "On B", author: "human" });
-      await store.addComment({ artifactId: a1.id, content: "Also on A", author: "human" });
+      await store.addComment("sess_test", { artifactId: a1.id, content: "On A", author: "human" });
+      await store.addComment("sess_test", { artifactId: a2.id, content: "On B", author: "human" });
+      await store.addComment("sess_test", { artifactId: a1.id, content: "Also on A", author: "human" });
 
       const commentsA = await store.getCommentsForArtifact(a1.id);
       expect(commentsA).toHaveLength(2);

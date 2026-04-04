@@ -1,8 +1,8 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { ArtifactStoreInterface } from "../types.js";
+import type { SessionBoundStore } from "../index.js";
 
-export function createCheckFeedbackTool(artifactStore: ArtifactStoreInterface) {
+export function createCheckFeedbackTool(artifactStore: SessionBoundStore) {
   return tool(
     "deepPairing_check_feedback",
     "Check for any new human comments or feedback. Call this periodically (every 3-5 tool calls) to pick up human input. The human may be commenting on your findings, plans, or code changes in real-time.",

@@ -10,7 +10,7 @@ import {
 
 function createArtifactStore() {
   const store = new ArtifactStore(new FakeArtifactRepository(), new FakeCommentRepository());
-  store.bind("sess_1", new EventEmitter());
+  store.registerSession("sess_1", new EventEmitter());
   return store;
 }
 
@@ -131,8 +131,8 @@ describe("buildSessionContext", () => {
     const repo = new FakeDecisionRepository();
     const store = createArtifactStore();
 
-    await store.createArtifact({ type: "research", title: "Analysis", content: {} });
-    await store.createArtifact({ type: "plan", title: "Plan", content: {} });
+    await store.createArtifact("sess_1", { type: "research", title: "Analysis", content: {} });
+    await store.createArtifact("sess_1", { type: "plan", title: "Plan", content: {} });
 
     const result = await buildSessionContext(repo, store, "sess_1");
     expect(result).toContain("Artifact Status");
@@ -144,7 +144,7 @@ describe("buildSessionContext", () => {
     const repo = new FakeDecisionRepository();
     const store = createArtifactStore();
 
-    const art = await store.createArtifact({ type: "plan", title: "Bad Plan", content: {} });
+    const art = await store.createArtifact("sess_1", { type: "plan", title: "Bad Plan", content: {} });
     await store.updateStatus(art.id, "rejected");
 
     const result = await buildSessionContext(repo, store, "sess_1");
@@ -155,8 +155,8 @@ describe("buildSessionContext", () => {
     const repo = new FakeDecisionRepository();
     const store = createArtifactStore();
 
-    const art = await store.createArtifact({ type: "research", title: "Research", content: {} });
-    await store.addComment({
+    const art = await store.createArtifact("sess_1", { type: "research", title: "Research", content: {} });
+    await store.addComment("sess_1", {
       artifactId: art.id,
       content: "Please also check the database layer",
       author: "human",
@@ -182,11 +182,11 @@ describe("buildSessionContext", () => {
     await repo.resolve("d1", "a", "Best option");
 
     // Artifact
-    await store.createArtifact({ type: "plan", title: "The Plan", content: {} });
+    await store.createArtifact("sess_1", { type: "plan", title: "The Plan", content: {} });
 
     // Comment
-    const art = await store.createArtifact({ type: "research", title: "Research", content: {} });
-    await store.addComment({ artifactId: art.id, content: "Good work", author: "human" });
+    const art = await store.createArtifact("sess_1", { type: "research", title: "Research", content: {} });
+    await store.addComment("sess_1", { artifactId: art.id, content: "Good work", author: "human" });
 
     const result = await buildSessionContext(repo, store, "sess_1");
     expect(result).toContain("Prior Decisions");
