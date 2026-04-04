@@ -2,20 +2,40 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { ArtifactStoreInterface, PlanReviewCallback } from "../types.js";
 
+const FileChangeInputSchema = z.object({
+  filePath: z.string(),
+  description: z.string().optional().describe("What changes in this file"),
+  changeType: z.enum(["create", "modify", "delete"]).optional(),
+});
+
 export function createPresentPlanTool(
   artifactStore: ArtifactStoreInterface,
   onPlanReview: PlanReviewCallback,
 ) {
   return tool(
     "deepPairing_present_plan",
-    "Present a structured implementation plan before making multi-file changes. The human will review each step and can approve, request revisions, or reject. This tool BLOCKS until the human responds.",
+    `Present a structured implementation plan before making multi-file changes. The human will review each step and can approve, request revisions, or reject. This tool BLOCKS until the human responds.
+
+For each step, provide:
+- Which findings motivated this step (motivatedBy)
+- A before/after code preview when the change is non-trivial
+- Structured file changes with descriptions, not just path strings`,
     {
       title: z.string().describe("Plan title"),
       steps: z.array(
         z.object({
           description: z.string().describe("What this step does"),
-          files: z.array(z.string()).describe("Files that will be changed"),
+          files: z.union([
+            z.array(z.string()),
+            z.array(FileChangeInputSchema),
+          ]).describe("Files that will be changed — prefer structured format with descriptions"),
           reasoning: z.string().describe("Why this step is needed"),
+          motivatedBy: z.array(z.string()).optional().describe("Finding titles that motivated this step"),
+          preview: z.object({
+            before: z.string().describe("Current code"),
+            after: z.string().describe("Proposed code after this step"),
+            filePath: z.string(),
+          }).optional().describe("Before/after code preview — include for non-trivial changes"),
         }),
       ).describe("Ordered list of implementation steps"),
       estimatedChanges: z.number().describe("Estimated number of file changes"),
@@ -31,7 +51,6 @@ export function createPresentPlanTool(
         agentReasoning: `Plan with ${args.steps.length} steps, ~${args.estimatedChanges} file changes`,
       });
 
-      // Block until human reviews the plan
       const result = await onPlanReview(artifact.id);
 
       if (result.verdict === "rejected") {
@@ -64,7 +83,6 @@ export function createPresentPlanTool(
         };
       }
 
-      // Approved
       return {
         content: [{
           type: "text" as const,

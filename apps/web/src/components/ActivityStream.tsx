@@ -70,7 +70,11 @@ function FindingsBlock({ event }: { event: AgentEvent & { type: "findings" } }) 
               {f.category}
             </span>
             <span className="text-gray-700">{f.detail}</span>
-            <span className="text-gray-400 shrink-0">{f.evidence}</span>
+            <span className="text-gray-400 shrink-0">
+              {typeof f.evidence === "string"
+                ? f.evidence
+                : `${(f.evidence as any[]).length} evidence item(s)`}
+            </span>
           </div>
         ))}
       </div>

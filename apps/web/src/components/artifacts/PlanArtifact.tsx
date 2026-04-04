@@ -59,14 +59,22 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                       </p>
                       {step.files.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
-                          {step.files.map((f) => (
-                            <span
-                              key={f}
-                              className="px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded text-[11px] font-mono"
-                            >
-                              {f}
-                            </span>
-                          ))}
+                          {step.files.map((f, fIdx) => {
+                            const filePath = typeof f === "string" ? f : (f as any).filePath;
+                            const desc = typeof f === "string" ? null : (f as any).description;
+                            const changeType = typeof f === "string" ? null : (f as any).changeType;
+                            const changeIcon = changeType === "create" ? "+" : changeType === "delete" ? "-" : "~";
+                            return (
+                              <span
+                                key={fIdx}
+                                className="px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded text-[11px] font-mono"
+                                title={desc ?? undefined}
+                              >
+                                {changeType && <span className="text-gray-400 mr-0.5">{changeIcon}</span>}
+                                {filePath}
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

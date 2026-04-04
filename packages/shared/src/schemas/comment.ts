@@ -4,6 +4,7 @@ export const CommentTargetSchema = z.object({
   artifactId: z.string(),
   lineNumber: z.number().int().optional(),
   findingIndex: z.number().int().optional(),
+  evidenceIndex: z.number().int().optional(),
   stepIndex: z.number().int().optional(),
   sectionId: z.string().optional(),
 });
