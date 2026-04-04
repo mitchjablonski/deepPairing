@@ -25,16 +25,18 @@ describe("ArtifactPanel", () => {
     expect(screen.getByText(/artifacts will appear/i)).toBeInTheDocument();
   });
 
-  it("renders artifact list with type icons", () => {
+  it("renders type tabs and artifact titles", () => {
     useArtifactStore.setState({
       artifacts: [researchArtifact, planArtifact],
       selectedArtifactId: researchArtifact.id,
     });
     render(<ArtifactPanel />);
 
+    // Type tabs
+    expect(screen.getByText("Research")).toBeInTheDocument();
+    expect(screen.getByText("Plans")).toBeInTheDocument();
+    // Selected artifact title visible
     expect(screen.getAllByText("Authentication System Analysis").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Auth Refactoring Plan").length).toBeGreaterThan(0);
-    expect(screen.getByText("Artifacts (2)")).toBeInTheDocument();
   });
 
   it("shows status badges on artifacts", () => {
@@ -94,18 +96,19 @@ describe("ArtifactPanel", () => {
     expect(screen.getByPlaceholderText("What should be changed?")).toBeInTheDocument();
   });
 
-  it("switches selected artifact on click", () => {
+  it("switches selected artifact when clicking type tab", () => {
     useArtifactStore.setState({
       artifacts: [researchArtifact, planArtifact],
       selectedArtifactId: researchArtifact.id,
     });
     render(<ArtifactPanel />);
 
-    fireEvent.click(screen.getByText("Auth Refactoring Plan"));
+    // Click the Plans tab — should select the plan artifact
+    fireEvent.click(screen.getByText("Plans"));
     expect(useArtifactStore.getState().selectedArtifactId).toBe(planArtifact.id);
   });
 
-  it("hides superseded artifacts from the list", () => {
+  it("hides superseded artifacts from tabs", () => {
     const superseded = { ...researchArtifact, status: "superseded" as const };
     useArtifactStore.setState({
       artifacts: [superseded, planArtifact],
@@ -113,6 +116,8 @@ describe("ArtifactPanel", () => {
     });
     render(<ArtifactPanel />);
 
-    expect(screen.getByText("Artifacts (1)")).toBeInTheDocument();
+    // Only Plans tab visible, no Research tab
+    expect(screen.getByText("Plans")).toBeInTheDocument();
+    expect(screen.queryByText("Research")).not.toBeInTheDocument();
   });
 });
