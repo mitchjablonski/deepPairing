@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSessionStore } from "../stores/session";
+import { WorkflowProgressBar } from "./WorkflowProgressBar";
 
 const phaseLabels: Record<string, { label: string; color: string }> = {
   idle:       { label: "Idle",       color: "bg-surface-elevated text-text-muted" },
@@ -36,18 +37,25 @@ export function AgentStatusBar() {
   };
 
   return (
-    <div className="flex items-center justify-between px-3 py-1 bg-surface-secondary border-b border-border-default text-xs">
-      <div className="flex items-center gap-3">
-        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-medium ${phase.color}`}>
-          {isActive && (
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-          )}
-          {phase.label}
-        </span>
-        {isActive && (
-          <span className="text-text-muted tabular-nums text-2xs">{formatTime(elapsed)}</span>
-        )}
+    <div className="bg-surface-secondary border-b border-border-default">
+      {/* Workflow progress bar */}
+      <div className="py-1">
+        <WorkflowProgressBar />
       </div>
+
+      {/* Stats row */}
+      <div className="flex items-center justify-between px-3 py-0.5 border-t border-border-subtle">
+        <div className="flex items-center gap-3">
+          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-medium ${phase.color}`}>
+            {isActive && (
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+            )}
+            {phase.label}
+          </span>
+          {isActive && (
+            <span className="text-text-muted tabular-nums text-2xs">{formatTime(elapsed)}</span>
+          )}
+        </div>
       <div className="flex items-center gap-3">
         <span className="text-text-muted text-2xs">
           {toolCallCount} tool{toolCallCount !== 1 ? "s" : ""}
@@ -61,6 +69,7 @@ export function AgentStatusBar() {
             Stop
           </button>
         )}
+      </div>
       </div>
     </div>
   );
