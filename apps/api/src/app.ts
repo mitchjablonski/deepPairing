@@ -13,6 +13,8 @@ import { ReasoningTracker } from "./services/reasoning-tracker.js";
 import { ForkManager } from "./services/fork-manager.js";
 import { GitWorktreeManager } from "./services/worktree-manager.js";
 import { ArtifactStore } from "./services/artifact-store.js";
+import { FileCache } from "./services/file-cache.js";
+import { createFileRoutes } from "./routes/files.js";
 import {
   FakeArtifactRepository,
   FakeCommentRepository,
@@ -28,6 +30,7 @@ const sessionStore = new SessionStore();
 const decisionManager = new DecisionManager();
 const reasoningTracker = new ReasoningTracker();
 const artifactStore = new ArtifactStore(artifactRepo, commentRepo);
+const fileCache = new FileCache();
 const worktreeManager = new GitWorktreeManager();
 
 // Plan review callback — blocks via a deferred promise, resolved by HTTP endpoint
@@ -58,11 +61,12 @@ export const app = new Hono();
 app.use("/*", cors());
 
 app.route("/", healthRoute);
-app.route("/", createSessionRoutes(agentService, sessionStore));
+app.route("/", createSessionRoutes(agentService, sessionStore, { fileCache }));
 app.route("/", createDecisionRoutes(decisionManager, sessionStore));
 app.route("/", createForkRoutes(forkManager, sessionStore));
 app.route("/", createArtifactRoutes(artifactStore, pendingPlanReviews, sessionStore));
 app.route("/", createCommentRoutes(artifactStore));
+app.route("/", createFileRoutes(fileCache));
 
 // Export for testing and route access
 export {
@@ -71,6 +75,7 @@ export {
   decisionManager,
   reasoningTracker,
   artifactStore,
+  fileCache,
   forkManager,
   pendingPlanReviews,
 };
