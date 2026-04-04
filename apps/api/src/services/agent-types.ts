@@ -5,6 +5,8 @@ export interface AgentSession {
   id: string;
   status: "running" | "completed" | "error";
   emitter: EventEmitter;
+  /** Buffer of all emitted events — replayed when SSE client connects */
+  eventBuffer: AgentEvent[];
 }
 
 export interface StartSessionOptions {
@@ -26,11 +28,13 @@ export const AGENT_EVENTS = {
   error: "agent:error",
 } as const;
 
-/** Emit a typed agent event on a session emitter */
+/** Emit a typed agent event on a session emitter, and buffer it */
 export function emitAgentEvent(
   emitter: EventEmitter,
   event: AgentEvent,
+  buffer?: AgentEvent[],
 ): void {
+  buffer?.push(event);
   emitter.emit(AGENT_EVENTS.event, event);
 }
 

@@ -533,7 +533,7 @@ export class FakeAgentService implements AgentService {
   async startSession(options: StartSessionOptions): Promise<AgentSession> {
     const id = options.sessionId ?? `fake_session_${this.nextId++}`;
     const emitter = new EventEmitter();
-    const session: AgentSession = { id, status: "running", emitter };
+    const session: AgentSession = { id, status: "running", emitter, eventBuffer: [] };
     this.sessions.set(id, session);
 
     const abortController = new AbortController();
@@ -603,7 +603,7 @@ export class FakeAgentService implements AgentService {
       await new Promise((resolve) => setTimeout(resolve, delay));
       if (signal.aborted) break;
 
-      emitAgentEvent(session.emitter, event);
+      emitAgentEvent(session.emitter, event, session.eventBuffer);
 
       // Pause at decision points — wait for human to resolve via emitter
       if (event.type === "decision_request" && scenario.pauseAtDecisions) {

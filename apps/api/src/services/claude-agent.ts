@@ -36,7 +36,7 @@ export class ClaudeAgentService implements AgentService {
     const abortController = new AbortController();
     const id = options.sessionId ?? crypto.randomUUID();
 
-    const session: AgentSession = { id, status: "running", emitter };
+    const session: AgentSession = { id, status: "running", emitter, eventBuffer: [] };
     this.sessions.set(id, session);
     this.abortControllers.set(id, abortController);
 
