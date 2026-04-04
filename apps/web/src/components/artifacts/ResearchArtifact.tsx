@@ -1,9 +1,10 @@
-import type { Artifact, Evidence } from "@deeppairing/shared";
-import { CommentTrigger } from "../CommentThread";
+import type { Artifact, Evidence, Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
-import { useState } from "react";
+import { CommentableCode } from "../CommentableCode";
+import { CommentTrigger } from "../CommentThread";
+import { useState, useMemo } from "react";
 
 interface ResearchArtifactProps {
   artifact: Artifact;
@@ -30,96 +31,117 @@ function EvidenceItem({
   artifactId,
   findingIndex,
   evidenceIndex,
+  allComments,
 }: {
   evidence: Evidence;
   artifactId: string;
   findingIndex: number;
   evidenceIndex: number;
+  allComments: Comment[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showFullFile, setShowFullFile] = useState(false);
-  const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
-  const evComments = comments.filter(
-    (c) => c.target.findingIndex === findingIndex && c.target.evidenceIndex === evidenceIndex,
-  );
+
+  // Build a map of comments by line number for this evidence
+  const commentsByLine = useMemo(() => {
+    const map = new Map<number, Comment[]>();
+    for (const c of allComments) {
+      if (
+        c.target.findingIndex === findingIndex &&
+        c.target.evidenceIndex === evidenceIndex &&
+        c.target.lineStart != null
+      ) {
+        const existing = map.get(c.target.lineStart) ?? [];
+        existing.push(c);
+        map.set(c.target.lineStart, existing);
+      }
+    }
+    return map;
+  }, [allComments, findingIndex, evidenceIndex]);
 
   return (
     <>
-    {showFullFile && (
-      <FileViewer
-        filePath={evidence.filePath}
-        highlightStart={evidence.lineStart}
-        highlightEnd={evidence.lineEnd}
-        artifactId={artifactId}
-        onClose={() => setShowFullFile(false)}
-      />
-    )}
-    <div className="mt-2 border border-gray-200 rounded-md overflow-hidden">
-      {/* File header */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-2.5 py-1.5 bg-gray-100 text-xs hover:bg-gray-150 transition-colors"
-      >
-        <span className="font-mono text-gray-600">
-          {evidence.filePath}:{evidence.lineStart}-{evidence.lineEnd}
-        </span>
-        <div className="flex items-center gap-2">
-          <span
-            onClick={(e) => { e.stopPropagation(); setShowFullFile(true); }}
-            className="text-blue-500 hover:text-blue-700 cursor-pointer hover:underline"
-          >
-            Open file
-          </span>
-          {evidence.relatedPaths && evidence.relatedPaths.length > 0 && (
-            <span className="text-gray-400">+{evidence.relatedPaths.length} related</span>
-          )}
-          <CommentTrigger
-            artifactId={artifactId}
-            target={{ findingIndex, evidenceIndex }}
-            existingCount={evComments.length}
-          />
-          <span className="text-gray-300">{expanded ? "▼" : "▶"}</span>
-        </div>
-      </button>
-
-      {/* Code snippet */}
-      <div className="bg-gray-50 border-t border-gray-200">
-        <pre className="px-3 py-2 text-xs font-mono text-gray-800 overflow-x-auto whitespace-pre">
-          {evidence.snippet}
-        </pre>
-      </div>
-
-      {/* Explanation */}
-      <div className="px-3 py-2 bg-amber-50 border-t border-gray-200 text-xs text-gray-700">
-        {evidence.explanation}
-      </div>
-
-      {/* Expanded: context + related paths */}
-      {expanded && (
-        <>
-          {evidence.context && (
-            <div className="border-t border-gray-200">
-              <div className="px-2.5 py-1 bg-gray-100 text-[10px] font-semibold text-gray-500 uppercase">
-                Full Context
-              </div>
-              <pre className="px-3 py-2 text-xs font-mono text-gray-600 overflow-x-auto whitespace-pre bg-gray-50">
-                {evidence.context}
-              </pre>
-            </div>
-          )}
-          {evidence.relatedPaths && evidence.relatedPaths.length > 0 && (
-            <div className="px-3 py-2 border-t border-gray-200 text-xs">
-              <span className="font-medium text-gray-500">Also appears in: </span>
-              {evidence.relatedPaths.map((p) => (
-                <span key={p} className="inline-block px-1.5 py-0.5 bg-gray-100 rounded font-mono text-gray-600 mr-1">
-                  {p}
-                </span>
-              ))}
-            </div>
-          )}
-        </>
+      {showFullFile && (
+        <FileViewer
+          filePath={evidence.filePath}
+          highlightStart={evidence.lineStart}
+          highlightEnd={evidence.lineEnd}
+          artifactId={artifactId}
+          onClose={() => setShowFullFile(false)}
+        />
       )}
-    </div>
+      <div className="mt-2 rounded-md overflow-hidden border border-gray-200">
+        {/* File header */}
+        <div className="flex items-center justify-between px-2.5 py-1.5 bg-gray-100 text-xs">
+          <span className="font-mono text-gray-600">
+            {evidence.filePath}:{evidence.lineStart}-{evidence.lineEnd}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFullFile(true)}
+              className="text-gray-400 hover:text-blue-600 transition-colors"
+              title="Open full file"
+            >
+              Open file
+            </button>
+            {evidence.relatedPaths && evidence.relatedPaths.length > 0 && (
+              <span className="text-gray-400">+{evidence.relatedPaths.length} related</span>
+            )}
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="text-gray-300 hover:text-gray-500"
+            >
+              {expanded ? "▼" : "▶"}
+            </button>
+          </div>
+        </div>
+
+        {/* Commentable code snippet — hover line to see +, click to comment */}
+        <CommentableCode
+          code={evidence.snippet}
+          language={evidence.language}
+          lineStart={evidence.lineStart}
+          filePath={evidence.filePath}
+          artifactId={artifactId}
+          commentsByLine={commentsByLine}
+          targetContext={{ findingIndex, evidenceIndex }}
+        />
+
+        {/* Explanation */}
+        <div className="px-3 py-2 bg-amber-50/80 border-t border-gray-700/20 text-xs text-gray-700">
+          {evidence.explanation}
+        </div>
+
+        {/* Expanded: context + related paths */}
+        {expanded && (
+          <>
+            {evidence.context && (
+              <div className="border-t border-gray-200">
+                <div className="px-2.5 py-1 bg-gray-100 text-[10px] font-semibold text-gray-500 uppercase">
+                  Full Context
+                </div>
+                <CommentableCode
+                  code={evidence.context}
+                  lineStart={1}
+                  filePath={evidence.filePath}
+                  artifactId={artifactId}
+                  targetContext={{ findingIndex, evidenceIndex }}
+                />
+              </div>
+            )}
+            {evidence.relatedPaths && evidence.relatedPaths.length > 0 && (
+              <div className="px-3 py-2 border-t border-gray-200 text-xs bg-gray-50">
+                <span className="font-medium text-gray-500">Also appears in: </span>
+                {evidence.relatedPaths.map((p) => (
+                  <span key={p} className="inline-block px-1.5 py-0.5 bg-gray-200 rounded font-mono text-gray-600 mr-1">
+                    {p}
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </>
   );
 }
@@ -128,6 +150,7 @@ function renderEvidence(
   evidence: string | Evidence[],
   artifactId: string,
   findingIndex: number,
+  allComments: Comment[],
 ) {
   if (typeof evidence === "string") {
     return <p className="text-gray-400 mt-0.5 font-mono text-[11px]">{evidence}</p>;
@@ -142,6 +165,7 @@ function renderEvidence(
           artifactId={artifactId}
           findingIndex={findingIndex}
           evidenceIndex={evIdx}
+          allComments={allComments}
         />
       ))}
     </div>
@@ -169,7 +193,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
           </h4>
           {content.findings.map((finding, i) => {
             const findingComments = comments.filter(
-              (c) => c.target.findingIndex === i && c.target.evidenceIndex == null,
+              (c) => c.target.findingIndex === i && c.target.evidenceIndex == null && c.target.lineStart == null,
             );
             return (
               <div key={i} className="p-3 bg-gray-50 rounded-lg border border-gray-100">
@@ -193,8 +217,8 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
                 {/* Detail */}
                 <p className="text-xs text-gray-700 mt-1">{finding.detail}</p>
 
-                {/* Evidence */}
-                {renderEvidence(finding.evidence, artifact.id, i)}
+                {/* Evidence — now with inline commenting on code lines */}
+                {renderEvidence(finding.evidence, artifact.id, i, comments)}
 
                 {/* Impact */}
                 {finding.impact && (
