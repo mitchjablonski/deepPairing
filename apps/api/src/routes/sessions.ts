@@ -7,6 +7,7 @@ import type { AgentService } from "../services/agent-types.js";
 import { AGENT_EVENTS, onAgentEvent } from "../services/agent-types.js";
 import { SessionStore } from "../services/session-store.js";
 import type { SessionRepository, EventRepository, DecisionRepository } from "../repositories/types.js";
+import type { FileCache } from "../services/file-cache.js";
 
 export interface SessionRouteDeps {
   agentService: AgentService;
@@ -14,6 +15,7 @@ export interface SessionRouteDeps {
   sessionRepo?: SessionRepository;
   eventRepo?: EventRepository;
   decisionRepo?: DecisionRepository;
+  fileCache?: FileCache;
 }
 
 export function createSessionRoutes(
@@ -21,6 +23,7 @@ export function createSessionRoutes(
   sessionStore: SessionStore,
   deps?: Partial<SessionRouteDeps>,
 ) {
+  const fileCache = deps?.fileCache;
   const { sessionRepo, eventRepo, decisionRepo } = deps ?? {};
   const router = new Hono();
 
@@ -76,6 +79,7 @@ export function createSessionRoutes(
       // Replay buffered events (events emitted before SSE client connected)
       if (session.eventBuffer) {
         for (const bufferedEvent of session.eventBuffer) {
+          fileCache?.processEvent(bufferedEvent);
           await sendEvent(bufferedEvent);
         }
       }
@@ -89,8 +93,9 @@ export function createSessionRoutes(
         return;
       }
 
-      // Stream events as they arrive
+      // Stream events as they arrive, and cache file contents
       const handler = (event: AgentEvent) => {
+        fileCache?.processEvent(event);
         sendEvent(event).catch(() => {
           // Stream closed by client
         });

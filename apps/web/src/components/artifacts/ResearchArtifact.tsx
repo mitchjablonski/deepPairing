@@ -2,6 +2,7 @@ import type { Artifact, Evidence } from "@deeppairing/shared";
 import { CommentTrigger } from "../CommentThread";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
+import { FileViewer } from "./FileViewer";
 import { useState } from "react";
 
 interface ResearchArtifactProps {
@@ -36,12 +37,22 @@ function EvidenceItem({
   evidenceIndex: number;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showFullFile, setShowFullFile] = useState(false);
   const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
   const evComments = comments.filter(
     (c) => c.target.findingIndex === findingIndex && c.target.evidenceIndex === evidenceIndex,
   );
 
   return (
+    <>
+    {showFullFile && (
+      <FileViewer
+        filePath={evidence.filePath}
+        highlightStart={evidence.lineStart}
+        highlightEnd={evidence.lineEnd}
+        onClose={() => setShowFullFile(false)}
+      />
+    )}
     <div className="mt-2 border border-gray-200 rounded-md overflow-hidden">
       {/* File header */}
       <button
@@ -52,6 +63,12 @@ function EvidenceItem({
           {evidence.filePath}:{evidence.lineStart}-{evidence.lineEnd}
         </span>
         <div className="flex items-center gap-2">
+          <span
+            onClick={(e) => { e.stopPropagation(); setShowFullFile(true); }}
+            className="text-blue-500 hover:text-blue-700 cursor-pointer hover:underline"
+          >
+            Open file
+          </span>
           {evidence.relatedPaths && evidence.relatedPaths.length > 0 && (
             <span className="text-gray-400">+{evidence.relatedPaths.length} related</span>
           )}
@@ -102,6 +119,7 @@ function EvidenceItem({
         </>
       )}
     </div>
+    </>
   );
 }
 
