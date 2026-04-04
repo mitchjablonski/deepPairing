@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useSessionStore } from "../stores/session";
+import { useHighlightedCode } from "../hooks/useHighlightedCode";
+import { detectLanguage } from "../lib/highlighter";
 
 interface CommentableCodeProps {
   code: string;
@@ -21,7 +23,7 @@ interface CommentableCodeProps {
 
 export function CommentableCode({
   code,
-  language: _language,
+  language,
   lineStart = 1,
   filePath,
   artifactId,
@@ -34,7 +36,10 @@ export function CommentableCode({
   const { submitComment } = useArtifactStore();
   const sessionId = useSessionStore((s) => s.sessionId);
 
-  const lines = code.split("\n");
+  const resolvedLang = language ?? (filePath ? detectLanguage(filePath) : "text");
+  const { lines: highlightedLines } = useHighlightedCode(code, resolvedLang);
+  const plainLines = code.split("\n");
+  const lines = plainLines;
 
   const handleSubmit = async (lineNum: number) => {
     if (!commentText.trim() || !sessionId || submitting) return;
@@ -64,7 +69,7 @@ export function CommentableCode({
   };
 
   return (
-    <div className="font-mono text-xs leading-5 bg-gray-900 rounded overflow-hidden">
+    <div className="font-mono text-xs leading-5 bg-surface-code rounded overflow-hidden">
       {lines.map((line, i) => {
         const lineNum = lineStart + i;
         const lineComments = commentsByLine?.get(lineNum) ?? [];
@@ -98,14 +103,21 @@ export function CommentableCode({
               </div>
 
               {/* Line number */}
-              <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-gray-500 select-none border-r border-gray-700/50">
+              <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-text-muted select-none border-r border-border-subtle">
                 {lineNum}
               </span>
 
-              {/* Code content */}
-              <span className="px-3 py-0.5 whitespace-pre flex-1 text-gray-200 overflow-x-auto">
-                {line || " "}
-              </span>
+              {/* Code content — syntax highlighted when available */}
+              {highlightedLines?.[i] ? (
+                <span
+                  className="px-3 py-0.5 whitespace-pre flex-1 overflow-x-auto"
+                  dangerouslySetInnerHTML={{ __html: highlightedLines[i] || "&nbsp;" }}
+                />
+              ) : (
+                <span className="px-3 py-0.5 whitespace-pre flex-1 text-text-primary overflow-x-auto">
+                  {line || " "}
+                </span>
+              )}
             </div>
 
             {/* Existing comments on this line */}
@@ -120,12 +132,12 @@ export function CommentableCode({
                 {lineComments.map((c) => (
                   <div
                     key={c.id}
-                    className="flex items-start gap-2 px-3 py-1.5 bg-blue-900/40 rounded text-xs mb-0.5"
+                    className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs mb-0.5"
                   >
-                    <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-blue-300" : "text-gray-400"}`}>
+                    <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
                       {c.author === "human" ? "You" : "Agent"}:
                     </span>
-                    <span className="text-gray-300">{c.content}</span>
+                    <span className="text-text-secondary">{c.content}</span>
                   </div>
                 ))}
               </div>
@@ -140,12 +152,12 @@ export function CommentableCode({
                     {lineComments.map((c) => (
                       <div
                         key={c.id}
-                        className="flex items-start gap-2 px-3 py-1.5 bg-blue-900/40 rounded text-xs"
+                        className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs"
                       >
-                        <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-blue-300" : "text-gray-400"}`}>
+                        <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
                           {c.author === "human" ? "You" : "Agent"}:
                         </span>
-                        <span className="text-gray-300">{c.content}</span>
+                        <span className="text-text-secondary">{c.content}</span>
                       </div>
                     ))}
                   </div>
@@ -169,14 +181,14 @@ export function CommentableCode({
                     }}
                     disabled={submitting}
                     autoFocus
-                    className="flex-1 px-2.5 py-1.5 bg-gray-800 border border-gray-600 rounded text-xs text-gray-200
-                               placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    className="flex-1 px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                               placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                   />
                   <button
                     onClick={() => handleSubmit(lineNum)}
                     disabled={!commentText.trim() || submitting}
                     className="px-2.5 py-1.5 bg-blue-600 text-white text-xs rounded
-                               hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
+                               hover:bg-blue-700 disabled:bg-gray-700 disabled:text-text-muted transition-colors"
                   >
                     Comment
                   </button>
@@ -185,7 +197,7 @@ export function CommentableCode({
                       setActiveCommentLine(null);
                       setCommentText("");
                     }}
-                    className="px-2 py-1.5 text-gray-500 text-xs hover:text-gray-300 transition-colors"
+                    className="px-2 py-1.5 text-text-muted text-xs hover:text-text-secondary transition-colors"
                   >
                     Cancel
                   </button>
