@@ -73,6 +73,13 @@ export function createSessionRoutes(
         }),
       });
 
+      // Replay buffered events (events emitted before SSE client connected)
+      if (session.eventBuffer) {
+        for (const bufferedEvent of session.eventBuffer) {
+          await sendEvent(bufferedEvent);
+        }
+      }
+
       if (session.status === "completed" || session.status === "error") {
         await stream.writeSSE({
           id: String(eventId++),
