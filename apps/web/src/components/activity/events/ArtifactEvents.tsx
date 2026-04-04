@@ -1,13 +1,6 @@
 import type { AgentEvent } from "@deeppairing/shared";
 import { useArtifactStore } from "../../../stores/artifact";
-
-const typeIcons: Record<string, string> = {
-  research: "🔍",
-  plan: "📋",
-  decision: "⚖️",
-  code_change: "✏️",
-  reasoning: "💭",
-};
+import { ArtifactIcon } from "../../icons/ArtifactIcons";
 
 export function ArtifactCreatedEvent({ event }: { event: AgentEvent & { type: "artifact_created" } }) {
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
@@ -18,7 +11,7 @@ export function ArtifactCreatedEvent({ event }: { event: AgentEvent & { type: "a
       className="mx-3 my-2 w-[calc(100%-1.5rem)] text-left p-3 bg-accent-blue-dim/40 border border-accent-blue/15 rounded-lg hover:bg-accent-blue-dim/60 transition-colors"
     >
       <div className="flex items-center gap-2">
-        <span className="text-base">{typeIcons[event.artifact.type] ?? "📄"}</span>
+        <ArtifactIcon type={event.artifact.type} className="w-4 h-4 text-accent-blue" />
         <span className="text-sm font-medium text-text-primary">{event.artifact.title}</span>
         <span className="ml-auto px-1.5 py-0.5 text-2xs font-medium bg-accent-blue-dim text-accent-blue rounded">
           {event.artifact.status}
