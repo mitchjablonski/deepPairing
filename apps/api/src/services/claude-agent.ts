@@ -102,11 +102,12 @@ export class ClaudeAgentService implements AgentService {
         allowedTools: [
           "Read", "Glob", "Grep", "Bash", "Edit", "Write",
           "WebSearch", "WebFetch",
+          "mcp__deeppairing__*", // All deepPairing collaboration tools
         ],
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         abortController,
-        settingSources: [],
+        settingSources: ["project"], // Load target project's CLAUDE.md for context
         mcpServers: {
           deeppairing: mcpServer,
         },
