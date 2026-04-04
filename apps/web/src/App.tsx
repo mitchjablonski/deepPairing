@@ -4,8 +4,9 @@ import { AgentStatusBar } from "./components/AgentStatusBar";
 import { ActivityStream } from "./components/activity/ActivityStream";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { Sidebar } from "./components/Sidebar";
+import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { useArtifactStore } from "./stores/artifact";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePreferencesStore } from "./stores/preferences";
 
 function ResizeHandle() {
@@ -20,15 +21,26 @@ function ResizeHandle() {
 
 function App() {
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
-  // Preferences store used in keyboard shortcut effect below
+  const [showHelp, setShowHelp] = useState(false);
 
-  // Keyboard shortcuts for panels
+  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Don't capture when typing in inputs
       const mod = e.metaKey || e.ctrlKey;
+
       if (mod && e.key === "b") {
         e.preventDefault();
         usePreferencesStore.getState().toggleSidebar();
+      }
+
+      if (mod && e.key === "/") {
+        e.preventDefault();
+        setShowHelp((v) => !v);
+      }
+
+      if (e.key === "Escape") {
+        setShowHelp(false);
       }
     };
     document.addEventListener("keydown", handler);
@@ -37,12 +49,9 @@ function App() {
 
   return (
     <div className="h-screen bg-surface-primary text-text-primary flex">
-      {/* Sidebar — outside panel group since it has its own collapse logic */}
       <Sidebar />
 
-      {/* Main content panels */}
       <PanelGroup orientation="horizontal" className="flex-1">
-        {/* Activity panel */}
         <Panel defaultSize={hasArtifacts ? 55 : 100} minSize={30}>
           <div className="flex flex-col h-full">
             <PromptInput />
@@ -51,7 +60,6 @@ function App() {
           </div>
         </Panel>
 
-        {/* Artifact panel — visible when artifacts exist */}
         {hasArtifacts && (
           <>
             <ResizeHandle />
@@ -63,6 +71,9 @@ function App() {
           </>
         )}
       </PanelGroup>
+
+      {/* Keyboard shortcut help overlay */}
+      {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}
     </div>
   );
 }
