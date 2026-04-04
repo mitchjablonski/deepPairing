@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { ActivityStream } from "../ActivityStream";
+import { ActivityStream } from "../activity/ActivityStream";
 import { useSessionStore } from "../../stores/session";
 import type { AgentEvent } from "@deeppairing/shared";
 
@@ -67,10 +67,13 @@ describe("ActivityStream", () => {
     expect(screen.getByText("120ms")).toBeInTheDocument();
   });
 
-  it("renders status dividers", () => {
-    setEvents([{ type: "status", phase: "gathering" }]);
+  it("renders phase group headers for status events", () => {
+    setEvents([
+      { type: "status", phase: "gathering" },
+      { type: "text", content: "Researching..." },
+    ]);
     render(<ActivityStream />);
-    expect(screen.getByText("gathering")).toBeInTheDocument();
+    expect(screen.getByText("Gathering")).toBeInTheDocument();
   });
 
   it("renders result blocks", () => {
@@ -174,23 +177,18 @@ describe("ActivityStream", () => {
     expect(screen.queryByText("orphan result")).not.toBeInTheDocument();
   });
 
-  it("renders multiple events in order", () => {
+  it("renders multiple events grouped by phase", () => {
     setEvents([
       { type: "status", phase: "gathering" },
       { type: "text", content: "Starting analysis." },
-      {
-        type: "tool_call",
-        toolCallId: "tc_001",
-        tool: "Read",
-        input: {},
-        summary: "Read file",
-      },
       { type: "status", phase: "presenting" },
       { type: "result", content: "Done.", stopReason: "end_turn" },
     ], "completed");
     render(<ActivityStream />);
-    expect(screen.getByText("Starting analysis.")).toBeInTheDocument();
-    expect(screen.getByText("Read")).toBeInTheDocument();
+    // Phase headers should appear
+    expect(screen.getByText("Gathering")).toBeInTheDocument();
+    expect(screen.getByText("Presenting")).toBeInTheDocument();
+    // Latest phase (presenting) should be expanded with its content
     expect(screen.getByText("Done.")).toBeInTheDocument();
   });
 });

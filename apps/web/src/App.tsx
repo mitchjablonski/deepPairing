@@ -1,7 +1,7 @@
 import { Panel, Group as PanelGroup, Separator } from "react-resizable-panels";
 import { PromptInput } from "./components/PromptInput";
 import { AgentStatusBar } from "./components/AgentStatusBar";
-import { ActivityStream } from "./components/ActivityStream";
+import { ActivityStream } from "./components/activity/ActivityStream";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { Sidebar } from "./components/Sidebar";
 import { useArtifactStore } from "./stores/artifact";
