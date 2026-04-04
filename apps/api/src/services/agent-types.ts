@@ -1,0 +1,43 @@
+import { EventEmitter } from "node:events";
+import type { AgentEvent } from "@deeppairing/shared";
+
+export interface AgentSession {
+  id: string;
+  status: "running" | "completed" | "error";
+  emitter: EventEmitter;
+}
+
+export interface StartSessionOptions {
+  prompt: string;
+  cwd: string;
+  sessionId?: string;
+}
+
+export interface AgentService {
+  startSession(options: StartSessionOptions): Promise<AgentSession>;
+  stopSession(sessionId: string): void;
+  getSession(sessionId: string): AgentSession | undefined;
+}
+
+/** Typed event emitter helper — sessions emit these events */
+export const AGENT_EVENTS = {
+  event: "agent:event",
+  done: "agent:done",
+  error: "agent:error",
+} as const;
+
+/** Emit a typed agent event on a session emitter */
+export function emitAgentEvent(
+  emitter: EventEmitter,
+  event: AgentEvent,
+): void {
+  emitter.emit(AGENT_EVENTS.event, event);
+}
+
+/** Listen for typed agent events */
+export function onAgentEvent(
+  emitter: EventEmitter,
+  handler: (event: AgentEvent) => void,
+): void {
+  emitter.on(AGENT_EVENTS.event, handler);
+}
