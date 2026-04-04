@@ -1,9 +1,5 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { DecisionManager } from "../decision-manager.js";
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 describe("DecisionManager", () => {
   it("creates a pending decision and resolves it", async () => {
@@ -48,16 +44,16 @@ describe("DecisionManager", () => {
     ).toThrow("Invalid option id: opt_c");
   });
 
-  it("times out after configured duration", async () => {
-    vi.useFakeTimers();
-    const manager = new DecisionManager(1000); // 1 second timeout
+  it("waits indefinitely — no timeout", async () => {
+    const manager = new DecisionManager();
 
     const promise = manager.createPendingDecision("dec_004", ["opt_a"]);
+    expect(manager.isPending("dec_004")).toBe(true);
 
-    vi.advanceTimersByTime(1001);
-
-    await expect(promise).rejects.toThrow("timed out");
-    expect(manager.isPending("dec_004")).toBe(false);
+    // Resolve after any amount of time — the promise is still there
+    manager.resolveDecision("dec_004", { optionId: "opt_a" });
+    const result = await promise;
+    expect(result.optionId).toBe("opt_a");
   });
 
   it("returns all pending decision IDs", () => {
@@ -71,15 +67,38 @@ describe("DecisionManager", () => {
     expect(ids).toHaveLength(2);
   });
 
-  it("cancels all pending decisions", async () => {
+  it("cancels all pending decisions on shutdown", async () => {
     const manager = new DecisionManager();
     const p1 = manager.createPendingDecision("dec_x", ["opt_1"]);
     const p2 = manager.createPendingDecision("dec_y", ["opt_1"]);
 
     manager.cancelAll();
 
-    await expect(p1).rejects.toThrow("cancelled");
-    await expect(p2).rejects.toThrow("cancelled");
+    await expect(p1).rejects.toThrow("shutting down");
+    await expect(p2).rejects.toThrow("shutting down");
     expect(manager.getPendingIds()).toHaveLength(0);
+  });
+
+  it("cancels only the specified session's decisions", async () => {
+    const manager = new DecisionManager();
+    const p1 = manager.createPendingDecision("dec_s1", ["opt_1"], "sess_1");
+    const p2 = manager.createPendingDecision("dec_s2", ["opt_1"], "sess_2");
+
+    manager.cancelSession("sess_1");
+
+    await expect(p1).rejects.toThrow("Session sess_1 ended");
+    expect(manager.isPending("dec_s1")).toBe(false);
+    expect(manager.isPending("dec_s2")).toBe(true);
+
+    // Clean up — await the rejection to prevent unhandled error
+    manager.cancelAll();
+    await expect(p2).rejects.toThrow("shutting down");
+  });
+
+  it("tracks session ID when provided", () => {
+    const manager = new DecisionManager();
+    manager.createPendingDecision("dec_1", ["opt_a"], "sess_abc");
+
+    expect(manager.isPending("dec_1")).toBe(true);
   });
 });

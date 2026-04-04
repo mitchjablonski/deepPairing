@@ -3,33 +3,37 @@ import type { DecisionResponse } from "@deeppairing/shared";
 interface PendingDecision {
   resolve: (response: DecisionResponse) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
   optionIds: string[];
+  sessionId: string;
+  createdAt: number;
 }
 
+/**
+ * Manages pending decisions that block agent execution until the human responds.
+ *
+ * No timeouts. The agent waits as long as the human needs. If the session
+ * is abandoned, call cancelSession() to clean up — don't auto-resolve.
+ */
 export class DecisionManager {
   private pending = new Map<string, PendingDecision>();
-  private timeoutMs: number;
-
-  constructor(timeoutMs = 5 * 60 * 1000) {
-    this.timeoutMs = timeoutMs;
-  }
 
   /**
-   * Create a pending decision that blocks until resolved.
-   * Returns a Promise that resolves when the human responds.
+   * Create a pending decision that blocks until the human responds.
+   * No timeout — the human takes as long as they need.
    */
   createPendingDecision(
     decisionId: string,
     optionIds: string[],
+    sessionId?: string,
   ): Promise<DecisionResponse> {
     return new Promise<DecisionResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(decisionId);
-        reject(new Error(`Decision ${decisionId} timed out after ${this.timeoutMs}ms`));
-      }, this.timeoutMs);
-
-      this.pending.set(decisionId, { resolve, reject, timer, optionIds });
+      this.pending.set(decisionId, {
+        resolve,
+        reject,
+        optionIds,
+        sessionId: sessionId ?? "unknown",
+        createdAt: Date.now(),
+      });
     });
   }
 
@@ -48,32 +52,37 @@ export class DecisionManager {
       );
     }
 
-    clearTimeout(pending.timer);
     this.pending.delete(decisionId);
     pending.resolve(response);
   }
 
-  /**
-   * Check if a decision is pending.
-   */
   isPending(decisionId: string): boolean {
     return this.pending.has(decisionId);
   }
 
-  /**
-   * Get all pending decision IDs.
-   */
   getPendingIds(): string[] {
     return Array.from(this.pending.keys());
   }
 
   /**
-   * Cancel all pending decisions (cleanup).
+   * Cancel all pending decisions for a session.
+   * Called when a session is abandoned or stopped — not on timeout.
+   */
+  cancelSession(sessionId: string): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.sessionId === sessionId) {
+        this.pending.delete(id);
+        pending.reject(new Error(`Session ${sessionId} ended`));
+      }
+    }
+  }
+
+  /**
+   * Cancel all pending decisions (server shutdown).
    */
   cancelAll(): void {
     for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error(`Decision ${id} cancelled`));
+      pending.reject(new Error(`Decision ${id} cancelled — server shutting down`));
     }
     this.pending.clear();
   }
