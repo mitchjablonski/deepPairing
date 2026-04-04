@@ -1,5 +1,6 @@
 import type { Artifact } from "@deeppairing/shared";
 import { CommentTrigger } from "../CommentThread";
+import { CommentableCode } from "../CommentableCode";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 
@@ -9,8 +10,10 @@ interface PlanArtifactProps {
 
 interface PlanStep {
   description: string;
-  files: string[];
+  files: (string | { filePath: string; description?: string; changeType?: string })[];
   reasoning: string;
+  motivatedBy?: string[];
+  preview?: { before: string; after: string; filePath: string };
 }
 
 export function PlanArtifact({ artifact }: PlanArtifactProps) {
@@ -22,14 +25,13 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
   return (
     <div className="space-y-4">
-      {/* Steps */}
       {content.steps && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               Implementation Steps ({content.steps.length})
             </h4>
-            {content.estimatedChanges && (
+            {content.estimatedChanges != null && (
               <span className="text-xs text-gray-400">
                 ~{content.estimatedChanges} file changes
               </span>
@@ -38,31 +40,45 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
           {content.steps.map((step, i) => {
             const stepComments = comments.filter(
-              (c) => c.target.stepIndex === i,
+              (c) => c.target.stepIndex === i && c.target.lineStart == null,
             );
             return (
               <div
                 key={i}
-                className="p-3 bg-gray-50 rounded-md border border-gray-100"
+                className="p-3 bg-gray-50 rounded-lg border border-gray-100"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2">
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
                     <span className="shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center mt-0.5">
                       {i + 1}
                     </span>
-                    <div>
+                    <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-800 font-medium">
                         {step.description}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5">
                         {step.reasoning}
                       </p>
+
+                      {/* Motivated by badges */}
+                      {step.motivatedBy && step.motivatedBy.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          <span className="text-[10px] text-gray-400">From:</span>
+                          {step.motivatedBy.map((m, mIdx) => (
+                            <span key={mIdx} className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">
+                              {m}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* File list */}
                       {step.files.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {step.files.map((f, fIdx) => {
-                            const filePath = typeof f === "string" ? f : (f as any).filePath;
-                            const desc = typeof f === "string" ? null : (f as any).description;
-                            const changeType = typeof f === "string" ? null : (f as any).changeType;
+                            const filePath = typeof f === "string" ? f : f.filePath;
+                            const desc = typeof f === "string" ? null : f.description;
+                            const changeType = typeof f === "string" ? null : f.changeType;
                             const changeIcon = changeType === "create" ? "+" : changeType === "delete" ? "-" : "~";
                             return (
                               <span
@@ -75,6 +91,32 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                               </span>
                             );
                           })}
+                        </div>
+                      )}
+
+                      {/* Before/after preview with inline commenting */}
+                      {step.preview && (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-[10px] font-semibold text-red-500 uppercase mb-0.5">Before</div>
+                            <CommentableCode
+                              code={step.preview.before}
+                              lineStart={1}
+                              filePath={step.preview.filePath}
+                              artifactId={artifact.id}
+                              targetContext={{ stepIndex: i }}
+                            />
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-semibold text-green-500 uppercase mb-0.5">After</div>
+                            <CommentableCode
+                              code={step.preview.after}
+                              lineStart={1}
+                              filePath={step.preview.filePath}
+                              artifactId={artifact.id}
+                              targetContext={{ stepIndex: i }}
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -91,7 +133,6 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
         </div>
       )}
 
-      {/* Actions */}
       <ArtifactStatusActions artifact={artifact} />
     </div>
   );
