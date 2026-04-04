@@ -346,7 +346,7 @@ export const artifactScenario: FakeScenario = {
       output: 'import { Router } from "express";\nimport bcrypt from "bcrypt";\n\nconst router = Router();\n\nrouter.post("/login", async (req, res) => {\n  const { email, password } = req.body;\n  // TODO: validate input\n  const user = await db.users.findByEmail(email);\n  if (!user || !await bcrypt.compare(password, user.passwordHash)) {\n    return res.status(401).json({ error: "Invalid credentials" });\n  }\n  res.json({ token: generateToken(user) });\n});',
       duration: 25,
     },
-    // Research findings artifact
+    // Research findings artifact — rich evidence with code snippets
     {
       type: "artifact_created",
       artifact: {
@@ -360,10 +360,70 @@ export const artifactScenario: FakeScenario = {
         content: {
           summary: "The authentication system has several areas for improvement across security, architecture, and testing.",
           findings: [
-            { category: "Security", detail: "Password hashing uses bcrypt with default salt rounds (10). OWASP recommends 12+ or switching to argon2.", evidence: "/src/routes/auth.ts:2", significance: "high" },
-            { category: "Security", detail: "No input validation on login endpoint — email and password are used directly from req.body.", evidence: "/src/routes/auth.ts:7", significance: "high" },
-            { category: "Architecture", detail: "Authentication logic is mixed directly into route handlers. No service layer separation.", evidence: "/src/routes/auth.ts", significance: "medium" },
-            { category: "Testing", detail: "No integration tests for the login flow. Only 2 unit tests exist for password hashing.", evidence: "/tests/auth/ (2 files)", significance: "medium" },
+            {
+              category: "Security",
+              title: "Weak Password Hashing",
+              detail: "Password hashing uses bcrypt with only 10 salt rounds, below the OWASP minimum recommendation of 12 rounds.",
+              evidence: [
+                {
+                  filePath: "/src/routes/auth.ts",
+                  lineStart: 2,
+                  lineEnd: 2,
+                  snippet: 'import bcrypt from "bcrypt";',
+                  language: "typescript",
+                  explanation: "Uses the bcrypt library. While bcrypt itself is not weak, the configuration (salt rounds) determines security.",
+                },
+                {
+                  filePath: "/src/routes/auth.ts",
+                  lineStart: 9,
+                  lineEnd: 11,
+                  snippet: '  if (!user || !await bcrypt.compare(password, user.passwordHash)) {\n    return res.status(401).json({ error: "Invalid credentials" });\n  }',
+                  language: "typescript",
+                  explanation: "bcrypt.compare uses the hash's embedded cost factor (10 rounds by default). OWASP recommends argon2id or bcrypt with 12+ rounds.",
+                  relatedPaths: ["/src/middleware/auth.ts"],
+                },
+              ],
+              significance: "high",
+              impact: "User passwords are vulnerable to offline brute-force attacks if the database is compromised.",
+              recommendation: "Switch to argon2id with OWASP-recommended parameters (memoryCost: 65536, timeCost: 3, parallelism: 4).",
+            },
+            {
+              category: "Security",
+              title: "Missing Input Validation",
+              detail: "The login endpoint accepts email and password directly from req.body without any validation.",
+              evidence: [
+                {
+                  filePath: "/src/routes/auth.ts",
+                  lineStart: 7,
+                  lineEnd: 8,
+                  snippet: '  const { email, password } = req.body;\n  // TODO: validate input',
+                  language: "typescript",
+                  explanation: "Destructures directly from req.body with a TODO comment acknowledging the missing validation.",
+                },
+              ],
+              significance: "high",
+              impact: "Vulnerable to oversized payloads, malformed emails, and potential injection.",
+              recommendation: "Add zod validation: z.string().email() for email, z.string().min(8).max(128) for password.",
+            },
+            {
+              category: "Architecture",
+              title: "Auth Logic Mixed with Routes",
+              detail: "Authentication business logic is embedded directly in Express route handlers rather than separated into a service layer.",
+              evidence: [
+                {
+                  filePath: "/src/routes/auth.ts",
+                  lineStart: 6,
+                  lineEnd: 13,
+                  snippet: 'router.post("/login", async (req, res) => {\n  const { email, password } = req.body;\n  // TODO: validate input\n  const user = await db.users.findByEmail(email);\n  if (!user || !await bcrypt.compare(password, user.passwordHash)) {\n    return res.status(401).json({ error: "Invalid credentials" });\n  }\n  res.json({ token: generateToken(user) });',
+                  language: "typescript",
+                  explanation: "Route handler does everything: validation, database lookup, password comparison, token generation, HTTP response.",
+                  relatedPaths: ["/src/middleware/auth.ts", "/src/routes/users.ts"],
+                },
+              ],
+              significance: "medium",
+              impact: "Testing requires mocking Express. Auth logic can't be reused in WebSocket or API key contexts.",
+              recommendation: "Extract to AuthService with validateCredentials() and hashPassword() methods.",
+            },
           ],
           openQuestions: [
             "Should we add rate limiting to the login endpoint?",
@@ -371,7 +431,7 @@ export const artifactScenario: FakeScenario = {
             "Should session tokens use JWT or opaque tokens?",
           ],
         },
-        agentReasoning: "Thorough review of auth module revealed both security vulnerabilities and architectural concerns.",
+        agentReasoning: "Thorough review of auth module revealed both critical security vulnerabilities and architectural concerns.",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
@@ -380,10 +440,9 @@ export const artifactScenario: FakeScenario = {
       type: "findings",
       summary: "The authentication system has several areas for improvement.",
       findings: [
-        { category: "Security", detail: "Weak password hashing (bcrypt, 10 rounds)", evidence: "/src/routes/auth.ts:2", significance: "high" as const },
-        { category: "Security", detail: "No input validation on login", evidence: "/src/routes/auth.ts:7", significance: "high" as const },
-        { category: "Architecture", detail: "Auth logic mixed with routes", evidence: "/src/routes/auth.ts", significance: "medium" as const },
-        { category: "Testing", detail: "No integration tests for login flow", evidence: "/tests/auth/", significance: "medium" as const },
+        { category: "Security", title: "Weak Password Hashing", detail: "bcrypt with only 10 salt rounds", evidence: [{ filePath: "/src/routes/auth.ts", lineStart: 2, lineEnd: 2, snippet: 'import bcrypt from "bcrypt";', language: "typescript", explanation: "Uses bcrypt with default 10 rounds" }], significance: "high" as const, impact: "Vulnerable to brute-force", recommendation: "Switch to argon2id" },
+        { category: "Security", title: "Missing Input Validation", detail: "No validation on login endpoint", evidence: [{ filePath: "/src/routes/auth.ts", lineStart: 7, lineEnd: 8, snippet: '  const { email, password } = req.body;\n  // TODO: validate input', language: "typescript", explanation: "Direct destructuring with TODO" }], significance: "high" as const },
+        { category: "Architecture", title: "Auth Logic Mixed with Routes", detail: "Business logic in route handlers", evidence: "/src/routes/auth.ts", significance: "medium" as const },
       ],
       openQuestions: ["Should we add rate limiting?", "Is MFA planned?"],
     },
@@ -440,14 +499,43 @@ export const artifactScenario: FakeScenario = {
         status: "draft" as const,
         content: {
           steps: [
-            { description: "Create AuthService class with argon2", files: ["/src/services/auth-service.ts"], reasoning: "Centralizes auth logic with modern hashing" },
-            { description: "Add input validation with zod", files: ["/src/schemas/auth.ts"], reasoning: "Validates email format and password requirements before processing" },
-            { description: "Update login route to use AuthService", files: ["/src/routes/auth.ts"], reasoning: "Replace inline bcrypt calls with service methods" },
-            { description: "Add integration tests", files: ["/tests/auth/integration.test.ts"], reasoning: "Verify the full login flow works end-to-end" },
+            {
+              description: "Create AuthService class with argon2",
+              files: [{ filePath: "/src/services/auth-service.ts", changeType: "create", description: "New service with validateCredentials() and hashPassword()" }],
+              reasoning: "Centralizes auth logic with modern hashing, enables unit testing",
+              motivatedBy: ["Weak Password Hashing", "Auth Logic Mixed with Routes"],
+              preview: {
+                before: "// No file exists yet",
+                after: 'import argon2 from "argon2";\n\nexport class AuthService {\n  async validateCredentials(email: string, password: string) {\n    const user = await db.users.findByEmail(email);\n    if (!user) return null;\n    const valid = await argon2.verify(user.passwordHash, password);\n    return valid ? user : null;\n  }\n}',
+                filePath: "/src/services/auth-service.ts",
+              },
+            },
+            {
+              description: "Add input validation with zod",
+              files: [{ filePath: "/src/schemas/auth.ts", changeType: "create", description: "Login request schema" }],
+              reasoning: "Validates email format and password requirements before processing",
+              motivatedBy: ["Missing Input Validation"],
+            },
+            {
+              description: "Update login route to use AuthService",
+              files: [{ filePath: "/src/routes/auth.ts", changeType: "modify", description: "Replace inline bcrypt with service calls" }],
+              reasoning: "Replace inline bcrypt calls with service methods, add validation middleware",
+              motivatedBy: ["Weak Password Hashing", "Missing Input Validation", "Auth Logic Mixed with Routes"],
+              preview: {
+                before: 'import bcrypt from "bcrypt";\n\nrouter.post("/login", async (req, res) => {\n  const { email, password } = req.body;\n  const user = await db.users.findByEmail(email);\n  if (!user || !await bcrypt.compare(password, user.passwordHash)) {',
+                after: 'import { AuthService } from "../services/auth-service";\nimport { loginSchema } from "../schemas/auth";\n\nconst authService = new AuthService();\n\nrouter.post("/login", async (req, res) => {\n  const parsed = loginSchema.safeParse(req.body);\n  if (!parsed.success) return res.status(400).json(parsed.error);\n  const user = await authService.validateCredentials(parsed.data.email, parsed.data.password);\n  if (!user) return res.status(401).json({ error: "Invalid credentials" });',
+                filePath: "/src/routes/auth.ts",
+              },
+            },
+            {
+              description: "Add integration tests",
+              files: [{ filePath: "/tests/auth/integration.test.ts", changeType: "create", description: "End-to-end login flow tests" }],
+              reasoning: "Verify the full login flow works end-to-end after refactoring",
+            },
           ],
           estimatedChanges: 4,
         },
-        agentReasoning: "Service pattern with 4 focused changes. Each step is independently verifiable.",
+        agentReasoning: "Service pattern with 4 focused changes. Each step addresses specific findings and is independently verifiable.",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
