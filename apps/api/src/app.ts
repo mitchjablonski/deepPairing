@@ -61,7 +61,7 @@ app.route("/", healthRoute);
 app.route("/", createSessionRoutes(agentService, sessionStore));
 app.route("/", createDecisionRoutes(decisionManager, sessionStore));
 app.route("/", createForkRoutes(forkManager, sessionStore));
-app.route("/", createArtifactRoutes(artifactStore, pendingPlanReviews));
+app.route("/", createArtifactRoutes(artifactStore, pendingPlanReviews, sessionStore));
 app.route("/", createCommentRoutes(artifactStore));
 
 // Export for testing and route access

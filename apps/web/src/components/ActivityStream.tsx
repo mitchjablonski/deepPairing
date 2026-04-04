@@ -3,6 +3,7 @@ import type { AgentEvent, ToolResultEvent } from "@deeppairing/shared";
 import { ToolCallCard } from "./ToolCallCard";
 import { DecisionCard } from "./DecisionCard";
 import { useSessionStore } from "../stores/session";
+import { useArtifactStore } from "../stores/artifact";
 
 function TextBlock({ content }: { content: string }) {
   return (
@@ -92,6 +93,44 @@ function ReasoningBlock({ event }: { event: AgentEvent & { type: "reasoning" } }
       <span className="text-gray-700">{event.action}</span>
       <p className="text-gray-500 mt-0.5">{event.reasoning}</p>
     </div>
+  );
+}
+
+const artifactTypeIcons: Record<string, string> = {
+  research: "🔍",
+  plan: "📋",
+  decision: "⚖️",
+  code_change: "✏️",
+  reasoning: "💭",
+};
+
+function ArtifactCard({
+  type,
+  title,
+  status,
+  artifactId,
+}: {
+  type: string;
+  title: string;
+  status: string;
+  artifactId: string;
+}) {
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+
+  return (
+    <button
+      onClick={() => selectArtifact(artifactId)}
+      className="mx-3 my-2 w-[calc(100%-1.5rem)] text-left p-3 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors"
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-base">{artifactTypeIcons[type] ?? "📄"}</span>
+        <span className="text-sm font-medium text-indigo-900">{title}</span>
+        <span className="ml-auto px-1.5 py-0.5 text-[10px] font-medium bg-indigo-100 text-indigo-700 rounded">
+          {status}
+        </span>
+      </div>
+      <p className="text-xs text-indigo-600 mt-1">Click to view in artifact panel →</p>
+    </button>
   );
 }
 
@@ -186,6 +225,42 @@ export function ActivityStream() {
                   <span className="font-semibold text-orange-700">{event.changeType}</span>{" "}
                   <span className="text-gray-700 font-mono">{event.filePath}</span>
                 </div>
+              );
+            case "artifact_created":
+              return (
+                <ArtifactCard
+                  key={i}
+                  type={event.artifact.type}
+                  title={event.artifact.title}
+                  status={event.artifact.status}
+                  artifactId={event.artifact.id}
+                />
+              );
+            case "artifact_updated":
+              return (
+                <div key={i} className="mx-3 my-1 px-3 py-1.5 bg-blue-50 border-l-3 border-blue-400 rounded-r-md text-xs">
+                  <span className="font-semibold text-blue-700">Artifact updated</span>{" "}
+                  <span className="text-gray-600">→ {event.status}</span>
+                </div>
+              );
+            case "comment_added":
+              return (
+                <div key={i} className="mx-3 my-1 px-3 py-1.5 bg-blue-50 border-l-3 border-blue-300 rounded-r-md text-xs">
+                  <span className="font-medium text-blue-700">
+                    {event.comment.author === "human" ? "You" : "Agent"}
+                  </span>{" "}
+                  <span className="text-gray-600">commented: {event.comment.content.slice(0, 80)}{event.comment.content.length > 80 ? "..." : ""}</span>
+                </div>
+              );
+            case "plan_review_request":
+              return (
+                <ArtifactCard
+                  key={i}
+                  type="plan"
+                  title={event.title}
+                  status="reviewing"
+                  artifactId={event.artifactId}
+                />
               );
             default:
               return null;
