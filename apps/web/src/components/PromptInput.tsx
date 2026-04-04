@@ -22,7 +22,7 @@ export function PromptInput() {
   };
 
   return (
-    <div className="p-4 border-b border-gray-200">
+    <div className="p-3 border-b border-border-default bg-surface-secondary">
       <div className="mb-2">
         <input
           type="text"
@@ -30,9 +30,9 @@ export function PromptInput() {
           value={cwd}
           onChange={(e) => setCwd(e.target.value)}
           disabled={isActive}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm
-                     focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                     disabled:bg-gray-50 disabled:text-gray-500"
+          className="w-full px-3 py-1.5 bg-surface-primary border border-border-default rounded text-sm text-text-primary
+                     placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue
+                     disabled:opacity-50"
         />
       </div>
       <div className="flex gap-2">
@@ -43,18 +43,19 @@ export function PromptInput() {
           onKeyDown={handleKeyDown}
           disabled={isActive}
           rows={2}
-          className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm resize-none
-                     focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                     disabled:bg-gray-50 disabled:text-gray-500"
+          className="flex-1 px-3 py-1.5 bg-surface-primary border border-border-default rounded text-sm text-text-primary
+                     placeholder-text-muted resize-none
+                     focus:outline-none focus:ring-1 focus:ring-accent-blue
+                     disabled:opacity-50"
         />
         <div className="flex flex-col gap-1">
           {!isDone && (
             <button
               onClick={handleSubmit}
               disabled={isActive || !prompt.trim() || !cwd.trim()}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md
-                         hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed
-                         transition-colors"
+              className="px-4 py-2 bg-accent-blue text-white text-sm font-medium rounded
+                         hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
+                         disabled:cursor-not-allowed transition-colors"
             >
               Start
             </button>
@@ -62,8 +63,8 @@ export function PromptInput() {
           {isDone && (
             <button
               onClick={reset}
-              className="px-4 py-2 bg-gray-600 text-white text-sm font-medium rounded-md
-                         hover:bg-gray-700 transition-colors"
+              className="px-4 py-2 bg-surface-elevated text-text-secondary text-sm font-medium rounded
+                         hover:bg-surface-hover transition-colors"
             >
               New
             </button>

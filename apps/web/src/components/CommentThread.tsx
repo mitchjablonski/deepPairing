@@ -9,6 +9,30 @@ interface CommentThreadProps {
   target?: { lineNumber?: number; findingIndex?: number; stepIndex?: number };
 }
 
+function Avatar({ author }: { author: string }) {
+  const isHuman = author === "human";
+  return (
+    <div
+      className={`w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold shrink-0 ${
+        isHuman
+          ? "bg-accent-blue text-white"
+          : "bg-accent-violet-dim text-accent-violet"
+      }`}
+    >
+      {isHuman ? "Y" : "A"}
+    </div>
+  );
+}
+
+function formatTime(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
 function CommentBubble({ comment }: { comment: Comment }) {
   const isHuman = comment.author === "human";
   const refs = (comment as any).codeReferences as Array<{
@@ -19,41 +43,37 @@ function CommentBubble({ comment }: { comment: Comment }) {
   }> | undefined;
 
   return (
-    <div className={`flex gap-2 ${isHuman ? "" : "flex-row-reverse"}`}>
-      <div
-        className={`px-3 py-2 rounded-lg text-xs max-w-[85%] ${
-          isHuman
-            ? "bg-blue-50 text-gray-800 rounded-bl-none"
-            : "bg-gray-100 text-gray-700 rounded-br-none"
-        }`}
-      >
+    <div className="flex gap-2">
+      <Avatar author={comment.author} />
+      <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 mb-0.5">
-          <span className={`font-semibold ${isHuman ? "text-blue-700" : "text-gray-500"}`}>
+          <span className={`text-xs font-semibold ${isHuman ? "text-accent-blue" : "text-text-muted"}`}>
             {isHuman ? "You" : "Agent"}
           </span>
           {comment.target.filePath && comment.target.lineStart && (
-            <span className="font-mono text-[10px] text-blue-500">
+            <span className="font-mono text-2xs text-accent-blue/60">
               {comment.target.filePath}:{comment.target.lineStart}
               {comment.target.lineEnd && comment.target.lineEnd !== comment.target.lineStart
                 ? `-${comment.target.lineEnd}` : ""}
             </span>
           )}
+          <span className="text-2xs text-text-muted ml-auto">{formatTime(comment.createdAt)}</span>
           {!isHuman && comment.acknowledged && (
-            <span className="text-gray-300" title="Acknowledged">&#10003;</span>
+            <span className="text-text-muted text-2xs" title="Acknowledged">✓</span>
           )}
         </div>
-        <p className="whitespace-pre-wrap">{comment.content}</p>
+        <p className="text-xs text-text-primary whitespace-pre-wrap">{comment.content}</p>
 
         {/* Code reference blocks */}
         {refs && refs.length > 0 && (
           <div className="mt-1.5 space-y-1">
             {refs.map((ref, i) => (
-              <div key={i} className="bg-gray-800 text-gray-200 rounded p-1.5 font-mono text-[11px]">
-                <div className="text-gray-400 text-[10px] mb-0.5">
+              <div key={i} className="bg-surface-code rounded p-1.5 font-mono text-2xs">
+                <div className="text-text-muted mb-0.5">
                   {ref.filePath}:{ref.lineStart}-{ref.lineEnd}
                 </div>
                 {ref.snippet && (
-                  <pre className="whitespace-pre overflow-x-auto">{ref.snippet}</pre>
+                  <pre className="whitespace-pre overflow-x-auto text-text-secondary">{ref.snippet}</pre>
                 )}
               </div>
             ))}
@@ -78,11 +98,10 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
     setSubmitting(false);
   };
 
-  // Build thread tree (flat for now, threaded replies later)
   const rootComments = comments.filter((c) => !c.parentCommentId);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {rootComments.map((comment) => (
         <CommentBubble key={comment.id} comment={comment} />
       ))}
@@ -100,15 +119,15 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
             }
           }}
           disabled={submitting}
-          className="flex-1 px-2.5 py-1.5 border border-gray-200 rounded text-xs
-                     focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-transparent
+          className="flex-1 px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                     placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue
                      disabled:opacity-50"
         />
         <button
           onClick={handleSubmit}
           disabled={!input.trim() || submitting}
-          className="px-2.5 py-1.5 bg-blue-600 text-white text-xs rounded
-                     hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed
+          className="px-2.5 py-1.5 bg-accent-blue text-white text-xs rounded
+                     hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-colors"
         >
           Send
@@ -146,8 +165,8 @@ export function CommentTrigger({
         onClick={() => setOpen(!open)}
         className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
           existingCount > 0
-            ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
-            : "bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600"
+            ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
+            : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary"
         }`}
       >
         <span className="text-[10px]">💬</span>
@@ -155,7 +174,7 @@ export function CommentTrigger({
       </button>
 
       {open && (
-        <div className="mt-1 p-2 bg-white border border-gray-200 rounded-lg shadow-sm max-w-sm">
+        <div className="mt-1 p-2.5 bg-surface-elevated border border-border-default rounded-lg shadow-lg max-w-sm">
           <CommentThread
             artifactId={artifactId}
             comments={comments}

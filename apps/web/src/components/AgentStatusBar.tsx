@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { useSessionStore } from "../stores/session";
 
 const phaseLabels: Record<string, { label: string; color: string }> = {
-  idle:       { label: "Idle",       color: "bg-gray-200 text-gray-700" },
-  connecting: { label: "Connecting", color: "bg-blue-100 text-blue-700" },
-  gathering:  { label: "Gathering",  color: "bg-amber-100 text-amber-700" },
-  presenting: { label: "Presenting", color: "bg-purple-100 text-purple-700" },
-  executing:  { label: "Executing",  color: "bg-green-100 text-green-700" },
-  completed:  { label: "Completed",  color: "bg-green-200 text-green-800" },
-  error:      { label: "Error",      color: "bg-red-100 text-red-700" },
+  idle:       { label: "Idle",       color: "bg-surface-elevated text-text-muted" },
+  connecting: { label: "Connecting", color: "bg-accent-blue-dim text-accent-blue" },
+  gathering:  { label: "Gathering",  color: "bg-accent-amber-dim text-accent-amber" },
+  presenting: { label: "Presenting", color: "bg-accent-violet-dim text-accent-violet" },
+  executing:  { label: "Executing",  color: "bg-accent-green-dim text-accent-green" },
+  completed:  { label: "Completed",  color: "bg-accent-green-dim text-accent-green" },
+  error:      { label: "Error",      color: "bg-accent-red-dim text-accent-red" },
 };
 
 export function AgentStatusBar() {
@@ -36,27 +36,27 @@ export function AgentStatusBar() {
   };
 
   return (
-    <div className="flex items-center justify-between px-4 py-1.5 bg-gray-50 border-b border-gray-200 text-xs">
+    <div className="flex items-center justify-between px-3 py-1 bg-surface-secondary border-b border-border-default text-xs">
       <div className="flex items-center gap-3">
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium ${phase.color}`}>
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-medium ${phase.color}`}>
           {isActive && (
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
           )}
           {phase.label}
         </span>
         {isActive && (
-          <span className="text-gray-400 tabular-nums">{formatTime(elapsed)}</span>
+          <span className="text-text-muted tabular-nums text-2xs">{formatTime(elapsed)}</span>
         )}
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-gray-500">
-          {toolCallCount} tool call{toolCallCount !== 1 ? "s" : ""}
+        <span className="text-text-muted text-2xs">
+          {toolCallCount} tool{toolCallCount !== 1 ? "s" : ""}
         </span>
-        <span className="text-gray-500">{events.length} events</span>
+        <span className="text-text-muted text-2xs">{events.length} events</span>
         {isActive && (
           <button
             onClick={(e) => { e.stopPropagation(); stopSession(); }}
-            className="px-2 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors font-medium"
+            className="px-2 py-0.5 bg-accent-red-dim text-accent-red rounded text-2xs hover:bg-accent-red-dim/80 transition-colors font-medium"
           >
             Stop
           </button>
