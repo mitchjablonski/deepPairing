@@ -161,10 +161,18 @@ export function ArtifactPanel() {
   if (visibleArtifacts.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-text-muted gap-3 p-8">
-        <ArtifactIcon type="research" className="w-8 h-8 opacity-30" />
+        <div className="w-12 h-12 rounded-full bg-surface-elevated flex items-center justify-center">
+          <ArtifactIcon type="research" className="w-6 h-6 opacity-40" />
+        </div>
         <div className="text-center">
-          <p className="text-sm">Artifacts will appear here</p>
-          <p className="text-xs mt-1">As the agent researches, decides, and builds</p>
+          <p className="text-sm font-medium text-text-secondary">Waiting for agent</p>
+          <p className="text-xs mt-1">Artifacts will appear here as the agent researches, decides, and builds</p>
+        </div>
+        {/* Skeleton loading hint */}
+        <div className="w-full max-w-xs space-y-2 mt-4 opacity-30">
+          <div className="h-3 bg-surface-elevated rounded animate-pulse" />
+          <div className="h-3 bg-surface-elevated rounded animate-pulse w-3/4" />
+          <div className="h-3 bg-surface-elevated rounded animate-pulse w-1/2" />
         </div>
       </div>
     );
