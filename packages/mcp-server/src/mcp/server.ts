@@ -135,9 +135,18 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
   }));
 
   // --- Call Tool ---
+  let firstToolCall = true;
+
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: rawArgs } = request.params;
     const args = (rawArgs ?? {}) as Record<string, any>;
+
+    // First tool call hint
+    let firstCallHint = "";
+    if (firstToolCall) {
+      firstToolCall = false;
+      firstCallHint = "\n[First use this session] The companion UI is at http://localhost:3847 — the human can review artifacts, comment, and make decisions there.";
+    }
 
     switch (name) {
       case "deepPairing_present_findings": {
@@ -154,7 +163,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
         });
         broadcast({ type: "artifact_created", artifact });
         return {
-          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:3847. Call deepPairing_check_feedback for their comments.` }],
+          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:3847. Call deepPairing_check_feedback for their comments.${firstCallHint}` }],
         };
       }
 

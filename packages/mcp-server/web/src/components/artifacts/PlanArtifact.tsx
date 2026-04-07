@@ -28,11 +28,11 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
       {content.steps && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
               Implementation Steps ({content.steps.length})
             </h4>
             {content.estimatedChanges != null && (
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-text-muted">
                 ~{content.estimatedChanges} file changes
               </span>
             )}
@@ -45,27 +45,27 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             return (
               <div
                 key={i}
-                className="p-3 bg-gray-50 rounded-lg border border-gray-100"
+                className="p-3 bg-surface-secondary rounded-lg border border-border-subtle"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2 flex-1 min-w-0">
-                    <span className="shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center mt-0.5">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5">
                       {i + 1}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-800 font-medium">
+                      <p className="text-sm text-text-primary font-medium">
                         {step.description}
                       </p>
-                      <p className="text-xs text-gray-500 mt-0.5">
+                      <p className="text-xs text-text-muted mt-0.5">
                         {step.reasoning}
                       </p>
 
                       {/* Motivated by badges */}
                       {step.motivatedBy && step.motivatedBy.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
-                          <span className="text-[10px] text-gray-400">From:</span>
+                          <span className="text-[10px] text-text-muted">From:</span>
                           {step.motivatedBy.map((m, mIdx) => (
-                            <span key={mIdx} className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">
+                            <span key={mIdx} className="px-1.5 py-0.5 bg-accent-amber-dim text-accent-amber rounded text-[10px]">
                               {m}
                             </span>
                           ))}
@@ -83,10 +83,10 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                             return (
                               <span
                                 key={fIdx}
-                                className="px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded text-[11px] font-mono"
+                                className="px-1.5 py-0.5 bg-gray-200 text-text-secondary rounded text-[11px] font-mono"
                                 title={desc ?? undefined}
                               >
-                                {changeType && <span className="text-gray-400 mr-0.5">{changeIcon}</span>}
+                                {changeType && <span className="text-text-muted mr-0.5">{changeIcon}</span>}
                                 {filePath}
                               </span>
                             );
@@ -98,7 +98,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                       {step.preview && (
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <div>
-                            <div className="text-[10px] font-semibold text-red-500 uppercase mb-0.5">Before</div>
+                            <div className="text-[10px] font-semibold text-accent-red uppercase mb-0.5">Before</div>
                             <CommentableCode
                               code={step.preview.before}
                               lineStart={1}
@@ -108,7 +108,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                             />
                           </div>
                           <div>
-                            <div className="text-[10px] font-semibold text-green-500 uppercase mb-0.5">After</div>
+                            <div className="text-[10px] font-semibold text-accent-green uppercase mb-0.5">After</div>
                             <CommentableCode
                               code={step.preview.after}
                               lineStart={1}

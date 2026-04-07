@@ -103,20 +103,20 @@ export function FileViewer({
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-8 text-sm text-gray-500">Loading file...</div>
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div className="bg-surface-primary rounded-lg p-8 text-sm text-text-muted">Loading file...</div>
       </div>
     );
   }
 
   if (error || !content) {
     return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 max-w-sm">
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div className="bg-surface-primary rounded-lg p-6 max-w-sm">
           <p className="text-sm text-red-600 mb-3">
             {error ?? "File not available"} — the agent hasn't read this file yet.
           </p>
-          <button onClick={onClose} className="px-3 py-1.5 bg-gray-100 text-sm rounded hover:bg-gray-200">
+          <button onClick={onClose} className="px-3 py-1.5 bg-surface-elevated text-sm rounded hover:bg-surface-hover">
             Close
           </button>
         </div>
@@ -125,20 +125,20 @@ export function FileViewer({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
-      <div className="bg-white rounded-lg shadow-xl flex flex-col max-w-4xl w-full max-h-[85vh]">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-8">
+      <div className="bg-surface-primary rounded-lg shadow-xl flex flex-col max-w-4xl w-full max-h-[85vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-default bg-surface-secondary rounded-t-lg">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-mono font-medium text-gray-800">{filePath}</span>
-            <span className="text-xs text-gray-400">{lines.length} lines</span>
+            <span className="text-sm font-mono font-medium text-text-primary">{filePath}</span>
+            <span className="text-xs text-text-muted">{lines.length} lines</span>
             {highlightStart != null && highlightEnd != null && (
-              <span className="px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">
+              <span className="px-1.5 py-0.5 text-xs bg-accent-amber-dim text-accent-amber rounded">
                 Evidence: L{highlightStart}-{highlightEnd}
               </span>
             )}
             {selectionRange && (
-              <span className="px-1.5 py-0.5 text-xs bg-blue-100 text-blue-700 rounded">
+              <span className="px-1.5 py-0.5 text-xs bg-accent-blue-dim text-accent-blue rounded">
                 Selected: L{selectionRange.start}-{selectionRange.end}
               </span>
             )}
@@ -147,14 +147,14 @@ export function FileViewer({
             {selectionRange && (
               <button
                 onClick={clearSelection}
-                className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded"
+                className="px-2 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-surface-hover rounded"
               >
                 Clear selection
               </button>
             )}
             <button
               onClick={onClose}
-              className="px-2 py-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-200 rounded"
+              className="px-2 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-surface-hover rounded"
             >
               Close
             </button>
@@ -163,7 +163,7 @@ export function FileViewer({
 
         {/* Instruction hint */}
         {!selectionRange && (
-          <div className="px-4 py-1.5 bg-blue-50 border-b border-blue-100 text-xs text-blue-600">
+          <div className="px-4 py-1.5 bg-accent-blue-dim border-b border-blue-100 text-xs text-accent-blue">
             Click a line number to select it. Shift-click to select a range. Then add a comment.
           </div>
         )}
@@ -189,22 +189,22 @@ export function FileViewer({
                   ref={isEvidenceHighlight && lineNum === highlightStart ? highlightRef : undefined}
                   className={`flex ${
                     isSelected
-                      ? "bg-blue-50 border-l-2 border-blue-500"
+                      ? "bg-accent-blue-dim border-l-2 border-blue-500"
                       : isEvidenceHighlight
-                        ? "bg-amber-50 border-l-2 border-amber-400"
-                        : "hover:bg-gray-50 border-l-2 border-transparent"
+                        ? "bg-accent-amber-dim border-l-2 border-amber-400"
+                        : "hover:bg-surface-secondary border-l-2 border-transparent"
                   }`}
                 >
                   <span
                     onClick={(e) => handleLineClick(lineNum, e.shiftKey)}
-                    className={`w-12 shrink-0 text-right pr-3 py-0.5 select-none border-r border-gray-100 cursor-pointer hover:bg-blue-100 hover:text-blue-700 transition-colors ${
-                      isSelected ? "text-blue-600 font-semibold" : "text-gray-400"
+                    className={`w-12 shrink-0 text-right pr-3 py-0.5 select-none border-r border-border-subtle cursor-pointer hover:bg-accent-blue-dim hover:text-accent-blue transition-colors ${
+                      isSelected ? "text-accent-blue font-semibold" : "text-text-muted"
                     }`}
                   >
                     {lineNum}
                   </span>
                   <span className={`px-3 py-0.5 whitespace-pre flex-1 ${
-                    isSelected ? "text-gray-900" : isEvidenceHighlight ? "text-gray-900" : "text-gray-700"
+                    isSelected ? "text-text-primary" : isEvidenceHighlight ? "text-text-primary" : "text-text-secondary"
                   }`}>
                     {line || " "}
                   </span>
@@ -216,12 +216,12 @@ export function FileViewer({
 
         {/* Comment input — appears when lines are selected */}
         {selectionRange && artifactId && (
-          <div className="border-t border-gray-200 p-3 bg-gray-50 rounded-b-lg">
+          <div className="border-t border-border-default p-3 bg-surface-secondary rounded-b-lg">
             <div className="mb-2">
-              <div className="text-xs text-gray-500 mb-1">
-                Comment on <span className="font-mono font-medium text-blue-700">L{selectionRange.start}-{selectionRange.end}</span>:
+              <div className="text-xs text-text-muted mb-1">
+                Comment on <span className="font-mono font-medium text-accent-blue">L{selectionRange.start}-{selectionRange.end}</span>:
               </div>
-              <pre className="text-xs font-mono bg-white border border-gray-200 rounded p-2 max-h-20 overflow-auto text-gray-600">
+              <pre className="text-xs font-mono bg-surface-primary border border-border-default rounded p-2 max-h-20 overflow-auto text-text-secondary">
                 {getSelectedSnippet()}
               </pre>
             </div>

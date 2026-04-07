@@ -12,29 +12,28 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
   const [submitting, setSubmitting] = useState(false);
   const { updateArtifactStatus } = useArtifactStore();
 
-  // Already resolved
   if (artifact.status === "approved") {
     return (
       <div className="flex items-center gap-2 pt-2 border-t border-border-default">
-        <span className="text-green-600 text-sm">&#10003;</span>
-        <span className="text-xs text-green-700 font-medium">Approved</span>
+        <span className="text-accent-green text-sm">&#10003;</span>
+        <span className="text-xs text-accent-green font-medium">Approved</span>
       </div>
     );
   }
 
   if (artifact.status === "rejected") {
     return (
-      <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
-        <span className="text-red-600 text-sm">&#10007;</span>
-        <span className="text-xs text-red-700 font-medium">Rejected</span>
+      <div className="flex items-center gap-2 pt-2 border-t border-border-default">
+        <span className="text-accent-red text-sm">&#10007;</span>
+        <span className="text-xs text-accent-red font-medium">Rejected</span>
       </div>
     );
   }
 
   if (artifact.status === "superseded") {
     return (
-      <div className="pt-2 border-t border-gray-100">
-        <span className="text-xs text-gray-400 italic">Superseded by newer version</span>
+      <div className="pt-2 border-t border-border-default">
+        <span className="text-xs text-text-muted italic">Superseded by newer version</span>
       </div>
     );
   }
@@ -51,30 +50,30 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
   };
 
   return (
-    <div className="pt-3 border-t border-gray-100 space-y-2">
+    <div className="pt-3 border-t border-border-default space-y-2">
       {!showRevisionInput ? (
         <div className="flex gap-2">
           <button
             onClick={() => handleAction("approved")}
             disabled={submitting}
-            className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded
-                       hover:bg-green-700 disabled:opacity-50 transition-colors"
+            className="px-3 py-1.5 bg-accent-green text-white text-xs font-medium rounded
+                       hover:bg-accent-green/80 disabled:opacity-50 transition-colors"
           >
             Approve
           </button>
           <button
             onClick={() => setShowRevisionInput(true)}
             disabled={submitting}
-            className="px-3 py-1.5 bg-amber-100 text-amber-700 text-xs font-medium rounded
-                       hover:bg-amber-200 disabled:opacity-50 transition-colors"
+            className="px-3 py-1.5 bg-accent-amber-dim text-accent-amber text-xs font-medium rounded
+                       hover:bg-accent-amber-dim/80 disabled:opacity-50 transition-colors"
           >
             Request Revision
           </button>
           <button
             onClick={() => handleAction("rejected")}
             disabled={submitting}
-            className="px-3 py-1.5 bg-red-100 text-red-700 text-xs font-medium rounded
-                       hover:bg-red-200 disabled:opacity-50 transition-colors"
+            className="px-3 py-1.5 bg-accent-red-dim text-accent-red text-xs font-medium rounded
+                       hover:bg-accent-red-dim/80 disabled:opacity-50 transition-colors"
           >
             Reject
           </button>
@@ -86,21 +85,21 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             rows={3}
-            className="w-full px-3 py-2 border border-amber-300 rounded-md text-xs resize-none
-                       focus:outline-none focus:ring-2 focus:ring-amber-400"
+            className="w-full px-3 py-2 bg-surface-secondary border border-accent-amber/30 rounded text-xs text-text-primary resize-none
+                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber"
           />
           <div className="flex gap-2">
             <button
               onClick={() => handleAction("revised", feedback)}
               disabled={!feedback.trim() || submitting}
-              className="px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded
-                         hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              className="px-3 py-1.5 bg-accent-amber text-text-inverse text-xs font-medium rounded
+                         hover:bg-accent-amber/80 disabled:opacity-50 transition-colors"
             >
               Submit Revision Request
             </button>
             <button
               onClick={() => { setShowRevisionInput(false); setFeedback(""); }}
-              className="px-3 py-1.5 text-gray-500 text-xs hover:text-gray-700 transition-colors"
+              className="px-3 py-1.5 text-text-muted text-xs hover:text-text-secondary transition-colors"
             >
               Cancel
             </button>
