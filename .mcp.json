@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "deeppairing": {
+      "command": "npx",
+      "args": ["tsx", "packages/mcp-server/src/standalone.ts"]
+    }
+  }
+}
