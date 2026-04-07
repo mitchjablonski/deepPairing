@@ -1,10 +1,10 @@
-import { createServer } from "node:http";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createHttpRoutes } from "./routes.js";
 import { addClient, removeClient } from "./websocket.js";
 import type { FileStore } from "../store/file-store.js";
 import { WebSocketServer } from "ws";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -18,7 +18,8 @@ export async function startHttpServer(
   const app = createHttpRoutes(store);
 
   // Try to serve built web UI if it exists
-  const webDistPath = path.join(import.meta.dirname ?? __dirname, "../../dist/web");
+  const __thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const webDistPath = path.join(__thisDir, "../../dist/web");
   if (fs.existsSync(webDistPath)) {
     // Serve static files for the companion web UI
     app.get("/*", async (c) => {

@@ -9,6 +9,14 @@ export function createHttpRoutes(store: FileStore) {
 
   app.use("/*", cors());
 
+  // Error handling
+  app.onError((err, c) => {
+    if (err instanceof SyntaxError) {
+      return c.json({ error: "Invalid JSON" }, 400);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
+
   // Full state for initial web UI hydration
   app.get("/api/state", (c) => {
     return c.json(store.getFullState());
@@ -47,9 +55,16 @@ export function createHttpRoutes(store: FileStore) {
 
     store.resolveDecision(decisionId, optionId, reasoning);
 
+    // Update the decision artifact status
+    const decision = store.getDecision(decisionId);
+    if (decision) {
+      store.updateArtifactStatus(decision.artifactId, "approved");
+    }
+
     broadcast({
       type: "decision_resolved",
       decisionId,
+      artifactId: decision?.artifactId,
       optionId,
       reasoning,
     });
