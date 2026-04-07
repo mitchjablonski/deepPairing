@@ -1,0 +1,100 @@
+import { create } from "zustand";
+import type { Artifact, Comment } from "@deeppairing/shared";
+
+interface ConnectionState {
+  connected: boolean;
+  sessionId: string | null;
+  ws: WebSocket | null;
+
+  connect: () => void;
+  disconnect: () => void;
+}
+
+const WS_URL = `ws://${window.location.host}/ws`;
+
+export const useConnectionStore = create<ConnectionState>((set, get) => {
+  function handleMessage(event: MessageEvent) {
+    try {
+      const data = JSON.parse(event.data);
+
+      // Import artifact store lazily to avoid circular deps
+      import("./artifact").then(({ useArtifactStore }) => {
+        const store = useArtifactStore.getState();
+
+        switch (data.type) {
+          case "connected":
+            set({ sessionId: data.state?.sessionId ?? null });
+            // Hydrate with full state
+            if (data.state) {
+              for (const artifact of data.state.artifacts ?? []) {
+                store.addArtifact(artifact);
+              }
+              for (const comment of data.state.comments ?? []) {
+                store.addComment(comment);
+              }
+            }
+            break;
+
+          case "artifact_created":
+            store.addArtifact(data.artifact);
+            break;
+
+          case "artifact_updated":
+            store.updateArtifact(data.artifactId, data.status);
+            break;
+
+          case "comment_added":
+            store.addComment(data.comment);
+            break;
+
+          case "decision_request":
+            // Decision requests come as artifacts — already handled by artifact_created
+            break;
+
+          case "decision_resolved":
+            // UI will refresh via artifact_updated or next hydration
+            break;
+        }
+      });
+    } catch {
+      // Ignore malformed messages
+    }
+  }
+
+  return {
+    connected: false,
+    sessionId: null,
+    ws: null,
+
+    connect: () => {
+      const existing = get().ws;
+      if (existing && existing.readyState <= 1) return; // Already connected/connecting
+
+      const ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        set({ connected: true, ws });
+      };
+
+      ws.onmessage = handleMessage;
+
+      ws.onclose = () => {
+        set({ connected: false, ws: null });
+        // Reconnect after 2 seconds
+        setTimeout(() => get().connect(), 2000);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    },
+
+    disconnect: () => {
+      const { ws } = get();
+      if (ws) {
+        ws.close();
+        set({ connected: false, ws: null });
+      }
+    },
+  };
+});
