@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { nanoid } from "nanoid";
 import type { FileStore } from "../store/file-store.js";
 import { broadcast } from "./websocket.js";
+import { formatSessionMarkdown } from "../export/format-markdown.js";
 
 export function createHttpRoutes(store: FileStore) {
   const app = new Hono();
@@ -108,6 +109,14 @@ export function createHttpRoutes(store: FileStore) {
   app.get("/api/artifacts/:artifactId/comments", (c) => {
     const artifactId = c.req.param("artifactId");
     return c.json({ comments: store.getCommentsForArtifact(artifactId) });
+  });
+
+  // Export session as markdown
+  app.get("/api/export", (c) => {
+    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "adr";
+    const state = store.getFullState();
+    const markdown = formatSessionMarkdown(state, format);
+    return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
   });
 
   return app;

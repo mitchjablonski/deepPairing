@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ArtifactPanel } from "./components/ArtifactPanel";
+import { ExportMenu } from "./components/ExportMenu";
 import { useConnectionStore } from "./stores/connection";
 import { usePreferencesStore } from "./stores/preferences";
 
@@ -28,7 +29,8 @@ function App() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-2xs text-text-muted">Companion UI</span>
+          <ExportMenu />
+          <span className="text-2xs text-text-muted">·</span>
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-secondary transition-colors"

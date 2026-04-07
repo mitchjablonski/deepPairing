@@ -6,6 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { nanoid } from "nanoid";
 import type { FileStore } from "../store/file-store.js";
+import { formatSessionMarkdown } from "../export/format-markdown.js";
 
 type BroadcastFn = (event: any) => void;
 
@@ -129,6 +130,16 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
         inputSchema: {
           type: "object" as const,
           properties: {},
+        },
+      },
+      {
+        name: "deepPairing_export_session",
+        description: "Export the current session as markdown. Formats: 'pr-description' (concise for PR bodies), 'adr' (architecture decision record), 'full' (complete session with code).",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            format: { type: "string", enum: ["pr-description", "adr", "full"], description: "Export format" },
+          },
         },
       },
     ],
@@ -286,6 +297,15 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
 
         return {
           content: [{ type: "text", text: parts.join("\n\n") + "\n\nIncorporate this feedback into your approach." }],
+        };
+      }
+
+      case "deepPairing_export_session": {
+        const format = (args?.format ?? "full") as "full" | "pr-description" | "adr";
+        const state = store.getFullState();
+        const markdown = formatSessionMarkdown(state, format);
+        return {
+          content: [{ type: "text", text: markdown }],
         };
       }
 
