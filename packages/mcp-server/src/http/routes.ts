@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { nanoid } from "nanoid";
-import type { FileStore } from "../store/file-store.js";
+import { FileStore } from "../store/file-store.js";
 import { broadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 
-export function createHttpRoutes(store: FileStore) {
+export function createHttpRoutes(store: FileStore, projectRoot?: string) {
   const app = new Hono();
 
   app.use("/*", cors());
@@ -117,6 +117,25 @@ export function createHttpRoutes(store: FileStore) {
     const state = store.getFullState();
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
+  });
+
+  // List past sessions
+  app.get("/api/sessions", (c) => {
+    if (!projectRoot) return c.json({ sessions: [] });
+    const sessions = FileStore.listSessions(projectRoot);
+    return c.json({ sessions });
+  });
+
+  // Load a specific past session
+  app.get("/api/sessions/:sessionId", (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!projectRoot) return c.json({ error: "No project root" }, 500);
+    try {
+      const state = FileStore.loadSession(projectRoot, sessionId);
+      return c.json(state);
+    } catch {
+      return c.json({ error: "Session not found" }, 404);
+    }
   });
 
   return app;
