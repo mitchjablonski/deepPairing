@@ -8,6 +8,7 @@ interface DecisionRecord {
   context: string;
   options: any[];
   response?: { optionId: string; reasoning?: string };
+  acknowledged?: boolean;
   createdAt: string;
   resolvedAt?: string;
 }
@@ -207,8 +208,20 @@ export class FileStore {
     return Array.from(this.decisions.values()).filter((d) => !d.response);
   }
 
+  getDecision(decisionId: string): DecisionRecord | undefined {
+    return this.decisions.get(decisionId);
+  }
+
   getResolvedDecisions(): DecisionRecord[] {
-    return Array.from(this.decisions.values()).filter((d) => d.response);
+    return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
+  }
+
+  acknowledgeDecisions(decisionIds: string[]): void {
+    for (const id of decisionIds) {
+      const dec = this.decisions.get(id);
+      if (dec) dec.acknowledged = true;
+    }
+    this.scheduleFlush();
   }
 
   // --- Plan Reviews ---

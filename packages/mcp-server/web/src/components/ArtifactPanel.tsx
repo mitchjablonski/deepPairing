@@ -4,6 +4,7 @@ import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
 import { PlanArtifact } from "./artifacts/PlanArtifact";
+import { DecisionCard } from "./DecisionCard";
 import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 
@@ -84,10 +85,16 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           {(artifact.content as any).diff ?? JSON.stringify(artifact.content, null, 2)}
         </div>
       )}
-      {artifact.type === "decision" && (
-        <div className="text-sm text-text-secondary">
-          {(artifact.content as any).context}
-        </div>
+      {artifact.type === "decision" && (artifact.content as any).options && (
+        <DecisionCard
+          event={{
+            type: "decision_request",
+            decisionId: (artifact.content as any).decisionId ?? artifact.id,
+            context: (artifact.content as any).context,
+            options: (artifact.content as any).options,
+          }}
+          decisionId={(artifact.content as any).decisionId ?? artifact.id}
+        />
       )}
 
       {/* General comments */}

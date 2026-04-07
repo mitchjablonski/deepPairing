@@ -165,7 +165,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
           id,
           type: "decision",
           title: args?.context ?? "Decision",
-          content: { context: args?.context, options: args?.options },
+          content: { context: args?.context, options: args?.options, decisionId },
         });
         store.recordDecisionRequest({
           decisionId,
@@ -238,9 +238,10 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
           parts.push(`Human comments (${comments.length}):\n${formatted}`);
         }
 
-        // Resolved decisions
+        // Resolved decisions (acknowledge so they don't repeat)
         const resolved = store.getResolvedDecisions();
         if (resolved.length > 0) {
+          store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
           const formatted = resolved.map((d) => {
             const option = d.options.find((o: any) => o.id === d.response?.optionId);
             return `- Decision "${d.context}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`;

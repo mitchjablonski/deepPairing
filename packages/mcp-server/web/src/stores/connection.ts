@@ -24,8 +24,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         switch (data.type) {
           case "connected":
             set({ sessionId: data.state?.sessionId ?? null });
-            // Hydrate with full state
+            // Reset before hydration to prevent duplicates on reconnect
             if (data.state) {
+              store.reset();
               for (const artifact of data.state.artifacts ?? []) {
                 store.addArtifact(artifact);
               }
@@ -52,7 +53,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             break;
 
           case "decision_resolved":
-            // UI will refresh via artifact_updated or next hydration
+            if (data.artifactId) {
+              store.updateArtifact(data.artifactId, "approved");
+            }
             break;
         }
       });
