@@ -11,6 +11,8 @@
  */
 
 import { createMcpServer } from "./mcp/server.js";
+import { startHttpServer } from "./http/server.js";
+import { broadcast } from "./http/websocket.js";
 import { FileStore } from "./store/file-store.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -29,35 +31,22 @@ function log(msg: string): void {
   }
 }
 
-// WebSocket broadcast stub — Phase 2 will replace with real WebSocket
-const connectedClients: Set<any> = new Set();
-function broadcast(event: any): void {
-  const data = JSON.stringify(event);
-  for (const client of connectedClients) {
-    try {
-      client.send(data);
-    } catch {
-      connectedClients.delete(client);
-    }
-  }
-  log(`broadcast: ${event.type}`);
-}
-
 async function main() {
   log("deepPairing MCP server starting");
   log(`Project root: ${projectRoot}`);
 
-  // Initialize store
+  // Initialize file store
   const store = new FileStore(projectRoot);
   log(`Session: ${store.getSessionId()}`);
 
-  // Start MCP server (stdio)
+  // Start HTTP + WebSocket server (companion web UI)
+  const port = await startHttpServer(store, log);
+  log(`Companion UI available at http://localhost:${port}`);
+
+  // Start MCP server (stdio — Claude Code connects here)
   const mcp = createMcpServer(store, broadcast);
   await mcp.start();
   log("MCP server connected via stdio");
-
-  // TODO Phase 2: Start HTTP + WebSocket server on port 3847
-  // For now, just the MCP server runs
 }
 
 main().catch((err) => {
