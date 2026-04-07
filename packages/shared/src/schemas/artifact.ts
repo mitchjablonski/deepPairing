@@ -31,6 +31,7 @@ export const ArtifactSchema = z.object({
   status: ArtifactStatusSchema,
   content: z.record(z.unknown()),
   agentReasoning: z.string().nullable(),
+  relatedArtifactIds: z.array(z.string()).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
