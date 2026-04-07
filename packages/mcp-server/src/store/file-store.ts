@@ -104,6 +104,7 @@ export class FileStore {
     title: string;
     content: Record<string, unknown>;
     agentReasoning?: string;
+    relatedArtifactIds?: string[];
   }): Artifact {
     const now = new Date().toISOString();
     const artifact: Artifact = {
@@ -116,6 +117,7 @@ export class FileStore {
       status: "draft",
       content: params.content,
       agentReasoning: params.agentReasoning ?? null,
+      relatedArtifactIds: params.relatedArtifactIds,
       createdAt: now,
       updatedAt: now,
     };

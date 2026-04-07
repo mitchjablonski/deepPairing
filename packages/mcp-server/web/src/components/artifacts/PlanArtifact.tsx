@@ -4,6 +4,47 @@ import { CommentableCode } from "../CommentableCode";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 
+/** Clickable badges that link to the finding artifacts that motivated a step */
+function MotivatedByBadges({ labels }: { labels: string[] }) {
+  const { artifacts, selectArtifact } = useArtifactStore();
+
+  return (
+    <div className="flex flex-wrap gap-1 mt-1.5">
+      <span className="text-[10px] text-text-muted">From:</span>
+      {labels.map((label, i) => {
+        // Try to find matching research artifact by title
+        const match = artifacts.find(
+          (a) => a.type === "research" && a.title.toLowerCase().includes(label.toLowerCase()),
+        ) ?? artifacts.find(
+          (a) => a.type === "research" && (a.content as any)?.findings?.some(
+            (f: any) => f.title?.toLowerCase().includes(label.toLowerCase()),
+          ),
+        );
+
+        if (match) {
+          return (
+            <button
+              key={i}
+              onClick={() => selectArtifact(match.id)}
+              className="px-1.5 py-0.5 bg-accent-amber-dim text-accent-amber rounded text-[10px]
+                         hover:bg-accent-amber-dim/80 transition-colors cursor-pointer"
+              title={`View finding: ${label}`}
+            >
+              {label} →
+            </button>
+          );
+        }
+
+        return (
+          <span key={i} className="px-1.5 py-0.5 bg-accent-amber-dim text-accent-amber rounded text-[10px]">
+            {label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 interface PlanArtifactProps {
   artifact: Artifact;
 }
@@ -62,14 +103,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
                       {/* Motivated by badges */}
                       {step.motivatedBy && step.motivatedBy.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          <span className="text-[10px] text-text-muted">From:</span>
-                          {step.motivatedBy.map((m, mIdx) => (
-                            <span key={mIdx} className="px-1.5 py-0.5 bg-accent-amber-dim text-accent-amber rounded text-[10px]">
-                              {m}
-                            </span>
-                          ))}
-                        </div>
+                        <MotivatedByBadges labels={step.motivatedBy} />
                       )}
 
                       {/* File list */}

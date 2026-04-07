@@ -25,6 +25,30 @@ const typeLabels: Record<string, string> = {
   reasoning: "Reasoning",
 };
 
+function RelatedArtifacts({ ids }: { ids: string[] }) {
+  const { artifacts, selectArtifact } = useArtifactStore();
+  const related = ids.map((id) => artifacts.find((a) => a.id === id)).filter(Boolean) as Artifact[];
+
+  if (related.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span className="text-2xs text-text-muted">Related:</span>
+      {related.map((a) => (
+        <button
+          key={a.id}
+          onClick={() => selectArtifact(a.id)}
+          className="inline-flex items-center gap-1 px-2 py-0.5 bg-surface-elevated border border-border-subtle
+                     rounded text-2xs text-text-secondary hover:border-accent-blue hover:text-accent-blue transition-colors"
+        >
+          <ArtifactIcon type={a.type} className="w-3 h-3" />
+          {a.title}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const generalComments = comments.filter(
@@ -60,6 +84,11 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <p className="text-xs text-text-muted italic">{artifact.agentReasoning}</p>
         )}
       </div>
+
+      {/* Related artifacts */}
+      {artifact.relatedArtifactIds && artifact.relatedArtifactIds.length > 0 && (
+        <RelatedArtifacts ids={artifact.relatedArtifactIds} />
+      )}
 
       {/* Type-specific renderer */}
       {artifact.type === "research" && <ResearchArtifact artifact={artifact} />}

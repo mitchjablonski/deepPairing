@@ -186,6 +186,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
           type: "decision",
           title: args?.context ?? "Decision",
           content: { context: args?.context, options: args?.options, decisionId },
+          relatedArtifactIds: args?.relatedFindings,
         });
         store.recordDecisionRequest({
           decisionId,
@@ -213,6 +214,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
           type: "plan",
           title: args?.title ?? "Implementation Plan",
           content: { steps: args?.steps, estimatedChanges: args?.estimatedChanges },
+          relatedArtifactIds: args?.relatedFindings,
         });
         store.recordPlanReview(id);
         broadcast({ type: "artifact_created", artifact });
