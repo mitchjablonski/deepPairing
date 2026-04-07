@@ -1,80 +1,82 @@
 # deepPairing
 
-Collaborative human-AI development framework built on Claude Code's Agent SDK.
+Collaborative human-AI development framework. MCP server + companion web UI that works within Claude Code natively.
 
 ## Architecture
 
-Turborepo + pnpm monorepo with 5 packages:
+```
+Claude Code ←stdio→ deepPairing MCP Server ←WebSocket→ Companion Web UI (localhost:3847)
+                     ↕ file store (.deeppairing/)        ↕ HTTP REST API
+```
+
+Turborepo + pnpm monorepo:
 
 ```
-apps/
-  api/          # TypeScript + Hono API server
-  web/          # React + Vite + Tailwind frontend
 packages/
   shared/       # Zod schemas, types, fixtures
-  mcp-server/   # In-process MCP tools for Claude collaboration
-  ui/           # Component library (placeholder)
+  mcp-server/   # Standalone MCP server + HTTP server + companion web UI
+    src/
+      mcp/      # MCP server (stdio transport, 5 tools)
+      http/     # Hono HTTP + WebSocket server
+      store/    # File-based persistence (.deeppairing/)
+    web/        # Companion React app (Vite build → dist/web/)
+apps/
+  api/          # [LEGACY] Old Agent SDK harness
+  web/          # [LEGACY] Old standalone frontend
 ```
 
 ### Key Architecture Decisions
 
-- **Agent SDK only** — no CLI fallback. Requires `ANTHROPIC_API_KEY`. Max plan OAuth is not supported.
-- **MCP tools for collaboration** — 5 in-process tools (`present_findings`, `present_options`, `present_plan`, `log_reasoning`, `check_feedback`) registered via `createSdkMcpServer`. Must be in `allowedTools` with `mcp__deeppairing__*` wildcard.
-- **Fakes not mocks** for testing — `FakeAgentService`, `FakeWorktreeManager`, fake repositories all implement the same interfaces as real implementations.
-- **Event-sourced streaming** — agent events flow through EventEmitter → SSE → frontend Zustand stores.
-- **Artifact model** — named, versioned, commentable outputs (research, plan, decision, code_change, reasoning) with lifecycle (draft → approved/revised/rejected).
+- **MCP server running inside Claude Code** — not a separate agent harness. Claude Code IS the agent.
+- **Non-blocking MCP tools** — `present_options` and `present_plan` record and return immediately. Human responds via companion UI or terminal. Agent calls `check_feedback` to get responses.
+- **File-based persistence** — `.deeppairing/sessions/{id}/` stores artifacts, comments, decisions as JSON.
+- **Dual transport** — stdio for MCP protocol, HTTP port 3847 for companion web UI + WebSocket.
+- **Fakes not mocks** for testing.
 
 ### Data Flow
 
 ```
-ClaudeAgentService → query() with MCP server
-  → Agent calls deepPairing MCP tools
-  → MCP tools create artifacts + block for human input
-  → Events emit on session EventEmitter
-  → SSE streams to frontend
-  → Zustand stores update React components
-  → Human interacts (comments, approves, selects options)
-  → REST API resolves pending decisions/plan reviews
-  → MCP tool unblocks and returns human's response to agent
+1. User talks to Claude Code normally
+2. Claude calls deepPairing MCP tools (present_findings, present_options, etc.)
+3. MCP tool records artifact in file store + pushes via WebSocket
+4. Companion web UI renders artifact with rich evidence, inline commenting
+5. Human comments/selects in web UI → POST to HTTP API → stored
+6. Claude calls check_feedback → reads human responses → continues
 ```
-
-### Critical Integration Points
-
-- `apps/api/src/services/claude-agent.ts` — wires MCP server, system prompt, allowed tools, and hooks into `query()`
-- `packages/mcp-server/src/index.ts` — `createDeepPairingMcpServer()` factory
-- `apps/api/src/prompts/system.ts` — collaboration protocol prompt (BAD/GOOD evidence examples)
-- `apps/api/src/services/artifact-store.ts` — artifact lifecycle management
-- `apps/api/src/services/decision-manager.ts` — deferred Promise pattern for blocking MCP tools
 
 ## Development
 
 ```bash
 pnpm install
-USE_FAKE_AGENT=true pnpm turbo dev     # Dev mode with fake agent (no API key needed)
-ANTHROPIC_API_KEY=... pnpm turbo dev   # Real Claude mode
-pnpm turbo test                        # Run all tests
-pnpm turbo build                       # Type-check and build all packages
+pnpm --filter @deeppairing/mcp-server build        # Build MCP server
+cd packages/mcp-server/web && npx vite build        # Build companion web UI
+pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 ```
 
-Frontend at http://localhost:5173 (Vite proxy forwards /api to :3001).
+## Testing with Claude Code
 
-## Testing Conventions
+Add `.mcp.json` to project root:
+```json
+{
+  "mcpServers": {
+    "deeppairing": {
+      "command": "npx",
+      "args": ["tsx", "packages/mcp-server/src/standalone.ts"]
+    }
+  }
+}
+```
 
-- **Fakes over mocks.** Build fake implementations that satisfy the same interface (`FakeAgentService`, `FakeArtifactRepository`, etc.).
-- Fakes live in `__fakes__/` directories adjacent to the real implementations.
-- Shared test data in `packages/shared/src/__fixtures__/`.
-- `USE_FAKE_AGENT=true` runs the full app with deterministic fake scenarios.
-- Tests use `vitest`. Frontend tests use `@testing-library/react` with `jsdom`.
+Open http://localhost:3847 for the companion UI.
 
 ## Code Conventions
 
 - TypeScript strict mode, ESM (`"type": "module"`).
 - Zod schemas in `packages/shared` are the single source of truth for types.
 - All new fields in schemas must be optional for backward compatibility.
-- Backend services use constructor injection for dependencies (not import mocking).
-- Frontend state in Zustand stores. No `Map` types in Zustand (causes infinite re-render with `useSyncExternalStore`). Use plain `Record<string, T[]>` instead.
-- `CommentableCode` component for any code block that should support inline commenting.
-- `scrollIntoView?.()` (optional chain) in components to handle jsdom test environment.
+- Frontend state in Zustand stores. No `Map` types (use `Record<string, T[]>`).
+- `CommentableCode` component for any code block with inline commenting.
+- `scrollIntoView?.()` (optional chain) for jsdom compatibility.
 
 ## Key Schemas
 
@@ -82,4 +84,3 @@ Frontend at http://localhost:5173 (Vite proxy forwards /api to :3001).
 - `Finding` — category, title, detail, evidence (string | Evidence[]), impact, recommendation
 - `Artifact` — id, type, version, parentId, status, content (type-specific)
 - `Comment` — target (artifactId + optional line/finding/evidence/step), codeReferences[]
-- `AgentEvent` — discriminated union of 15 event types
