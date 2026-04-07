@@ -1,12 +1,15 @@
 import { useEffect } from "react";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { ExportMenu } from "./components/ExportMenu";
+import { SessionBrowser } from "./components/SessionBrowser";
+import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 import { usePreferencesStore } from "./stores/preferences";
 
 function App() {
   const { connected, connect } = useConnectionStore();
   const { theme, setTheme } = usePreferencesStore();
+  const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
 
   // Connect to MCP server WebSocket on mount
   useEffect(() => {
@@ -50,9 +53,9 @@ function App() {
         </div>
       </div>
 
-      {/* Main content — artifact panel fills the screen */}
+      {/* Main content */}
       <div className="flex-1 min-h-0">
-        <ArtifactPanel />
+        {hasArtifacts ? <ArtifactPanel /> : <SessionBrowser />}
       </div>
     </div>
   );

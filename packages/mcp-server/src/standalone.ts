@@ -40,7 +40,7 @@ async function main() {
   log(`Session: ${store.getSessionId()}`);
 
   // Start HTTP + WebSocket server (companion web UI)
-  const port = await startHttpServer(store, log);
+  const port = await startHttpServer(store, log, projectRoot);
   log(`Companion UI available at http://localhost:${port}`);
 
   // Notify user via stderr (Claude Code shows MCP stderr to the user)

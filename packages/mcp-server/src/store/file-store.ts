@@ -265,4 +265,67 @@ export class FileStore {
       planReviews: Array.from(this.planReviews.values()),
     };
   }
+
+  // --- Static methods for multi-session access ---
+
+  static listSessions(projectRoot: string): Array<{
+    id: string;
+    createdAt: string;
+    lastActivity: string;
+    summary: string;
+    artifactCount: number;
+    hasDecisions: boolean;
+  }> {
+    const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
+    if (!fs.existsSync(sessionsDir)) return [];
+
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const sessions: Array<{
+      id: string;
+      createdAt: string;
+      lastActivity: string;
+      summary: string;
+      artifactCount: number;
+      hasDecisions: boolean;
+    }> = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const sessionDir = path.join(sessionsDir, entry.name);
+      try {
+        const artFile = path.join(sessionDir, "artifacts.json");
+        if (!fs.existsSync(artFile)) continue;
+
+        const artifacts: Artifact[] = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+        if (artifacts.length === 0) continue;
+
+        const decFile = path.join(sessionDir, "decisions.json");
+        const hasDecisions = fs.existsSync(decFile) &&
+          JSON.parse(fs.readFileSync(decFile, "utf-8")).length > 0;
+
+        const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        const firstArtifact = sorted[0];
+        const lastArtifact = sorted[sorted.length - 1];
+
+        sessions.push({
+          id: entry.name,
+          createdAt: firstArtifact.createdAt,
+          lastActivity: lastArtifact.updatedAt ?? lastArtifact.createdAt,
+          summary: firstArtifact.title,
+          artifactCount: artifacts.length,
+          hasDecisions,
+        });
+      } catch {
+        // Skip corrupted sessions
+      }
+    }
+
+    return sessions.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+  }
+
+  static loadSession(projectRoot: string, sessionId: string) {
+    const store = new FileStore(projectRoot, sessionId);
+    return store.getFullState();
+  }
 }

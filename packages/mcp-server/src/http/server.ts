@@ -14,8 +14,9 @@ const MAX_PORT_ATTEMPTS = 10;
 export async function startHttpServer(
   store: FileStore,
   log: (msg: string) => void,
+  projectRoot?: string,
 ): Promise<number> {
-  const app = createHttpRoutes(store);
+  const app = createHttpRoutes(store, projectRoot);
 
   // Try to serve built web UI if it exists
   const __thisDir = path.dirname(fileURLToPath(import.meta.url));
