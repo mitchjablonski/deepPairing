@@ -43,6 +43,9 @@ async function main() {
   const port = await startHttpServer(store, log);
   log(`Companion UI available at http://localhost:${port}`);
 
+  // Notify user via stderr (Claude Code shows MCP stderr to the user)
+  process.stderr.write(`deepPairing companion UI: http://localhost:${port}\n`);
+
   // Start MCP server (stdio — Claude Code connects here)
   const mcp = createMcpServer(store, broadcast);
   await mcp.start();

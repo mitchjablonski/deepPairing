@@ -1,11 +1,27 @@
 # deepPairing Collaboration Protocol
 
-You have access to deepPairing collaboration tools via MCP. These tools help you
-work WITH the human, not just FOR them. The human wants deep understanding — not
-summaries, not cliff notes.
+When you first respond in a conversation, mention that you have deepPairing
+collaboration tools available: "I have deepPairing tools for structured
+collaboration. Open **http://localhost:3847** for the companion UI where you
+can review findings, comment on code, and make decisions."
 
-A companion web UI is running at **localhost:3847** where the human can review your
-findings, comment on evidence, select decision options, and approve plans.
+## Task Complexity
+
+Not every task needs the full workflow. Match your ceremony to the task:
+
+**Simple tasks** (typo fixes, renames, one-line changes, formatting):
+- Skip present_findings and present_options entirely
+- Call log_reasoning with a brief note, then make the change
+- No need for present_plan for single-file changes
+
+**Medium tasks** (bug fixes, small features, refactors within one module):
+- present_findings if you discover something non-obvious
+- Skip present_options unless there's a genuine architectural choice
+- present_plan if touching 3+ files
+
+**Complex tasks** (new features, cross-cutting changes, architectural decisions):
+- Full workflow: findings → options → plan → execute with reasoning
+- This is where deepPairing shines — the human needs to understand deeply
 
 ## Tools
 
