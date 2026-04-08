@@ -145,6 +145,15 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
     ],
   }));
 
+  // --- Passive feedback helper ---
+  function getPassiveFeedback(): string {
+    const comments = store.getUnacknowledgedComments();
+    if (comments.length === 0) return "";
+    store.acknowledgeComments(comments.map((c) => c.id));
+    const formatted = comments.map((c) => `- ${c.content}`).join("\n");
+    return `\n\n[Human feedback]: ${formatted}`;
+  }
+
   // --- Call Tool ---
   let firstToolCall = true;
 
@@ -174,7 +183,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
         });
         broadcast({ type: "artifact_created", artifact });
         return {
-          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:3847. Call deepPairing_check_feedback for their comments.${firstCallHint}` }],
+          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:3847. Call deepPairing_check_feedback for their comments.${firstCallHint}${getPassiveFeedback()}` }],
         };
       }
 
@@ -203,7 +212,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
           options: args?.options,
         });
         return {
-          content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select an option at localhost:3847 or tell you directly. Call deepPairing_check_feedback to see if they've decided.` }],
+          content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select an option at localhost:3847 or tell you directly. Call deepPairing_check_feedback to see if they've decided.${getPassiveFeedback()}` }],
         };
       }
 
@@ -220,7 +229,7 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
         broadcast({ type: "artifact_created", artifact });
         broadcast({ type: "plan_review_request", artifactId: id, title: args?.title });
         return {
-          content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:3847. Call deepPairing_check_feedback for their verdict.` }],
+          content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:3847. Call deepPairing_check_feedback for their verdict.${getPassiveFeedback()}` }],
         };
       }
 
@@ -240,11 +249,26 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
         });
         broadcast({ type: "artifact_created", artifact });
         return {
-          content: [{ type: "text", text: "Reasoning logged. Proceed with code changes." }],
+          content: [{ type: "text", text: `Reasoning logged. Proceed with code changes.${getPassiveFeedback()}` }],
         };
       }
 
       case "deepPairing_check_feedback": {
+        // If no immediate feedback exists, long-poll for up to 30 seconds
+        const hasImmediate = store.getUnacknowledgedComments().length > 0 ||
+          store.getResolvedDecisions().length > 0;
+
+        if (!hasImmediate) {
+          // Check if there are draft artifacts — if so, wait for human action
+          const hasDrafts = store.getArtifacts().some(
+            (a) => a.status === "draft" && ["research", "plan", "decision"].includes(a.type),
+          );
+          if (hasDrafts) {
+            // Long-poll: wait up to 30s for feedback to arrive
+            await store.waitForFeedback(30000);
+          }
+        }
+
         const parts: string[] = [];
 
         // Unacknowledged comments

@@ -1,6 +1,7 @@
 import type { Artifact } from "@deeppairing/shared";
 import { CommentTrigger } from "../CommentThread";
 import { CommentableCode } from "../CommentableCode";
+import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 
@@ -117,11 +118,12 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                             return (
                               <span
                                 key={fIdx}
-                                className="px-1.5 py-0.5 bg-gray-200 text-text-secondary rounded text-[11px] font-mono"
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-surface-elevated text-text-secondary rounded text-[11px] font-mono"
                                 title={desc ?? undefined}
                               >
-                                {changeType && <span className="text-text-muted mr-0.5">{changeIcon}</span>}
+                                {changeType && <span className="text-text-muted">{changeIcon}</span>}
                                 {filePath}
+                                <OpenInEditorLink filePath={filePath} line={1} />
                               </span>
                             );
                           })}

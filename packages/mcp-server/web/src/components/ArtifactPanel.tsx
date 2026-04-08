@@ -138,7 +138,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
 }
 
 export function ArtifactPanel() {
-  const { artifacts, selectedArtifactId, selectArtifact } = useArtifactStore();
+  const { artifacts, selectedArtifactId, selectArtifact, unreadIds } = useArtifactStore();
 
   const visibleArtifacts = useMemo(
     () => artifacts.filter((a) => a.status !== "superseded"),
@@ -184,6 +184,7 @@ export function ArtifactPanel() {
       <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto">
         {Array.from(typeGroups.entries()).map(([type, items]) => {
           const hasSelected = items.some((a) => a.id === selectedArtifactId);
+          const unreadCount = items.filter((a) => unreadIds.includes(a.id)).length;
           return (
             <button
               key={type}
@@ -197,6 +198,11 @@ export function ArtifactPanel() {
               <ArtifactIcon type={type} className="w-3 h-3" />
               {typeLabels[type] ?? type}
               <span className="text-2xs opacity-60">{items.length}</span>
+              {unreadCount > 0 && (
+                <span className="w-4 h-4 rounded-full bg-accent-blue text-white text-[9px] flex items-center justify-center font-bold">
+                  {unreadCount}
+                </span>
+              )}
             </button>
           );
         })}

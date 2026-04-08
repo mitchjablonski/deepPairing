@@ -7,6 +7,7 @@ export interface ArtifactState {
   artifacts: Artifact[];
   comments: Record<string, Comment[]>;
   selectedArtifactId: string | null;
+  unreadIds: string[];
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
@@ -38,11 +39,16 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   artifacts: [],
   comments: {},
   selectedArtifactId: null,
+  unreadIds: [],
 
   addArtifact: (artifact) =>
     set((state) => ({
       artifacts: [...state.artifacts, artifact],
       selectedArtifactId: state.selectedArtifactId ?? artifact.id,
+      // Mark as unread if we already have a selected artifact (not the first one)
+      unreadIds: state.selectedArtifactId && state.selectedArtifactId !== artifact.id
+        ? [...state.unreadIds, artifact.id]
+        : state.unreadIds,
     })),
 
   updateArtifact: (id, status, version) =>
@@ -61,7 +67,10 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       };
     }),
 
-  selectArtifact: (id) => set({ selectedArtifactId: id }),
+  selectArtifact: (id) => set((state) => ({
+    selectedArtifactId: id,
+    unreadIds: state.unreadIds.filter((uid) => uid !== id),
+  })),
 
   submitComment: async (artifactId, content, target) => {
     await fetch(`${API_BASE}/api/comments`, {
@@ -91,5 +100,5 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     });
   },
 
-  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null }),
+  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [] }),
 }));
