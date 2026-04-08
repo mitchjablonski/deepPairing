@@ -132,6 +132,7 @@ export class FileStore {
       art.status = status;
       art.updatedAt = new Date().toISOString();
       this.scheduleFlush();
+      this.notifyFeedbackWaiters();
     }
   }
 
@@ -160,6 +161,7 @@ export class FileStore {
     };
     this.comments.push(comment);
     this.scheduleFlush();
+    if (params.author === "human") this.notifyFeedbackWaiters();
     return comment;
   }
 
@@ -199,6 +201,7 @@ export class FileStore {
       dec.response = { optionId, reasoning };
       dec.resolvedAt = new Date().toISOString();
       this.scheduleFlush();
+      this.notifyFeedbackWaiters();
     }
   }
 
@@ -254,6 +257,34 @@ export class FileStore {
 
   getPendingPlanReviews(): PlanReviewRecord[] {
     return Array.from(this.planReviews.values()).filter((p) => !p.verdict);
+  }
+
+  // --- Feedback notification (for long-poll) ---
+
+  private feedbackWaiters: Array<() => void> = [];
+
+  /** Register a waiter that resolves when new feedback arrives */
+  waitForFeedback(timeoutMs = 30000): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.feedbackWaiters = this.feedbackWaiters.filter((w) => w !== resolve);
+        resolve();
+      }, timeoutMs);
+
+      const wrappedResolve = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+
+      this.feedbackWaiters.push(wrappedResolve);
+    });
+  }
+
+  /** Notify all waiters that feedback has arrived */
+  private notifyFeedbackWaiters(): void {
+    const waiters = this.feedbackWaiters;
+    this.feedbackWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   // --- Full state (for web UI hydration) ---
