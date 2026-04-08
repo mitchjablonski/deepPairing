@@ -4,6 +4,7 @@ import { ExportMenu } from "./components/ExportMenu";
 import { SessionBrowser } from "./components/SessionBrowser";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
+import { ReviewGate } from "./components/ReviewGate";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { EditorPicker } from "./components/OpenInEditor";
 import { useArtifactStore } from "./stores/artifact";
@@ -107,6 +108,8 @@ function App() {
         </div>
       </div>
 
+      {/* Review gate — approve all draft artifacts to proceed */}
+      <ReviewGate />
       {/* Pending decision/plan banner */}
       <PendingBanner />
 
