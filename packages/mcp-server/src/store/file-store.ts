@@ -246,6 +246,7 @@ export class FileStore {
       review.feedback = feedback;
       review.resolvedAt = new Date().toISOString();
       this.scheduleFlush();
+      this.notifyFeedbackWaiters();
     }
   }
 

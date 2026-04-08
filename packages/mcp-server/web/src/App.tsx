@@ -6,6 +6,7 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { ReviewGate } from "./components/ReviewGate";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
+import { MessageInput } from "./components/MessageInput";
 import { EditorPicker } from "./components/OpenInEditor";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
@@ -117,6 +118,9 @@ function App() {
       <div className="flex-1 min-h-0">
         {hasArtifacts ? <ArtifactPanel /> : <SessionBrowser />}
       </div>
+
+      {/* Free-form message to agent */}
+      {hasArtifacts && <MessageInput />}
 
       {/* Keyboard shortcut help overlay */}
       {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}
