@@ -5,6 +5,7 @@ import { SessionBrowser } from "./components/SessionBrowser";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
+import { EditorPicker } from "./components/OpenInEditor";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 import { usePreferencesStore } from "./stores/preferences";
@@ -76,6 +77,8 @@ function App() {
           <TurnIndicator />
         </div>
         <div className="flex items-center gap-2">
+          <EditorPicker />
+          <span className="text-2xs text-text-muted">·</span>
           <ExportMenu />
           <span className="text-2xs text-text-muted">·</span>
           <button

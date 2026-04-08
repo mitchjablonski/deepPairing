@@ -4,6 +4,7 @@ import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
 import { CommentTrigger } from "../CommentThread";
+import { OpenInEditorLink } from "../OpenInEditor";
 import { useState, useMemo } from "react";
 
 interface ResearchArtifactProps {
@@ -73,8 +74,9 @@ function EvidenceItem({
       <div className="mt-2 rounded-md overflow-hidden border border-border-default">
         {/* File header */}
         <div className="flex items-center justify-between px-2.5 py-1.5 bg-surface-elevated text-xs">
-          <span className="font-mono text-text-secondary">
+          <span className="font-mono text-text-secondary flex items-center gap-1.5">
             {evidence.filePath}:{evidence.lineStart}-{evidence.lineEnd}
+            <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
           </span>
           <div className="flex items-center gap-2">
             <button
