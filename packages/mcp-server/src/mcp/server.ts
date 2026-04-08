@@ -272,7 +272,19 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
         const parts: string[] = [];
 
         // Unacknowledged comments
-        const comments = store.getUnacknowledgedComments();
+        const allComments = store.getUnacknowledgedComments();
+        const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
+        const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
+
+        // Session-level directives (free-form messages from human)
+        if (sessionMessages.length > 0) {
+          store.acknowledgeComments(sessionMessages.map((c) => c.id));
+          const formatted = sessionMessages.map((c) => `- ${c.content}`).join("\n");
+          parts.push(`🎯 Human directive:\n${formatted}\n\nAdjust your approach based on this guidance.`);
+        }
+
+        // Artifact-specific comments
+        const comments = artifactComments;
         if (comments.length > 0) {
           store.acknowledgeComments(comments.map((c) => c.id));
           const formatted = comments.map((c) => {
