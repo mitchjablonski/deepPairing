@@ -6,7 +6,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "bin": {
-    "deeppairing-server": "./dist/standalone.js"
+    "deeppairing-server": "./dist/standalone.js",
+    "deeppairing": "./dist/cli/init.js"
   },
   "scripts": {
     "build": "tsc",

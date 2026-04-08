@@ -1,6 +1,18 @@
 import { create } from "zustand";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
+/** Request notification permission and send a notification when tab is unfocused */
+function notifyIfUnfocused(title: string, body: string) {
+  if (typeof Notification === "undefined") return;
+  if (document.hasFocus()) return;
+
+  if (Notification.permission === "granted") {
+    new Notification(title, { body, icon: "/favicon.ico" });
+  } else if (Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
 interface ConnectionState {
   connected: boolean;
   sessionId: string | null;
@@ -50,6 +62,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
           case "decision_request":
             // Decision requests come as artifacts — already handled by artifact_created
+            notifyIfUnfocused(
+              "deepPairing — Decision needed",
+              data.context ?? "The agent needs you to choose an approach",
+            );
+            break;
+
+          case "plan_review_request":
+            notifyIfUnfocused(
+              "deepPairing — Plan review",
+              `Review plan: ${data.title ?? "Implementation plan"}`,
+            );
             break;
 
           case "decision_resolved":
@@ -77,6 +100,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       ws.onopen = () => {
         set({ connected: true, ws });
+        // Request notification permission on first connect
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+          Notification.requestPermission();
+        }
       };
 
       ws.onmessage = handleMessage;
