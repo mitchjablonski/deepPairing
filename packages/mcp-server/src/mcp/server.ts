@@ -285,20 +285,31 @@ export function createMcpServer(store: FileStore, broadcast: BroadcastFn) {
           parts.push(`Plan reviews:\n${reviewedPlans.join("\n")}`);
         }
 
+        // Check for draft artifacts still awaiting human review
+        const draftArtifacts = store.getArtifacts().filter(
+          (a) => a.status === "draft" && ["research", "plan"].includes(a.type),
+        );
+        if (draftArtifacts.length > 0) {
+          const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
+          parts.push(`⏳ WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}\nDo NOT proceed to the next phase until the human approves these. They may still be reviewing and adding comments.`);
+        }
+
+        const pendingDec = store.getPendingDecisions();
+        if (pendingDec.length > 0) {
+          parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending. Wait for the human to select.`);
+        }
+        if (pendingPlans.length > 0) {
+          parts.push(`⏳ WAITING: ${pendingPlans.length} plan review(s) pending. Wait for approval.`);
+        }
+
         if (parts.length === 0) {
-          const pendingDec = store.getPendingDecisions();
-          if (pendingDec.length > 0 || pendingPlans.length > 0) {
-            return {
-              content: [{ type: "text", text: `No new feedback yet. Still waiting on: ${pendingDec.length} decision(s), ${pendingPlans.length} plan review(s). The human can respond at localhost:3847 or tell you directly.` }],
-            };
-          }
           return {
-            content: [{ type: "text", text: "No new feedback. Continue with your current approach." }],
+            content: [{ type: "text", text: "No pending feedback or reviews. All artifacts approved. You may proceed." }],
           };
         }
 
         return {
-          content: [{ type: "text", text: parts.join("\n\n") + "\n\nIncorporate this feedback into your approach." }],
+          content: [{ type: "text", text: parts.join("\n\n") + "\n\nIncorporate feedback and wait for pending reviews before proceeding." }],
         };
       }
 

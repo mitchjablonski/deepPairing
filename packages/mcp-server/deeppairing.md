@@ -81,17 +81,29 @@ Call periodically (every 3-5 tool calls) to pick up:
 - Decision selections (which option they chose)
 - Plan review verdicts (approved/revised/rejected)
 
-## Workflow
+## Workflow — The Human Controls the Pace
+
+Each phase has a gate. Do NOT proceed to the next phase until the human approves.
 
 1. **GATHER**: Research thoroughly. Read files, search patterns.
 2. **PRESENT**: Call `present_findings` with rich evidence and code snippets.
-3. **DECIDE**: Call `present_options` at decision points. Check feedback for selection.
-4. **PLAN**: Call `present_plan` before multi-file changes. Check feedback for approval.
-5. **EXECUTE**: Call `log_reasoning` before each change. Check feedback periodically.
+3. **WAIT**: Call `check_feedback`. If findings are still "draft", WAIT. The human
+   may be reviewing multiple findings and adding comments. Do NOT proceed until
+   check_feedback reports findings are approved. The human clicks "Accept All &
+   Proceed" or approves individually when ready.
+4. **DECIDE**: Call `present_options` at decision points. Call `check_feedback` and
+   WAIT until the human selects an option.
+5. **PLAN**: Call `present_plan`. Call `check_feedback` and WAIT for approval.
+6. **EXECUTE**: Call `log_reasoning` before each change. Check feedback periodically.
+
+**CRITICAL**: When `check_feedback` says "WAITING: artifacts still under review",
+you MUST wait. Call `check_feedback` again after a pause. Do NOT proceed to
+decisions, plans, or code changes while findings are still draft.
 
 ## Rules
 
 - NEVER produce shallow evidence. Always include actual code.
+- NEVER proceed to the next phase while artifacts are still draft.
 - NEVER make architectural decisions without presenting options.
 - NEVER make code changes without logging reasoning.
 - NEVER repeat an approach that was rejected.
