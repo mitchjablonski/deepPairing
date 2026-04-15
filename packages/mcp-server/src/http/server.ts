@@ -22,10 +22,17 @@ export async function startHttpServer(
   const __thisDir = path.dirname(fileURLToPath(import.meta.url));
   const webDistPath = path.join(__thisDir, "../../dist/web");
   if (fs.existsSync(webDistPath)) {
-    // Serve static files for the companion web UI
-    app.get("/*", async (c) => {
+    // Serve static files for the companion web UI (skip API routes)
+    app.get("/*", async (c, next) => {
+      if (c.req.path.startsWith("/api/")) return next();
       const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
       const fullPath = path.join(webDistPath, filePath);
+      // Prevent path traversal — ensure resolved path stays within webDistPath
+      const resolvedPath = path.resolve(fullPath);
+      const resolvedBase = path.resolve(webDistPath);
+      if (!resolvedPath.startsWith(resolvedBase + path.sep) && resolvedPath !== resolvedBase) {
+        return c.notFound();
+      }
       if (fs.existsSync(fullPath)) {
         const content = fs.readFileSync(fullPath);
         const ext = path.extname(filePath).slice(1);
@@ -52,18 +59,23 @@ export async function startHttpServer(
       return c.notFound();
     });
   } else {
-    app.get("/", (c) => {
-      return c.html(`<!DOCTYPE html>
+    const fallbackHtml = `<!DOCTYPE html>
 <html>
 <head><title>deepPairing</title></head>
 <body style="background:#0f1117;color:#e4e5ea;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-<div style="text-align:center">
-<h1>deepPairing</h1>
-<p style="color:#9ca0b0">Companion web UI not built yet. Run the build to enable it.</p>
-<p style="color:#5c6178;font-size:0.875rem">MCP server is running. Claude Code can use the deepPairing tools.</p>
+<div style="text-align:center;max-width:480px;padding:2rem">
+<h1 style="margin-bottom:0.5rem">deepPairing</h1>
+<p style="color:#9ca0b0">Companion web UI not built yet.</p>
+<p style="color:#5c6178;font-size:0.875rem;margin-top:1rem">Run this command to build it:</p>
+<code style="display:block;background:#1c1f2b;padding:0.75rem 1rem;border-radius:8px;margin-top:0.5rem;font-size:0.875rem;color:#4f7df7">cd packages/mcp-server && pnpm build</code>
+<p style="color:#5c6178;font-size:0.75rem;margin-top:1.5rem">MCP server is running — Claude Code can use the deepPairing tools.<br>The UI will appear here after building.</p>
 </div>
 </body>
-</html>`);
+</html>`;
+    // Serve fallback on ALL routes (not just /) so users see the message regardless of path
+    app.get("/*", (c, next) => {
+      if (c.req.path.startsWith("/api/")) return next();
+      return c.html(fallbackHtml);
     });
   }
 

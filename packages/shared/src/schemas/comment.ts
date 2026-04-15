@@ -20,6 +20,7 @@ export const CommentTargetSchema = z.object({
   evidenceIndex: z.number().int().optional(),
   stepIndex: z.number().int().optional(),
   sectionId: z.string().optional(),
+  suggestion: z.string().optional().describe("Suggested code replacement for this line"),
 });
 
 export type CommentTarget = z.infer<typeof CommentTargetSchema>;

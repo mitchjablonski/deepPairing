@@ -1,32 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment } from "@deeppairing/shared";
+import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams } from "./store-interface.js";
 
-interface DecisionRecord {
-  decisionId: string;
-  artifactId: string;
-  context: string;
-  options: any[];
-  response?: { optionId: string; reasoning?: string };
-  acknowledged?: boolean;
-  createdAt: string;
-  resolvedAt?: string;
-}
-
-interface PlanReviewRecord {
-  artifactId: string;
-  verdict?: "approved" | "revised" | "rejected";
-  feedback?: string;
-  createdAt: string;
-  resolvedAt?: string;
-}
+export type { DecisionRecord, PlanReviewRecord };
 
 /**
  * File-based store for deepPairing artifacts, comments, and decisions.
  * Stores data in .deeppairing/ directory within the project root.
  * In-memory cache with debounced disk flush.
  */
-export class FileStore {
+export class FileStore implements IStore {
   private basePath: string;
   private artifacts: Artifact[] = [];
   private comments: Comment[] = [];
@@ -34,12 +18,18 @@ export class FileStore {
   private planReviews: Map<string, PlanReviewRecord> = new Map();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
+  private autonomyLevel: "supervised" | "balanced" | "autonomous" = "supervised";
 
   constructor(projectRoot: string, sessionId?: string) {
     this.basePath = path.join(projectRoot, ".deeppairing");
     this.sessionId = sessionId ?? `session_${Date.now()}`;
+    // Prevent path traversal via sessionId
+    if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
+      throw new Error("Invalid session ID");
+    }
     this.ensureDir();
     this.load();
+    this.loadPreferences();
   }
 
   private ensureDir(): void {
@@ -51,28 +41,35 @@ export class FileStore {
     return path.join(this.basePath, "sessions", this.sessionId);
   }
 
+  private loadPreferences(): void {
+    const prefsPath = path.join(this.basePath, "preferences.json");
+    const prefs = this.loadJsonFile<Record<string, any>>(prefsPath, {});
+    if (prefs.autonomyLevel) this.autonomyLevel = prefs.autonomyLevel;
+  }
+
   private load(): void {
+    const dir = this.sessionDir();
+    this.artifacts = this.loadJsonFile<Artifact[]>(path.join(dir, "artifacts.json"), []);
+    this.comments = this.loadJsonFile<Comment[]>(path.join(dir, "comments.json"), []);
+    const decArr = this.loadJsonFile<DecisionRecord[]>(path.join(dir, "decisions.json"), []);
+    this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
+    const planArr = this.loadJsonFile<PlanReviewRecord[]>(path.join(dir, "plan-reviews.json"), []);
+    this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
+  }
+
+  /** Load a JSON file with graceful error handling */
+  private loadJsonFile<T>(filePath: string, fallback: T): T {
     try {
-      const artFile = path.join(this.sessionDir(), "artifacts.json");
-      if (fs.existsSync(artFile)) {
-        this.artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
-      }
-      const cmtFile = path.join(this.sessionDir(), "comments.json");
-      if (fs.existsSync(cmtFile)) {
-        this.comments = JSON.parse(fs.readFileSync(cmtFile, "utf-8"));
-      }
-      const decFile = path.join(this.sessionDir(), "decisions.json");
-      if (fs.existsSync(decFile)) {
-        const arr: DecisionRecord[] = JSON.parse(fs.readFileSync(decFile, "utf-8"));
-        this.decisions = new Map(arr.map((d) => [d.decisionId, d]));
-      }
-      const planFile = path.join(this.sessionDir(), "plan-reviews.json");
-      if (fs.existsSync(planFile)) {
-        const arr: PlanReviewRecord[] = JSON.parse(fs.readFileSync(planFile, "utf-8"));
-        this.planReviews = new Map(arr.map((p) => [p.artifactId, p]));
-      }
-    } catch {
-      // Fresh session — no files to load
+      if (!fs.existsSync(filePath)) return fallback;
+      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch (err: any) {
+      if (err?.code === "ENOENT") return fallback;
+      // Corrupted JSON — log warning and back up the corrupt file
+      console.error(`[deepPairing] Corrupted file ${filePath}: ${err.message}`);
+      try {
+        fs.copyFileSync(filePath, filePath + ".corrupt");
+      } catch { /* best-effort backup */ }
+      return fallback;
     }
   }
 
@@ -84,12 +81,28 @@ export class FileStore {
     }, 100);
   }
 
+  /** Atomic write: write to .tmp then rename */
+  private atomicWrite(filePath: string, data: unknown): void {
+    const tmp = filePath + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, filePath);
+  }
+
   private flush(): void {
     const dir = this.sessionDir();
-    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(this.artifacts, null, 2));
-    fs.writeFileSync(path.join(dir, "comments.json"), JSON.stringify(this.comments, null, 2));
-    fs.writeFileSync(path.join(dir, "decisions.json"), JSON.stringify(Array.from(this.decisions.values()), null, 2));
-    fs.writeFileSync(path.join(dir, "plan-reviews.json"), JSON.stringify(Array.from(this.planReviews.values()), null, 2));
+    this.atomicWrite(path.join(dir, "artifacts.json"), this.artifacts);
+    this.atomicWrite(path.join(dir, "comments.json"), this.comments);
+    this.atomicWrite(path.join(dir, "decisions.json"), Array.from(this.decisions.values()));
+    this.atomicWrite(path.join(dir, "plan-reviews.json"), Array.from(this.planReviews.values()));
+  }
+
+  /** Force an immediate flush — call before process exit */
+  forceFlush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.flush();
   }
 
   getSessionId(): string {
@@ -126,11 +139,24 @@ export class FileStore {
     return artifact;
   }
 
+  renameArtifact(artifactId: string, title: string): void {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (art) {
+      art.title = title;
+      art.updatedAt = new Date().toISOString();
+      this.scheduleFlush();
+    }
+  }
+
   updateArtifactStatus(artifactId: string, status: ArtifactStatus): void {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
+      const wasDraft = art.status === "draft";
       art.status = status;
       art.updatedAt = new Date().toISOString();
+      if (wasDraft && status !== "draft") {
+        this.recordArtifactReviewed(artifactId);
+      }
       this.scheduleFlush();
       this.notifyFeedbackWaiters();
     }
@@ -260,6 +286,117 @@ export class FileStore {
     return Array.from(this.planReviews.values()).filter((p) => !p.verdict);
   }
 
+  // --- Engagement Metrics ---
+
+  private reviewLatencies: { type: string; latencyMs: number }[] = [];
+
+  /** Record that an artifact was reviewed (status changed from draft) */
+  recordArtifactReviewed(artifactId: string): void {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (art) {
+      const latencyMs = Date.now() - new Date(art.createdAt).getTime();
+      this.reviewLatencies.push({ type: art.type, latencyMs });
+    }
+  }
+
+  getEngagementMetrics(): {
+    avgReviewLatencyMs: number;
+    commentDensity: number;
+    approvalRate: number;
+    reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
+  } {
+    const reviewed = this.artifacts.filter((a) => a.status !== "draft" && a.status !== "superseded");
+    const approved = this.artifacts.filter((a) => a.status === "approved");
+    const approvalRate = reviewed.length > 0 ? approved.length / reviewed.length : 1;
+
+    const humanComments = this.comments.filter((c) => c.author === "human" && c.target.artifactId !== "__session__");
+    const commentDensity = this.artifacts.length > 0 ? humanComments.length / this.artifacts.length : 0;
+
+    const avgReviewLatencyMs = this.reviewLatencies.length > 0
+      ? this.reviewLatencies.reduce((sum, r) => sum + r.latencyMs, 0) / this.reviewLatencies.length
+      : 0;
+
+    // Per-type breakdown
+    const reviewsByType: Record<string, { totalMs: number; count: number }> = {};
+    for (const r of this.reviewLatencies) {
+      const entry = reviewsByType[r.type] ?? { totalMs: 0, count: 0 };
+      entry.totalMs += r.latencyMs;
+      entry.count += 1;
+      reviewsByType[r.type] = entry;
+    }
+    const typeSummary: Record<string, { avgLatencyMs: number; count: number }> = {};
+    for (const [type, data] of Object.entries(reviewsByType)) {
+      typeSummary[type] = { avgLatencyMs: Math.round(data.totalMs / data.count), count: data.count };
+    }
+
+    return { avgReviewLatencyMs: Math.round(avgReviewLatencyMs), commentDensity, approvalRate, reviewsByType: typeSummary };
+  }
+
+  // --- Session Memory (persists across sessions) ---
+
+  /**
+   * Record a rejected approach so it's never proposed again.
+   * Stored in .deeppairing/preferences.json under "rejectedApproaches".
+   */
+  recordRejectedApproach(description: string): void {
+    const prefs = this.readPreferences();
+    const rejected: string[] = prefs.rejectedApproaches ?? [];
+    if (!rejected.includes(description)) {
+      rejected.push(description);
+      prefs.rejectedApproaches = rejected;
+      this.writePreferences(prefs);
+    }
+  }
+
+  /**
+   * Record an approved pattern the human prefers.
+   * Stored in .deeppairing/preferences.json under "approvedPatterns".
+   */
+  recordApprovedPattern(description: string): void {
+    const prefs = this.readPreferences();
+    const approved: string[] = prefs.approvedPatterns ?? [];
+    if (!approved.includes(description)) {
+      approved.push(description);
+      prefs.approvedPatterns = approved;
+      this.writePreferences(prefs);
+    }
+  }
+
+  /**
+   * Get session memory context for the agent.
+   * Returns rejected approaches and approved patterns from previous sessions.
+   */
+  getSessionMemory(): { rejectedApproaches: string[]; approvedPatterns: string[] } {
+    const prefs = this.readPreferences();
+    return {
+      rejectedApproaches: prefs.rejectedApproaches ?? [],
+      approvedPatterns: prefs.approvedPatterns ?? [],
+    };
+  }
+
+  private readPreferences(): Record<string, any> {
+    const prefsPath = path.join(this.basePath, "preferences.json");
+    return this.loadJsonFile<Record<string, any>>(prefsPath, {});
+  }
+
+  private writePreferences(prefs: Record<string, any>): void {
+    const prefsPath = path.join(this.basePath, "preferences.json");
+    fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+  }
+
+  // --- Autonomy Level ---
+
+  setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): void {
+    this.autonomyLevel = level;
+    const prefs = this.readPreferences();
+    prefs.autonomyLevel = level;
+    this.writePreferences(prefs);
+  }
+
+  getAutonomyLevel(): "supervised" | "balanced" | "autonomous" {
+    return this.autonomyLevel;
+  }
+
   // --- Feedback notification (for long-poll) ---
 
   private feedbackWaiters: Array<() => void> = [];
@@ -297,6 +434,9 @@ export class FileStore {
       comments: this.comments,
       decisions: Array.from(this.decisions.values()),
       planReviews: Array.from(this.planReviews.values()),
+      autonomyLevel: this.autonomyLevel,
+      sessionMemory: this.getSessionMemory(),
+      engagementMetrics: this.getEngagementMetrics(),
     };
   }
 

@@ -32,6 +32,8 @@ export interface ArtifactState {
     reasoning?: string,
   ) => Promise<void>;
 
+  renameArtifact: (artifactId: string, title: string) => Promise<void>;
+
   reset: () => void;
 }
 
@@ -98,6 +100,19 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ optionId, reasoning }),
     });
+  },
+
+  renameArtifact: async (artifactId, title) => {
+    await fetch(`${API_BASE}/api/artifacts/${artifactId}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    set((state) => ({
+      artifacts: state.artifacts.map((a) =>
+        a.id === artifactId ? { ...a, title } : a,
+      ),
+    }));
   },
 
   reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [] }),

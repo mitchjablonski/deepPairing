@@ -75,8 +75,9 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
 
     return (
       <motion.div
-        initial={{ opacity: 0.8, scale: 0.98 }}
+        initial={{ opacity: 0, scale: 0.96 }}
         animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
         className="mx-3 my-2 p-4 bg-accent-green-dim border border-accent-green/20 rounded-lg"
       >
         <div className="flex items-center gap-2 mb-1">
@@ -128,12 +129,12 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
               layout
               onClick={() => handleSelect(option.id)}
               disabled={submitting}
-              className={`text-left p-3 border rounded-lg transition-all disabled:opacity-50 ${
+              className={`text-left p-3 border rounded-lg transition-all duration-[180ms] ease-out disabled:opacity-50 press-scale ${
                 idx === focusedIndex
                   ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
                   : option.recommendation
                     ? "border-accent-blue/30 bg-surface-elevated hover:border-accent-blue/50"
-                    : "border-border-default bg-surface-elevated hover:border-border-focus/30"
+                    : "border-white/[0.06] bg-surface-elevated hover:border-white/[0.1]"
               }`}
               onMouseEnter={() => setFocusedIndex(idx)}
             >

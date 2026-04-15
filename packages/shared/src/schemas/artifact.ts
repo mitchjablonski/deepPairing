@@ -37,3 +37,42 @@ export const ArtifactSchema = z.object({
 });
 
 export type Artifact = z.infer<typeof ArtifactSchema>;
+
+// --- Typed content interfaces for artifact types not covered by content-types.ts ---
+
+export interface DecisionContent {
+  context: string;
+  options: Array<{
+    id: string;
+    title: string;
+    description: string;
+    pros: string[];
+    cons: string[];
+    effort: "low" | "medium" | "high";
+    risk: "low" | "medium" | "high";
+    recommendation: boolean;
+  }>;
+  decisionId: string;
+}
+
+export interface ReasoningContent {
+  action: string;
+  reasoning: string;
+  alternativesConsidered?: string[];
+  alternativeDetails?: Array<{ title: string; reason: string }>;
+  confidence?: "low" | "medium" | "high";
+}
+
+export interface CodeChangeContent {
+  filePath: string;
+  changeType: "create" | "modify" | "delete";
+  before: string;
+  after: string;
+  reasoning: string;
+  confidence?: "low" | "medium" | "high";
+}
+
+/** Helper to cast artifact content to a typed interface */
+export function getTypedContent<T>(artifact: Artifact): T {
+  return artifact.content as T;
+}

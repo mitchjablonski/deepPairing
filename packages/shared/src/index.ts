@@ -56,6 +56,10 @@ export {
   type ArtifactType,
   type ArtifactStatus,
   type Artifact,
+  type DecisionContent,
+  type ReasoningContent,
+  type CodeChangeContent,
+  getTypedContent,
 } from "./schemas/artifact.js";
 
 export {

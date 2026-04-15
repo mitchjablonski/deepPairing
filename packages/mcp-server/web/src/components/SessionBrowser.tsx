@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
+import { demoArtifacts, demoComments } from "@deeppairing/shared/__fixtures__/demo-session";
 
 const API_BASE = `http://${window.location.host}`;
 
@@ -17,7 +18,18 @@ export function SessionBrowser() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
-  const { addArtifact, addComment, reset } = useArtifactStore();
+  const { addArtifact, addComment, selectArtifact, reset } = useArtifactStore();
+
+  const loadDemo = () => {
+    reset();
+    for (const artifact of demoArtifacts) {
+      addArtifact(artifact);
+    }
+    for (const comment of demoComments) {
+      addComment(comment);
+    }
+    selectArtifact(demoArtifacts[0].id);
+  };
 
   useEffect(() => {
     fetch(`${API_BASE}/api/sessions`)
@@ -87,6 +99,14 @@ export function SessionBrowser() {
           <p className="text-sm">No sessions yet</p>
           <p className="text-xs mt-1">Start a conversation with Claude Code using deepPairing tools</p>
         </div>
+        <button
+          onClick={loadDemo}
+          className="px-4 py-2 bg-accent-blue text-white text-xs font-medium rounded-lg
+                     hover:bg-accent-blue/80 transition-all duration-[180ms] ease-out press-scale"
+        >
+          Try Demo
+        </button>
+        <p className="text-2xs text-text-muted">See what a deepPairing session looks like</p>
       </div>
     );
   }
@@ -102,9 +122,9 @@ export function SessionBrowser() {
           key={session.id}
           onClick={() => loadSession(session.id)}
           disabled={loadingSession === session.id}
-          className="w-full text-left p-3 bg-surface-elevated border border-border-subtle rounded-lg
-                     hover:border-border-default hover:bg-surface-hover transition-colors
-                     disabled:opacity-50"
+          className="w-full text-left p-3 bg-surface-elevated border border-white/[0.06] rounded-lg
+                     hover:border-white/[0.1] hover:bg-surface-hover transition-all duration-[180ms] ease-out
+                     disabled:opacity-50 press-scale"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">

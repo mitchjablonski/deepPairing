@@ -1,53 +1,72 @@
 #!/usr/bin/env node
 /**
- * deepPairing MCP Server — standalone entry point.
- * Starts MCP server on stdio + HTTP/WebSocket on port 3847.
+ * deepPairing MCP Server — thin stdio wrapper.
  *
- * Usage:
- *   npx @deeppairing/mcp-server
- *   node dist/standalone.js
+ * Each Claude Code session spawns this process. It:
+ * 1. Ensures the shared daemon is running (spawns it if needed)
+ * 2. Registers its session with the daemon
+ * 3. Runs the MCP server on stdio, proxying all store operations to the daemon via HTTP
  *
- * Claude Code connects via stdio. Companion web UI at localhost:3847.
+ * The daemon manages the companion web UI, WebSocket broadcast, and all state.
  */
 
 import { createMcpServer } from "./mcp/server.js";
-import { startHttpServer } from "./http/server.js";
-import { broadcast } from "./http/websocket.js";
-import { FileStore } from "./store/file-store.js";
+import { ensureDaemon } from "./daemon-lifecycle.js";
+import { DaemonClient } from "./daemon-client.js";
 import fs from "node:fs";
 import path from "node:path";
 
 const projectRoot = process.cwd();
-const logFile = path.join(projectRoot, ".deeppairing", "server.log");
+const dpDir = path.join(projectRoot, ".deeppairing");
+const logFile = path.join(dpDir, "server.log");
 
-// Logging — must not write to stdout/stderr (corrupts MCP protocol)
 function log(msg: string): void {
-  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  const line = `[${new Date().toISOString()}] [mcp] ${msg}\n`;
   try {
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
     fs.appendFileSync(logFile, line);
-  } catch {
-    // Can't log — silently continue
-  }
+  } catch {}
 }
 
 async function main() {
-  log("deepPairing MCP server starting");
+  log("MCP wrapper starting");
   log(`Project root: ${projectRoot}`);
 
-  // Initialize file store
-  const store = new FileStore(projectRoot);
-  log(`Session: ${store.getSessionId()}`);
+  // Ensure the shared daemon is running
+  const port = await ensureDaemon(projectRoot);
+  log(`Daemon ready on port ${port}`);
 
-  // Start HTTP + WebSocket server (companion web UI)
-  const port = await startHttpServer(store, log, projectRoot);
-  log(`Companion UI available at http://localhost:${port}`);
+  // Create a session ID and register with the daemon
+  const sessionId = `session_${Date.now()}`;
+  const client = new DaemonClient(port, sessionId);
+  await client.register();
+  log(`Session registered: ${sessionId}`);
 
-  // Notify user via stderr (Claude Code shows MCP stderr to the user)
-  process.stderr.write(`deepPairing companion UI: http://localhost:${port}\n`);
+  // Notify user
+  process.stderr.write(`\n  deepPairing is running.\n  Companion UI: http://localhost:${port}\n  Session: ${sessionId}\n\n`);
 
-  // Start MCP server (stdio — Claude Code connects here)
-  const mcp = createMcpServer(store, broadcast);
+  // Create MCP server with the daemon client as the store
+  // broadcast is a no-op — the daemon broadcasts when mutations happen via daemon-routes
+  const noop = () => {};
+  const mcp = createMcpServer(client, noop, port);
+
+  // Graceful shutdown
+  process.on("exit", () => {
+    client.unregister().catch(() => {});
+    client.forceFlush().catch(() => {});
+  });
+  process.on("SIGINT", () => {
+    log("Shutting down (SIGINT)");
+    client.unregister().catch(() => {});
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    log("Shutting down (SIGTERM)");
+    client.unregister().catch(() => {});
+    process.exit(0);
+  });
+
+  // Start MCP server on stdio
   await mcp.start();
   log("MCP server connected via stdio");
 }

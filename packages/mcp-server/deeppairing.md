@@ -1,9 +1,32 @@
 # deepPairing Collaboration Protocol
 
-When you first respond in a conversation, mention that you have deepPairing
-collaboration tools available: "I have deepPairing tools for structured
-collaboration. Open **http://localhost:3847** for the companion UI where you
-can review findings, comment on code, and make decisions."
+**IMPORTANT: You have deepPairing MCP tools available. Use them instead of
+presenting research, decisions, and plans as plain text.** The companion UI
+provides rich rendering, inline code commenting, and structured decision-making
+that plain terminal output cannot.
+
+When you first respond, tell the user: "I have deepPairing tools for structured
+collaboration. Open the companion UI to review findings, comment on code, and
+make decisions." The URL will be shown in your first tool call response.
+
+## When to Use deepPairing Tools
+
+**Always use `present_findings`** when you have research results, code analysis,
+or codebase observations to share. Never dump findings as plain text.
+
+**Always use `present_options`** when there are 2+ valid approaches and you need
+the human to choose. Never just list options in text.
+
+**Always use `present_plan`** before multi-file changes. Never describe a plan
+in text only.
+
+**Always use `present_code_change`** when you want the human to review a specific
+change with before/after context.
+
+**Always use `log_reasoning`** before every Edit or Write to explain your reasoning.
+
+**The only exception** is simple tasks (typo fixes, one-line changes) where the
+overhead isn't worth it.
 
 ## Task Complexity
 
@@ -75,30 +98,135 @@ This tool is **non-blocking** — call `deepPairing_check_feedback` for approval
 ### deepPairing_log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.
 
+### deepPairing_present_code_change
+Call to present a code change with before/after content for human review.
+Use this when you want the human to see exactly what you're changing and why.
+
+Include: `filePath`, `changeType` (create/modify/delete), `before`, `after`,
+`reasoning`, and optionally `confidence` (low/medium/high) and `relatedFindings`
+(artifact IDs of findings that motivated this change).
+
+The human can review the diff, comment inline, and approve/reject in the companion UI.
+
 ### deepPairing_check_feedback
-Call periodically (every 3-5 tool calls) to pick up:
+**CRITICAL: This is a polling tool. You MUST call it in a loop when waiting for
+human responses. Do NOT stop and wait for terminal input.**
+
+When you have pending artifacts (findings, decisions, plans), call `check_feedback`
+repeatedly until the human responds. Each call waits up to 30 seconds for a response.
+If it times out, call it again immediately. The human is reviewing in the companion
+UI at localhost — they are NOT typing in the terminal.
+
+**Polling pattern:**
+```
+1. Call present_findings / present_options / present_plan
+2. Call check_feedback          ← waits up to 30s
+3. If response says "WAITING": call check_feedback again  ← DO NOT stop here
+4. Repeat until you get approval/comments/selection
+5. Only then proceed to the next phase
+```
+
+Returns:
 - Human comments on your findings, evidence, or code
 - Decision selections (which option they chose)
 - Plan review verdicts (approved/revised/rejected)
+- Inline code suggestions (the human can suggest replacement code)
+- Session-level directives (free-form messages from the human)
+
+If no response after several polls, an escalation hint will tell you to ask the
+human directly in the terminal as a fallback.
+
+### deepPairing_export_session
+Export the current session as markdown. Three formats:
+- `pr-description`: Concise summary for pull request bodies
+- `adr`: Architecture Decision Record format
+- `full`: Complete session with code evidence, decisions, and reasoning log
+
+## Advanced Features
+
+### Confidence
+Add `confidence: "low" | "medium" | "high"` to findings and code changes.
+Low-confidence items are highlighted for closer human review. High-confidence
+items may auto-approve in balanced/autonomous mode.
+
+### Structured Reasoning
+When calling `log_reasoning`, use `alternativeDetails` instead of plain
+`alternativesConsidered` for richer display:
+```json
+{
+  "alternativeDetails": [
+    { "title": "Use bcrypt 12 rounds", "reason": "Still vulnerable to GPU attacks" }
+  ]
+}
+```
+
+### Conditional Plans
+Plan steps can include `condition` and `branches` for branching logic:
+```json
+{
+  "description": "Run migration",
+  "reasoning": "Update schema",
+  "condition": "if tests pass",
+  "branches": [
+    { "description": "Deploy to staging", "reasoning": "Verify in staging first" }
+  ]
+}
+```
+
+### Inline Code Suggestions
+The human can suggest replacement code on specific lines. These arrive in
+`check_feedback` as `[SUGGESTION for file:line]` — apply them directly.
 
 ## Workflow — The Human Controls the Pace
 
 Each phase has a gate. Do NOT proceed to the next phase until the human approves.
+**The human responds in the companion UI, NOT in the terminal.** You must poll
+`check_feedback` to get their responses.
 
 1. **GATHER**: Research thoroughly. Read files, search patterns.
 2. **PRESENT**: Call `present_findings` with rich evidence and code snippets.
-3. **WAIT**: Call `check_feedback`. If findings are still "draft", WAIT. The human
-   may be reviewing multiple findings and adding comments. Do NOT proceed until
-   check_feedback reports findings are approved. The human clicks "Accept All &
-   Proceed" or approves individually when ready.
-4. **DECIDE**: Call `present_options` at decision points. Call `check_feedback` and
-   WAIT until the human selects an option.
-5. **PLAN**: Call `present_plan`. Call `check_feedback` and WAIT for approval.
-6. **EXECUTE**: Call `log_reasoning` before each change. Check feedback periodically.
+3. **POLL**: Call `check_feedback` in a loop. Each call waits up to 30s. If it
+   returns "WAITING", call `check_feedback` again immediately — do NOT show the
+   WAITING message to the user or ask them to type in the terminal. Keep polling
+   until you get approval or comments.
+4. **DECIDE**: Call `present_options` at decision points. Poll `check_feedback`
+   until the human selects an option.
+5. **PLAN**: Call `present_plan`. Poll `check_feedback` until approved/revised.
+6. **EXECUTE**: Call `log_reasoning` before each change. Poll feedback periodically.
 
-**CRITICAL**: When `check_feedback` says "WAITING: artifacts still under review",
-you MUST wait. Call `check_feedback` again after a pause. Do NOT proceed to
-decisions, plans, or code changes while findings are still draft.
+**CRITICAL**: When `check_feedback` says "WAITING", you MUST call `check_feedback`
+again. Do NOT ask the user to respond in the terminal. Do NOT show them the
+WAITING message. The human is reviewing in the browser — just keep polling.
+
+## Autonomy Levels
+
+The human sets their preferred involvement level in the companion UI. `check_feedback`
+will tell you the current level. Adjust your ceremony accordingly:
+
+**Supervised** (default): Full ceremony — findings, options, plan, approval at every gate.
+Wait for explicit approval before proceeding to the next phase.
+
+**Balanced**: Skip `present_findings` for simple/medium tasks. Only use `present_options`
+when there's a genuine architectural choice (not obvious best-practice). Still present
+plans for multi-file changes and log reasoning before edits.
+
+**Autonomous**: Proceed with recommended options automatically. Use `log_reasoning`
+liberally so the human can review your thought process after the fact. Only call
+`present_options` for high-risk or irreversible decisions. Present code changes for
+review but don't wait for approval before continuing.
+
+## Session Memory
+
+deepPairing remembers decisions across sessions. On the first `check_feedback` call,
+you'll receive context from previous sessions:
+
+- **Rejected approaches**: Options the human explicitly rejected. NEVER propose these
+  again. If a rejected approach is the only viable option, explain why and ask permission.
+- **Approved patterns**: Approaches the human preferred. Default to these when facing
+  similar decisions.
+
+This memory builds automatically from decision resolutions. The human can view and
+manage it in the companion UI.
 
 ## Rules
 

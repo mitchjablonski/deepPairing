@@ -1,0 +1,52 @@
+{
+  "name": "deeppairing-vscode",
+  "displayName": "deepPairing",
+  "description": "Human-AI collaborative development companion — review findings, make decisions, and comment on code changes from within VS Code.",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deeppairing",
+          "title": "deepPairing",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "deeppairing": [
+        {
+          "type": "webview",
+          "id": "deeppairing.companion",
+          "name": "Companion"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "deeppairing.openCompanion",
+        "title": "deepPairing: Open Companion"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc && node build.mjs",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

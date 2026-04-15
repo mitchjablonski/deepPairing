@@ -55,7 +55,7 @@ pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 
 ## Testing with Claude Code
 
-Add `.mcp.json` to project root:
+**From within the deepPairing repo** — add `.mcp.json` to project root:
 ```json
 {
   "mcpServers": {
@@ -66,6 +66,19 @@ Add `.mcp.json` to project root:
   }
 }
 ```
+
+**From another project** — use `node` with the built dist and absolute path:
+```json
+{
+  "mcpServers": {
+    "deeppairing": {
+      "command": "node",
+      "args": ["/absolute/path/to/deeppairing/packages/mcp-server/dist/standalone.js"]
+    }
+  }
+}
+```
+Make sure you've run `pnpm install && pnpm build` in the deepPairing repo first.
 
 Open http://localhost:3847 for the companion UI.
 

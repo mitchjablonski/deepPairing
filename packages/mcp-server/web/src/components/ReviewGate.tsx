@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 
 export function ReviewGate() {
@@ -20,8 +21,9 @@ export function ReviewGate() {
 
   // Build summary of what Accept All will do
   const autoDecisions = decisionDraft.map((a) => {
-    const options = (a.content as any)?.options ?? [];
-    const recommended = options.find((o: any) => o.recommendation) ?? options[0];
+    const dc = getTypedContent<DecisionContent>(a);
+    const options = dc.options ?? [];
+    const recommended = options.find((o) => o.recommendation) ?? options[0];
     return { artifact: a, recommended };
   }).filter((d) => d.recommended);
 
@@ -33,11 +35,11 @@ export function ReviewGate() {
 
     for (const artifact of allDraft) {
       if (artifact.type === "decision") {
-        const options = (artifact.content as any)?.options ?? [];
-        const recommended = options.find((o: any) => o.recommendation) ?? options[0];
-        const decisionId = (artifact.content as any)?.decisionId;
-        if (recommended && decisionId) {
-          await resolveDecision(decisionId, recommended.id, "Accepted via bulk approve");
+        const dc = getTypedContent<DecisionContent>(artifact);
+        const options = dc.options ?? [];
+        const recommended = options.find((o) => o.recommendation) ?? options[0];
+        if (recommended && dc.decisionId) {
+          await resolveDecision(dc.decisionId, recommended.id, "Accepted via bulk approve");
         }
       }
       await updateArtifactStatus(artifact.id, "approved");
@@ -72,7 +74,7 @@ export function ReviewGate() {
           )}
           <button
             onClick={handleAcceptAll}
-            className={`px-2.5 py-1 text-2xs font-medium rounded transition-colors ${
+            className={`px-2.5 py-1 text-2xs font-medium rounded transition-all duration-[180ms] ease-out press-scale ${
               confirming
                 ? "bg-accent-amber text-text-inverse hover:bg-accent-amber/80"
                 : "bg-accent-green text-text-inverse hover:bg-accent-green/80"
@@ -97,7 +99,7 @@ export function ReviewGate() {
           Will auto-select recommended options:
           {autoDecisions.map((d) => (
             <span key={d.artifact.id} className="block ml-2 text-text-secondary">
-              • {(d.artifact.content as any)?.context}: <strong>{d.recommended?.title}</strong>
+              • {getTypedContent<DecisionContent>(d.artifact).context}: <strong>{d.recommended?.title}</strong>
             </span>
           ))}
         </div>

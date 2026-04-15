@@ -12,12 +12,12 @@
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 
   /* Dense developer-tool type scale */
-  --text-2xs: 0.625rem;
-  --text-xs: 0.6875rem;
-  --text-sm: 0.8125rem;
-  --text-base: 0.875rem;
-  --text-lg: 1rem;
-  --text-xl: 1.125rem;
+  --text-2xs: 0.625rem;     /* 10px — badges, tertiary labels */
+  --text-xs: 0.75rem;       /* 12px — labels, secondary text */
+  --text-sm: 0.8125rem;     /* 13px — body, code */
+  --text-base: 0.875rem;    /* 14px — primary prose */
+  --text-lg: 1rem;          /* 16px — headings */
+  --text-xl: 1.125rem;      /* 18px — large headings */
 
   /* Surfaces */
   --color-surface-primary: #0f1117;
@@ -71,6 +71,12 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Font size scaling — applied to root, cascades to all rem/em values */
+[data-font-size="compact"] { font-size: 12px; }
+[data-font-size="default"] { font-size: 14px; }
+[data-font-size="large"] { font-size: 16px; }
+[data-font-size="xlarge"] { font-size: 18px; }
+
 /* Selection */
 ::selection {
   background: var(--color-accent-blue);
@@ -95,8 +101,51 @@ html {
 
 /* Focus ring */
 *:focus-visible {
-  outline: 1px solid var(--color-border-focus);
-  outline-offset: 1px;
+  outline: 2px solid rgba(124, 92, 252, 0.5);
+  outline-offset: 2px;
+}
+
+/* Approved flash animation */
+@keyframes approved-flash {
+  0% { background-color: rgba(52, 199, 89, 0.08); }
+  100% { background-color: transparent; }
+}
+.animate-approved {
+  animation: approved-flash 600ms ease-out forwards;
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-elevated) 25%,
+    var(--color-surface-hover) 50%,
+    var(--color-surface-elevated) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Scroll shadows for scrollable panels */
+.scroll-shadow {
+  background:
+    linear-gradient(var(--color-surface-primary) 30%, transparent) center top,
+    linear-gradient(transparent, var(--color-surface-primary) 70%) center bottom;
+  background-repeat: no-repeat;
+  background-size: 100% 16px;
+  background-attachment: local;
+}
+
+/* Button press micro-interaction */
+.press-scale {
+  transition: transform 100ms ease-out;
+}
+.press-scale:active {
+  transform: scale(0.97);
 }
 
 /* Input/textarea dark base */
@@ -109,9 +158,28 @@ input::placeholder, textarea::placeholder {
   color: var(--color-text-muted);
 }
 
+/* Prose line-height */
+body {
+  line-height: 1.5;
+}
+
 /* Code elements */
 code, pre {
   font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.54;
+}
+
+/* Heading line-height */
+h1, h2, h3, h4, h5, h6 {
+  line-height: 1.2;
+}
+
+/* Single-line truncation utility */
+.truncate-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Light mode overrides */
