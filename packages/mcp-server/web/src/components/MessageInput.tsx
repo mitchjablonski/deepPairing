@@ -62,7 +62,7 @@ export function MessageInput() {
           disabled={!message.trim() || sending}
           className="px-3 py-1.5 bg-accent-blue text-white text-xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
-                     transition-colors"
+                     transition-all duration-[180ms] ease-out press-scale"
         >
           {sent ? "Sent ✓" : "Send"}
         </button>

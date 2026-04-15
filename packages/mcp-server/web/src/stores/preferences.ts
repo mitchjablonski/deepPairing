@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 type Theme = "dark" | "light" | "system";
+type FontSize = "compact" | "default" | "large" | "xlarge";
 
 export const EDITOR_PRESETS: Record<string, { label: string; template: string }> = {
   vscode: { label: "VS Code", template: "vscode://file/{path}:{line}:{column}" },
@@ -14,11 +15,15 @@ export const EDITOR_PRESETS: Record<string, { label: string; template: string }>
 
 interface PreferencesState {
   theme: Theme;
+  fontSize: FontSize;
+  contentWidth: "full" | "constrained";
   sidebarCollapsed: boolean;
   focusedPanel: "activity" | "artifact" | null;
   editorScheme: string;
 
   setTheme: (theme: Theme) => void;
+  setFontSize: (size: FontSize) => void;
+  toggleContentWidth: () => void;
   toggleSidebar: () => void;
   setFocusedPanel: (panel: "activity" | "artifact" | null) => void;
   setEditorScheme: (scheme: string) => void;
@@ -33,6 +38,16 @@ function getStoredTheme(): Theme {
 function getStoredEditor(): string {
   if (typeof window === "undefined") return "vscode";
   return localStorage.getItem("dp-editor") ?? "vscode";
+}
+
+function getStoredFontSize(): FontSize {
+  if (typeof window === "undefined") return "default";
+  return (localStorage.getItem("dp-font-size") as FontSize) ?? "default";
+}
+
+function applyFontSize(size: FontSize): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.setAttribute("data-font-size", size);
 }
 
 function applyTheme(theme: Theme): void {
@@ -51,12 +66,16 @@ function applyTheme(theme: Theme): void {
 export const usePreferencesStore = create<PreferencesState>((set, get) => {
   const initial = getStoredTheme();
   applyTheme(initial);
+  const initialFontSize = getStoredFontSize();
+  applyFontSize(initialFontSize);
 
   const editorKey = getStoredEditor();
   const editorScheme = EDITOR_PRESETS[editorKey]?.template ?? EDITOR_PRESETS.vscode.template;
 
   return {
     theme: initial,
+    fontSize: initialFontSize,
+    contentWidth: (localStorage.getItem("dp-content-width") as "full" | "constrained") ?? "full",
     sidebarCollapsed: false,
     focusedPanel: null,
     editorScheme,
@@ -66,6 +85,19 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
       applyTheme(theme);
       set({ theme });
     },
+
+    setFontSize: (size) => {
+      localStorage.setItem("dp-font-size", size);
+      applyFontSize(size);
+      set({ fontSize: size });
+    },
+
+    toggleContentWidth: () =>
+      set((s) => {
+        const next = s.contentWidth === "full" ? "constrained" : "full";
+        localStorage.setItem("dp-content-width", next);
+        return { contentWidth: next };
+      }),
 
     toggleSidebar: () =>
       set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Artifact, Comment } from "@deeppairing/shared";
+import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -13,118 +13,152 @@ function notifyIfUnfocused(title: string, body: string) {
   }
 }
 
+interface ActiveSession {
+  sessionId: string;
+  artifactCount: number;
+}
+
 interface ConnectionState {
   connected: boolean;
   sessionId: string | null;
-  ws: WebSocket | null;
+  autonomyLevel: "supervised" | "balanced" | "autonomous";
+  adapter: ConnectionAdapter | null;
+  activeSessions: ActiveSession[];
 
-  connect: () => void;
+  connect: (sessionId?: string) => void;
   disconnect: () => void;
+  switchSession: (sessionId: string) => void;
+  refreshSessions: () => void;
 }
 
-const WS_URL = `ws://${window.location.host}/ws`;
-
 export const useConnectionStore = create<ConnectionState>((set, get) => {
-  function handleMessage(event: MessageEvent) {
-    try {
-      const data = JSON.parse(event.data);
+  function handleMessage(data: any) {
+    // Import artifact store lazily to avoid circular deps
+    import("./artifact").then(({ useArtifactStore }) => {
+      const store = useArtifactStore.getState();
 
-      // Import artifact store lazily to avoid circular deps
-      import("./artifact").then(({ useArtifactStore }) => {
-        const store = useArtifactStore.getState();
-
-        switch (data.type) {
-          case "connected":
-            set({ sessionId: data.state?.sessionId ?? null });
-            // Reset before hydration to prevent duplicates on reconnect
-            if (data.state) {
-              store.reset();
-              for (const artifact of data.state.artifacts ?? []) {
-                store.addArtifact(artifact);
-              }
-              for (const comment of data.state.comments ?? []) {
-                store.addComment(comment);
-              }
+      switch (data.type) {
+        case "connected":
+          set({
+            sessionId: data.state?.sessionId ?? null,
+            autonomyLevel: data.state?.autonomyLevel ?? "supervised",
+          });
+          // Reset before hydration to prevent duplicates on reconnect
+          if (data.state) {
+            store.reset();
+            for (const artifact of data.state.artifacts ?? []) {
+              store.addArtifact(artifact);
             }
-            break;
-
-          case "artifact_created":
-            store.addArtifact(data.artifact);
-            break;
-
-          case "artifact_updated":
-            store.updateArtifact(data.artifactId, data.status);
-            break;
-
-          case "comment_added":
-            store.addComment(data.comment);
-            break;
-
-          case "decision_request":
-            // Decision requests come as artifacts — already handled by artifact_created
-            notifyIfUnfocused(
-              "deepPairing — Decision needed",
-              data.context ?? "The agent needs you to choose an approach",
-            );
-            break;
-
-          case "plan_review_request":
-            notifyIfUnfocused(
-              "deepPairing — Plan review",
-              `Review plan: ${data.title ?? "Implementation plan"}`,
-            );
-            break;
-
-          case "decision_resolved":
-            if (data.artifactId) {
-              store.updateArtifact(data.artifactId, "approved");
+            for (const comment of data.state.comments ?? []) {
+              store.addComment(comment);
             }
-            break;
-        }
-      });
-    } catch {
-      // Ignore malformed messages
-    }
+          }
+          break;
+
+        case "artifact_created":
+          store.addArtifact(data.artifact);
+          break;
+
+        case "artifact_updated":
+          store.updateArtifact(data.artifactId, data.status);
+          break;
+
+        case "comment_added":
+          store.addComment(data.comment);
+          break;
+
+        case "artifact_renamed":
+          useArtifactStore.setState((s) => ({
+            artifacts: s.artifacts.map((a) =>
+              a.id === data.artifactId ? { ...a, title: data.title } : a,
+            ),
+          }));
+          break;
+
+        case "decision_request":
+          notifyIfUnfocused(
+            "deepPairing — Decision needed",
+            data.context ?? "The agent needs you to choose an approach",
+          );
+          break;
+
+        case "plan_review_request":
+          notifyIfUnfocused(
+            "deepPairing — Plan review",
+            `Review plan: ${data.title ?? "Implementation plan"}`,
+          );
+          break;
+
+        case "preference_changed":
+          if (data.autonomyLevel) {
+            set({ autonomyLevel: data.autonomyLevel });
+          }
+          break;
+
+        case "decision_resolved":
+          if (data.artifactId) {
+            store.updateArtifact(data.artifactId, "approved");
+          }
+          break;
+      }
+    });
   }
 
   return {
     connected: false,
     sessionId: null,
-    ws: null,
+    autonomyLevel: "supervised",
+    adapter: null,
+    activeSessions: [],
 
-    connect: () => {
-      const existing = get().ws;
-      if (existing && existing.readyState <= 1) return; // Already connected/connecting
+    connect: (sessionId?: string) => {
+      if (get().adapter) return;
 
-      const ws = new WebSocket(WS_URL);
+      const adapter = createAdapter(undefined, sessionId);
+      set({ adapter });
 
-      ws.onopen = () => {
-        set({ connected: true, ws });
+      adapter.onConnect(() => {
+        set({ connected: true });
         // Request notification permission on first connect
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           Notification.requestPermission();
         }
-      };
+      });
 
-      ws.onmessage = handleMessage;
+      adapter.onMessage(handleMessage);
 
-      ws.onclose = () => {
-        set({ connected: false, ws: null });
-        // Reconnect after 2 seconds
-        setTimeout(() => get().connect(), 2000);
-      };
+      adapter.onDisconnect(() => {
+        set({ connected: false });
+      });
 
-      ws.onerror = () => {
-        ws.close();
-      };
+      adapter.connect();
     },
 
     disconnect: () => {
-      const { ws } = get();
-      if (ws) {
-        ws.close();
-        set({ connected: false, ws: null });
+      const { adapter } = get();
+      if (adapter) {
+        adapter.disconnect();
+        set({ connected: false, adapter: null });
       }
+    },
+
+    switchSession: (sessionId: string) => {
+      const { adapter } = get();
+      if (adapter && "switchSession" in adapter) {
+        // Reset artifact store before switching
+        import("./artifact").then(({ useArtifactStore }) => {
+          useArtifactStore.getState().reset();
+        });
+        (adapter as any).switchSession(sessionId);
+        set({ sessionId });
+      }
+    },
+
+    refreshSessions: () => {
+      fetch(`http://${window.location.host}/api/active-sessions`)
+        .then((r) => r.json())
+        .then((data) => set({ activeSessions: data.sessions ?? [] }))
+        .catch(() => {});
     },
   };
 });

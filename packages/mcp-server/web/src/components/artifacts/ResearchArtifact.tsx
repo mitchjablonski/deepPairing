@@ -5,7 +5,8 @@ import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
 import { CommentTrigger } from "../CommentThread";
 import { OpenInEditorLink } from "../OpenInEditor";
-import { useState, useMemo } from "react";
+import { SimpleMarkdown } from "../SimpleMarkdown";
+import { useState, useMemo, useEffect, useRef } from "react";
 
 interface ResearchArtifactProps {
   artifact: Artifact;
@@ -17,15 +18,70 @@ interface RichFinding {
   detail: string;
   evidence: string | Evidence[];
   significance: "low" | "medium" | "high";
+  confidence?: "low" | "medium" | "high";
   impact?: string;
   recommendation?: string;
 }
 
-const sigColors = {
+const sigColors: Record<string, string> = {
   high: "bg-accent-red-dim text-accent-red",
   medium: "bg-accent-amber-dim text-accent-amber",
   low: "bg-surface-elevated text-text-secondary",
 };
+
+const categoryColors: Record<string, string> = {
+  security: "bg-accent-red-dim text-accent-red",
+  architecture: "bg-accent-violet-dim text-accent-violet",
+  performance: "bg-accent-amber-dim text-accent-amber",
+  testing: "bg-accent-cyan-dim text-accent-cyan",
+  infrastructure: "bg-accent-blue-dim text-accent-blue",
+  "code quality": "bg-accent-green-dim text-accent-green",
+  domain: "bg-accent-violet-dim text-accent-violet",
+};
+
+function getCategoryColor(category: string): string {
+  const lower = category.toLowerCase();
+  // Check for partial matches (e.g., "Domain / Why This Exists" matches "domain")
+  for (const [key, color] of Object.entries(categoryColors)) {
+    if (lower.includes(key)) return color;
+  }
+  return "bg-accent-blue-dim text-accent-blue";
+}
+
+type ColorBy = "significance" | "category";
+
+function FindingLegend({ colorBy, findings }: { colorBy: ColorBy; findings: RichFinding[] }) {
+  if (colorBy === "significance") {
+    return (
+      <div className="flex items-center gap-3 text-2xs text-text-muted">
+        <span className="text-text-muted">Color:</span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded bg-accent-red" /> High
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded bg-accent-amber" /> Medium
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded bg-text-muted" /> Low
+        </span>
+      </div>
+    );
+  }
+
+  // Category mode — show unique categories found in findings
+  const categories = [...new Set(findings.map((f) => f.category).filter(Boolean))];
+  return (
+    <div className="flex items-center gap-3 text-2xs text-text-muted flex-wrap">
+      <span className="text-text-muted">Color:</span>
+      {categories.map((cat) => (
+        <span key={cat} className="flex items-center gap-1">
+          <span className={`w-2 h-2 rounded ${getCategoryColor(cat).split(" ")[0]}`} />
+          {cat}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function EvidenceItem({
   evidence,
@@ -99,15 +155,17 @@ function EvidenceItem({
         </div>
 
         {/* Commentable code snippet — hover line to see +, click to comment */}
-        <CommentableCode
-          code={evidence.snippet}
-          language={evidence.language}
-          lineStart={evidence.lineStart}
-          filePath={evidence.filePath}
-          artifactId={artifactId}
-          commentsByLine={commentsByLine}
-          targetContext={{ findingIndex, evidenceIndex }}
-        />
+        {evidence.snippet && (
+          <CommentableCode
+            code={evidence.snippet}
+            language={evidence.language}
+            lineStart={evidence.lineStart}
+            filePath={evidence.filePath}
+            artifactId={artifactId}
+            commentsByLine={commentsByLine}
+            targetContext={{ findingIndex, evidenceIndex }}
+          />
+        )}
 
         {/* Explanation */}
         <div className="px-3 py-2 bg-accent-amber-dim/80 border-t border-border-default/20 text-xs text-text-secondary">
@@ -149,27 +207,44 @@ function EvidenceItem({
 }
 
 function renderEvidence(
-  evidence: string | Evidence[],
+  evidence: unknown,
   artifactId: string,
   findingIndex: number,
   allComments: Comment[],
 ) {
+  // Guard: missing or null evidence
+  if (!evidence) return null;
+
+  // String evidence (simple reference)
   if (typeof evidence === "string") {
     return <p className="text-text-muted mt-0.5 font-mono text-[11px]">{evidence}</p>;
   }
 
+  // Normalize: single object → wrap in array
+  const evidenceArray = Array.isArray(evidence) ? evidence : [evidence];
+
   return (
     <div className="space-y-1">
-      {evidence.map((ev, evIdx) => (
-        <EvidenceItem
-          key={evIdx}
-          evidence={ev as Evidence}
-          artifactId={artifactId}
-          findingIndex={findingIndex}
-          evidenceIndex={evIdx}
-          allComments={allComments}
-        />
-      ))}
+      {evidenceArray.map((ev, evIdx) => {
+        // Guard: skip items that don't look like Evidence objects
+        if (!ev || typeof ev !== "object" || !("filePath" in ev)) {
+          return (
+            <p key={evIdx} className="text-text-muted mt-0.5 font-mono text-[11px]">
+              {JSON.stringify(ev)}
+            </p>
+          );
+        }
+        return (
+          <EvidenceItem
+            key={evIdx}
+            evidence={ev as Evidence}
+            artifactId={artifactId}
+            findingIndex={findingIndex}
+            evidenceIndex={evIdx}
+            allComments={allComments}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -181,65 +256,205 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
     openQuestions?: string[];
   };
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  const [focusMode, setFocusMode] = useState(false);
+  const [focusIndex, setFocusIndex] = useState(0);
+  const [colorBy, setColorBy] = useState<ColorBy>("significance");
+  const findings = content.findings ?? [];
+  const focusRef = useRef<HTMLDivElement>(null);
+
+  // Arrow key navigation in focus mode
+  useEffect(() => {
+    if (!focusMode) return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusIndex((i) => Math.max(0, i - 1));
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusIndex((i) => Math.min(findings.length - 1, i + 1));
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [focusMode, findings.length]);
+
+  const renderFinding = (finding: RichFinding, i: number) => {
+    const findingComments = comments.filter(
+      (c) => c.target.findingIndex === i && c.target.evidenceIndex == null && c.target.lineStart == null,
+    );
+    return (
+      <div
+        key={i}
+        className={`bg-surface-secondary rounded-lg border border-white/[0.06] hover:border-white/[0.1] transition-all duration-[180ms] ease-out ${
+          focusMode ? "p-5" : "p-3"
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+              colorBy === "significance"
+                ? (sigColors[finding.significance] ?? "bg-surface-elevated text-text-secondary")
+                : getCategoryColor(finding.category ?? "")
+            }`}>
+              {finding.category ?? "Finding"}
+            </span>
+            {finding.title && (
+              <span className={`font-semibold text-text-primary ${focusMode ? "text-base" : "text-sm"}`}>{finding.title}</span>
+            )}
+            {finding.confidence && finding.confidence !== "medium" && (
+              <span className={`shrink-0 px-1.5 py-0.5 rounded text-2xs font-medium ${
+                finding.confidence === "low"
+                  ? "bg-accent-amber-dim text-accent-amber border border-dashed border-accent-amber/30"
+                  : "bg-accent-green-dim text-accent-green"
+              }`}>
+                {finding.confidence === "low" ? "? uncertain" : "✓ confident"}
+              </span>
+            )}
+          </div>
+          <CommentTrigger
+            artifactId={artifact.id}
+            target={{ findingIndex: i }}
+            existingCount={findingComments.length}
+          />
+        </div>
+
+        {/* Detail */}
+        <SimpleMarkdown text={finding.detail} className={`text-text-secondary mt-2 space-y-2 ${focusMode ? "text-sm leading-relaxed" : "text-xs"}`} />
+
+        {/* Evidence — now with inline commenting on code lines */}
+        {renderEvidence(finding.evidence, artifact.id, i, comments)}
+
+        {/* Impact */}
+        {finding.impact && (
+          <div className="mt-3 p-2.5 bg-accent-red-dim/50 border-l-2 border-accent-red rounded-r">
+            <span className={`font-semibold text-accent-red block mb-0.5 ${focusMode ? "text-sm" : "text-xs"}`}>Impact</span>
+            <SimpleMarkdown text={finding.impact} className={`text-accent-red/80 ${focusMode ? "text-sm" : "text-xs"}`} />
+          </div>
+        )}
+
+        {/* Recommendation */}
+        {finding.recommendation && (
+          <div className="mt-2 p-2.5 bg-accent-green-dim/50 border-l-2 border-accent-green rounded-r">
+            <span className={`font-semibold text-accent-green block mb-0.5 ${focusMode ? "text-sm" : "text-xs"}`}>Recommendation</span>
+            <SimpleMarkdown text={finding.recommendation} className={`text-accent-green/80 ${focusMode ? "text-sm" : "text-xs"}`} />
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
       {content.summary && (
-        <p className="text-sm text-text-secondary">{content.summary}</p>
+        <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
       )}
 
-      {content.findings && content.findings.length > 0 && (
-        <div className="space-y-4">
-          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-            Findings ({content.findings.length})
-          </h4>
-          {content.findings.map((finding, i) => {
-            const findingComments = comments.filter(
-              (c) => c.target.findingIndex === i && c.target.evidenceIndex == null && c.target.lineStart == null,
-            );
-            return (
-              <div key={i} className="p-3 bg-surface-secondary rounded-lg border border-border-subtle">
-                {/* Header */}
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${sigColors[finding.significance]}`}>
-                      {finding.category}
-                    </span>
-                    {finding.title && (
-                      <span className="text-sm font-semibold text-text-primary">{finding.title}</span>
-                    )}
-                  </div>
-                  <CommentTrigger
-                    artifactId={artifact.id}
-                    target={{ findingIndex: i }}
-                    existingCount={findingComments.length}
-                  />
+      {findings.length > 0 && (
+        <div className="space-y-3">
+          {/* Header with view toggle and color mode */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+                Findings ({findings.length})
+              </h4>
+              <div className="flex items-center gap-2">
+                {/* Color by toggle */}
+                <div className="flex items-center gap-0.5 bg-surface-elevated rounded p-0.5">
+                  <button
+                    onClick={() => setColorBy("significance")}
+                    className={`px-2 py-0.5 rounded text-2xs transition-colors ${
+                      colorBy === "significance" ? "bg-surface-hover text-text-primary" : "text-text-muted"
+                    }`}
+                  >
+                    Severity
+                  </button>
+                  <button
+                    onClick={() => setColorBy("category")}
+                    className={`px-2 py-0.5 rounded text-2xs transition-colors ${
+                      colorBy === "category" ? "bg-surface-hover text-text-primary" : "text-text-muted"
+                    }`}
+                  >
+                    Category
+                  </button>
                 </div>
-
-                {/* Detail */}
-                <p className="text-xs text-text-secondary mt-1">{finding.detail}</p>
-
-                {/* Evidence — now with inline commenting on code lines */}
-                {renderEvidence(finding.evidence, artifact.id, i, comments)}
-
-                {/* Impact */}
-                {finding.impact && (
-                  <div className="mt-2 p-2 bg-accent-red-dim border border-accent-red/20 rounded text-xs">
-                    <span className="font-semibold text-accent-red">Impact: </span>
-                    <span className="text-accent-red">{finding.impact}</span>
-                  </div>
-                )}
-
-                {/* Recommendation */}
-                {finding.recommendation && (
-                  <div className="mt-2 p-2 bg-accent-green-dim border border-accent-green/20 rounded text-xs">
-                    <span className="font-semibold text-accent-green">Recommendation: </span>
-                    <span className="text-accent-green">{finding.recommendation}</span>
+                {/* View mode toggle */}
+                {findings.length > 1 && (
+                  <div className="flex items-center gap-0.5 bg-surface-elevated rounded p-0.5">
+                    <button
+                      onClick={() => { setFocusMode(false); }}
+                      className={`px-2 py-0.5 rounded text-2xs transition-colors ${
+                        !focusMode ? "bg-surface-hover text-text-primary" : "text-text-muted"
+                      }`}
+                    >
+                      All
+                    </button>
+                    <button
+                      onClick={() => { setFocusMode(true); setFocusIndex(0); }}
+                      className={`px-2 py-0.5 rounded text-2xs transition-colors ${
+                        focusMode ? "bg-surface-hover text-text-primary" : "text-text-muted"
+                      }`}
+                    >
+                      Focus
+                    </button>
                   </div>
                 )}
               </div>
-            );
-          })}
+            </div>
+            {/* Legend */}
+            <FindingLegend colorBy={colorBy} findings={findings} />
+          </div>
+
+          {focusMode ? (
+            /* Focus mode: one finding at a time with navigation */
+            <div className="space-y-3">
+              {/* Navigation */}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setFocusIndex((i) => Math.max(0, i - 1))}
+                  disabled={focusIndex === 0}
+                  className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary disabled:opacity-30 press-scale"
+                >
+                  Prev
+                </button>
+                <span className="text-2xs text-text-muted">
+                  {focusIndex + 1} / {findings.length}
+                  {findings[focusIndex]?.title && (
+                    <span className="text-text-secondary ml-1.5">— {findings[focusIndex].title}</span>
+                  )}
+                </span>
+                <button
+                  onClick={() => setFocusIndex((i) => Math.min(findings.length - 1, i + 1))}
+                  disabled={focusIndex === findings.length - 1}
+                  className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary disabled:opacity-30 press-scale"
+                >
+                  Next
+                </button>
+              </div>
+
+              {renderFinding(findings[focusIndex], focusIndex)}
+
+              {/* Dot indicators */}
+              <div className="flex items-center justify-center gap-1.5">
+                {findings.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setFocusIndex(i)}
+                    className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                      i === focusIndex ? "bg-accent-blue" : "bg-surface-hover"
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            /* List mode: all findings */
+            <div className="space-y-4">
+              {findings.map((finding, i) => renderFinding(finding, i))}
+            </div>
+          )}
         </div>
       )}
 

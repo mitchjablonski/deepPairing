@@ -1,10 +1,27 @@
 {
   "name": "@deeppairing/shared",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Shared schemas and types for deepPairing",
   "type": "module",
+  "license": "MIT",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./__fixtures__/*": "./src/__fixtures__/*.ts"
+  },
+  "files": [
+    "src/"
+  ],
+  "keywords": [
+    "deeppairing",
+    "schemas",
+    "types"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deeppairing/deeppairing"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",

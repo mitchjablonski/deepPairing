@@ -1,12 +1,24 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { Artifact } from "@deeppairing/shared";
+import { type Artifact, type ReasoningContent, type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
+import { usePreferencesStore } from "../stores/preferences";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
 import { PlanArtifact } from "./artifacts/PlanArtifact";
 import { DecisionCard } from "./DecisionCard";
+import { CodeChangeArtifact } from "./artifacts/CodeChangeArtifact";
 import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
+import { CausalChain } from "./CausalChain";
+
+const statusDots: Record<string, string> = {
+  draft: "bg-text-muted",
+  reviewing: "bg-accent-blue",
+  approved: "bg-accent-green",
+  revised: "bg-accent-amber",
+  rejected: "bg-accent-red",
+  superseded: "bg-text-muted opacity-40",
+};
 
 const statusColors: Record<string, string> = {
   draft: "bg-surface-elevated text-text-muted",
@@ -49,7 +61,50 @@ function RelatedArtifacts({ ids }: { ids: string[] }) {
   );
 }
 
+function EditableTitle({ artifact }: { artifact: Artifact }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(artifact.title);
+  const { renameArtifact } = useArtifactStore();
+
+  const handleSave = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== artifact.title) {
+      renameArtifact(artifact.id, trimmed);
+    }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={handleSave}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSave();
+          if (e.key === "Escape") { setDraft(artifact.title); setEditing(false); }
+        }}
+        autoFocus
+        className="text-sm font-semibold text-text-primary leading-[1.2] bg-surface-secondary border border-accent-blue rounded px-1.5 py-0.5
+                   focus:outline-none focus:ring-1 focus:ring-accent-blue min-w-[200px]"
+      />
+    );
+  }
+
+  return (
+    <h3
+      className="text-sm font-semibold text-text-primary leading-[1.2] cursor-pointer hover:text-accent-blue transition-colors"
+      onClick={() => { setDraft(artifact.title); setEditing(true); }}
+      title="Click to rename"
+    >
+      {artifact.title}
+    </h3>
+  );
+}
+
 function ArtifactDetail({ artifact }: { artifact: Artifact }) {
+  const contentWidth = usePreferencesStore((s) => s.contentWidth);
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const generalComments = comments.filter(
     (c) =>
@@ -62,17 +117,19 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   return (
     <motion.div
       key={artifact.id}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.15 }}
-      className="flex-1 overflow-y-auto p-4 space-y-4"
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ duration: 0.2, ease: [0.32, 0.72, 0, 1] }}
+      className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full ${
+        contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
+      }`}
     >
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-1">
           <ArtifactIcon type={artifact.type} className="text-text-secondary" />
-          <h3 className="text-sm font-semibold text-text-primary">{artifact.title}</h3>
+          <EditableTitle artifact={artifact} />
           <span className={`px-1.5 py-0.5 text-2xs font-medium rounded ${statusColors[artifact.status]}`}>
             {artifact.status}
           </span>
@@ -85,6 +142,9 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         )}
       </div>
 
+      {/* Causal chain — shows artifact relationships */}
+      <CausalChain />
+
       {/* Related artifacts */}
       {artifact.relatedArtifactIds && artifact.relatedArtifactIds.length > 0 && (
         <RelatedArtifacts ids={artifact.relatedArtifactIds} />
@@ -93,38 +153,67 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {/* Type-specific renderer */}
       {artifact.type === "research" && <ResearchArtifact artifact={artifact} />}
       {artifact.type === "plan" && <PlanArtifact artifact={artifact} />}
-      {artifact.type === "reasoning" && (
-        <div className="space-y-2">
-          <div className="text-sm text-text-primary">
-            <strong>Action:</strong> {(artifact.content as any).action}
-          </div>
-          <div className="text-sm text-text-secondary">
-            <strong>Why:</strong> {(artifact.content as any).reasoning}
-          </div>
-          {(artifact.content as any).alternativesConsidered?.length > 0 && (
-            <div className="text-xs text-text-muted">
-              <strong>Alternatives:</strong>{" "}
-              {(artifact.content as any).alternativesConsidered.join(", ")}
+      {artifact.type === "reasoning" && (() => {
+        const rc = getTypedContent<ReasoningContent>(artifact);
+        return (
+          <div className="space-y-3">
+            <div className="text-sm text-text-primary">
+              <strong>Action:</strong> {rc.action}
             </div>
-          )}
-        </div>
-      )}
+            {rc.confidence && (
+              <span className={`inline-block px-1.5 py-0.5 text-2xs font-medium rounded ${
+                rc.confidence === "high"
+                  ? "bg-accent-green-dim text-accent-green"
+                  : rc.confidence === "low"
+                    ? "bg-accent-amber-dim text-accent-amber"
+                    : "bg-surface-elevated text-text-secondary"
+              }`}>
+                {rc.confidence} confidence
+              </span>
+            )}
+            <div className="text-sm text-text-secondary">
+              <strong>Why:</strong> {rc.reasoning}
+            </div>
+            {rc.alternativeDetails && rc.alternativeDetails.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide">Alternatives Considered</div>
+                {rc.alternativeDetails.map((alt, i) => (
+                  <div key={i} className="flex items-start gap-2 px-3 py-2 bg-surface-elevated border border-white/[0.06] rounded-lg">
+                    <span className="text-accent-red text-xs mt-0.5 shrink-0">✗</span>
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-text-secondary line-through opacity-70">{alt.title}</div>
+                      <div className="text-2xs text-text-muted mt-0.5">{alt.reason}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!rc.alternativeDetails?.length && rc.alternativesConsidered && rc.alternativesConsidered.length > 0 && (
+              <div className="text-xs text-text-muted">
+                <strong>Alternatives:</strong>{" "}
+                {rc.alternativesConsidered.join(", ")}
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {artifact.type === "code_change" && (
-        <div className="text-xs font-mono bg-surface-code p-3 rounded overflow-auto whitespace-pre-wrap text-text-secondary">
-          {(artifact.content as any).diff ?? JSON.stringify(artifact.content, null, 2)}
-        </div>
+        <CodeChangeArtifact artifact={artifact} />
       )}
-      {artifact.type === "decision" && (artifact.content as any).options && (
-        <DecisionCard
-          event={{
-            type: "decision_request",
-            decisionId: (artifact.content as any).decisionId ?? artifact.id,
-            context: (artifact.content as any).context,
-            options: (artifact.content as any).options,
-          }}
-          decisionId={(artifact.content as any).decisionId ?? artifact.id}
-        />
-      )}
+      {artifact.type === "decision" && (() => {
+        const dc = getTypedContent<DecisionContent>(artifact);
+        return dc.options ? (
+          <DecisionCard
+            event={{
+              type: "decision_request",
+              decisionId: dc.decisionId ?? artifact.id,
+              context: dc.context,
+              options: dc.options,
+            }}
+            decisionId={dc.decisionId ?? artifact.id}
+          />
+        ) : null;
+      })()}
 
       {/* General comments */}
       <div className="pt-3 border-t border-border-default">
@@ -137,15 +226,263 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   );
 }
 
+type SidebarGrouping = "type" | "timeline" | "flow";
+
+/** Build causal-chain groups from relatedArtifactIds */
+function buildFlowGroups(artifacts: Artifact[]): Map<string, Artifact[]> {
+  const groups = new Map<string, Artifact[]>();
+  const assigned = new Set<string>();
+
+  // Find root artifacts (not referenced by anyone else's relatedArtifactIds)
+  const referenced = new Set<string>();
+  for (const a of artifacts) {
+    for (const rid of a.relatedArtifactIds ?? []) referenced.add(rid);
+  }
+
+  // Build chains starting from roots
+  for (const a of artifacts) {
+    if (assigned.has(a.id)) continue;
+    if (referenced.has(a.id)) continue; // Not a root — will be picked up by its parent
+
+    const chain: Artifact[] = [a];
+    assigned.add(a.id);
+
+    // Follow forward references
+    const queue = [...(a.relatedArtifactIds ?? [])];
+    // Also find artifacts that reference this one
+    for (const other of artifacts) {
+      if (other.relatedArtifactIds?.includes(a.id) && !assigned.has(other.id)) {
+        queue.push(other.id);
+      }
+    }
+
+    for (const rid of queue) {
+      const related = artifacts.find((x) => x.id === rid);
+      if (related && !assigned.has(related.id)) {
+        chain.push(related);
+        assigned.add(related.id);
+        // Continue following references
+        for (const nextId of related.relatedArtifactIds ?? []) {
+          if (!assigned.has(nextId)) queue.push(nextId);
+        }
+      }
+    }
+
+    const label = a.title.length > 30 ? a.title.slice(0, 28) + "..." : a.title;
+    groups.set(label, chain);
+  }
+
+  // Add any orphans
+  const orphans = artifacts.filter((a) => !assigned.has(a.id));
+  if (orphans.length > 0) {
+    groups.set("Other", orphans);
+  }
+
+  return groups;
+}
+
+/** Sidebar artifact list with grouping modes */
+function ArtifactSidebar({
+  typeGroups,
+  artifacts,
+  selectedArtifactId,
+  unreadIds,
+  collapsed,
+  onToggle,
+}: {
+  typeGroups: Map<string, Artifact[]>;
+  artifacts: Artifact[];
+  selectedArtifactId: string | null;
+  unreadIds: string[];
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const { selectArtifact } = useArtifactStore();
+  const [grouping, setGrouping] = useState<SidebarGrouping>("type");
+
+  // Build groups based on selected mode
+  const groups = useMemo((): Map<string, Artifact[]> => {
+    if (grouping === "type") return typeGroups;
+    if (grouping === "timeline") {
+      const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return new Map([["All Artifacts", sorted]]);
+    }
+    return buildFlowGroups(artifacts);
+  }, [grouping, typeGroups, artifacts]);
+
+  return (
+    <div
+      className={`shrink-0 border-r border-border-default bg-surface-secondary overflow-y-auto transition-all duration-[180ms] ease-out ${
+        collapsed ? "w-12" : "w-[220px]"
+      }`}
+    >
+      {/* Collapse toggle + grouping selector */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onToggle}
+          className="flex items-center justify-center py-1.5 px-2 text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            {collapsed ? (
+              <path d="M4 2l4 4-4 4" />
+            ) : (
+              <path d="M8 2L4 6l4 4" />
+            )}
+          </svg>
+        </button>
+
+        {/* Grouping mode selector */}
+        {!collapsed && (
+          <div className="flex items-center gap-0.5 pr-2">
+            {(["type", "flow", "timeline"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setGrouping(mode)}
+                className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${
+                  grouping === mode
+                    ? "bg-surface-hover text-text-primary"
+                    : "text-text-muted hover:text-text-secondary"
+                }`}
+                title={mode === "type" ? "Group by type" : mode === "flow" ? "Group by causal chain" : "Chronological timeline"}
+              >
+                {mode === "type" ? "Type" : mode === "flow" ? "Flow" : "Time"}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Grouped artifact list */}
+      {Array.from(groups.entries()).map(([label, items]) => (
+        <div key={label}>
+          {/* Section header */}
+          {!collapsed && (
+            <div className="flex items-center gap-1.5 px-3 py-1 text-2xs font-semibold text-text-muted uppercase tracking-wide">
+              {grouping === "type" && <ArtifactIcon type={label} className="w-3 h-3" />}
+              {grouping === "type" ? (typeLabels[label] ?? label) : label}
+              <span className="opacity-50">{items.length}</span>
+            </div>
+          )}
+
+          {/* Items */}
+          {items.map((a) => {
+            const isSelected = a.id === selectedArtifactId;
+            const isUnread = unreadIds.includes(a.id);
+
+            return (
+              <button
+                key={a.id}
+                onClick={() => selectArtifact(a.id)}
+                className={`w-full flex items-center gap-2 transition-all duration-[180ms] ease-out ${
+                  collapsed ? "justify-center px-1 py-1.5" : "px-3 py-1.5 text-left"
+                } ${
+                  isSelected
+                    ? "bg-surface-hover border-l-2 border-l-accent-blue"
+                    : "border-l-2 border-l-transparent hover:bg-surface-hover/50"
+                }`}
+                title={a.title}
+              >
+                {collapsed ? (
+                  <div className="relative">
+                    <ArtifactIcon type={a.type} className={`w-4 h-4 ${isSelected ? "text-accent-blue" : "text-text-muted"}`} />
+                    {isUnread && (
+                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-accent-blue" />
+                    )}
+                    <span className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${statusDots[a.status]}`} />
+                  </div>
+                ) : (
+                  <>
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDots[a.status]}`} />
+                    <span className={`text-2xs truncate flex-1 ${
+                      isSelected ? "text-text-primary font-medium" : "text-text-secondary"
+                    }`}>
+                      {a.title}
+                    </span>
+                    {isUnread && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent-blue shrink-0" />
+                    )}
+                  </>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const API_BASE = `http://${window.location.host}`;
+
+interface ActiveSession { sessionId: string; port: number; pid: number; startedAt: string }
+
+/**
+ * Multi-agent bar: loads artifacts from other active sessions and merges
+ * them into the local store so everything appears in one UI.
+ */
+function MultiAgentSync() {
+  const { addArtifact, addComment, artifacts } = useArtifactStore();
+  const knownSessionIds = useMemo(() => new Set(artifacts.map((a) => a.sessionId)), [artifacts]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const sync = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/active-sessions`);
+        const data = await res.json();
+        const sessions: ActiveSession[] = data.sessions ?? [];
+
+        for (const session of sessions) {
+          if (knownSessionIds.has(session.sessionId)) continue; // Already loaded
+
+          // Load this session's artifacts from disk via the API
+          try {
+            const sRes = await fetch(`${API_BASE}/api/live-session/${session.sessionId}`);
+            if (!sRes.ok) continue;
+            const state = await sRes.json();
+            if (cancelled) return;
+
+            for (const artifact of state.artifacts ?? []) {
+              addArtifact(artifact);
+            }
+            for (const comment of state.comments ?? []) {
+              addComment(comment);
+            }
+          } catch {}
+        }
+      } catch {}
+    };
+
+    sync();
+    const timer = setInterval(sync, 5000); // Poll for new sessions every 5s
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [knownSessionIds.size]); // Re-run when we load new sessions
+
+  return null; // No visual output — just syncs data
+}
+
 export function ArtifactPanel() {
   const { artifacts, selectedArtifactId, selectArtifact, unreadIds } = useArtifactStore();
+  const { sidebarCollapsed, toggleSidebar } = usePreferencesStore();
+  const [sessionFilter, setSessionFilter] = useState<string | "all">("all");
 
-  const visibleArtifacts = useMemo(
-    () => artifacts.filter((a) => a.status !== "superseded"),
+  // Unique session IDs present in the store
+  const sessionIds = useMemo(
+    () => [...new Set(artifacts.map((a) => a.sessionId))],
     [artifacts],
   );
 
-  // Group by type for tabs
+  const visibleArtifacts = useMemo(
+    () => artifacts.filter((a) =>
+      a.status !== "superseded" &&
+      (sessionFilter === "all" || a.sessionId === sessionFilter)
+    ),
+    [artifacts, sessionFilter],
+  );
+
+  // Group by type
   const typeGroups = useMemo(() => {
     const groups = new Map<string, Artifact[]>();
     for (const a of visibleArtifacts) {
@@ -169,10 +506,10 @@ export function ArtifactPanel() {
           <p className="text-xs mt-1">Artifacts will appear here as the agent researches, decides, and builds</p>
         </div>
         {/* Skeleton loading hint */}
-        <div className="w-full max-w-xs space-y-2 mt-4 opacity-30">
-          <div className="h-3 bg-surface-elevated rounded animate-pulse" />
-          <div className="h-3 bg-surface-elevated rounded animate-pulse w-3/4" />
-          <div className="h-3 bg-surface-elevated rounded animate-pulse w-1/2" />
+        <div className="w-full max-w-xs space-y-2 mt-4">
+          <div className="h-3 rounded animate-shimmer" />
+          <div className="h-3 rounded animate-shimmer w-3/4" />
+          <div className="h-3 rounded animate-shimmer w-1/2" />
         </div>
       </div>
     );
@@ -180,63 +517,67 @@ export function ArtifactPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Type tabs */}
-      <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto">
-        {Array.from(typeGroups.entries()).map(([type, items]) => {
-          const hasSelected = items.some((a) => a.id === selectedArtifactId);
-          const unreadCount = items.filter((a) => unreadIds.includes(a.id)).length;
-          return (
-            <button
-              key={type}
-              onClick={() => selectArtifact(items[0].id)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-2xs font-medium transition-colors shrink-0 ${
-                hasSelected
-                  ? "bg-accent-blue-dim text-accent-blue"
-                  : "text-text-muted hover:bg-surface-hover hover:text-text-secondary"
-              }`}
-            >
-              <ArtifactIcon type={type} className="w-3 h-3" />
-              {typeLabels[type] ?? type}
-              <span className="text-2xs opacity-60">{items.length}</span>
-              {unreadCount > 0 && (
-                <span className="w-4 h-4 rounded-full bg-accent-blue text-white text-[9px] flex items-center justify-center font-bold">
-                  {unreadCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {/* Sync artifacts from other active sessions */}
+      <MultiAgentSync />
 
-      {/* Artifact list within selected type */}
-      {selectedArtifact && (
-        <div className="flex items-center gap-1 px-2 py-1 border-b border-border-subtle bg-surface-secondary/50 overflow-x-auto">
-          {(typeGroups.get(selectedArtifact.type) ?? []).map((a) => (
-            <button
-              key={a.id}
-              onClick={() => selectArtifact(a.id)}
-              className={`px-2 py-0.5 rounded text-2xs transition-colors shrink-0 truncate max-w-40 ${
-                a.id === selectedArtifactId
-                  ? "bg-surface-elevated text-text-primary font-medium"
-                  : "text-text-muted hover:text-text-secondary"
-              }`}
-            >
-              {a.title}
-            </button>
-          ))}
+      {/* Session filter — shown when artifacts from multiple agents exist */}
+      {sessionIds.length > 1 && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
+          <span className="text-2xs text-text-muted shrink-0">Agents:</span>
+          <button
+            onClick={() => setSessionFilter("all")}
+            className={`px-2 py-0.5 rounded text-2xs shrink-0 transition-colors ${
+              sessionFilter === "all"
+                ? "bg-accent-blue-dim text-accent-blue font-medium"
+                : "text-text-muted hover:text-text-secondary"
+            }`}
+          >
+            All ({artifacts.filter((a) => a.status !== "superseded").length})
+          </button>
+          {sessionIds.map((sid, i) => {
+            const count = artifacts.filter((a) => a.sessionId === sid && a.status !== "superseded").length;
+            return (
+              <button
+                key={sid}
+                onClick={() => setSessionFilter(sid)}
+                className={`px-2 py-0.5 rounded text-2xs shrink-0 transition-colors ${
+                  sessionFilter === sid
+                    ? "bg-accent-blue-dim text-accent-blue font-medium"
+                    : "text-text-muted hover:text-text-secondary"
+                }`}
+                title={sid}
+              >
+                Agent {i + 1} ({count})
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Detail view with crossfade */}
-      <AnimatePresence mode="wait">
-        {selectedArtifact ? (
-          <ArtifactDetail key={selectedArtifact.id} artifact={selectedArtifact} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-xs text-text-muted">
-            Select an artifact to view details
-          </div>
-        )}
-      </AnimatePresence>
+      <div className="flex flex-1 min-h-0">
+      {/* Left sidebar */}
+      <ArtifactSidebar
+        typeGroups={typeGroups}
+        artifacts={visibleArtifacts}
+        selectedArtifactId={selectedArtifactId}
+        unreadIds={unreadIds}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+      />
+
+      {/* Detail pane */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <AnimatePresence mode="popLayout">
+          {selectedArtifact ? (
+            <ArtifactDetail key={selectedArtifact.id} artifact={selectedArtifact} />
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-xs text-text-muted">
+              Select an artifact to view details
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+      </div>
     </div>
   );
 }
