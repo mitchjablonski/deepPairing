@@ -93,6 +93,7 @@ export {
 
 export {
   FindingSchema,
+  FindingSeveritySchema,
   ResearchContentSchema,
   FileChangeSchema,
   PlanStepSchema,
@@ -100,7 +101,11 @@ export {
   ReasoningConceptSchema,
   ReasoningRelationSchema,
   ReasoningContentSchema,
+  SpecRequirementSchema,
+  SpecTaskSchema,
+  SpecContentSchema,
   type Finding,
+  type FindingSeverity,
   type ResearchContent,
   type FileChange,
   type PlanStep,
@@ -108,4 +113,7 @@ export {
   type ReasoningConcept,
   type ReasoningRelation,
   type ReasoningContent,
+  type SpecRequirement,
+  type SpecTask,
+  type SpecContent,
 } from "./schemas/content-types.js";

@@ -6,6 +6,7 @@ export const ArtifactTypeSchema = z.enum([
   "decision",
   "code_change",
   "reasoning",
+  "spec",
 ]);
 
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>;

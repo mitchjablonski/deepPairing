@@ -119,14 +119,16 @@ export class FileStore implements IStore {
     content: Record<string, unknown>;
     agentReasoning?: string;
     relatedArtifactIds?: string[];
+    parentId?: string | null;
+    version?: number;
   }): Artifact {
     const now = new Date().toISOString();
     const artifact: Artifact = {
       id: params.id,
       sessionId: this.sessionId,
       type: params.type,
-      version: 1,
-      parentId: null,
+      version: params.version ?? 1,
+      parentId: params.parentId ?? null,
       title: params.title,
       status: "draft",
       content: params.content,

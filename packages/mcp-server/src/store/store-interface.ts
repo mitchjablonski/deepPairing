@@ -29,6 +29,10 @@ export interface CreateArtifactParams {
   content: Record<string, unknown>;
   agentReasoning?: string;
   relatedArtifactIds?: string[];
+  /** When set, this artifact versions a previous one (supersede flow). */
+  parentId?: string | null;
+  /** Override the default version of 1; used when superseding. */
+  version?: number;
 }
 
 export interface AddCommentParams {

@@ -492,6 +492,162 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("present_spec", () => {
+    it("creates a spec artifact with requirements, tasks, and open questions", async () => {
+      const { text, isError } = await callTool("deepPairing_present_spec", {
+        title: "Auth rate limiting",
+        objective: "Prevent credential-stuffing without locking out legitimate users",
+        context: "The login endpoint currently has no throttle.",
+        requirements: [
+          {
+            id: "REQ-1",
+            statement: "Limit failed login attempts per user",
+            rationale: "GPU-assisted brute-force is fast once credentials leak",
+            acceptanceCriteria: ["After 5 failures within 10 min, reject", "Reset on successful login"],
+            priority: "must",
+          },
+          {
+            id: "REQ-2",
+            statement: "Rate limit per IP",
+            rationale: "Prevents distributed attacks across many accounts",
+            acceptanceCriteria: ["Max 100 attempts per IP per 5 min"],
+            priority: "should",
+          },
+        ],
+        design: "Use existing Redis instance as the counter store.",
+        tasks: [
+          { description: "Add LoginThrottle middleware", linkedRequirementIds: ["REQ-1", "REQ-2"], estimate: "m" },
+        ],
+        openQuestions: ["Should admin accounts be exempt?"],
+      });
+
+      expect(isError).toBeFalsy();
+      expect(text).toContain("presented for review");
+
+      const specs = store.getArtifacts().filter((a) => a.type === "spec");
+      expect(specs).toHaveLength(1);
+      expect(specs[0].title).toBe("Auth rate limiting");
+      const content = specs[0].content as any;
+      expect(content.requirements).toHaveLength(2);
+      expect(content.requirements[0].id).toBe("REQ-1");
+      expect(content.requirements[0].acceptanceCriteria).toHaveLength(2);
+      expect(content.tasks[0].linkedRequirementIds).toEqual(["REQ-1", "REQ-2"]);
+      expect(content.openQuestions).toContain("Should admin accounts be exempt?");
+    });
+
+    it("refuses when a requirement matches a rejected approach", async () => {
+      store.recordRejectedApproach("Auth: Railway", "too expensive");
+      const { isError, text } = await callTool("deepPairing_present_spec", {
+        title: "Auth",
+        objective: "stand up login",
+        requirements: [
+          {
+            id: "REQ-1",
+            statement: "Deploy auth service to Railway",
+            rationale: "it's easy",
+            acceptanceCriteria: ["can reach the service over HTTPS"],
+          },
+        ],
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("REJECTED_APPROACH_BLOCKED");
+      expect(store.getArtifacts().filter((a) => a.type === "spec")).toHaveLength(0);
+    });
+  });
+
+  describe("supersede_artifact", () => {
+    it("creates a versioned child and retires the old one", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "first pass",
+        findings: [{ category: "Security", detail: "weak hash", significance: "high" }],
+      });
+      const old = store.getArtifacts()[0];
+
+      const { text, isError } = await callTool("deepPairing_supersede_artifact", {
+        oldArtifactId: old.id,
+        title: "Second pass: actually it's argon2",
+        content: {
+          summary: "revised: weak hash turned out to be argon2id",
+          findings: [{ category: "Security", detail: "already argon2id", significance: "low" }],
+        },
+        reason: "misidentified the library on first read",
+      });
+
+      expect(isError).toBeFalsy();
+      expect(text).toContain(old.id);
+      expect(text).toContain("v2");
+
+      const artifacts = store.getArtifacts();
+      expect(artifacts).toHaveLength(2);
+
+      const retired = artifacts.find((a) => a.id === old.id);
+      expect(retired?.status).toBe("superseded");
+
+      const successor = artifacts.find((a) => a.id !== old.id);
+      expect(successor?.type).toBe("research");
+      expect(successor?.version).toBe(2);
+      expect(successor?.parentId).toBe(old.id);
+      expect(successor?.status).toBe("draft");
+
+      // Reason is preserved as an agent comment on the OLD artifact
+      const retiredComments = store.getCommentsForArtifact(old.id);
+      expect(retiredComments.some((c) =>
+        c.author === "agent" && c.content.includes("misidentified"))).toBe(true);
+    });
+
+    it("refuses to supersede an already-superseded artifact", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const old = store.getArtifacts()[0];
+      store.updateArtifactStatus(old.id, "superseded");
+
+      const { isError, text } = await callTool("deepPairing_supersede_artifact", {
+        oldArtifactId: old.id,
+        content: { summary: "x2", findings: [] },
+        reason: "retry",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("already superseded");
+    });
+
+    it("records a new plan review cycle when superseding a plan", async () => {
+      await callTool("deepPairing_present_plan", {
+        title: "Original plan",
+        steps: [{ description: "step A", reasoning: "because" }],
+        estimatedChanges: 1,
+      });
+      const oldPlan = store.getArtifacts()[0];
+      expect(store.getPendingPlanReviews().map((p) => p.artifactId)).toContain(oldPlan.id);
+
+      const result = await callTool("deepPairing_supersede_artifact", {
+        oldArtifactId: oldPlan.id,
+        title: "Revised plan",
+        content: {
+          steps: [{ description: "step A'", reasoning: "incorporate feedback" }],
+          estimatedChanges: 1,
+        },
+        reason: "human asked for smaller scope",
+      });
+      expect(result.isError).toBeFalsy();
+
+      const newPlan = store.getArtifacts().find((a) => a.id !== oldPlan.id)!;
+      const pending = store.getPendingPlanReviews();
+      expect(pending.map((p) => p.artifactId)).toContain(newPlan.id);
+    });
+
+    it("errors on missing oldArtifactId", async () => {
+      const { isError, text } = await callTool("deepPairing_supersede_artifact", {
+        oldArtifactId: "art_nope",
+        content: { summary: "x", findings: [] },
+        reason: "x",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("no artifact");
+    });
+  });
+
   describe("unknown tool", () => {
     it("returns an error for unknown tools", async () => {
       const result = await callTool("deepPairing_nonexistent");
