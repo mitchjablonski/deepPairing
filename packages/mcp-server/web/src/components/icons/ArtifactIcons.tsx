@@ -53,6 +53,15 @@ export function ScaleIcon({ className = "" }: { className?: string }) {
   );
 }
 
+export function ListChecklistIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <path d="M2 3h1M2 7h1M2 11h1M5 3h7M5 7h7M5 11h7" />
+      <path d="M2.3 3l0.4 0.4 0.7-0.7M2.3 7l0.4 0.4 0.7-0.7M2.3 11l0.4 0.4 0.7-0.7" />
+    </svg>
+  );
+}
+
 /** Get the icon component for an artifact type */
 export function ArtifactIcon({ type, className = "" }: { type: string; className?: string }) {
   switch (type) {
@@ -61,6 +70,7 @@ export function ArtifactIcon({ type, className = "" }: { type: string; className
     case "decision": return <ScaleIcon className={className} />;
     case "code_change": return <CodeIcon className={className} />;
     case "reasoning": return <BrainIcon className={className} />;
+    case "spec": return <ListChecklistIcon className={className} />;
     default: return <FileTextIcon className={className} />;
   }
 }

@@ -55,7 +55,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     tools: [
       {
         name: "deepPairing_present_findings",
-        description: `USE THIS instead of presenting research as plain text. Present findings with rich evidence (code snippets, explanations) in the companion UI at localhost:${port}. This is NON-BLOCKING — call check_feedback after to get the human's response. Always include a descriptive title.`,
+        description: `USE THIS instead of presenting research as plain text. Present findings with rich evidence (code snippets, explanations) in the companion UI at localhost:${port}. This is NON-BLOCKING — call check_feedback after to get the human's response. Always include a descriptive title.\n\nPopulate BOTH significance (how note-worthy this finding is) AND severity (risk level if not addressed: info / low / medium / high / critical). Severity tells the human what to study first.`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -70,7 +70,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                   title: { type: "string" },
                   detail: { type: "string" },
                   evidence: { description: "Code snippets with explanations — use rich format" },
-                  significance: { type: "string", enum: ["low", "medium", "high"] },
+                  significance: { type: "string", enum: ["low", "medium", "high"], description: "How note-worthy this finding is" },
+                  severity: {
+                    type: "string",
+                    enum: ["info", "low", "medium", "high", "critical"],
+                    description: "Risk level if unaddressed — helps the human prioritize what to study first. Distinct from significance.",
+                  },
                   confidence: { type: "string", enum: ["low", "medium", "high"], description: "How confident are you in this finding?" },
                   impact: { type: "string" },
                   recommendation: { type: "string" },
@@ -111,6 +116,53 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             },
           },
           required: ["context", "options"],
+        },
+      },
+      {
+        name: "deepPairing_present_spec",
+        description:
+          "USE THIS for any non-trivial feature BEFORE present_plan. The spec is the pairing artifact for 'think together before building' — each requirement has a rationale the human can challenge and acceptance criteria you can verify against later. This is NOT a compliance document; it's a learning artifact that makes the mental model explicit.\n\nWhen to use: new features, cross-cutting changes, anything where you'd otherwise jump straight to code without agreement on 'what are we actually building'.\n\nNON-BLOCKING — call check_feedback after to get approval / revisions.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            title: { type: "string", description: "Short descriptive title, e.g. 'Auth rate limiting'" },
+            objective: { type: "string", description: "One-sentence objective this spec is chasing" },
+            context: { type: "string", description: "Background / constraints / existing system notes" },
+            requirements: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "Stable identifier within this spec, e.g. 'REQ-1'" },
+                  statement: { type: "string", description: "WHAT, in one sentence" },
+                  rationale: { type: "string", description: "WHY — the reason this requirement exists (teaching moment)" },
+                  acceptanceCriteria: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Testable conditions that satisfy this requirement",
+                  },
+                  priority: { type: "string", enum: ["must", "should", "could"] },
+                },
+                required: ["id", "statement", "rationale", "acceptanceCriteria"],
+              },
+            },
+            design: { type: "string", description: "High-level design notes — not a full design doc" },
+            tasks: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  description: { type: "string" },
+                  linkedRequirementIds: { type: "array", items: { type: "string" } },
+                  estimate: { type: "string", enum: ["xs", "s", "m", "l", "xl"] },
+                },
+                required: ["description"],
+              },
+            },
+            openQuestions: { type: "array", items: { type: "string" }, description: "Things you need the human to decide before proceeding" },
+          },
+          required: ["title", "objective", "requirements"],
         },
       },
       {
@@ -288,6 +340,24 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             },
           },
           required: ["commentId", "answer"],
+        },
+      },
+      {
+        name: "deepPairing_supersede_artifact",
+        description:
+          "Replace a prior artifact with a revised version. Use this when the human requests revisions — produce a fresh v(N+1) artifact linked to the original via parentId, and the original flips to 'superseded'. The supersede chain preserves the learning history (the human can still replay earlier drafts). Do NOT re-call present_findings / present_plan / etc. for a revision — use this tool so the relationship is recorded.\n\nThe new artifact starts as draft, so it goes through the normal review loop.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            oldArtifactId: { type: "string", description: "The id of the artifact being replaced (art_...)" },
+            title: { type: "string", description: "Updated title (may match the old one if revising content only)" },
+            content: {
+              type: "object",
+              description: "Full content object for the new version — same shape as the type-specific present_* tools accept",
+            },
+            reason: { type: "string", description: "Brief explanation of what changed and why — shown to the human" },
+          },
+          required: ["oldArtifactId", "content", "reason"],
         },
       },
       {
@@ -509,6 +579,54 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
+      case "deepPairing_present_spec": {
+        const requirementsArr: any[] = Array.isArray(args?.requirements) ? args.requirements : [];
+        const tasksArr: any[] = Array.isArray(args?.tasks) ? args.tasks : [];
+        const proposals: string[] = [
+          args?.title ?? "",
+          args?.objective ?? "",
+          ...requirementsArr.map((r) => r?.statement ?? ""),
+          ...requirementsArr.map((r) => r?.rationale ?? ""),
+          ...tasksArr.map((t) => t?.description ?? ""),
+        ].filter(Boolean);
+        const blocked = await preflightRejectedApproaches("present_spec", proposals);
+        if (blocked) return blocked;
+
+        const id = `art_${nanoid(10)}`;
+        const artifact = await store.createArtifact({
+          id,
+          type: "spec",
+          title: String(args?.title ?? "Specification"),
+          content: {
+            objective: args?.objective,
+            context: args?.context,
+            requirements: requirementsArr,
+            design: args?.design,
+            tasks: tasksArr,
+            openQuestions: args?.openQuestions ?? [],
+          },
+        });
+        broadcast({ type: "artifact_created", artifact });
+        await autoNameSession(artifact.title);
+
+        // Quick-approve path via elicitation for simple specs
+        const elicitAction = await tryElicit(
+          `Spec: "${artifact.title}"\n\n` +
+          `Accept to approve these requirements as-is.\n` +
+          `Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${port}`,
+        );
+        if (elicitAction === "approve") {
+          await store.updateArtifactStatus(id, "approved");
+          return {
+            content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${await getPassiveFeedback()}` }],
+          };
+        }
+
+        return {
+          content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${port}. Call deepPairing_check_feedback for their response.${await getPassiveFeedback()}` }],
+        };
+      }
+
       case "deepPairing_present_plan": {
         const planSteps: any[] = Array.isArray(args?.steps) ? args.steps : [];
         const proposals: string[] = [
@@ -624,7 +742,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           // Check if there are draft artifacts — if so, wait for human action
           const allArts = await store.getArtifacts();
           const hasDrafts = allArts.some(
-            (a) => a.status === "draft" && ["research", "plan", "decision", "code_change"].includes(a.type),
+            (a) => a.status === "draft" && ["research", "spec", "plan", "decision", "code_change"].includes(a.type),
           );
           if (hasDrafts) {
             // Send progress heartbeats during the wait to keep the connection alive
@@ -664,13 +782,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const allArtifacts = await store.getArtifacts();
         const totalArtifacts = allArtifacts.length;
         const approvedCount = allArtifacts.filter((a) => a.status === "approved").length;
-        const pendingCount = allArtifacts.filter((a) => a.status === "draft" && ["research", "plan", "decision"].includes(a.type)).length;
+        const pendingCount = allArtifacts.filter((a) => a.status === "draft" && ["research", "spec", "plan", "decision"].includes(a.type)).length;
         const totalComments = (await store.getUnacknowledgedComments()).length;
         const autonomyLabel = await store.getAutonomyLevel();
 
         // Find oldest pending artifact age
         let oldestPendingAge = "";
-        const pendingArts = allArtifacts.filter((a) => a.status === "draft" && ["research", "plan", "decision"].includes(a.type));
+        const pendingArts = allArtifacts.filter((a) => a.status === "draft" && ["research", "spec", "plan", "decision"].includes(a.type));
         if (pendingArts.length > 0) {
           const oldestMs = Date.now() - new Date(pendingArts[0].createdAt).getTime();
           const mins = Math.floor(oldestMs / 60000);
@@ -684,6 +802,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           suggestedAction = "Wait for decision selection before proceeding.";
         } else if (pendingArts.some((a) => a.type === "plan")) {
           suggestedAction = "Wait for plan approval before implementing.";
+        } else if (pendingArts.some((a) => a.type === "spec")) {
+          suggestedAction = "Wait for spec approval before planning implementation.";
         } else if (pendingArts.some((a) => a.type === "research")) {
           suggestedAction = "Wait for findings review before proposing solutions.";
         }
@@ -779,7 +899,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         // Check for draft artifacts still awaiting human review
         const draftArtifacts = (await store.getArtifacts()).filter(
-          (a) => a.status === "draft" && ["research", "plan"].includes(a.type),
+          (a) => a.status === "draft" && ["research", "spec", "plan"].includes(a.type),
         );
         if (draftArtifacts.length > 0) {
           const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
@@ -899,6 +1019,75 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         broadcast({ type: "comment_added", comment: answerComment });
         return {
           content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await getPassiveFeedback()}` }],
+        };
+      }
+
+      case "deepPairing_supersede_artifact": {
+        const oldArtifactId = String(args?.oldArtifactId ?? "").trim();
+        const reason = String(args?.reason ?? "").trim();
+        const content = (args?.content && typeof args.content === "object") ? args.content : null;
+        if (!oldArtifactId || !reason || !content) {
+          return {
+            content: [{ type: "text", text: "supersede_artifact requires oldArtifactId, content, and reason." }],
+            isError: true,
+          };
+        }
+
+        const all = await store.getArtifacts();
+        const old = all.find((a) => a.id === oldArtifactId);
+        if (!old) {
+          return {
+            content: [{ type: "text", text: `supersede_artifact: no artifact with id ${oldArtifactId}.` }],
+            isError: true,
+          };
+        }
+        if (old.status === "superseded" || old.status === "retracted") {
+          return {
+            content: [{ type: "text", text: `supersede_artifact: ${oldArtifactId} is already ${old.status}.` }],
+            isError: true,
+          };
+        }
+
+        const title = String(args?.title ?? old.title);
+        const newId = `art_${nanoid(10)}`;
+        const newArtifact = await store.createArtifact({
+          id: newId,
+          type: old.type,
+          title,
+          content: content as Record<string, unknown>,
+          agentReasoning: reason,
+          parentId: old.id,
+          version: old.version + 1,
+        });
+        await store.updateArtifactStatus(old.id, "superseded");
+
+        // Agent-authored comment on the OLD artifact records the reason visibly
+        await store.addComment({
+          id: `cmt_${nanoid(10)}`,
+          artifactId: old.id,
+          content: `Superseded by ${newId}: ${reason}`,
+          author: "agent",
+        });
+
+        // For decisions and plans, the daemon-side record also needs the new
+        // review cycle so check_feedback surfaces pending verdicts.
+        if (old.type === "decision" && (content as any).options && (content as any).decisionId) {
+          await store.recordDecisionRequest({
+            decisionId: (content as any).decisionId,
+            artifactId: newId,
+            context: (content as any).context ?? title,
+            options: (content as any).options,
+          });
+        }
+        if (old.type === "plan") {
+          await store.recordPlanReview(newId);
+        }
+
+        broadcast({ type: "artifact_created", artifact: newArtifact });
+        broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
+
+        return {
+          content: [{ type: "text", text: `Superseded ${oldArtifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review.${await getPassiveFeedback()}` }],
         };
       }
 

@@ -1,12 +1,22 @@
 import { z } from "zod";
 import { EvidenceInputSchema } from "./evidence.js";
 
+export const FindingSeveritySchema = z.enum(["info", "low", "medium", "high", "critical"]);
+export type FindingSeverity = z.infer<typeof FindingSeveritySchema>;
+
 export const FindingSchema = z.object({
   category: z.string(),
   title: z.string().optional(),
   detail: z.string(),
   evidence: z.union([z.string(), z.array(EvidenceInputSchema)]),
+  /** How interesting / note-worthy — signals whether this belongs in the session at all. */
   significance: z.enum(["low", "medium", "high"]),
+  /**
+   * Risk level for prioritization ("if we don't address this, how bad?").
+   * Distinct from significance. Helps the developer know what to learn from
+   * first. Optional so older sessions remain valid.
+   */
+  severity: FindingSeveritySchema.optional(),
   impact: z.string().optional().describe("What happens if this is not addressed"),
   recommendation: z.string().optional().describe("What should be done"),
   relatedFindings: z.array(z.string()).optional(),
@@ -53,6 +63,54 @@ export const PlanContentSchema = z.object({
 });
 
 export type PlanContent = z.infer<typeof PlanContentSchema>;
+
+// --- Spec (think together before building) ---
+
+/**
+ * A single requirement in a co-authored spec. Kept deliberately lightweight
+ * (rationale + acceptance criteria) because the goal is "make the mental
+ * model explicit so we can argue about it" — not ceremony.
+ *
+ * The pairing value: each requirement has a rationale the developer can
+ * challenge ("why do we need this?") and acceptance criteria the agent can
+ * verify against later ("did we achieve this?"). Both are teaching moments.
+ */
+export const SpecRequirementSchema = z.object({
+  id: z.string().describe("Stable identifier within this spec, e.g. 'REQ-1'"),
+  statement: z.string().describe("WHAT the requirement is, in one sentence"),
+  rationale: z.string().describe("WHY — the reason this requirement exists"),
+  acceptanceCriteria: z
+    .array(z.string())
+    .describe("Testable conditions that, if true, satisfy this requirement"),
+  priority: z.enum(["must", "should", "could"]).optional(),
+});
+
+export type SpecRequirement = z.infer<typeof SpecRequirementSchema>;
+
+export const SpecTaskSchema = z.object({
+  description: z.string(),
+  /** Which requirement ids this task implements — the traceability link. */
+  linkedRequirementIds: z.array(z.string()).optional(),
+  estimate: z.enum(["xs", "s", "m", "l", "xl"]).optional(),
+});
+
+export type SpecTask = z.infer<typeof SpecTaskSchema>;
+
+export const SpecContentSchema = z.object({
+  objective: z.string().describe("One-sentence objective the spec is chasing"),
+  context: z.string().optional().describe("Background / constraints / existing system notes"),
+  requirements: z.array(SpecRequirementSchema),
+  /**
+   * Optional design notes — NOT a full design doc, just the chosen shape at
+   * a high level. The plan artifact is for implementation; design here lives
+   * between "why" and "how" and helps the human sanity-check the approach.
+   */
+  design: z.string().optional(),
+  tasks: z.array(SpecTaskSchema).optional(),
+  openQuestions: z.array(z.string()).optional(),
+});
+
+export type SpecContent = z.infer<typeof SpecContentSchema>;
 
 // --- Reasoning (the "show your work" artifact) ---
 

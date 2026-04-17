@@ -17,6 +17,12 @@ or codebase observations to share. Never dump findings as plain text.
 **Always use `present_options`** when there are 2+ valid approaches and you need
 the human to choose. Never just list options in text.
 
+**Use `present_spec`** BEFORE `present_plan` for any non-trivial feature. A
+spec makes the mental model explicit: objective + requirements (with rationale
+AND acceptance criteria) + optional design notes + tasks that trace back to
+requirements. Skip for simple tasks. This is a learning artifact, not a
+compliance doc — each requirement is a rationale the human can challenge.
+
 **Always use `present_plan`** before multi-file changes. Never describe a plan
 in text only.
 
@@ -71,6 +77,7 @@ GOOD:
     "relatedPaths": ["src/middleware/auth.ts"]
   }],
   "significance": "high",
+  "severity": "high",
   "impact": "Vulnerable to GPU brute-force if database compromised",
   "recommendation": "Switch to argon2id with memoryCost: 65536, timeCost: 3"
 }
@@ -79,6 +86,11 @@ GOOD:
 For each finding, always provide: title, actual code snippet, explanation of WHY,
 impact if not addressed, specific recommendation.
 
+**significance vs severity:** `significance` is *note-worthiness* (is this worth
+surfacing?). `severity` is *risk-level-if-unaddressed* (info / low / medium /
+high / critical). Both populated gives the human both signals: what's
+interesting and what to study first.
+
 ### deepPairing_present_options
 Call at ANY decision point with multiple valid approaches. Present 2-4 options.
 
@@ -86,6 +98,24 @@ This tool is **non-blocking** — it records the options and returns immediately
 The human can select in the companion UI or tell you directly.
 
 Call `deepPairing_check_feedback` afterward to see if they've decided.
+
+### deepPairing_present_spec
+Call BEFORE `present_plan` for non-trivial features. The spec is
+"think together before building" — the human challenges rationales and
+acceptance criteria before you commit to an approach.
+
+Fields:
+- `title`, `objective` (one sentence), `context` (optional background)
+- `requirements[]`: each with `id` (e.g. REQ-1), `statement`, `rationale`
+  (the WHY — this is where learning happens), `acceptanceCriteria[]`
+  (testable conditions), optional `priority` ("must" / "should" / "could")
+- `design` (optional high-level notes, not a full doc)
+- `tasks[]`: each with `description`, `linkedRequirementIds[]` for
+  traceability, optional `estimate` (xs / s / m / l / xl)
+- `openQuestions[]`: things you need the human to decide
+
+After approval, call `present_plan` to translate requirements into
+implementation steps.
 
 ### deepPairing_present_plan
 Call BEFORE multi-file changes. Present implementation steps with:
@@ -175,6 +205,16 @@ Returns:
 If no response after several polls, an escalation hint will tell you to ask the
 human directly in the terminal as a fallback.
 
+### deepPairing_supersede_artifact
+Call when the human requests a revision on a prior artifact (findings, plan,
+options, code change). Pass the old artifact id, updated content, and a short
+reason. deepPairing creates a v(N+1) draft linked via parentId; the old
+artifact flips to "superseded". The reason is preserved as an agent comment
+on the retired artifact so the human can see what changed and why.
+
+Do NOT re-call present_findings / present_plan / etc. for a revision — use
+this tool so the version history is explicit and replay can walk the drafts.
+
 ### deepPairing_retract_artifact
 Call when you realize mid-flight you shouldn't have presented an artifact — you
 noticed an error, the context changed, or you tried a rejected approach. Pass
@@ -238,8 +278,10 @@ Each phase has a gate. Do NOT proceed to the next phase until the human approves
    until you get approval or comments.
 4. **DECIDE**: Call `present_options` at decision points. Poll `check_feedback`
    until the human selects an option.
-5. **PLAN**: Call `present_plan`. Poll `check_feedback` until approved/revised.
-6. **EXECUTE**: Call `log_reasoning` before each change. Poll feedback periodically.
+5. **SPEC** (non-trivial features only): Call `present_spec` to make the
+   requirements and their rationales explicit. Poll until approved.
+6. **PLAN**: Call `present_plan`. Poll `check_feedback` until approved/revised.
+7. **EXECUTE**: Call `log_reasoning` before each change. Poll feedback periodically.
 
 **CRITICAL**: When `check_feedback` says "WAITING", you MUST call `check_feedback`
 again. Do NOT ask the user to respond in the terminal. Do NOT show them the

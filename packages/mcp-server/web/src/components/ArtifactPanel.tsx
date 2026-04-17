@@ -10,6 +10,7 @@ import { PlanArtifact } from "./artifacts/PlanArtifact";
 import { DecisionCard } from "./DecisionCard";
 import { CodeChangeArtifact } from "./artifacts/CodeChangeArtifact";
 import { ReasoningCard } from "./artifacts/ReasoningCard";
+import { SpecArtifact } from "./artifacts/SpecArtifact";
 import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { CausalChain } from "./CausalChain";
@@ -61,6 +62,7 @@ const statusLabels: Record<string, string> = {
 
 const typeLabels: Record<string, string> = {
   research: "Research",
+  spec: "Specs",
   plan: "Plans",
   decision: "Decisions",
   code_change: "Code",
@@ -182,6 +184,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
 
       {/* Type-specific renderer */}
       {artifact.type === "research" && <ResearchArtifact artifact={artifact} />}
+      {artifact.type === "spec" && <SpecArtifact artifact={artifact} />}
       {artifact.type === "plan" && <PlanArtifact artifact={artifact} />}
       {artifact.type === "reasoning" && <ReasoningCard artifact={artifact} />}
       {artifact.type === "code_change" && (

@@ -222,7 +222,7 @@ function main() {
     const hasDpHook = settings.hooks.Stop.some((h: any) => h.command?.includes("deeppairing"));
     if (!hasDpHook) {
       settings.hooks.Stop.push({
-        command: `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>x.status==='draft'&&['research','plan','decision','code_change'].includes(x.type))){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`,
+        command: `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>x.status==='draft'&&['research','spec','plan','decision','code_change'].includes(x.type))){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`,
       });
       fs.writeFileSync(hooksFile, JSON.stringify(settings, null, 2));
       console.log(`  ${green("✓")} Added Claude Code Stop hook (prevents stopping with pending reviews)`);

@@ -18,10 +18,27 @@ interface RichFinding {
   detail: string;
   evidence: string | Evidence[];
   significance: "low" | "medium" | "high";
+  severity?: "info" | "low" | "medium" | "high" | "critical";
   confidence?: "low" | "medium" | "high";
   impact?: string;
   recommendation?: string;
 }
+
+const severityStyles: Record<string, string> = {
+  info: "bg-surface-elevated text-text-muted border border-white/[0.06]",
+  low: "bg-accent-green-dim text-accent-green",
+  medium: "bg-accent-amber-dim text-accent-amber",
+  high: "bg-accent-red-dim text-accent-red",
+  critical: "bg-accent-red text-white",
+};
+
+const severityLabels: Record<string, string> = {
+  info: "info",
+  low: "low risk",
+  medium: "medium risk",
+  high: "high risk",
+  critical: "critical",
+};
 
 const sigColors: Record<string, string> = {
   high: "bg-accent-red-dim text-accent-red",
@@ -303,6 +320,14 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
             </span>
             {finding.title && (
               <span className={`font-semibold text-text-primary ${focusMode ? "text-base" : "text-sm"}`}>{finding.title}</span>
+            )}
+            {finding.severity && (
+              <span
+                className={`shrink-0 px-1.5 py-0.5 rounded text-2xs font-semibold ${severityStyles[finding.severity]}`}
+                title="Severity — risk level if unaddressed"
+              >
+                {severityLabels[finding.severity]}
+              </span>
             )}
             {finding.confidence && finding.confidence !== "medium" && (
               <span className={`shrink-0 px-1.5 py-0.5 rounded text-2xs font-medium ${
