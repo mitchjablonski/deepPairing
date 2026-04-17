@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
@@ -63,7 +65,7 @@ type BroadcastFn = (event: any) => void;
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
     { name: "deeppairing", version: "0.1.0" },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {}, resources: {} } },
   );
 
   // --- List Tools ---
@@ -391,6 +393,122 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
     ],
   }));
+
+  // --- MCP resources ---
+  //
+  // Exposes the session's data as first-class MCP resources so the agent can
+  // *pull* context (past artifacts, past sessions) instead of the server
+  // shoving everything into every tool response. Useful when the human says
+  // "remember what we decided about X last Tuesday" — the agent can browse
+  // past sessions as resources rather than relying on the one-shot
+  // firstCallHint memory dump.
+  //
+  // URIs:
+  //   deeppairing://session/current            — full state of the active session
+  //   deeppairing://artifact/{id}              — a single artifact in the active session
+  //   deeppairing://sessions                   — index of past sessions in this project
+  //   deeppairing://session/{id}               — full state of a past session
+
+  const canListPast = typeof (store as any).listPastSessions === "function";
+  const canLoadPast = typeof (store as any).loadPastSession === "function";
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    const resources: Array<{ uri: string; name: string; description?: string; mimeType: string }> = [];
+
+    // Current session
+    resources.push({
+      uri: "deeppairing://session/current",
+      name: "Active session state",
+      description: "Full JSON snapshot of the active session — artifacts, comments, decisions, plan reviews, autonomy level, session memory.",
+      mimeType: "application/json",
+    });
+
+    // Per-artifact resources in the active session
+    const artifacts = await store.getArtifacts();
+    for (const a of artifacts) {
+      resources.push({
+        uri: `deeppairing://artifact/${a.id}`,
+        name: `${a.type}: ${a.title}`,
+        description: `v${a.version} · ${a.status}${a.parentId ? ` · supersedes ${a.parentId}` : ""}`,
+        mimeType: "application/json",
+      });
+    }
+
+    // Past sessions index (only when the store supports it — DaemonClient does)
+    if (canListPast) {
+      resources.push({
+        uri: "deeppairing://sessions",
+        name: "Past sessions in this project",
+        description: "Index of prior deepPairing sessions — titles, timestamps, artifact counts. Read to decide which past session to pull.",
+        mimeType: "application/json",
+      });
+
+      try {
+        const past = await (store as any).listPastSessions();
+        for (const s of past) {
+          if (s.id === store.getSessionId()) continue; // skip active
+          resources.push({
+            uri: `deeppairing://session/${s.id}`,
+            name: `Past session: ${s.summary ?? s.id}`,
+            description: `${s.artifactCount} artifacts · ${s.lastActivity ?? s.createdAt}`,
+            mimeType: "application/json",
+          });
+        }
+      } catch {
+        // Listing failure is non-fatal; the index resource itself still works
+      }
+    }
+
+    return { resources };
+  });
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const uri = request.params.uri;
+
+    if (uri === "deeppairing://session/current") {
+      const state = await store.getFullState();
+      return {
+        contents: [{ uri, mimeType: "application/json", text: JSON.stringify(state, null, 2) }],
+      };
+    }
+
+    const artifactMatch = uri.match(/^deeppairing:\/\/artifact\/(.+)$/);
+    if (artifactMatch) {
+      const id = artifactMatch[1];
+      const artifacts = await store.getArtifacts();
+      const artifact = artifacts.find((a) => a.id === id);
+      if (!artifact) {
+        throw new Error(`Artifact not found: ${id}`);
+      }
+      return {
+        contents: [{ uri, mimeType: "application/json", text: JSON.stringify(artifact, null, 2) }],
+      };
+    }
+
+    if (uri === "deeppairing://sessions") {
+      if (!canListPast) {
+        return { contents: [{ uri, mimeType: "application/json", text: "[]" }] };
+      }
+      const past = await (store as any).listPastSessions();
+      return {
+        contents: [{ uri, mimeType: "application/json", text: JSON.stringify(past, null, 2) }],
+      };
+    }
+
+    const sessionMatch = uri.match(/^deeppairing:\/\/session\/(.+)$/);
+    if (sessionMatch) {
+      const sessionId = sessionMatch[1];
+      if (!canLoadPast) {
+        throw new Error("Past session reads require a DaemonClient store.");
+      }
+      const state = await (store as any).loadPastSession(sessionId);
+      return {
+        contents: [{ uri, mimeType: "application/json", text: JSON.stringify(state, null, 2) }],
+      };
+    }
+
+    throw new Error(`Unknown resource URI: ${uri}`);
+  });
 
   // --- Passive feedback helper ---
   async function getPassiveFeedback(): Promise<string> {

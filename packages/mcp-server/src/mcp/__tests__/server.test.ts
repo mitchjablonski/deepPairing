@@ -707,6 +707,69 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("MCP resources (E1)", () => {
+    it("lists the current session + per-artifact resources", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "Auth review",
+        summary: "findings",
+        findings: [{ category: "Security", detail: "weak hash", significance: "high" }],
+      });
+
+      const list = await client.listResources();
+      const uris = list.resources.map((r: any) => r.uri);
+
+      expect(uris).toContain("deeppairing://session/current");
+      // One artifact was created
+      const artifactUris = uris.filter((u: string) => u.startsWith("deeppairing://artifact/"));
+      expect(artifactUris).toHaveLength(1);
+
+      const artifact = store.getArtifacts()[0];
+      expect(artifactUris[0]).toBe(`deeppairing://artifact/${artifact.id}`);
+    });
+
+    it("reads the current session resource as JSON", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "x",
+        summary: "y",
+        findings: [{ category: "z", detail: "w", significance: "low" }],
+      });
+
+      const resource = await client.readResource({ uri: "deeppairing://session/current" });
+      expect(resource.contents[0].mimeType).toBe("application/json");
+      const parsed = JSON.parse(resource.contents[0].text as string);
+      expect(parsed.sessionId).toBe("test_session");
+      expect(parsed.artifacts).toHaveLength(1);
+    });
+
+    it("reads a single artifact resource by id", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "Target",
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+
+      const resource = await client.readResource({ uri: `deeppairing://artifact/${artifact.id}` });
+      const parsed = JSON.parse(resource.contents[0].text as string);
+      expect(parsed.id).toBe(artifact.id);
+      expect(parsed.title).toBe("Target");
+    });
+
+    it("errors on unknown artifact id", async () => {
+      await expect(
+        client.readResource({ uri: "deeppairing://artifact/art_nope" }),
+      ).rejects.toThrow();
+    });
+
+    it("does not list past-session resources when the store can't read them (bare FileStore)", async () => {
+      const list = await client.listResources();
+      const uris = list.resources.map((r: any) => r.uri);
+      // FileStore test harness doesn't implement listPastSessions, so the
+      // index resource should be absent.
+      expect(uris).not.toContain("deeppairing://sessions");
+    });
+  });
+
   describe("unknown tool", () => {
     it("returns an error for unknown tools", async () => {
       const result = await callTool("deepPairing_nonexistent");
