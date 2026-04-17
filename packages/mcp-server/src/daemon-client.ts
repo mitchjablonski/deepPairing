@@ -214,4 +214,33 @@ export class DaemonClient implements IStore {
   async forceFlush(): Promise<void> {
     await this.post("/flush");
   }
+
+  // --- Cross-session reads (past sessions in the same project) ---
+
+  /** List past sessions for this project. Uses the daemon's public /api/sessions. */
+  async listPastSessions(): Promise<Array<{
+    id: string;
+    createdAt: string;
+    lastActivity: string;
+    summary: string;
+    artifactCount: number;
+    hasDecisions: boolean;
+  }>> {
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}/api/sessions`);
+    const data = await res.json();
+    return data.sessions ?? [];
+  }
+
+  /** Load a specific past session's full state. */
+  async loadPastSession(sessionId: string): Promise<any> {
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}/api/sessions/${encodeURIComponent(sessionId)}`);
+    if (!res.ok) throw new Error(`Session ${sessionId} not found`);
+    return res.json();
+  }
+
+  private portFromBaseUrl(): number {
+    // baseUrl = http://localhost:{port}/api/internal/sessions/{sessionId}
+    const match = this.baseUrl.match(/localhost:(\d+)/);
+    return match ? parseInt(match[1], 10) : 3847;
+  }
 }

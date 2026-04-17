@@ -304,6 +304,31 @@ liberally so the human can review your thought process after the fact. Only call
 `present_options` for high-risk or irreversible decisions. Present code changes for
 review but don't wait for approval before continuing.
 
+## MCP Resources
+
+deepPairing exposes the session's state as MCP resources so you can pull
+context on demand instead of relying on tool responses for everything:
+
+- `deeppairing://session/current` — full JSON snapshot of the active session
+  (artifacts, comments, decisions, plan reviews, autonomy, session memory)
+- `deeppairing://artifact/{id}` — a single artifact from the active session
+- `deeppairing://sessions` — index of past sessions in this project (title,
+  artifact count, timestamps)
+- `deeppairing://session/{id}` — full state of a past session
+
+**When to read resources:**
+- The human references prior work ("remember what we decided last Tuesday?")
+  → list `deeppairing://sessions`, pick the relevant one, read it
+- A concept in your current session rhymes with one you've handled before →
+  read the past session to cite the earlier reasoning and approved pattern
+- You need a single artifact's full detail without cluttering your response →
+  read `deeppairing://artifact/{id}`
+
+Resources are read-only. Don't use them as a substitute for `check_feedback`
+when you're waiting on the human's in-session response — the firstCallHint
+still delivers the essential session memory (rejected approaches, approved
+patterns) at the start of every session.
+
 ## Session Memory
 
 deepPairing remembers decisions across sessions. **On your very first tool call
