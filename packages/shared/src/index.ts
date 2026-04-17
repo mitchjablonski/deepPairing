@@ -52,12 +52,13 @@ export {
 export {
   ArtifactTypeSchema,
   ArtifactStatusSchema,
+  ArtifactStatusHistoryEntrySchema,
   ArtifactSchema,
   type ArtifactType,
   type ArtifactStatus,
+  type ArtifactStatusHistoryEntry,
   type Artifact,
   type DecisionContent,
-  type ReasoningContent,
   type CodeChangeContent,
   getTypedContent,
 } from "./schemas/artifact.js";
@@ -66,10 +67,12 @@ export {
   CodeReferenceSchema,
   CommentTargetSchema,
   CommentAuthorSchema,
+  CommentIntentSchema,
   CommentSchema,
   CreateCommentRequestSchema,
   type CodeReference,
   type CommentTarget,
+  type CommentIntent,
   type Comment,
   type CreateCommentRequest,
 } from "./schemas/comment.js";
@@ -82,14 +85,27 @@ export {
 } from "./schemas/evidence.js";
 
 export {
+  SessionAnnotationSchema,
+  CreateAnnotationRequestSchema,
+  type SessionAnnotation,
+  type CreateAnnotationRequest,
+} from "./schemas/annotation.js";
+
+export {
   FindingSchema,
   ResearchContentSchema,
   FileChangeSchema,
   PlanStepSchema,
   PlanContentSchema,
+  ReasoningConceptSchema,
+  ReasoningRelationSchema,
+  ReasoningContentSchema,
   type Finding,
   type ResearchContent,
   type FileChange,
   type PlanStep,
   type PlanContent,
+  type ReasoningConcept,
+  type ReasoningRelation,
+  type ReasoningContent,
 } from "./schemas/content-types.js";

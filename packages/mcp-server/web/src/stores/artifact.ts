@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
-
-const API_BASE = `http://${window.location.host}`;
+import { API_BASE, sessionHeaders } from "../lib/api";
 
 export interface ArtifactState {
   artifacts: Artifact[];
@@ -18,6 +17,7 @@ export interface ArtifactState {
     artifactId: string,
     content: string,
     target?: Record<string, unknown>,
+    options?: { intent?: "comment" | "question" | "suggestion"; parentCommentId?: string | null },
   ) => Promise<void>;
 
   updateArtifactStatus: (
@@ -47,7 +47,6 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     set((state) => ({
       artifacts: [...state.artifacts, artifact],
       selectedArtifactId: state.selectedArtifactId ?? artifact.id,
-      // Mark as unread if we already have a selected artifact (not the first one)
       unreadIds: state.selectedArtifactId && state.selectedArtifactId !== artifact.id
         ? [...state.unreadIds, artifact.id]
         : state.unreadIds,
@@ -74,14 +73,16 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     unreadIds: state.unreadIds.filter((uid) => uid !== id),
   })),
 
-  submitComment: async (artifactId, content, target) => {
+  submitComment: async (artifactId, content, target, options) => {
     await fetch(`${API_BASE}/api/comments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: sessionHeaders(),
       body: JSON.stringify({
         artifactId,
         content,
         target: { artifactId, ...target },
+        intent: options?.intent,
+        parentCommentId: options?.parentCommentId ?? null,
       }),
     });
   },
@@ -89,7 +90,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   updateArtifactStatus: async (artifactId, status, feedback) => {
     await fetch(`${API_BASE}/api/artifacts/${artifactId}/status`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: sessionHeaders(),
       body: JSON.stringify({ status, feedback }),
     });
   },
@@ -97,7 +98,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   resolveDecision: async (decisionId, optionId, reasoning) => {
     await fetch(`${API_BASE}/api/decisions/${decisionId}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: sessionHeaders(),
       body: JSON.stringify({ optionId, reasoning }),
     });
   },
@@ -105,7 +106,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   renameArtifact: async (artifactId, title) => {
     await fetch(`${API_BASE}/api/artifacts/${artifactId}/rename`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: sessionHeaders(),
       body: JSON.stringify({ title }),
     });
     set((state) => ({

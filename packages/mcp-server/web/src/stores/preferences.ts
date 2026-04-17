@@ -115,8 +115,20 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
     buildEditorLink: (filePath, line, column = 1) => {
       const scheme = get().editorScheme;
       if (!scheme) return null;
+
+      // Resolve relative paths against project root
+      let absPath = filePath;
+      if (!filePath.startsWith("/")) {
+        try {
+          const projectRoot = (window as any).__dpConnectionStore?.getState?.()?.projectRoot;
+          if (projectRoot) {
+            absPath = `${projectRoot}/${filePath}`;
+          }
+        } catch {}
+      }
+
       return scheme
-        .replace("{path}", filePath)
+        .replace("{path}", absPath)
         .replace("{line}", String(line))
         .replace("{column}", String(column));
     },

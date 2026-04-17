@@ -98,6 +98,45 @@ This tool is **non-blocking** — call `deepPairing_check_feedback` for approval
 ### deepPairing_log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.
 
+**PAIRING IMPERATIVE — name the concept.** Every time an engineering concept
+or pattern is at play, surface it via `concept`. Think: *what is the underlying
+pattern this person would need to understand to make the same choice next
+time?* Examples: `"dependency inversion"`, `"optimistic UI"`, `"debounce vs
+throttle"`, `"command-query separation"`. Include a one-line plain-English
+definition in `oneLineExplanation` for concepts the reader might not know.
+
+This is the single highest-leverage move in deepPairing. The human is learning
+*from* you — naming the pattern turns every action into a teaching moment.
+Name it even when it feels obvious.
+
+Also populate:
+- `evidence`: files/line ranges that motivated this reasoning, when it came
+  from the codebase
+- `relatesTo: { artifactId, kind }`: back-link to a parent artifact when this
+  reasoning elaborates, answers, or supersedes another
+
+Example:
+```json
+{
+  "action": "Replace the auth guard with middleware composition",
+  "reasoning": "The guard is called in six handlers and each re-implements role checking...",
+  "concept": {
+    "name": "dependency inversion",
+    "oneLineExplanation": "Handlers depend on an auth-check abstraction, not a specific implementation — lets us swap in a test double or future mTLS without touching handler code."
+  },
+  "evidence": [{
+    "filePath": "src/routes/users.ts",
+    "lineStart": 12, "lineEnd": 28,
+    "snippet": "if (!req.user?.roles.includes('admin')) return 401;",
+    "explanation": "This exact block appears in 6 handlers"
+  }],
+  "alternativeDetails": [
+    { "title": "Extract a helper function", "reason": "Still couples each handler to the helper's signature — change the signature, touch every handler" }
+  ],
+  "confidence": "high"
+}
+```
+
 ### deepPairing_present_code_change
 Call to present a code change with before/after content for human review.
 Use this when you want the human to see exactly what you're changing and why.
@@ -135,6 +174,14 @@ Returns:
 
 If no response after several polls, an escalation hint will tell you to ask the
 human directly in the terminal as a fallback.
+
+### deepPairing_retract_artifact
+Call when you realize mid-flight you shouldn't have presented an artifact — you
+noticed an error, the context changed, or you tried a rejected approach. Pass
+the artifact id and a short reason. The UI marks it as retracted with your
+reason visible to the human, and you can keep polling check_feedback as normal.
+
+Do NOT bail out to the terminal to apologize or retract manually. Use this tool.
 
 ### deepPairing_export_session
 Export the current session as markdown. Three formats:
@@ -217,16 +264,22 @@ review but don't wait for approval before continuing.
 
 ## Session Memory
 
-deepPairing remembers decisions across sessions. On the first `check_feedback` call,
-you'll receive context from previous sessions:
+deepPairing remembers decisions across sessions. **On your very first tool call
+of every session**, the response includes context from previous sessions:
 
-- **Rejected approaches**: Options the human explicitly rejected. NEVER propose these
-  again. If a rejected approach is the only viable option, explain why and ask permission.
-- **Approved patterns**: Approaches the human preferred. Default to these when facing
-  similar decisions.
+- **Rejected approaches**: Options the human explicitly rejected. NEVER propose
+  these again. The `present_*` tools will refuse the call with
+  `REJECTED_APPROACH_BLOCKED` if you try.
+- **Approved patterns**: Approaches the human preferred. Default to these when
+  facing similar decisions.
 
-This memory builds automatically from decision resolutions. The human can view and
-manage it in the companion UI.
+If pre-flight refuses your call, do NOT retry with the same approach. Either
+revise to exclude the rejected path, or — if you believe conditions have
+changed — call `present_findings` first to make the case for reconsidering,
+then wait for the human's response via `check_feedback`.
+
+This memory builds automatically from decision resolutions. The human can view
+and manage it in the companion UI.
 
 ## Rules
 

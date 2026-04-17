@@ -182,14 +182,56 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Service");
     });
 
-    it("delivers session memory on first check_feedback", async () => {
+    it("does NOT include session memory inside check_feedback", async () => {
+      // Session memory is delivered on the first tool call hint (see
+      // first-call-hint test below), never inside check_feedback — mixing
+      // WAITING signals with past-violation warnings creates contradictory
+      // imperatives for the agent.
       store.recordApprovedPattern("Service pattern");
       store.recordRejectedApproach("Inline refactor");
 
+      // Burn the first tool call on something other than check_feedback
+      await callTool("deepPairing_log_reasoning", {
+        action: "warm-up",
+        reasoning: "trigger the first-call hint elsewhere",
+        confidence: "low",
+      });
+
       const { text } = await callTool("deepPairing_check_feedback");
+      expect(text).not.toContain("previous sessions");
+      expect(text).not.toContain("Rejected approaches");
+    });
+  });
+
+  describe("session memory on first tool call", () => {
+    it("includes rejected approaches with reasons in the first tool call response", async () => {
+      store.recordRejectedApproach("Deploy to Railway", "too expensive for our scale");
+      store.recordApprovedPattern("Service pattern");
+
+      const { text } = await callTool("deepPairing_log_reasoning", {
+        action: "first call",
+        reasoning: "test",
+        confidence: "low",
+      });
+
+      expect(text).toContain("From previous sessions");
+      expect(text).toContain("Deploy to Railway");
+      expect(text).toContain("too expensive for our scale");
       expect(text).toContain("Service pattern");
-      expect(text).toContain("Inline refactor");
-      expect(text).toContain("previous sessions");
+    });
+
+    it("does NOT repeat session memory on subsequent tool calls", async () => {
+      store.recordRejectedApproach("Inline refactor");
+
+      await callTool("deepPairing_log_reasoning", {
+        action: "first", reasoning: "x", confidence: "low",
+      });
+      const { text } = await callTool("deepPairing_log_reasoning", {
+        action: "second", reasoning: "y", confidence: "low",
+      });
+
+      expect(text).not.toContain("From previous sessions");
+      expect(text).not.toContain("Inline refactor");
     });
 
     it("resets poll counter when feedback arrives", async () => {
@@ -229,6 +271,224 @@ describe("MCP Tool Handlers", () => {
       const { text } = await callTool("deepPairing_export_session", { format: "full" });
       expect(text).toContain("Session Report");
       expect(text).toContain("Weak hashing");
+    });
+  });
+
+  describe("pre-flight rejected-approach validation", () => {
+    it("blocks present_options when an option matches a rejected approach", async () => {
+      store.recordRejectedApproach("Deploy: Railway", "too expensive for our scale");
+
+      const result = await callTool("deepPairing_present_options", {
+        context: "Choose a hosting provider",
+        options: [
+          { id: "a", title: "Railway", description: "Easy deploy", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Fly.io", description: "Edge", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("REJECTED_APPROACH_BLOCKED");
+      expect(result.text).toContain("Railway");
+      expect(result.text).toContain("too expensive for our scale");
+      // Artifact must NOT have been created
+      expect(store.getArtifacts()).toHaveLength(0);
+    });
+
+    it("blocks present_plan when a step description matches a rejected approach", async () => {
+      store.recordRejectedApproach("Inline refactor");
+
+      const result = await callTool("deepPairing_present_plan", {
+        title: "Cleanup",
+        steps: [{ description: "Inline refactor of auth module", reasoning: "simpler" }],
+        estimatedChanges: 1,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("REJECTED_APPROACH_BLOCKED");
+      expect(store.getArtifacts()).toHaveLength(0);
+    });
+
+    it("allows present_findings when nothing matches", async () => {
+      store.recordRejectedApproach("Deploy: Railway");
+
+      const { isError } = await callTool("deepPairing_present_findings", {
+        summary: "Auth analysis",
+        findings: [{ category: "Security", detail: "Weak hash", significance: "high" }],
+      });
+
+      expect(isError).toBeFalsy();
+      expect(store.getArtifacts()).toHaveLength(1);
+    });
+  });
+
+  describe("retract_artifact", () => {
+    it("transitions the artifact to retracted and records the reason", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "hasty analysis",
+        findings: [{ category: "other", detail: "something", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+
+      const { text, isError } = await callTool("deepPairing_retract_artifact", {
+        artifactId: artifact.id,
+        reason: "realised I had the wrong file",
+      });
+
+      expect(isError).toBeFalsy();
+      expect(text).toContain(artifact.id);
+      expect(store.getArtifacts()[0].status).toBe("retracted");
+
+      // Agent-authored comment preserves the reason for the human to see
+      const comments = store.getCommentsForArtifact(artifact.id);
+      expect(comments.length).toBeGreaterThan(0);
+      expect(comments.some((c) => c.author === "agent" && c.content.includes("wrong file"))).toBe(true);
+    });
+
+    it("errors when the artifact id is unknown", async () => {
+      const { isError, text } = await callTool("deepPairing_retract_artifact", {
+        artifactId: "art_does_not_exist",
+        reason: "oops",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("no artifact");
+    });
+
+    it("errors when trying to retract an already-approved artifact", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      store.updateArtifactStatus(artifact.id, "approved");
+
+      const { isError, text } = await callTool("deepPairing_retract_artifact", {
+        artifactId: artifact.id,
+        reason: "second thoughts",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("too late to retract");
+    });
+
+    it("requires both artifactId and reason", async () => {
+      const missingReason = await callTool("deepPairing_retract_artifact", { artifactId: "art_x" });
+      expect(missingReason.isError).toBe(true);
+      expect(missingReason.text).toContain("reason");
+
+      const missingId = await callTool("deepPairing_retract_artifact", { reason: "no id" });
+      expect(missingId.isError).toBe(true);
+      expect(missingId.text).toContain("artifactId");
+    });
+  });
+
+  describe("answer_question + question prioritization", () => {
+    it("prioritizes question comments in check_feedback with an answer hint", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      store.addComment({
+        id: "cmt_plain",
+        artifactId: artifact.id,
+        content: "just a note",
+        author: "human",
+      });
+      store.addComment({
+        id: "cmt_q1",
+        artifactId: artifact.id,
+        content: "why did you pick this approach?",
+        author: "human",
+        intent: "question",
+      });
+
+      const { text } = await callTool("deepPairing_check_feedback");
+      // Questions section appears and carries the answer hint
+      expect(text).toContain("Human questions");
+      expect(text).toContain("why did you pick this approach");
+      expect(text).toContain("deepPairing_answer_question");
+      expect(text).toContain("cmt_q1");
+      // Questions are listed before regular comments in the final text
+      const qIdx = text.indexOf("Human questions");
+      const cIdx = text.indexOf("Human comments");
+      expect(qIdx).toBeGreaterThanOrEqual(0);
+      expect(cIdx === -1 || qIdx < cIdx).toBe(true);
+    });
+
+    it("answer_question links the reply and marks the question answered", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      const question = store.addComment({
+        id: "cmt_q2",
+        artifactId: artifact.id,
+        content: "what else did you consider?",
+        author: "human",
+        intent: "question",
+      });
+
+      const { text, isError } = await callTool("deepPairing_answer_question", {
+        commentId: question.id,
+        answer: "I considered X but rejected it because Y.",
+      });
+
+      expect(isError).toBeFalsy();
+      expect(text).toContain(question.id);
+
+      // Parent question should now carry answeredByCommentId
+      const parent = store.getComment(question.id);
+      expect(parent?.answeredByCommentId).toBeTruthy();
+
+      // The answer comment is agent-authored, parented, and acknowledged
+      const all = store.getCommentsForArtifact(artifact.id);
+      const answer = all.find((c) => c.id === parent?.answeredByCommentId);
+      expect(answer).toBeDefined();
+      expect(answer?.author).toBe("agent");
+      expect(answer?.parentCommentId).toBe(question.id);
+      expect(answer?.content).toContain("considered X");
+    });
+
+    it("already-answered questions drop out of the priority lane", async () => {
+      await callTool("deepPairing_present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      const q = store.addComment({
+        id: "cmt_q3",
+        artifactId: artifact.id,
+        content: "what does this do?",
+        author: "human",
+        intent: "question",
+      });
+      // Acknowledge so the existing check_feedback exchange doesn't re-surface it first
+      store.acknowledgeComments([q.id]);
+      await callTool("deepPairing_answer_question", {
+        commentId: q.id,
+        answer: "It's a guard clause.",
+      });
+
+      // Add a fresh plain comment so check_feedback has something to show
+      store.addComment({
+        id: "cmt_plain2",
+        artifactId: artifact.id,
+        content: "makes sense",
+        author: "human",
+      });
+
+      const { text } = await callTool("deepPairing_check_feedback");
+      expect(text).not.toContain("Human questions");
+      expect(text).toContain("Human comments");
+    });
+
+    it("errors when answering an unknown commentId", async () => {
+      const { isError, text } = await callTool("deepPairing_answer_question", {
+        commentId: "cmt_not_real",
+        answer: "hi",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("no comment");
     });
   });
 

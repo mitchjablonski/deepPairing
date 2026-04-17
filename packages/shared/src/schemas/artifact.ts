@@ -17,9 +17,16 @@ export const ArtifactStatusSchema = z.enum([
   "revised",
   "rejected",
   "superseded",
+  "retracted",
 ]);
 
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>;
+
+export const ArtifactStatusHistoryEntrySchema = z.object({
+  status: ArtifactStatusSchema,
+  at: z.string().datetime(),
+});
+export type ArtifactStatusHistoryEntry = z.infer<typeof ArtifactStatusHistoryEntrySchema>;
 
 export const ArtifactSchema = z.object({
   id: z.string(),
@@ -29,6 +36,12 @@ export const ArtifactSchema = z.object({
   parentId: z.string().nullable(),
   title: z.string(),
   status: ArtifactStatusSchema,
+  /**
+   * Timestamped trail of status transitions. Optional for backward
+   * compatibility with older sessions — replay falls back to
+   * createdAt/updatedAt when absent.
+   */
+  statusHistory: z.array(ArtifactStatusHistoryEntrySchema).optional(),
   content: z.record(z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),
@@ -53,14 +66,6 @@ export interface DecisionContent {
     recommendation: boolean;
   }>;
   decisionId: string;
-}
-
-export interface ReasoningContent {
-  action: string;
-  reasoning: string;
-  alternativesConsidered?: string[];
-  alternativeDetails?: Array<{ title: string; reason: string }>;
-  confidence?: "low" | "medium" | "high";
 }
 
 export interface CodeChangeContent {

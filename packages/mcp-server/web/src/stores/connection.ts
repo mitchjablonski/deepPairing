@@ -15,12 +15,15 @@ function notifyIfUnfocused(title: string, body: string) {
 
 interface ActiveSession {
   sessionId: string;
+  title: string;
+  project: string;
   artifactCount: number;
 }
 
 interface ConnectionState {
   connected: boolean;
   sessionId: string | null;
+  projectRoot: string | null;
   autonomyLevel: "supervised" | "balanced" | "autonomous";
   adapter: ConnectionAdapter | null;
   activeSessions: ActiveSession[];
@@ -32,6 +35,9 @@ interface ConnectionState {
 }
 
 export const useConnectionStore = create<ConnectionState>((set, get) => {
+  // Expose on window so artifact store can read sessionId without circular import
+  const storeRef = { getState: () => get() };
+  if (typeof window !== "undefined") (window as any).__dpConnectionStore = storeRef;
   function handleMessage(data: any) {
     // Import artifact store lazily to avoid circular deps
     import("./artifact").then(({ useArtifactStore }) => {
@@ -41,6 +47,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         case "connected":
           set({
             sessionId: data.state?.sessionId ?? null,
+            projectRoot: data.projectRoot ?? null,
             autonomyLevel: data.state?.autonomyLevel ?? "supervised",
           });
           // Reset before hydration to prevent duplicates on reconnect
@@ -107,6 +114,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   return {
     connected: false,
     sessionId: null,
+    projectRoot: null,
     autonomyLevel: "supervised",
     adapter: null,
     activeSessions: [],

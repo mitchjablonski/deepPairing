@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
+import { useReplayStore } from "../stores/replay";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { demoArtifacts, demoComments } from "@deeppairing/shared/__fixtures__/demo-session";
 
@@ -52,6 +53,10 @@ export function SessionBrowser() {
       for (const comment of state.comments ?? []) {
         addComment(comment);
       }
+      // Opening a past session drops us into replay mode — the scrubber
+      // above ArtifactPanel hides events after the cursor, so re-reading
+      // feels like walking through the session as it happened.
+      await useReplayStore.getState().enterReplay(sessionId, state);
     } catch {
       // Failed to load
     } finally {

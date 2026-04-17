@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-
-const API_BASE = `http://${window.location.host}`;
+import { API_BASE, sessionHeaders } from "../lib/api";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
 
@@ -29,7 +28,7 @@ export function AutonomySlider() {
     try {
       await fetch(`${API_BASE}/api/preferences`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({ autonomyLevel: newLevel }),
       });
     } catch {

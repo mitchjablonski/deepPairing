@@ -144,7 +144,7 @@ describe("FileStore", () => {
 
     const memory = store.getSessionMemory();
     expect(memory.approvedPatterns).toContain("Service pattern");
-    expect(memory.rejectedApproaches).toContain("Inline refactor");
+    expect(memory.rejectedApproaches.map((r) => r.description)).toContain("Inline refactor");
   });
 
   describe("listSessions", () => {

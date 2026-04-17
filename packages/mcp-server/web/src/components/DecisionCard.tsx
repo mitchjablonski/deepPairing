@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
+import { SimpleMarkdown } from "./SimpleMarkdown";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -99,12 +100,14 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
     );
   }
 
-  // Grid layout: 2 options → 2 cols, 3+ → 3 cols (max 4)
+  // Grid layout: 2 options → 2 cols, 3+ → 3 cols (max 4). Below the narrow
+  // breakpoint (900px) everything stacks to a single column so split-screen
+  // with Claude Code stays usable.
   const gridCols =
     event.options.length === 2
-      ? "grid-cols-2"
+      ? "grid-cols-1 min-[900px]:grid-cols-2"
       : event.options.length >= 3
-        ? "grid-cols-3"
+        ? "grid-cols-1 min-[900px]:grid-cols-3"
         : "";
 
   return (
@@ -118,7 +121,7 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
         <span className="text-sm font-semibold text-accent-red">Decision Needed</span>
         <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter select</span>
       </div>
-      <p className="text-sm text-text-primary mb-4">{event.context}</p>
+      <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
 
       {/* Options grid */}
       <div className={`grid gap-2 ${gridCols}`}>
@@ -151,7 +154,7 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
               </div>
 
               {/* Description */}
-              <p className="text-xs text-text-secondary mb-2">{option.description}</p>
+              <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
 
               {/* Pros */}
               {option.pros.length > 0 && (

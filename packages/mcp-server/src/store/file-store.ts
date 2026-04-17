@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment } from "@deeppairing/shared";
-import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams } from "./store-interface.js";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation } from "@deeppairing/shared";
+import { nanoid } from "nanoid";
+import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 
@@ -152,8 +153,18 @@ export class FileStore implements IStore {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       const wasDraft = art.status === "draft";
+      const now = new Date().toISOString();
       art.status = status;
-      art.updatedAt = new Date().toISOString();
+      art.updatedAt = now;
+      // Append to statusHistory so replay can reconstruct the trail faithfully.
+      // Lazy-init so older sessions opt into the richer format on first
+      // transition — old records keep working via the fallback in timeline.ts.
+      const history = (art as any).statusHistory ?? [];
+      if (history.length === 0 && art.createdAt) {
+        history.push({ status: "draft", at: art.createdAt });
+      }
+      history.push({ status, at: now });
+      (art as any).statusHistory = history;
       if (wasDraft && status !== "draft") {
         this.recordArtifactReviewed(artifactId);
       }
@@ -174,14 +185,18 @@ export class FileStore implements IStore {
     content: string;
     author: "human" | "agent";
     target?: Record<string, unknown>;
+    intent?: "comment" | "question" | "suggestion";
+    parentCommentId?: string | null;
   }): Comment {
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
       target: { artifactId: params.artifactId, ...params.target },
-      parentCommentId: null,
+      parentCommentId: params.parentCommentId ?? null,
       author: params.author,
       content: params.content,
+      intent: params.intent,
+      answeredByCommentId: null,
       acknowledged: params.author === "agent",
       createdAt: new Date().toISOString(),
     };
@@ -204,6 +219,18 @@ export class FileStore implements IStore {
       if (ids.includes(c.id)) c.acknowledged = true;
     }
     this.scheduleFlush();
+  }
+
+  getComment(commentId: string): Comment | undefined {
+    return this.comments.find((c) => c.id === commentId);
+  }
+
+  markCommentAnswered(commentId: string, answerCommentId: string): void {
+    const parent = this.comments.find((c) => c.id === commentId);
+    if (parent) {
+      parent.answeredByCommentId = answerCommentId;
+      this.scheduleFlush();
+    }
   }
 
   // --- Decisions ---
@@ -337,15 +364,41 @@ export class FileStore implements IStore {
   /**
    * Record a rejected approach so it's never proposed again.
    * Stored in .deeppairing/preferences.json under "rejectedApproaches".
+   * Records are enriched objects; legacy string[] entries are migrated on next write.
    */
-  recordRejectedApproach(description: string): void {
+  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string): void {
     const prefs = this.readPreferences();
-    const rejected: string[] = prefs.rejectedApproaches ?? [];
-    if (!rejected.includes(description)) {
-      rejected.push(description);
-      prefs.rejectedApproaches = rejected;
-      this.writePreferences(prefs);
+    const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+    const existing = rejected.find((r) => r.description === description);
+    if (existing) {
+      // If we now have a reason and didn't before, enrich the existing record.
+      if (reason && !existing.reason) {
+        existing.reason = reason;
+        existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
+        if (sourceArtifactId) existing.sourceArtifactId = sourceArtifactId;
+        prefs.rejectedApproaches = rejected;
+        this.writePreferences(prefs);
+      }
+      return;
     }
+    rejected.push({
+      description,
+      reason: reason || undefined,
+      rejectedAt: new Date().toISOString(),
+      sourceArtifactId,
+    });
+    prefs.rejectedApproaches = rejected;
+    this.writePreferences(prefs);
+  }
+
+  /** Migrate legacy string[] into RejectedApproach[] so downstream code sees one shape. */
+  private normalizeRejectedApproaches(raw: unknown): RejectedApproach[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((entry) =>
+      typeof entry === "string"
+        ? { description: entry }
+        : { description: String((entry as any)?.description ?? ""), reason: (entry as any)?.reason, rejectedAt: (entry as any)?.rejectedAt, sourceArtifactId: (entry as any)?.sourceArtifactId },
+    ).filter((r) => r.description);
   }
 
   /**
@@ -366,10 +419,10 @@ export class FileStore implements IStore {
    * Get session memory context for the agent.
    * Returns rejected approaches and approved patterns from previous sessions.
    */
-  getSessionMemory(): { rejectedApproaches: string[]; approvedPatterns: string[] } {
+  getSessionMemory(): { rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] } {
     const prefs = this.readPreferences();
     return {
-      rejectedApproaches: prefs.rejectedApproaches ?? [],
+      rejectedApproaches: this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []),
       approvedPatterns: prefs.approvedPatterns ?? [],
     };
   }
@@ -382,6 +435,45 @@ export class FileStore implements IStore {
   private writePreferences(prefs: Record<string, any>): void {
     const prefsPath = path.join(this.basePath, "preferences.json");
     fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+  }
+
+  // --- Session annotations (learner's replay notes) ---
+
+  /**
+   * Annotations live in a separate annotations.json file per session. They
+   * never reach the agent — they're the human re-reading their own past
+   * work. Keeping the channel separate prevents "learning notes" from
+   * accidentally becoming agent context.
+   */
+  private annotationsPath(): string {
+    return path.join(this.sessionDir(), "annotations.json");
+  }
+
+  getAnnotations(): SessionAnnotation[] {
+    return this.loadJsonFile<SessionAnnotation[]>(this.annotationsPath(), []);
+  }
+
+  addAnnotation(params: { targetEventId: string; note: string; tags?: string[] }): SessionAnnotation {
+    const annotation: SessionAnnotation = {
+      id: `ann_${nanoid(10)}`,
+      sessionId: this.sessionId,
+      targetEventId: params.targetEventId,
+      note: params.note,
+      tags: params.tags,
+      createdAt: new Date().toISOString(),
+    };
+    const existing = this.getAnnotations();
+    existing.push(annotation);
+    fs.writeFileSync(this.annotationsPath(), JSON.stringify(existing, null, 2));
+    return annotation;
+  }
+
+  deleteAnnotation(annotationId: string): boolean {
+    const existing = this.getAnnotations();
+    const next = existing.filter((a) => a.id !== annotationId);
+    if (next.length === existing.length) return false;
+    fs.writeFileSync(this.annotationsPath(), JSON.stringify(next, null, 2));
+    return true;
   }
 
   // --- Autonomy Level ---

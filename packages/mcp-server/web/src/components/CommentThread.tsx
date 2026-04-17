@@ -136,6 +136,157 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
   );
 }
 
+/**
+ * Inline "ask why" trigger. Sibling to CommentTrigger but submits the comment
+ * with intent: "question", which:
+ *   1) is surfaced to the agent via check_feedback's question-priority lane
+ *   2) renders as a pulsing dot in the UI until the agent answers
+ *
+ * Target acts the same way as CommentTrigger — lets the human pin the
+ * question to a specific finding / step / evidence / option.
+ */
+export function AskTrigger({
+  artifactId,
+  target,
+  variant = "inline",
+}: {
+  artifactId: string;
+  target: {
+    lineNumber?: number;
+    findingIndex?: number;
+    evidenceIndex?: number;
+    stepIndex?: number;
+    alternativeIndex?: number;
+  };
+  /** "inline" = compact icon-button; "pill" = small labelled pill */
+  variant?: "inline" | "pill";
+}) {
+  const [open, setOpen] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const { submitComment, comments } = useArtifactStore();
+
+  // Look up existing question(s) + their answers for this target
+  const artifactComments = (comments[artifactId] ?? []) as any[];
+  const matching = artifactComments.filter((c) => {
+    if (c.intent !== "question") return false;
+    if (target.findingIndex != null && c.target.findingIndex !== target.findingIndex) return false;
+    if (target.stepIndex != null && c.target.stepIndex !== target.stepIndex) return false;
+    if (target.evidenceIndex != null && c.target.evidenceIndex !== target.evidenceIndex) return false;
+    if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
+    if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
+    return true;
+  });
+  const unanswered = matching.filter((q) => !q.answeredByCommentId).length;
+  const answeredQuestions = matching.filter((q) => q.answeredByCommentId);
+
+  const send = async () => {
+    const trimmed = question.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    await submitComment(artifactId, trimmed, target, { intent: "question" });
+    setQuestion("");
+    setSent(true);
+    setOpen(false);
+    setTimeout(() => setSent(false), 2000);
+    setSending(false);
+  };
+
+  const classes =
+    variant === "pill"
+      ? "inline-flex items-center gap-1 text-2xs px-2 py-0.5 rounded transition-colors font-medium"
+      : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
+
+  const tint = unanswered > 0
+    ? "bg-accent-violet-dim text-accent-violet hover:bg-accent-violet-dim/80 animate-pulse"
+    : matching.length > 0
+      ? "bg-accent-violet-dim/40 text-accent-violet hover:bg-accent-violet-dim/60"
+      : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        title={unanswered > 0 ? `${unanswered} unanswered question` : "Ask the agent about this"}
+        className={`${classes} ${tint}`}
+      >
+        <span className="text-[10px] font-semibold">?</span>
+        {variant === "pill" && <span>{sent ? "Asked" : "Ask why"}</span>}
+        {matching.length > 0 && <span>{matching.length}</span>}
+      </button>
+
+      {open && (
+        <div className="mt-1.5 p-2.5 bg-surface-elevated border border-border-default rounded-lg shadow-lg max-w-sm space-y-2">
+          {/* Prior questions + answers on this target */}
+          {matching.length > 0 && (
+            <div className="space-y-2 pb-2 border-b border-border-subtle">
+              {matching.map((q) => {
+                const answer = q.answeredByCommentId
+                  ? artifactComments.find((c) => c.id === q.answeredByCommentId)
+                  : undefined;
+                return (
+                  <div key={q.id} className="text-2xs">
+                    <div className="font-medium text-accent-violet">
+                      ? {q.content}
+                    </div>
+                    {answer ? (
+                      <div className="mt-1 pl-3 border-l-2 border-accent-violet/30 text-text-secondary whitespace-pre-wrap">
+                        {answer.content}
+                      </div>
+                    ) : (
+                      <div className="mt-0.5 pl-3 text-text-muted italic">awaiting answer</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex gap-1.5">
+            <input
+              type="text"
+              autoFocus
+              placeholder="Ask the agent to explain..."
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  send();
+                }
+                if (e.key === "Escape") {
+                  setOpen(false);
+                  setQuestion("");
+                }
+              }}
+              disabled={sending}
+              className="flex-1 px-2 py-1 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
+            />
+            <button
+              onClick={send}
+              disabled={!question.trim() || sending}
+              className="px-2 py-1 bg-accent-violet text-white text-2xs rounded hover:bg-accent-violet/80 disabled:opacity-50 press-scale"
+            >
+              Ask
+            </button>
+          </div>
+          <div className="text-[9px] text-text-muted">
+            Answered via <code className="font-mono">answer_question</code> in the agent's next turn
+          </div>
+
+          {/* If there are answered questions, show a hint the user can collapse */}
+          {answeredQuestions.length > 0 && !unanswered && (
+            <div className="text-[9px] text-text-muted italic">
+              {answeredQuestions.length} previous answer{answeredQuestions.length !== 1 ? "s" : ""} above
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Inline comment trigger — click to start a comment on a specific location */
 export function CommentTrigger({
   artifactId,

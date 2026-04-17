@@ -19,6 +19,7 @@ export const CommentTargetSchema = z.object({
   findingIndex: z.number().int().optional(),
   evidenceIndex: z.number().int().optional(),
   stepIndex: z.number().int().optional(),
+  alternativeIndex: z.number().int().optional().describe("Index into a reasoning artifact's alternativeDetails[]"),
   sectionId: z.string().optional(),
   suggestion: z.string().optional().describe("Suggested code replacement for this line"),
 });
@@ -26,6 +27,9 @@ export const CommentTargetSchema = z.object({
 export type CommentTarget = z.infer<typeof CommentTargetSchema>;
 
 export const CommentAuthorSchema = z.enum(["human", "agent"]);
+
+export const CommentIntentSchema = z.enum(["comment", "question", "suggestion"]);
+export type CommentIntent = z.infer<typeof CommentIntentSchema>;
 
 export const CommentSchema = z.object({
   id: z.string(),
@@ -35,6 +39,13 @@ export const CommentSchema = z.object({
   author: CommentAuthorSchema,
   content: z.string().min(1),
   codeReferences: z.array(CodeReferenceSchema).optional().describe("Code snippets referenced in this comment"),
+  /**
+   * Default "comment". "question" means the human wants an explanation and
+   * the agent should respond with deepPairing_answer_question.
+   */
+  intent: CommentIntentSchema.optional(),
+  /** Set when an agent-authored reply has answered this question. */
+  answeredByCommentId: z.string().nullable().optional(),
   acknowledged: z.boolean(),
   createdAt: z.string().datetime(),
 });
@@ -46,6 +57,7 @@ export const CreateCommentRequestSchema = z.object({
   content: z.string().min(1),
   parentCommentId: z.string().nullable().optional(),
   codeReferences: z.array(CodeReferenceSchema).optional(),
+  intent: CommentIntentSchema.optional(),
 });
 
 export type CreateCommentRequest = z.infer<typeof CreateCommentRequestSchema>;
