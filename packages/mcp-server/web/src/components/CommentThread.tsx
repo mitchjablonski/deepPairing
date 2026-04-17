@@ -157,6 +157,8 @@ export function AskTrigger({
     evidenceIndex?: number;
     stepIndex?: number;
     alternativeIndex?: number;
+    optionId?: string;
+    sectionId?: string;
   };
   /** "inline" = compact icon-button; "pill" = small labelled pill */
   variant?: "inline" | "pill";
@@ -175,6 +177,8 @@ export function AskTrigger({
     if (target.stepIndex != null && c.target.stepIndex !== target.stepIndex) return false;
     if (target.evidenceIndex != null && c.target.evidenceIndex !== target.evidenceIndex) return false;
     if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
+    if (target.optionId != null && (c.target as any).optionId !== target.optionId) return false;
+    if (target.sectionId != null && (c.target as any).sectionId !== target.sectionId) return false;
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
   });

@@ -152,6 +152,10 @@ function EvidenceItem({
             <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
           </span>
           <div className="flex items-center gap-2">
+            <AskTrigger
+              artifactId={artifactId}
+              target={{ findingIndex, evidenceIndex }}
+            />
             <button
               onClick={() => setShowFullFile(true)}
               className="text-text-muted hover:text-accent-blue transition-colors"

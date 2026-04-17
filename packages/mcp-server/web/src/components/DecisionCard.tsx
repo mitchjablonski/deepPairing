@@ -3,11 +3,14 @@ import { motion, AnimatePresence } from "motion/react";
 import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
+import { AskTrigger } from "./CommentThread";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
   /** decisionId for the new non-blocking API */
   decisionId?: string;
+  /** Artifact id — needed for AskTrigger targeting per-option questions */
+  artifactId?: string;
   onResolved?: () => void;
 }
 
@@ -17,7 +20,7 @@ const badgeColors = {
   high: "bg-accent-red-dim text-accent-red",
 };
 
-export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProps) {
+export function DecisionCard({ event, decisionId, artifactId, onResolved }: DecisionCardProps) {
   const { resolveDecision } = useArtifactStore();
   const [focusedIndex, setFocusedIndex] = useState(
     event.options.findIndex((o) => o.recommendation) ?? 0,
@@ -127,12 +130,23 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
       <div className={`grid gap-2 ${gridCols}`}>
         <AnimatePresence>
           {event.options.map((option, idx) => (
-            <motion.button
+            <motion.div
               key={option.id}
               layout
-              onClick={() => handleSelect(option.id)}
-              disabled={submitting}
-              className={`text-left p-3 border rounded-lg transition-all duration-[180ms] ease-out disabled:opacity-50 press-scale ${
+              role="button"
+              tabIndex={submitting ? -1 : 0}
+              aria-disabled={submitting}
+              onClick={() => !submitting && handleSelect(option.id)}
+              onKeyDown={(e) => {
+                if (submitting) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleSelect(option.id);
+                }
+              }}
+              className={`text-left p-3 border rounded-lg transition-all duration-[180ms] ease-out press-scale cursor-pointer ${
+                submitting ? "opacity-50 cursor-not-allowed" : ""
+              } ${
                 idx === focusedIndex
                   ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
                   : option.recommendation
@@ -143,7 +157,7 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
             >
               {/* Title + badges */}
               <div className="flex items-start justify-between gap-2 mb-1.5">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 min-w-0">
                   <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
                   {option.recommendation && (
                     <span className="px-1.5 py-0.5 text-2xs font-medium bg-accent-blue-dim text-accent-blue rounded">
@@ -151,6 +165,17 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
                     </span>
                   )}
                 </div>
+                {artifactId && (
+                  <div
+                    // Stop click here so asking a question doesn't also select
+                    // the option.
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    className="shrink-0"
+                  >
+                    <AskTrigger artifactId={artifactId} target={{ optionId: option.id }} />
+                  </div>
+                )}
               </div>
 
               {/* Description */}
@@ -189,7 +214,7 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
                   {option.risk} risk
                 </span>
               </div>
-            </motion.button>
+            </motion.div>
           ))}
         </AnimatePresence>
       </div>
