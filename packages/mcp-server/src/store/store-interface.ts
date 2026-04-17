@@ -57,6 +57,13 @@ export interface RejectedApproach {
   reason?: string;
   rejectedAt?: string;
   sourceArtifactId?: string;
+  /**
+   * The underlying concept this rejection covers — e.g. "cost-sensitivity on
+   * low-traffic services". When set, pre-flight validation matches on concept
+   * equality in addition to surface substring, so "Deploy to Fly.io" also
+   * gets blocked after "Deploy to Railway" was rejected for the same reason.
+   */
+  concept?: string;
 }
 
 /**
@@ -122,7 +129,7 @@ export interface IStore {
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
   }>;
-  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string): MaybePromise<void>;
+  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): MaybePromise<void>;
   recordApprovedPattern(description: string): MaybePromise<void>;
   getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
 

@@ -10,32 +10,48 @@ import { formatSessionMarkdown } from "../export/format-markdown.js";
 
 /**
  * Check a set of proposal strings against previously rejected approaches.
- * Returns the first match found, or null if none. Matching is case-insensitive
- * substring in either direction — if the rejected approach's description
- * contains a proposal phrase, or vice versa, that's a match.
+ * Returns the first match found, or null if none.
+ *
+ * Matching has two layers:
+ *   1) Surface: case-insensitive substring against the rejection description
+ *      (and its colon-delimited fragments, so "Deploy: Railway" catches bare
+ *      "Railway" proposals).
+ *   2) Concept: when a rejected approach carries a `concept`, match if the
+ *      concept's keywords appear anywhere in the proposal. This catches
+ *      paraphrased re-proposals — e.g. "Deploy to Fly.io" still blocks after
+ *      rejecting Railway with concept "pay-per-request serverless hosting".
  */
 function findRejectedApproachMatch(
   proposalStrings: string[],
   rejected: RejectedApproach[],
-): { proposal: string; rejected: RejectedApproach } | null {
+): { proposal: string; rejected: RejectedApproach; via: "surface" | "concept" } | null {
   const clean = (s: string) => s.trim().toLowerCase();
   for (const rej of rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
-    // Split the rejected description on `:` so "Deploy: Railway" matches
-    // "Railway" proposals cleanly without requiring the whole context.
-    const rejParts = rejNormalized.split(":").map((p) => p.trim()).filter(Boolean);
+    // The portion AFTER the first colon is the specific rejection noun
+    // ("Deploy: Railway" → "railway"); the prefix is the category and
+    // recurs across unrelated rejections, so we don't match on it.
+    const specificNoun = rejNormalized.includes(":")
+      ? rejNormalized.split(":").slice(1).join(":").trim()
+      : rejNormalized;
+    const conceptTokens = rej.concept
+      ? clean(rej.concept).split(/\s+/).filter((t) => t.length >= 4)
+      : [];
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
-      // Direct substring in either direction
+      // Direct substring in either direction (whole rejection description)
       if (rejNormalized.includes(p) || p.includes(rejNormalized)) {
-        return { proposal, rejected: rej };
+        return { proposal, rejected: rej, via: "surface" };
       }
-      // Match on any colon-delimited fragment of the rejection
-      for (const part of rejParts) {
-        if (part.length < 3) continue; // Skip noise tokens
-        if (p.includes(part)) return { proposal, rejected: rej };
+      // Specific noun fragment of the rejection (post-colon)
+      if (specificNoun.length >= 3 && p.includes(specificNoun)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      // Concept match: every non-stopword concept token present in the proposal
+      if (conceptTokens.length > 0 && conceptTokens.every((t) => p.includes(t))) {
+        return { proposal, rejected: rej, via: "concept" };
       }
     }
   }
@@ -469,9 +485,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       const reasonLine = match.rejected.reason
         ? `\nPrior rejection reason: "${match.rejected.reason}"`
         : "";
+      const conceptLine =
+        match.via === "concept" && match.rejected.concept
+          ? `\nMatched on underlying concept: "${match.rejected.concept}". ` +
+            `A paraphrased proposal still counts — the user has rejected this kind of approach.`
+          : "";
       const message =
         `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
-        `which the user previously rejected ("${match.rejected.description}").${reasonLine}\n\n` +
+        `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
         `Do NOT retry with this approach. Revise your proposal to exclude it, or — if you believe ` +
         `conditions have changed — present_findings first to make the case for reconsidering, then ` +
         `wait for the human's response via check_feedback. The artifact was NOT created.`;
@@ -871,11 +892,16 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             if (option) {
               await store.recordApprovedPattern(`${d.context}: ${option.title}`);
               const rejected = d.options.filter((o: any) => o.id !== d.response?.optionId);
+              // The winning option's description often encodes the concept
+              // ("a managed queue — we pay per job, not per month"). Use it
+              // as the concept tag so future pre-flight catches paraphrases.
+              const concept = option?.description ?? undefined;
               for (const rej of rejected) {
                 await store.recordRejectedApproach(
                   `${d.context}: ${rej.title}`,
                   d.response?.reasoning,
                   d.artifactId,
+                  concept,
                 );
               }
             }

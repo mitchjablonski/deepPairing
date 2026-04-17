@@ -368,16 +368,19 @@ export class FileStore implements IStore {
    * Stored in .deeppairing/preferences.json under "rejectedApproaches".
    * Records are enriched objects; legacy string[] entries are migrated on next write.
    */
-  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string): void {
+  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): void {
     const prefs = this.readPreferences();
     const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
     const existing = rejected.find((r) => r.description === description);
     if (existing) {
-      // If we now have a reason and didn't before, enrich the existing record.
-      if (reason && !existing.reason) {
-        existing.reason = reason;
+      // Enrich incrementally — each new signal (reason, concept, source) is
+      // additive so we never overwrite prior context with a blank update.
+      let changed = false;
+      if (reason && !existing.reason) { existing.reason = reason; changed = true; }
+      if (concept && !existing.concept) { existing.concept = concept; changed = true; }
+      if (sourceArtifactId && !existing.sourceArtifactId) { existing.sourceArtifactId = sourceArtifactId; changed = true; }
+      if (changed) {
         existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
-        if (sourceArtifactId) existing.sourceArtifactId = sourceArtifactId;
         prefs.rejectedApproaches = rejected;
         this.writePreferences(prefs);
       }
@@ -386,6 +389,7 @@ export class FileStore implements IStore {
     rejected.push({
       description,
       reason: reason || undefined,
+      concept: concept || undefined,
       rejectedAt: new Date().toISOString(),
       sourceArtifactId,
     });
@@ -399,7 +403,13 @@ export class FileStore implements IStore {
     return raw.map((entry) =>
       typeof entry === "string"
         ? { description: entry }
-        : { description: String((entry as any)?.description ?? ""), reason: (entry as any)?.reason, rejectedAt: (entry as any)?.rejectedAt, sourceArtifactId: (entry as any)?.sourceArtifactId },
+        : {
+            description: String((entry as any)?.description ?? ""),
+            reason: (entry as any)?.reason,
+            rejectedAt: (entry as any)?.rejectedAt,
+            sourceArtifactId: (entry as any)?.sourceArtifactId,
+            concept: (entry as any)?.concept,
+          },
     ).filter((r) => r.description);
   }
 

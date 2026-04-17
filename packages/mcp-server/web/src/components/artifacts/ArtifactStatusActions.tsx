@@ -193,10 +193,13 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
         </div>
       )}
 
-      {/* Comment input — always visible, submitted with any action */}
+      {/* Comment input — always visible, submitted with any action.
+          Reject + Request Revision REQUIRE a reason: the reason flows into
+          session memory so the agent never re-proposes a rejected approach,
+          and replay can show future-you what you objected to. */}
       <textarea
         ref={commentRef}
-        placeholder="Add a comment (optional — sent with your action)..."
+        placeholder="Add a comment — required for Reject / Request Revision"
         value={comment}
         onChange={(e) => setComment(e.target.value)}
         onKeyDown={(e) => {
@@ -231,16 +234,17 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
         </button>
         <button
           onClick={() => handleAction("rejected")}
-          disabled={submitting}
+          disabled={submitting || !comment.trim()}
           className="px-3 py-1.5 bg-accent-red-dim text-accent-red text-xs font-medium rounded
-                     hover:bg-accent-red-dim/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+                     hover:bg-accent-red-dim/80 disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
+          title={comment.trim() ? "" : "Add a comment so the agent knows why — this reason is remembered across sessions"}
         >
           Reject
         </button>
       </div>
       {!comment.trim() && (
         <div className="text-2xs text-text-muted">
-          Cmd+Enter to approve quickly
+          Cmd+Enter to approve quickly · Reject / Revise need a reason — it's remembered across sessions
         </div>
       )}
     </div>

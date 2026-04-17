@@ -194,20 +194,23 @@ export function DecisionCard({ event, decisionId, onResolved }: DecisionCardProp
         </AnimatePresence>
       </div>
 
-      {/* Optional reasoning — appears as a link, expands on click */}
+      {/* Reasoning — nudged because it becomes the rejection reason for the
+          N-1 options you didn't pick. Without it, the agent only remembers
+          "don't propose these" without knowing why. */}
       <div className="mt-3 flex items-center gap-2">
         {!showReasoning ? (
           <button
             onClick={() => setShowReasoning(true)}
-            className="text-xs text-text-muted hover:text-accent-blue transition-colors"
+            className="text-xs text-accent-blue hover:underline transition-colors"
+            title="The reason you pick gets recorded as the why for every rejected option"
           >
-            + Add reasoning (optional)
+            + Why this choice? <span className="text-text-muted">(remembered across sessions)</span>
           </button>
         ) : (
           <div className="flex gap-2 flex-1">
             <input
               type="text"
-              placeholder="Why this choice?"
+              placeholder="Why — becomes the 'don't propose these' reason for rejected options"
               value={reasoning}
               onChange={(e) => setReasoning(e.target.value)}
               onKeyDown={(e) => {

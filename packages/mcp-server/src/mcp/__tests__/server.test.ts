@@ -319,6 +319,65 @@ describe("MCP Tool Handlers", () => {
       expect(isError).toBeFalsy();
       expect(store.getArtifacts()).toHaveLength(1);
     });
+
+    it("blocks via concept match even when surface names differ (U6)", async () => {
+      // Past rejection: "Railway" with the underlying concept "pay-per-request serverless hosting"
+      store.recordRejectedApproach(
+        "Deploy: Railway",
+        "too expensive for low-traffic services",
+        undefined,
+        "pay-per-request serverless hosting platform",
+      );
+
+      // Agent now proposes Fly.io with language that matches the concept tokens
+      const result = await callTool("deepPairing_present_options", {
+        context: "Pick a deploy target",
+        options: [
+          {
+            id: "a", title: "Fly.io",
+            description: "Use Fly.io — another pay-per-request serverless hosting platform",
+            pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+          },
+          {
+            id: "b", title: "AWS ECS",
+            description: "Long-running ECS task", pros: [], cons: [], effort: "medium", risk: "medium", recommendation: false,
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("REJECTED_APPROACH_BLOCKED");
+      expect(result.text).toContain("underlying concept");
+      expect(result.text).toContain("pay-per-request serverless hosting platform");
+      expect(store.getArtifacts()).toHaveLength(0);
+    });
+  });
+
+  describe("rejected approaches captured from artifact rejections (U1+U6)", () => {
+    it("records a rejected approach with reason when a finding is rejected", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "Proposed caching layer",
+        summary: "add Redis cache",
+        findings: [{ category: "Perf", detail: "cache user profiles", significance: "high" }],
+      });
+      const artifact = store.getArtifacts()[0];
+
+      // Simulate the HTTP PATH: status update to rejected with feedback.
+      // We invoke the store directly since test fixtures don't use Hono.
+      store.updateArtifactStatus(artifact.id, "rejected");
+      // The HTTP handler also records the rejected approach — simulate that path
+      store.recordRejectedApproach(
+        artifact.title,
+        "we already have a CDN layer; adding Redis is premature",
+        artifact.id,
+      );
+
+      const memory = store.getSessionMemory();
+      const match = memory.rejectedApproaches.find((r) => r.description === "Proposed caching layer");
+      expect(match).toBeDefined();
+      expect(match?.reason).toContain("premature");
+      expect(match?.sourceArtifactId).toBe(artifact.id);
+    });
   });
 
   describe("retract_artifact", () => {
