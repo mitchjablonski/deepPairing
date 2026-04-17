@@ -45,6 +45,17 @@ function getStoredFontSize(): FontSize {
   return (localStorage.getItem("dp-font-size") as FontSize) ?? "default";
 }
 
+/** Safe localStorage wrappers so the store loads in non-browser contexts. */
+function lsGet(key: string): string | null {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function lsSet(key: string, value: string): void {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  try { localStorage.setItem(key, value); } catch {}
+}
+
 function applyFontSize(size: FontSize): void {
   if (typeof document === "undefined") return;
   document.documentElement.setAttribute("data-font-size", size);
@@ -75,19 +86,19 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
   return {
     theme: initial,
     fontSize: initialFontSize,
-    contentWidth: (localStorage.getItem("dp-content-width") as "full" | "constrained") ?? "full",
+    contentWidth: (lsGet("dp-content-width") as "full" | "constrained") ?? "full",
     sidebarCollapsed: false,
     focusedPanel: null,
     editorScheme,
 
     setTheme: (theme) => {
-      localStorage.setItem("dp-theme", theme);
+      lsSet("dp-theme", theme);
       applyTheme(theme);
       set({ theme });
     },
 
     setFontSize: (size) => {
-      localStorage.setItem("dp-font-size", size);
+      lsSet("dp-font-size", size);
       applyFontSize(size);
       set({ fontSize: size });
     },
@@ -95,7 +106,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
     toggleContentWidth: () =>
       set((s) => {
         const next = s.contentWidth === "full" ? "constrained" : "full";
-        localStorage.setItem("dp-content-width", next);
+        lsSet("dp-content-width", next);
         return { contentWidth: next };
       }),
 
@@ -107,8 +118,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
     setEditorScheme: (scheme) => {
       // Find the preset key or save as custom
       const preset = Object.entries(EDITOR_PRESETS).find(([_, v]) => v.template === scheme);
-      localStorage.setItem("dp-editor", preset ? preset[0] : "custom");
-      localStorage.setItem("dp-editor-template", scheme);
+      lsSet("dp-editor", preset ? preset[0] : "custom");
+      lsSet("dp-editor-template", scheme);
       set({ editorScheme: scheme });
     },
 
