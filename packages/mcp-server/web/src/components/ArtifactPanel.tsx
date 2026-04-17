@@ -201,6 +201,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
               options: dc.options,
             }}
             decisionId={dc.decisionId ?? artifact.id}
+            artifactId={artifact.id}
           />
         ) : null;
       })()}

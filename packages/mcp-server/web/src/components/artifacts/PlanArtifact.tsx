@@ -1,5 +1,5 @@
 import type { Artifact } from "@deeppairing/shared";
-import { CommentTrigger } from "../CommentThread";
+import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
@@ -279,11 +279,17 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                       )}
                     </div>
                   </div>
-                  <CommentTrigger
-                    artifactId={artifact.id}
-                    target={{ stepIndex: i }}
-                    existingCount={stepComments.length}
-                  />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <AskTrigger
+                      artifactId={artifact.id}
+                      target={{ stepIndex: i }}
+                    />
+                    <CommentTrigger
+                      artifactId={artifact.id}
+                      target={{ stepIndex: i }}
+                      existingCount={stepComments.length}
+                    />
+                  </div>
                 </div>
               </div>
             );

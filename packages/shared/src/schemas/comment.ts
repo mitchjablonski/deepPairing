@@ -20,6 +20,7 @@ export const CommentTargetSchema = z.object({
   evidenceIndex: z.number().int().optional(),
   stepIndex: z.number().int().optional(),
   alternativeIndex: z.number().int().optional().describe("Index into a reasoning artifact's alternativeDetails[]"),
+  optionId: z.string().optional().describe("The option id this comment targets (for decision artifacts)"),
   sectionId: z.string().optional(),
   suggestion: z.string().optional().describe("Suggested code replacement for this line"),
 });
