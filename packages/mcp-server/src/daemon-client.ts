@@ -174,8 +174,8 @@ export class DaemonClient implements IStore {
     return this.get("/metrics");
   }
 
-  async recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string): Promise<void> {
-    await this.post("/memory/rejected", { description, reason, sourceArtifactId });
+  async recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): Promise<void> {
+    await this.post("/memory/rejected", { description, reason, sourceArtifactId, concept });
   }
 
   async recordApprovedPattern(description: string): Promise<void> {

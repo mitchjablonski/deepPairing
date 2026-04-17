@@ -245,8 +245,8 @@ export function createDaemonRoutes(
 
   app.post("/api/internal/sessions/:sessionId/memory/rejected", async (c) => {
     const store = getStore(c.req.param("sessionId"));
-    const { description, reason, sourceArtifactId } = await c.req.json();
-    store.recordRejectedApproach(description, reason, sourceArtifactId);
+    const { description, reason, sourceArtifactId, concept } = await c.req.json();
+    store.recordRejectedApproach(description, reason, sourceArtifactId, concept);
     return c.json({ status: "recorded" });
   });
 

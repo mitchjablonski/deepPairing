@@ -135,6 +135,21 @@ export function createHttpRoutes(
       broadcast({ type: "comment_added", comment }, sid);
     }
 
+    // When a non-decision artifact is rejected, remember the approach so
+    // pre-flight blocks any future re-proposal. Description is the artifact
+    // title; reason is the feedback comment (required client-side).
+    if (status === "rejected") {
+      const artifacts = await store.getArtifacts();
+      const artifact = artifacts.find((a) => a.id === artifactId);
+      if (artifact && artifact.type !== "decision") {
+        await store.recordRejectedApproach(
+          artifact.title,
+          feedback?.trim() || undefined,
+          artifactId,
+        );
+      }
+    }
+
     broadcast({ type: "artifact_updated", artifactId, status }, sid);
 
     return c.json({ status: "updated", artifactId });
