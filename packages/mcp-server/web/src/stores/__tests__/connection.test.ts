@@ -1,0 +1,217 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { ConnectionAdapter } from "../../lib/connection-adapter";
+
+/**
+ * FakeAdapter — a controllable ConnectionAdapter we can push messages into
+ * from tests. Follows the fakes-not-mocks preference: implements the full
+ * real interface, just with in-memory triggers.
+ */
+class FakeAdapter implements ConnectionAdapter {
+  messageHandler: ((data: any) => void) | null = null;
+  connectHandler: (() => void) | null = null;
+  disconnectHandler: (() => void) | null = null;
+  connected = false;
+
+  connect() { this.connected = true; this.connectHandler?.(); }
+  disconnect() { this.connected = false; this.disconnectHandler?.(); }
+  onMessage(h: (data: any) => void) { this.messageHandler = h; }
+  onConnect(h: () => void) { this.connectHandler = h; }
+  onDisconnect(h: () => void) { this.disconnectHandler = h; }
+
+  /** Test helper: deliver a message to the connection store. */
+  emit(data: any) {
+    this.messageHandler?.(data);
+  }
+}
+
+let activeAdapter: FakeAdapter;
+
+vi.mock("../../lib/connection-adapter", () => ({
+  createAdapter: () => activeAdapter,
+}));
+
+// Import AFTER the mock so the store picks up the fake
+let useConnectionStore: typeof import("../connection").useConnectionStore;
+let useArtifactStore: typeof import("../artifact").useArtifactStore;
+
+beforeEach(async () => {
+  activeAdapter = new FakeAdapter();
+  // Reset module cache so each test re-imports a clean store
+  vi.resetModules();
+  const connMod = await import("../connection");
+  const artMod = await import("../artifact");
+  useConnectionStore = connMod.useConnectionStore;
+  useArtifactStore = artMod.useArtifactStore;
+  useArtifactStore.getState().reset();
+  vi.stubGlobal("Notification", undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+/** Give the dynamic import("./artifact") inside handleMessage a tick to resolve. */
+async function flush() {
+  // The store does an ESM dynamic import per message; microtasks + a macrotask
+  // cover the chain on all supported platforms.
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+describe("connection store — handleMessage dispatch", () => {
+  it("hydrates artifact store on `connected` with state", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/home/mitch/proj",
+      state: {
+        sessionId: "sess_1",
+        autonomyLevel: "balanced",
+        artifacts: [
+          { id: "a1", sessionId: "sess_1", type: "research", version: 1, parentId: null,
+            title: "A", status: "draft", content: {}, agentReasoning: null,
+            createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z" },
+        ],
+        comments: [
+          { id: "c1", sessionId: "sess_1", target: { artifactId: "a1" }, parentCommentId: null,
+            author: "human", content: "hi", acknowledged: false,
+            createdAt: "2026-04-16T10:01:00.000Z" },
+        ],
+      },
+    });
+    await flush();
+
+    const conn = useConnectionStore.getState();
+    expect(conn.sessionId).toBe("sess_1");
+    expect(conn.projectRoot).toBe("/home/mitch/proj");
+    expect(conn.autonomyLevel).toBe("balanced");
+
+    const art = useArtifactStore.getState();
+    expect(art.artifacts).toHaveLength(1);
+    expect(art.artifacts[0].id).toBe("a1");
+    expect(art.comments["a1"]).toHaveLength(1);
+  });
+
+  it("resets before hydrating so reconnect doesn't duplicate artifacts", async () => {
+    // Seed the store as if a prior connect happened
+    useArtifactStore.getState().addArtifact({
+      id: "stale", sessionId: "sess_old", type: "research", version: 1, parentId: null,
+      title: "Stale", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-04-16T09:00:00.000Z", updatedAt: "2026-04-16T09:00:00.000Z",
+    });
+
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "connected",
+      state: {
+        sessionId: "sess_fresh",
+        autonomyLevel: "supervised",
+        artifacts: [
+          { id: "fresh", sessionId: "sess_fresh", type: "research", version: 1, parentId: null,
+            title: "Fresh", status: "draft", content: {}, agentReasoning: null,
+            createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z" },
+        ],
+      },
+    });
+    await flush();
+
+    const art = useArtifactStore.getState();
+    expect(art.artifacts.map((a) => a.id)).toEqual(["fresh"]);
+  });
+
+  it("appends artifacts on `artifact_created`", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "artifact_created",
+      artifact: {
+        id: "a1", sessionId: "s1", type: "plan", version: 1, parentId: null,
+        title: "New plan", status: "draft", content: {}, agentReasoning: null,
+        createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+      },
+    });
+    await flush();
+    expect(useArtifactStore.getState().artifacts).toHaveLength(1);
+  });
+
+  it("updates status on `artifact_updated`", async () => {
+    useArtifactStore.getState().addArtifact({
+      id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null,
+      title: "A", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+    });
+
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "artifact_updated", artifactId: "a1", status: "approved" });
+    await flush();
+
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+  });
+
+  it("appends comments on `comment_added`", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "comment_added",
+      comment: {
+        id: "c1", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null,
+        author: "agent", content: "reply", acknowledged: true,
+        createdAt: "2026-04-16T10:00:00.000Z",
+      },
+    });
+    await flush();
+    expect(useArtifactStore.getState().comments["a1"]).toHaveLength(1);
+  });
+
+  it("renames artifact on `artifact_renamed`", async () => {
+    useArtifactStore.getState().addArtifact({
+      id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null,
+      title: "Old title", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+    });
+
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "artifact_renamed", artifactId: "a1", title: "New title" });
+    await flush();
+
+    expect(useArtifactStore.getState().artifacts[0].title).toBe("New title");
+  });
+
+  it("updates autonomyLevel on `preference_changed`", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "preference_changed", autonomyLevel: "autonomous" });
+    await flush();
+    expect(useConnectionStore.getState().autonomyLevel).toBe("autonomous");
+  });
+
+  it("flips artifact status to approved on `decision_resolved`", async () => {
+    useArtifactStore.getState().addArtifact({
+      id: "a1", sessionId: "s1", type: "decision", version: 1, parentId: null,
+      title: "Which pattern?", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+    });
+
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "decision_resolved", artifactId: "a1", optionId: "opt_x" });
+    await flush();
+
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+  });
+});
+
+describe("connection store — lifecycle", () => {
+  it("connect marks connected; disconnect clears", () => {
+    const s = useConnectionStore.getState();
+    s.connect();
+    expect(useConnectionStore.getState().connected).toBe(true);
+    s.disconnect();
+    expect(useConnectionStore.getState().connected).toBe(false);
+  });
+
+  it("connect is idempotent — a second call does not create a second adapter", () => {
+    const connectSpy = vi.spyOn(activeAdapter, "connect");
+    useConnectionStore.getState().connect();
+    useConnectionStore.getState().connect();
+    // The adapter's connect() was called exactly once (the second store.connect
+    // detects an existing adapter and returns early).
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+  });
+});
