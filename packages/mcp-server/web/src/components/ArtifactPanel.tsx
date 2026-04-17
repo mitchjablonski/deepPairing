@@ -1,12 +1,15 @@
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { type Artifact, type ReasoningContent, type DecisionContent, getTypedContent } from "@deeppairing/shared";
+import { type Artifact, type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore } from "../stores/preferences";
+import { useReplayStore } from "../stores/replay";
+import { useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
 import { PlanArtifact } from "./artifacts/PlanArtifact";
 import { DecisionCard } from "./DecisionCard";
 import { CodeChangeArtifact } from "./artifacts/CodeChangeArtifact";
+import { ReasoningCard } from "./artifacts/ReasoningCard";
 import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { CausalChain } from "./CausalChain";
@@ -18,6 +21,7 @@ const statusDots: Record<string, string> = {
   revised: "bg-accent-amber",
   rejected: "bg-accent-red",
   superseded: "bg-text-muted opacity-40",
+  retracted: "bg-text-muted opacity-60",
 };
 
 const statusColors: Record<string, string> = {
@@ -27,6 +31,32 @@ const statusColors: Record<string, string> = {
   revised: "bg-accent-amber-dim text-accent-amber",
   rejected: "bg-accent-red-dim text-accent-red",
   superseded: "bg-surface-elevated text-text-muted",
+  retracted: "bg-surface-elevated text-text-muted",
+};
+
+/**
+ * Non-color status glyph. Paired with `statusDots` colors, this gives every
+ * artifact TWO differentiators — shape + color — so status is legible
+ * colorblind-friendly and without ambient highlighting.
+ */
+const statusGlyph: Record<string, string> = {
+  draft: "●",      // solid dot — unreviewed
+  reviewing: "⧗",  // hourglass — in-flight
+  approved: "✓",   // check — done
+  revised: "↻",    // cycle — back to the agent
+  rejected: "✗",   // cross — dead
+  superseded: "⇈", // double up — replaced by newer version
+  retracted: "↩",  // return arrow — agent backed out
+};
+
+const statusLabels: Record<string, string> = {
+  draft: "Draft, awaiting review",
+  reviewing: "Under review",
+  approved: "Approved",
+  revised: "Revision requested",
+  rejected: "Rejected",
+  superseded: "Superseded by newer version",
+  retracted: "Retracted by agent",
 };
 
 const typeLabels: Record<string, string> = {
@@ -153,50 +183,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {/* Type-specific renderer */}
       {artifact.type === "research" && <ResearchArtifact artifact={artifact} />}
       {artifact.type === "plan" && <PlanArtifact artifact={artifact} />}
-      {artifact.type === "reasoning" && (() => {
-        const rc = getTypedContent<ReasoningContent>(artifact);
-        return (
-          <div className="space-y-3">
-            <div className="text-sm text-text-primary">
-              <strong>Action:</strong> {rc.action}
-            </div>
-            {rc.confidence && (
-              <span className={`inline-block px-1.5 py-0.5 text-2xs font-medium rounded ${
-                rc.confidence === "high"
-                  ? "bg-accent-green-dim text-accent-green"
-                  : rc.confidence === "low"
-                    ? "bg-accent-amber-dim text-accent-amber"
-                    : "bg-surface-elevated text-text-secondary"
-              }`}>
-                {rc.confidence} confidence
-              </span>
-            )}
-            <div className="text-sm text-text-secondary">
-              <strong>Why:</strong> {rc.reasoning}
-            </div>
-            {rc.alternativeDetails && rc.alternativeDetails.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide">Alternatives Considered</div>
-                {rc.alternativeDetails.map((alt, i) => (
-                  <div key={i} className="flex items-start gap-2 px-3 py-2 bg-surface-elevated border border-white/[0.06] rounded-lg">
-                    <span className="text-accent-red text-xs mt-0.5 shrink-0">✗</span>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium text-text-secondary line-through opacity-70">{alt.title}</div>
-                      <div className="text-2xs text-text-muted mt-0.5">{alt.reason}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {!rc.alternativeDetails?.length && rc.alternativesConsidered && rc.alternativesConsidered.length > 0 && (
-              <div className="text-xs text-text-muted">
-                <strong>Alternatives:</strong>{" "}
-                {rc.alternativesConsidered.join(", ")}
-              </div>
-            )}
-          </div>
-        );
-      })()}
+      {artifact.type === "reasoning" && <ReasoningCard artifact={artifact} />}
       {artifact.type === "code_change" && (
         <CodeChangeArtifact artifact={artifact} />
       )}
@@ -384,20 +371,35 @@ function ArtifactSidebar({
                 title={a.title}
               >
                 {collapsed ? (
-                  <div className="relative">
+                  <div className="relative" title={`${typeLabels[a.type] ?? a.type} — ${statusLabels[a.status] ?? a.status}`}>
                     <ArtifactIcon type={a.type} className={`w-4 h-4 ${isSelected ? "text-accent-blue" : "text-text-muted"}`} />
                     {isUnread && (
                       <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-accent-blue" />
                     )}
-                    <span className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${statusDots[a.status]}`} />
+                    <span
+                      aria-label={statusLabels[a.status]}
+                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${statusDots[a.status]} text-white`}
+                    >
+                      {statusGlyph[a.status] ?? "•"}
+                    </span>
                   </div>
                 ) : (
                   <>
-                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDots[a.status]}`} />
+                    <ArtifactIcon
+                      type={a.type}
+                      className={`w-3.5 h-3.5 shrink-0 ${isSelected ? "text-accent-blue" : "text-text-muted"}`}
+                    />
                     <span className={`text-2xs truncate flex-1 ${
                       isSelected ? "text-text-primary font-medium" : "text-text-secondary"
-                    }`}>
+                    } ${a.status === "retracted" ? "line-through opacity-60" : ""}`}>
                       {a.title}
+                    </span>
+                    <span
+                      aria-label={statusLabels[a.status]}
+                      title={statusLabels[a.status]}
+                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${statusDots[a.status]} text-white`}
+                    >
+                      {statusGlyph[a.status] ?? "•"}
                     </span>
                     {isUnread && (
                       <span className="w-1.5 h-1.5 rounded-full bg-accent-blue shrink-0" />
@@ -466,7 +468,14 @@ function MultiAgentSync() {
 export function ArtifactPanel() {
   const { artifacts, selectedArtifactId, selectArtifact, unreadIds } = useArtifactStore();
   const { sidebarCollapsed, toggleSidebar } = usePreferencesStore();
+  const isNarrow = useIsNarrowViewport();
+  const effectiveCollapsed = sidebarCollapsed || isNarrow;
   const [sessionFilter, setSessionFilter] = useState<string | "all">("all");
+
+  // Replay mode: hide artifacts created after the cursor. createdAt is ISO
+  // so string comparison matches chronological order.
+  const replayActive = useReplayStore((s) => s.active);
+  const replayCursor = useReplayStore((s) => s.cursor);
 
   // Unique session IDs present in the store
   const sessionIds = useMemo(
@@ -475,11 +484,17 @@ export function ArtifactPanel() {
   );
 
   const visibleArtifacts = useMemo(
-    () => artifacts.filter((a) =>
-      a.status !== "superseded" &&
-      (sessionFilter === "all" || a.sessionId === sessionFilter)
-    ),
-    [artifacts, sessionFilter],
+    () => artifacts.filter((a) => {
+      if (a.status !== "superseded" &&
+          (sessionFilter === "all" || a.sessionId === sessionFilter)) {
+        // When replaying, drop artifacts that haven't been "created" yet at
+        // the cursor so the side bar reflects the state as of that moment.
+        if (replayActive && replayCursor && a.createdAt > replayCursor) return false;
+        return true;
+      }
+      return false;
+    }),
+    [artifacts, sessionFilter, replayActive, replayCursor],
   );
 
   // Group by type
@@ -561,7 +576,7 @@ export function ArtifactPanel() {
         artifacts={visibleArtifacts}
         selectedArtifactId={selectedArtifactId}
         unreadIds={unreadIds}
-        collapsed={sidebarCollapsed}
+        collapsed={effectiveCollapsed}
         onToggle={toggleSidebar}
       />
 

@@ -15,8 +15,11 @@ import path from "node:path";
 
 // --- Test helpers ---
 
+import type { SessionMeta } from "../daemon-routes.js";
+
 let tmpDir: string;
 let sessions: Map<string, FileStore>;
+let sessionMeta: Map<string, SessionMeta>;
 let broadcasts: Array<{ sessionId: string; event: any }>;
 let app: ReturnType<typeof createDaemonRoutes>;
 
@@ -29,9 +32,11 @@ function createTestSession(sessionId: string): FileStore {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-daemon-test-"));
   sessions = new Map();
+  sessionMeta = new Map();
   broadcasts = [];
   app = createDaemonRoutes(
     sessions,
+    sessionMeta,
     createTestSession,
     (sessionId, event) => broadcasts.push({ sessionId, event }),
   );
@@ -213,7 +218,7 @@ describe("Daemon Routes", () => {
     const res = await app.request(`/api/internal/sessions/${SESSION}/memory`);
     const memory = await res.json();
     expect(memory.approvedPatterns).toContain("Service pattern");
-    expect(memory.rejectedApproaches).toContain("Inline refactor");
+    expect(memory.rejectedApproaches.map((r: any) => r.description)).toContain("Inline refactor");
   });
 
   it("lists active sessions", async () => {
@@ -286,8 +291,10 @@ describe("DaemonClient", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-client-test-"));
     sessions = new Map();
     broadcasts = [];
+    sessionMeta = new Map();
     const routes = createDaemonRoutes(
       sessions,
+      sessionMeta,
       (id) => { const s = new FileStore(tmpDir, id); sessions.set(id, s); return s; },
       (sid, event) => broadcasts.push({ sessionId: sid, event }),
     );
@@ -385,7 +392,7 @@ describe("DaemonClient", () => {
 
     const memory = await client.getSessionMemory();
     expect(memory.approvedPatterns).toContain("Service layer");
-    expect(memory.rejectedApproaches).toContain("God object");
+    expect(memory.rejectedApproaches.map((r) => r.description)).toContain("God object");
   });
 
   it("returns full state", async () => {

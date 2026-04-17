@@ -37,6 +37,8 @@ export interface AddCommentParams {
   content: string;
   author: "human" | "agent";
   target?: Record<string, unknown>;
+  intent?: "comment" | "question" | "suggestion";
+  parentCommentId?: string | null;
 }
 
 export interface RecordDecisionParams {
@@ -44,6 +46,13 @@ export interface RecordDecisionParams {
   artifactId: string;
   context: string;
   options: any[];
+}
+
+export interface RejectedApproach {
+  description: string;
+  reason?: string;
+  rejectedAt?: string;
+  sourceArtifactId?: string;
 }
 
 /**
@@ -61,7 +70,7 @@ export interface IStore {
     decisions: DecisionRecord[];
     planReviews: PlanReviewRecord[];
     autonomyLevel: string;
-    sessionMemory: { rejectedApproaches: string[]; approvedPatterns: string[] };
+    sessionMemory: { rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] };
     engagementMetrics: {
       avgReviewLatencyMs: number;
       commentDensity: number;
@@ -82,6 +91,9 @@ export interface IStore {
   getCommentsForArtifact(artifactId: string): MaybePromise<Comment[]>;
   getUnacknowledgedComments(): MaybePromise<Comment[]>;
   acknowledgeComments(ids: string[]): MaybePromise<void>;
+  /** Mark a question comment as answered by linking to the answer comment. */
+  markCommentAnswered(commentId: string, answerCommentId: string): MaybePromise<void>;
+  getComment(commentId: string): MaybePromise<Comment | undefined>;
 
   // Decisions
   recordDecisionRequest(params: RecordDecisionParams): MaybePromise<void>;
@@ -106,9 +118,9 @@ export interface IStore {
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
   }>;
-  recordRejectedApproach(description: string): MaybePromise<void>;
+  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string): MaybePromise<void>;
   recordApprovedPattern(description: string): MaybePromise<void>;
-  getSessionMemory(): MaybePromise<{ rejectedApproaches: string[]; approvedPatterns: string[] }>;
+  getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;

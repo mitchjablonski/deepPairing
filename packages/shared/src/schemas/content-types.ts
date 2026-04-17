@@ -53,3 +53,53 @@ export const PlanContentSchema = z.object({
 });
 
 export type PlanContent = z.infer<typeof PlanContentSchema>;
+
+// --- Reasoning (the "show your work" artifact) ---
+
+/** A named concept the agent is applying — the pairing-learning hook. */
+export const ReasoningConceptSchema = z.object({
+  name: z.string().describe("The concept name (e.g. 'dependency inversion', 'optimistic UI', 'debounce vs throttle')"),
+  oneLineExplanation: z
+    .string()
+    .optional()
+    .describe("One-sentence plain-English explanation for a developer who may not know the concept"),
+});
+
+export type ReasoningConcept = z.infer<typeof ReasoningConceptSchema>;
+
+/** How this reasoning step connects to another artifact. */
+export const ReasoningRelationSchema = z.object({
+  artifactId: z.string(),
+  kind: z.enum(["elaborates", "answers", "supersedes"]),
+});
+
+export type ReasoningRelation = z.infer<typeof ReasoningRelationSchema>;
+
+export const ReasoningContentSchema = z.object({
+  action: z.string().describe("What you're about to do, in plain English"),
+  reasoning: z.string().describe("Why this approach"),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+  /** Legacy: flat strings. New agents prefer alternativeDetails. */
+  alternativesConsidered: z.array(z.string()).optional(),
+  /** Rejected alternatives with structured reasons. */
+  alternativeDetails: z
+    .array(
+      z.object({
+        title: z.string(),
+        reason: z.string(),
+      }),
+    )
+    .optional(),
+  /**
+   * The named concept the agent is applying. THIS IS THE PAIRING LEVER —
+   * when the agent surfaces the concept by name (instead of just applying
+   * it silently), the human learns the pattern, not just the fix.
+   */
+  concept: ReasoningConceptSchema.optional(),
+  /** Files / lines that motivated this reasoning step. */
+  evidence: z.array(EvidenceInputSchema).optional(),
+  /** Back-link to another artifact this reasoning elaborates / answers. */
+  relatesTo: ReasoningRelationSchema.optional(),
+});
+
+export type ReasoningContent = z.infer<typeof ReasoningContentSchema>;

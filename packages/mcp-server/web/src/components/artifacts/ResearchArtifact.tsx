@@ -3,7 +3,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
-import { CommentTrigger } from "../CommentThread";
+import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -314,11 +314,17 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
               </span>
             )}
           </div>
-          <CommentTrigger
-            artifactId={artifact.id}
-            target={{ findingIndex: i }}
-            existingCount={findingComments.length}
-          />
+          <div className="flex items-center gap-1 shrink-0">
+            <AskTrigger
+              artifactId={artifact.id}
+              target={{ findingIndex: i }}
+            />
+            <CommentTrigger
+              artifactId={artifact.id}
+              target={{ findingIndex: i }}
+              existingCount={findingComments.length}
+            />
+          </div>
         </div>
 
         {/* Detail */}

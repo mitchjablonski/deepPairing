@@ -28,7 +28,10 @@ presenting research, decisions, and plans as plain text.**
 **Always use present_options** when there are 2+ valid approaches.
 **Always use present_plan** before multi-file changes.
 **Always use present_code_change** for code review with before/after context.
-**Always use log_reasoning** before every Edit or Write.
+**Always use log_reasoning** before every Edit or Write. **Name the underlying
+concept** via the concept field (name + one-line explanation) — this is how
+the human learns the pattern, not just the fix. Name it even when it feels
+obvious.
 
 ## Polling for Feedback
 
@@ -46,11 +49,29 @@ to ask the user in the terminal. The human responds in the companion UI browser.
 6. EXECUTE: Call log_reasoning before each change
 
 The companion UI URL is shown in your first tool call response.
+
+## Rejected Approaches & Retraction
+
+Your first tool call of every session returns a list of approaches the human
+previously rejected. Do NOT propose those — present_findings / present_options
+/ present_plan / present_code_change will refuse the call with a
+REJECTED_APPROACH_BLOCKED error if you try.
+
+If you realize mid-flight that you shouldn't have presented an artifact
+(e.g. you noticed an error after the fact), call retract_artifact with the
+artifact id and a short reason. Do NOT bail out to the terminal. Keep polling
+check_feedback for the human's response.
 `;
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
 function green(text: string): string {
   return `\x1b[32m${text}\x1b[0m`;
+}
+function red(text: string): string {
+  return `\x1b[31m${text}\x1b[0m`;
+}
+function yellow(text: string): string {
+  return `\x1b[33m${text}\x1b[0m`;
 }
 function dim(text: string): string {
   return `\x1b[2m${text}\x1b[0m`;
@@ -169,6 +190,45 @@ function main() {
     console.log(`  ${green("✓")} Created .deeppairing/ directory`);
   }
 
+  // 5. Set up Claude Code hooks for deepPairing workflow
+  const claudeDir = path.join(cwd, ".claude");
+  const hooksFile = path.join(claudeDir, "settings.local.json");
+
+  let hooksNeedSetup = true;
+  if (fs.existsSync(hooksFile)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
+      if (settings.hooks?.Stop) {
+        hooksNeedSetup = false;
+        console.log(`  ${dim("✓")} Claude Code hooks already configured`);
+      }
+    } catch {}
+  }
+
+  if (hooksNeedSetup) {
+    fs.mkdirSync(claudeDir, { recursive: true });
+
+    // Read existing settings or create new
+    let settings: any = {};
+    if (fs.existsSync(hooksFile)) {
+      try { settings = JSON.parse(fs.readFileSync(hooksFile, "utf-8")); } catch {}
+    }
+
+    // Add Stop hook — checks for pending deepPairing artifacts and forces continue
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.Stop = settings.hooks.Stop ?? [];
+
+    // Check if we already have a deepPairing stop hook
+    const hasDpHook = settings.hooks.Stop.some((h: any) => h.command?.includes("deeppairing"));
+    if (!hasDpHook) {
+      settings.hooks.Stop.push({
+        command: `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>x.status==='draft'&&['research','plan','decision','code_change'].includes(x.type))){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`,
+      });
+      fs.writeFileSync(hooksFile, JSON.stringify(settings, null, 2));
+      console.log(`  ${green("✓")} Added Claude Code Stop hook (prevents stopping with pending reviews)`);
+    }
+  }
+
   // Done
   console.log(`
   ${bold("Setup complete!")}
@@ -177,6 +237,7 @@ function main() {
   - .mcp.json configured (Claude Code will start the deepPairing server)
   - CLAUDE.md updated (Claude will follow the collaboration protocol)
   - .deeppairing/ created (session data stored here)
+  - Claude Code hooks set up (prevents stopping with pending reviews)
 
   ${dim("Next steps:")}
   1. Restart Claude Code to activate deepPairing
@@ -186,6 +247,103 @@ function main() {
   ${dim("Claude will present findings, decisions, and plans. You review")}
   ${dim("and steer in the companion UI. Try: \"Analyze the auth module.\"")}
 `);
+}
+
+/**
+ * `deeppairing doctor` — one-shot diagnostic. Prints daemon PID/port, the
+ * daemon.json state, /api/state response, and a log tail so the user doesn't
+ * have to manually run lsof/cat/ls to debug a stuck MCP.
+ */
+async function doctor() {
+  console.log(bold("\n  deepPairing doctor\n"));
+
+  const dpDir = path.join(cwd, ".deeppairing");
+  const infoFile = path.join(dpDir, "daemon.json");
+  const logFile = path.join(dpDir, "daemon.log");
+
+  // 1. daemon.json
+  let info: { pid?: number; port?: number; startedAt?: string } | null = null;
+  if (fs.existsSync(infoFile)) {
+    try {
+      info = JSON.parse(fs.readFileSync(infoFile, "utf-8"));
+      console.log(`  ${green("✓")} .deeppairing/daemon.json present`);
+      console.log(`    ${dim("pid:")}       ${info?.pid ?? "?"}`);
+      console.log(`    ${dim("port:")}      ${info?.port ?? "?"}`);
+      console.log(`    ${dim("startedAt:")} ${info?.startedAt ?? "?"}`);
+    } catch (err) {
+      console.log(`  ${red("✗")} .deeppairing/daemon.json is malformed: ${err}`);
+    }
+  } else {
+    console.log(`  ${yellow("!")} .deeppairing/daemon.json missing`);
+  }
+
+  // 2. PID liveness
+  if (info?.pid) {
+    let alive = false;
+    try { process.kill(info.pid, 0); alive = true; } catch {}
+    console.log(`  ${alive ? green("✓") : red("✗")} PID ${info.pid} is ${alive ? "alive" : "not running"}`);
+  }
+
+  // 3. Probe /api/state on the reported port (or default)
+  const port = info?.port ?? 3847;
+  let probeOk = false;
+  let probeStatus: number | string = "no-response";
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(`http://localhost:${port}/api/state`, { signal: controller.signal });
+    clearTimeout(timer);
+    probeStatus = res.status;
+    probeOk = res.ok;
+  } catch (err: any) {
+    probeStatus = err?.message ?? String(err);
+  }
+  console.log(`  ${probeOk ? green("✓") : red("✗")} GET http://localhost:${port}/api/state → ${probeStatus}`);
+
+  // 4. Active sessions
+  if (probeOk) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`http://localhost:${port}/api/active-sessions`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data: any = await res.json();
+        const list: any[] = data.sessions ?? [];
+        console.log(`  ${green("✓")} Active sessions: ${list.length}`);
+        for (const s of list) {
+          console.log(`    ${dim("-")} ${s.sessionId} ${dim(`(${s.artifactCount} artifacts, ${s.title})`)}`);
+        }
+      }
+    } catch {}
+  }
+
+  // 5. Log tail
+  if (fs.existsSync(logFile)) {
+    try {
+      const content = fs.readFileSync(logFile, "utf-8");
+      const lines = content.trim().split("\n").slice(-10);
+      console.log(`\n  ${bold("Log tail")} ${dim("(last 10 lines of .deeppairing/daemon.log):")}`);
+      for (const line of lines) console.log(`  ${dim(line)}`);
+    } catch (err) {
+      console.log(`  ${red("✗")} Could not read daemon.log: ${err}`);
+    }
+  } else {
+    console.log(`  ${yellow("!")} No daemon.log found`);
+  }
+
+  // 6. Overall verdict
+  console.log();
+  if (probeOk) {
+    console.log(`  ${green(bold("Daemon healthy"))} on port ${port}`);
+  } else if (info?.pid) {
+    console.log(`  ${red(bold("Daemon unhealthy"))} — daemon.json points at PID ${info.pid} but port ${port} is not responding`);
+    console.log(`  ${dim("Try: kill ") + info.pid + dim(" && rm .deeppairing/daemon.json")}`);
+  } else {
+    console.log(`  ${yellow(bold("No daemon detected"))} on port ${port}`);
+    console.log(`  ${dim("Start one by opening a Claude Code session with deepPairing configured, or run the daemon directly.")}`);
+  }
+  console.log();
 }
 
 // --- CLI entry point with argument parsing ---
@@ -203,6 +361,7 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   ${bold("Usage:")}
     npx deeppairing              Set up deepPairing in current project
     npx deeppairing init         Set up deepPairing in current project
+    npx deeppairing doctor       Diagnose a running / misbehaving daemon
     npx deeppairing --help       Show this help message
     npx deeppairing --version    Show version
 `);
@@ -211,6 +370,11 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   console.log("0.1.0");
 } else if (cmd === "init") {
   main();
+} else if (cmd === "doctor") {
+  doctor().catch((err) => {
+    console.error(`  ${red("✗")} doctor failed: ${err}`);
+    process.exit(1);
+  });
 } else {
   console.log(`  Unknown command: ${cmd}\n  Run ${dim("npx deeppairing --help")} for usage.`);
   process.exit(1);

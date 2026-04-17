@@ -1,9 +1,12 @@
 const shortcuts = [
+  { keys: "⌘K", description: "Command palette" },
+  { keys: "⌘,", description: "Settings sheet" },
   { keys: "j / k", description: "Navigate artifacts" },
-  { keys: "a", description: "Approve current artifact" },
-  { keys: "r", description: "Request revision" },
-  { keys: "c", description: "Focus comment input" },
-  { keys: "Escape", description: "Close / deselect" },
+  { keys: "a", description: "Arm approve (3s confirm countdown)" },
+  { keys: "r", description: "Focus revision textarea" },
+  { keys: "q", description: "Ask the agent about this artifact" },
+  { keys: "⌘⏎", description: "Submit approve (from textarea)" },
+  { keys: "Escape", description: "Cancel countdown / close overlay" },
   { keys: "?", description: "Toggle this help" },
 ];
 

@@ -1,18 +1,84 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
-
-const API_BASE = `http://${window.location.host}`;
+import { API_BASE, sessionHeaders } from "../lib/api";
 
 /**
- * Free-form message input at the bottom of the companion UI.
- * Sends steering messages to the agent via the comment system.
- * Messages are stored with artifactId: "__session__" and delivered
- * to the agent as "Human directive: {content}" in check_feedback.
+ * Free-form message composer at the bottom of the companion UI.
+ * Sends steering messages to the agent via the comment system, stored with
+ * artifactId: "__session__" and delivered as "Human directive" in
+ * check_feedback.
+ *
+ * Features:
+ * - Multiline textarea (Cmd/Ctrl+Enter sends; Enter inserts newline)
+ * - @artifact mentions with fuzzy autocomplete — inline text reference
+ * - Last 3 session messages surfaced as thread history above the input
  */
 export function MessageInput() {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const sessionComments = useArtifactStore((s) => s.comments["__session__"] ?? []);
+
+  // Thread history — last 3 session messages, newest at the bottom to read
+  // naturally from older to newer as the eye travels down toward the input.
+  const history = useMemo(() => {
+    const list = [...sessionComments].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return list.slice(-3);
+  }, [sessionComments]);
+
+  // @mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionSelectedIdx, setMentionSelectedIdx] = useState(0);
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery == null) return [] as { id: string; title: string; type: string }[];
+    const q = mentionQuery.toLowerCase();
+    return artifacts
+      .filter((a) => a.status !== "superseded" && a.status !== "retracted")
+      .filter((a) => q === "" || a.title.toLowerCase().includes(q))
+      .slice(0, 5)
+      .map((a) => ({ id: a.id, title: a.title, type: a.type }));
+  }, [mentionQuery, artifacts]);
+
+  // Track the textarea content to detect when the caret is inside an @-token.
+  const updateMentionState = (text: string, caret: number) => {
+    const upToCaret = text.slice(0, caret);
+    const lastAt = upToCaret.lastIndexOf("@");
+    if (lastAt < 0) { setMentionQuery(null); return; }
+    // Must be at start-of-text or preceded by whitespace so we don't match emails.
+    const prev = lastAt === 0 ? " " : upToCaret[lastAt - 1];
+    if (prev && !/\s/.test(prev)) { setMentionQuery(null); return; }
+    const token = upToCaret.slice(lastAt + 1);
+    // Cancel if the token has whitespace (token ended).
+    if (/\s/.test(token)) { setMentionQuery(null); return; }
+    setMentionQuery(token);
+    setMentionSelectedIdx(0);
+  };
+
+  useEffect(() => { updateMentionState(message, textareaRef.current?.selectionStart ?? message.length); }, [message]);
+
+  const applyMention = (title: string) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const caret = ta.selectionStart ?? message.length;
+    const upToCaret = message.slice(0, caret);
+    const lastAt = upToCaret.lastIndexOf("@");
+    if (lastAt < 0) return;
+    const before = message.slice(0, lastAt);
+    const after = message.slice(caret);
+    const insert = `@${title} `;
+    const next = before + insert + after;
+    setMessage(next);
+    setMentionQuery(null);
+    // Move caret after the inserted reference.
+    requestAnimationFrame(() => {
+      const pos = (before + insert).length;
+      ta.setSelectionRange(pos, pos);
+      ta.focus();
+    });
+  };
 
   const handleSend = async () => {
     if (!message.trim() || sending) return;
@@ -21,7 +87,7 @@ export function MessageInput() {
     try {
       await fetch(`${API_BASE}/api/comments`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({
           artifactId: "__session__",
           content: message.trim(),
@@ -40,36 +106,117 @@ export function MessageInput() {
 
   return (
     <div className="px-3 py-2 border-t border-border-default bg-surface-secondary">
-      <div className="flex gap-1.5">
-        <input
-          type="text"
-          placeholder="Message the agent... (e.g., 'skip auth, focus on database')"
+      {/* Thread history — last 3 session messages */}
+      {history.length > 0 && (
+        <div className="space-y-1 mb-2 max-h-[140px] overflow-y-auto">
+          {history.map((c) => {
+            const isAgent = c.author === "agent";
+            return (
+              <div
+                key={c.id}
+                className={`text-2xs px-2 py-1 rounded border ${
+                  isAgent
+                    ? "bg-accent-blue-dim/15 border-accent-blue/20 text-accent-blue"
+                    : "bg-surface-primary border-border-default text-text-secondary"
+                }`}
+              >
+                <span className="opacity-60 mr-1.5 font-medium">{isAgent ? "agent" : "you"}:</span>
+                <span className="whitespace-pre-wrap break-words">{c.content}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="relative">
+        <textarea
+          ref={textareaRef}
+          rows={2}
+          placeholder="Message the agent... (Cmd+Enter to send, @ to reference artifacts)"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (mentionQuery != null && mentionSuggestions.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setMentionSelectedIdx((i) => Math.min(i + 1, mentionSuggestions.length - 1));
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setMentionSelectedIdx((i) => Math.max(i - 1, 0));
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                applyMention(mentionSuggestions[mentionSelectedIdx].title);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setMentionQuery(null);
+                return;
+              }
+            }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               handleSend();
             }
           }}
+          onKeyUp={(e) => {
+            const ta = e.currentTarget;
+            updateMentionState(ta.value, ta.selectionStart ?? ta.value.length);
+          }}
+          onClick={(e) => {
+            const ta = e.currentTarget;
+            updateMentionState(ta.value, ta.selectionStart ?? ta.value.length);
+          }}
           disabled={sending}
-          className="flex-1 px-2.5 py-1.5 bg-surface-primary border border-border-default rounded text-xs text-text-primary
+          className="w-full px-2.5 py-1.5 bg-surface-primary border border-border-default rounded text-xs text-text-primary resize-none
                      placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue
                      disabled:opacity-50"
         />
+
+        {/* @mention autocomplete */}
+        {mentionQuery != null && mentionSuggestions.length > 0 && (
+          <div className="absolute left-0 bottom-full mb-1 w-full max-w-sm bg-surface-elevated border border-border-default rounded shadow-lg overflow-hidden z-10">
+            <div className="px-2 py-1 text-2xs text-text-muted border-b border-border-default">
+              Reference artifact
+            </div>
+            {mentionSuggestions.map((s, i) => (
+              <button
+                key={s.id}
+                onMouseEnter={() => setMentionSelectedIdx(i)}
+                onClick={() => applyMention(s.title)}
+                className={`w-full flex items-center gap-2 px-2 py-1 text-left transition-colors ${
+                  i === mentionSelectedIdx
+                    ? "bg-accent-blue-dim/40 text-accent-blue"
+                    : "text-text-secondary hover:bg-surface-hover"
+                }`}
+              >
+                <span className="text-2xs opacity-60 font-mono">{s.type}</span>
+                <span className="text-xs truncate flex-1">{s.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between mt-1">
+        <p className="text-2xs text-text-muted">
+          Reaches the agent on its next <code className="font-mono">check_feedback</code> call
+        </p>
         <button
           onClick={handleSend}
           disabled={!message.trim() || sending}
-          className="px-3 py-1.5 bg-accent-blue text-white text-xs rounded
+          className="px-3 py-1 bg-accent-blue text-white text-2xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
         >
           {sent ? "Sent ✓" : "Send"}
+          <kbd className="ml-1.5 font-mono opacity-70 text-[9px]">⌘⏎</kbd>
         </button>
       </div>
-      <p className="text-2xs text-text-muted mt-1">
-        Steering messages reach the agent on its next check_feedback call
-      </p>
     </div>
   );
 }

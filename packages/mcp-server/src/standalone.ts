@@ -13,6 +13,7 @@
 import { createMcpServer } from "./mcp/server.js";
 import { ensureDaemon } from "./daemon-lifecycle.js";
 import { DaemonClient } from "./daemon-client.js";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -36,11 +37,14 @@ async function main() {
   const port = await ensureDaemon(projectRoot);
   log(`Daemon ready on port ${port}`);
 
-  // Create a session ID and register with the daemon
-  const sessionId = `session_${Date.now()}`;
+  // Create a session ID and register with the daemon.
+  // Include a random suffix so two wrappers spawned in the same millisecond
+  // don't collide into one FileStore.
+  const sessionId = `session_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+  const projectName = path.basename(projectRoot);
   const client = new DaemonClient(port, sessionId);
-  await client.register();
-  log(`Session registered: ${sessionId}`);
+  await client.register({ title: projectName, project: projectName });
+  log(`Session registered: ${sessionId} (${projectName})`);
 
   // Notify user
   process.stderr.write(`\n  deepPairing is running.\n  Companion UI: http://localhost:${port}\n  Session: ${sessionId}\n\n`);

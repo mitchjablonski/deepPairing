@@ -9,8 +9,15 @@ import type { Artifact, Comment } from "@deeppairing/shared";
 type SessionMap = Map<string, FileStore>;
 type BroadcastFn = (sessionId: string, event: any) => void;
 
+export interface SessionMeta {
+  title: string;
+  project: string;
+  registeredAt: string;
+}
+
 export function createDaemonRoutes(
   sessions: SessionMap,
+  sessionMeta: Map<string, SessionMeta>,
   createSession: (sessionId: string) => FileStore,
   broadcast: BroadcastFn,
 ) {
@@ -30,8 +37,25 @@ export function createDaemonRoutes(
 
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
+    const body = await c.req.json().catch(() => ({}));
     const store = getStore(sessionId);
+    // Store session metadata (title, project)
+    sessionMeta.set(sessionId, {
+      title: body.title ?? sessionId,
+      project: body.project ?? "",
+      registeredAt: new Date().toISOString(),
+    });
     return c.json({ status: "registered", sessionId, state: store.getFullState() });
+  });
+
+  // Rename a session
+  app.post("/api/internal/sessions/:sessionId/rename", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const { title } = await c.req.json();
+    const meta = sessionMeta.get(sessionId);
+    if (meta) meta.title = title;
+    broadcast(sessionId, { type: "session_renamed", sessionId, title });
+    return c.json({ status: "renamed" });
   });
 
   app.post("/api/internal/sessions/:sessionId/unregister", async (c) => {
@@ -79,6 +103,7 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const store = getStore(c.req.param("sessionId"));
     const params = await c.req.json();
+    // params already has intent/parentCommentId when the MCP wrapper sends them
     const comment = store.addComment(params);
     broadcast(c.req.param("sessionId"), { type: "comment_added", comment });
     return c.json({ comment });
@@ -99,6 +124,19 @@ export function createDaemonRoutes(
   app.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
     const store = getStore(c.req.param("sessionId"));
     return c.json({ comments: store.getCommentsForArtifact(c.req.param("artifactId")) });
+  });
+
+  app.get("/api/internal/sessions/:sessionId/comments/:commentId", (c) => {
+    const store = getStore(c.req.param("sessionId"));
+    const comment = store.getComment(c.req.param("commentId"));
+    return c.json({ comment: comment ?? null });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/answered", async (c) => {
+    const store = getStore(c.req.param("sessionId"));
+    const { answerCommentId } = await c.req.json();
+    store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
+    return c.json({ status: "marked" });
   });
 
   // --- Decisions ---
@@ -207,8 +245,8 @@ export function createDaemonRoutes(
 
   app.post("/api/internal/sessions/:sessionId/memory/rejected", async (c) => {
     const store = getStore(c.req.param("sessionId"));
-    const { description } = await c.req.json();
-    store.recordRejectedApproach(description);
+    const { description, reason, sourceArtifactId } = await c.req.json();
+    store.recordRejectedApproach(description, reason, sourceArtifactId);
     return c.json({ status: "recorded" });
   });
 
@@ -236,10 +274,16 @@ export function createDaemonRoutes(
   // --- Active sessions list ---
 
   app.get("/api/internal/sessions", (c) => {
-    const list = Array.from(sessions.entries()).map(([id, store]) => ({
-      sessionId: id,
-      artifactCount: store.getArtifacts().length,
-    }));
+    const list = Array.from(sessions.entries()).map(([id, store]) => {
+      const meta = sessionMeta.get(id);
+      return {
+        sessionId: id,
+        title: meta?.title ?? id,
+        project: meta?.project ?? "",
+        artifactCount: store.getArtifacts().length,
+        registeredAt: meta?.registeredAt,
+      };
+    });
     return c.json({ sessions: list });
   });
 

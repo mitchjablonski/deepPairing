@@ -1,36 +1,50 @@
 import { useEffect, useState } from "react";
 import { ArtifactPanel } from "./components/ArtifactPanel";
-import { ExportMenu } from "./components/ExportMenu";
 import { SessionBrowser } from "./components/SessionBrowser";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { ReviewGate } from "./components/ReviewGate";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
-import { EditorPicker } from "./components/OpenInEditor";
 import { AutonomySlider } from "./components/AutonomySlider";
 import { SessionMetrics } from "./components/SessionMetrics";
 import { CommandPalette } from "./components/CommandPalette";
+import { SettingsSheet } from "./components/SettingsSheet";
+import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
-import { usePreferencesStore } from "./stores/preferences";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
-  const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth } = usePreferencesStore();
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
-  // Connect to MCP server WebSocket on mount
+  // Fetch active sessions on mount, auto-connect to the first one
   useEffect(() => {
-    connect();
-    refreshSessions();
+    const init = async () => {
+      refreshSessions();
+      // Fetch sessions and auto-connect to the first (or only) one
+      try {
+        const res = await fetch(`http://${window.location.host}/api/active-sessions`);
+        const data = await res.json();
+        const sessions = data.sessions ?? [];
+        if (sessions.length > 0) {
+          connect(sessions[0].sessionId);
+        } else {
+          connect(); // Fallback: global connection
+        }
+      } catch {
+        connect();
+      }
+    };
+    init();
     // Poll for new sessions every 10s
     const timer = setInterval(refreshSessions, 10000);
     return () => clearInterval(timer);
-  }, [connect, refreshSessions]);
+  }, []);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -43,6 +57,11 @@ function App() {
         setShowPalette((v) => !v);
         return;
       }
+      if (e.key === "," && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setShowSettings((v) => !v);
+        return;
+      }
       if (e.key === "?") {
         e.preventDefault();
         setShowHelp((v) => !v);
@@ -50,6 +69,7 @@ function App() {
       if (e.key === "Escape") {
         setShowHelp(false);
         setShowPalette(false);
+        setShowSettings(false);
       }
 
       const store = useArtifactStore.getState();
@@ -65,18 +85,30 @@ function App() {
         store.selectArtifact(visible[nextIdx].id);
       }
 
-      if (e.key === "a") {
+      if (e.key === "a" || e.key === "r") {
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
-        if (selected && selected.status === "draft") {
-          store.updateArtifactStatus(selected.id, "approved");
-        }
+        if (!selected || selected.status !== "draft") return;
+        e.preventDefault();
+        // Dispatch to the active artifact's action panel. The panel arms a
+        // confirm affordance (countdown for approve, focus the comment
+        // textarea for revise) — never commits silently on a single keystroke.
+        window.dispatchEvent(
+          new CustomEvent("dp:artifact-shortcut", {
+            detail: { artifactId: selected.id, action: e.key === "a" ? "approve" : "revise" },
+          }),
+        );
       }
 
-      if (e.key === "r") {
-        // Focus would go to revision input — for now just log
+      if (e.key === "q") {
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
-        if (selected && selected.status === "draft") {
-          store.updateArtifactStatus(selected.id, "revised", "Revision requested via keyboard");
+        if (!selected) return;
+        e.preventDefault();
+        // Ask the user for a question and submit it with intent: "question".
+        // A richer input affordance lives on findings via AskTrigger — this
+        // is the artifact-root equivalent for keyboard users.
+        const question = window.prompt(`Ask the agent about "${selected.title}":`);
+        if (question && question.trim()) {
+          store.submitComment(selected.id, question.trim(), undefined, { intent: "question" });
         }
       }
     };
@@ -87,92 +119,85 @@ function App() {
 
   return (
     <div className="h-screen bg-surface-primary text-text-primary flex flex-col">
-      {/* Header */}
+      {/* Header — pared back to the essentials. Low-frequency chrome
+          (theme, font size, content width, editor picker, export) lives in
+          the Settings sheet (⌘,). Quick actions live in the Command palette (⌘K). */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border-default bg-surface-secondary">
-        <div className="flex items-center gap-3">
-          <h1 className="text-sm font-bold">deepPairing</h1>
-          {/* Session switcher — shown when multiple agents are active */}
-          {activeSessions.length > 1 && (
-            <div className="flex items-center gap-0.5 bg-surface-elevated rounded p-0.5">
-              {activeSessions.map((s, i) => (
-                <button
-                  key={s.sessionId}
-                  onClick={() => switchSession(s.sessionId)}
-                  className={`px-2 py-0.5 rounded text-2xs transition-colors ${
-                    sessionId === s.sessionId
-                      ? "bg-accent-blue-dim text-accent-blue font-medium"
-                      : "text-text-muted hover:text-text-secondary"
-                  }`}
-                  title={s.sessionId}
-                >
-                  Agent {i + 1}
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="flex items-center gap-3 min-w-0">
+          <h1 className="text-sm font-bold shrink-0">deepPairing</h1>
           <TurnIndicator />
         </div>
-        <div className="flex items-center gap-2">
-          <EditorPicker />
-          <span className="text-2xs text-text-muted">·</span>
-          <ExportMenu />
-          <span className="text-2xs text-text-muted">·</span>
+        <div className="flex items-center gap-1 shrink-0">
           <AutonomySlider />
-          <span className="text-2xs text-text-muted">·</span>
+          <span className="text-2xs text-text-muted mx-1">·</span>
+          <button
+            onClick={() => setShowPalette(true)}
+            className="hidden min-[700px]:inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            title="Command palette (⌘K)"
+          >
+            <span>Search</span>
+            <kbd className="font-mono bg-surface-elevated px-1 rounded text-[9px]">⌘K</kbd>
+          </button>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-secondary transition-colors"
+            title="Settings (⌘,)"
+            aria-label="Open settings"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+              <circle cx="7" cy="7" r="2" />
+              <path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.8 2.8l1.4 1.4M9.8 9.8l1.4 1.4M2.8 11.2l1.4-1.4M9.8 4.2l1.4-1.4" />
+            </svg>
+          </button>
           <button
             onClick={() => setShowHelp(true)}
             className="px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
             title="Keyboard shortcuts (?)"
+            aria-label="Show keyboard shortcuts"
           >
             <kbd className="font-mono">?</kbd>
           </button>
-          <div className="flex items-center gap-0.5 bg-surface-elevated rounded p-0.5" title="Font size">
-            {([["compact", 9], ["default", 11], ["large", 13], ["xlarge", 15]] as const).map(([size, px]) => (
-              <button
-                key={size}
-                onClick={() => setFontSize(size)}
-                className={`px-1 py-0.5 rounded transition-colors ${
-                  fontSize === size
-                    ? "bg-surface-hover text-text-primary"
-                    : "text-text-muted hover:text-text-secondary"
-                }`}
-              >
-                <span style={{ fontSize: px, lineHeight: 1 }}>A</span>
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={toggleContentWidth}
-            className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-secondary transition-colors"
-            title={contentWidth === "full" ? "Constrain content width" : "Full width"}
-          >
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
-              {contentWidth === "full" ? (
-                /* Arrows pointing inward → constrain */
-                <><path d="M1 6.5h3M9 6.5h3" /><path d="M3 4.5l-2 2 2 2M10 4.5l2 2-2 2" /></>
-              ) : (
-                /* Arrows pointing outward → expand */
-                <><path d="M1 6.5h3M9 6.5h3" /><path d="M2 4.5l2 2-2 2M11 4.5l-2 2 2 2" /></>
-              )}
-            </svg>
-          </button>
-          <button
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="p-1 rounded hover:bg-surface-hover text-text-muted hover:text-text-secondary transition-colors"
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          >
-            {theme === "dark" ? (
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
-                <circle cx="6.5" cy="6.5" r="2.5" />
-                <path d="M6.5 1V2.5M6.5 10.5V12M1 6.5H2.5M10.5 6.5H12M2.6 2.6L3.7 3.7M9.3 9.3L10.4 10.4M2.6 10.4L3.7 9.3M9.3 3.7L10.4 2.6" />
-              </svg>
-            ) : (
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 7.5A5 5 0 115.5 2a4 4 0 005.5 5.5z" />
-              </svg>
-            )}
-          </button>
         </div>
+      </div>
+
+      {/* Session bar — always visible */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="shrink-0 text-text-muted mr-0.5">
+          <rect x="1" y="2" width="4" height="3.5" rx="0.5" />
+          <rect x="7" y="2" width="4" height="3.5" rx="0.5" />
+          <rect x="1" y="7" width="4" height="3" rx="0.5" />
+          <rect x="7" y="7" width="4" height="3" rx="0.5" />
+        </svg>
+        {activeSessions.length === 0 ? (
+          <span className="text-2xs text-text-muted">No active sessions — start a Claude Code conversation with deepPairing</span>
+        ) : (
+          activeSessions.map((s, i) => {
+            const isActive = sessionId === s.sessionId;
+            const label = s.title && s.title !== s.sessionId
+              ? s.title
+              : s.project
+                ? s.project
+                : `Session ${i + 1}`;
+            return (
+              <button
+                key={s.sessionId}
+                onClick={() => switchSession(s.sessionId)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-2xs transition-all duration-[180ms] shrink-0 press-scale ${
+                  isActive
+                    ? "bg-accent-blue-dim text-accent-blue font-medium border border-accent-blue/20"
+                    : "text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"
+                }`}
+                title={`${s.sessionId}${s.project ? `\nProject: ${s.project}` : ""}\nArtifacts: ${s.artifactCount}`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent-blue animate-pulse" : "bg-accent-green"}`} />
+                <span className="truncate max-w-40">{label}</span>
+                {s.artifactCount > 0 && (
+                  <span className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded opacity-70">{s.artifactCount}</span>
+                )}
+              </button>
+            );
+          })
+        )}
       </div>
 
       {/* Disconnected warning */}
@@ -183,6 +208,9 @@ function App() {
           </span>
         </div>
       )}
+
+      {/* Replay scrubber — only renders when replay mode is active */}
+      <ReplayScrubber />
 
       {/* Review gate — approve all draft artifacts to proceed */}
       <ReviewGate />
@@ -208,6 +236,9 @@ function App() {
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}
+
+      {/* Settings sheet */}
+      {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} />}
 
       {/* Keyboard shortcut help overlay */}
       {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}

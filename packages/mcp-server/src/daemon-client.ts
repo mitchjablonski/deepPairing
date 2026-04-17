@@ -10,6 +10,7 @@ import type {
   CreateArtifactParams,
   AddCommentParams,
   RecordDecisionParams,
+  RejectedApproach,
 } from "./store/store-interface.js";
 
 export class DaemonClient implements IStore {
@@ -41,8 +42,12 @@ export class DaemonClient implements IStore {
 
   // --- Session lifecycle ---
 
-  async register(): Promise<void> {
-    await this.post("/register");
+  async register(meta?: { title?: string; project?: string }): Promise<void> {
+    await this.post("/register", meta ?? {});
+  }
+
+  async renameSession(title: string): Promise<void> {
+    await this.post("/rename", { title });
   }
 
   async unregister(): Promise<void> {
@@ -88,6 +93,15 @@ export class DaemonClient implements IStore {
 
   async acknowledgeComments(ids: string[]): Promise<void> {
     await this.post("/comments/acknowledge", { ids });
+  }
+
+  async getComment(commentId: string): Promise<Comment | undefined> {
+    const data = await this.get<{ comment: Comment | null }>(`/comments/${commentId}`);
+    return data.comment ?? undefined;
+  }
+
+  async markCommentAnswered(commentId: string, answerCommentId: string): Promise<void> {
+    await this.post(`/comments/${commentId}/answered`, { answerCommentId });
   }
 
   // --- Decisions ---
@@ -160,15 +174,15 @@ export class DaemonClient implements IStore {
     return this.get("/metrics");
   }
 
-  async recordRejectedApproach(description: string): Promise<void> {
-    await this.post("/memory/rejected", { description });
+  async recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string): Promise<void> {
+    await this.post("/memory/rejected", { description, reason, sourceArtifactId });
   }
 
   async recordApprovedPattern(description: string): Promise<void> {
     await this.post("/memory/approved", { description });
   }
 
-  async getSessionMemory(): Promise<{ rejectedApproaches: string[]; approvedPatterns: string[] }> {
+  async getSessionMemory(): Promise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }> {
     return this.get("/memory");
   }
 

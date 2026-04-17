@@ -19,7 +19,7 @@ import path from "node:path";
 
 import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
-import { createDaemonRoutes } from "./daemon-routes.js";
+import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 
 const DEFAULT_PORT = 3847;
@@ -41,6 +41,7 @@ function log(msg: string): void {
 // --- Session management ---
 
 const sessions = new Map<string, FileStore>();
+const sessionMeta = new Map<string, SessionMeta>();
 
 function createSession(sessionId: string): FileStore {
   log(`Creating session: ${sessionId}`);
@@ -130,34 +131,61 @@ app.use("/*", cors({
 }));
 
 // Mount internal daemon routes (for MCP wrappers)
-const daemonRoutes = createDaemonRoutes(sessions, createSession, broadcast);
+const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast);
 app.route("/", daemonRoutes);
 
 // Mount public web UI routes (for browser)
-// Use a Proxy that delegates to the default (first active) store dynamically
-const storeProxy = new Proxy({} as any, {
-  get(_target, prop) {
-    const store = getDefaultStore();
-    const val = (store as any)[prop];
-    return typeof val === "function" ? val.bind(store) : val;
+// Pass a session-lookup function so each request routes to the correct store
+const publicRoutes = createHttpRoutes(
+  (sessionId?: string) => {
+    if (sessionId) {
+      const store = sessions.get(sessionId);
+      if (store) return store;
+    }
+    return getDefaultStore();
   },
-});
-const publicRoutes = createHttpRoutes(storeProxy, projectRoot);
+  projectRoot,
+  (event, sessionId) => {
+    // Session-scoped broadcast for public routes
+    if (sessionId) {
+      broadcast(sessionId, event);
+    } else {
+      // Broadcast to all sessions as fallback
+      for (const sid of sessions.keys()) {
+        broadcast(sid, event);
+      }
+    }
+  },
+);
 app.route("/", publicRoutes);
 
 // Active sessions endpoint for the web UI
 app.get("/api/active-sessions", (c) => {
-  const list = Array.from(sessions.entries()).map(([id, store]) => ({
-    sessionId: id,
-    artifactCount: store.getArtifacts().length,
-  }));
+  const list = Array.from(sessions.entries()).map(([id, store]) => {
+    const meta = sessionMeta.get(id);
+    return {
+      sessionId: id,
+      title: meta?.title ?? id,
+      project: meta?.project ?? "",
+      artifactCount: store.getArtifacts().length,
+    };
+  });
   return c.json({ sessions: list });
+});
+
+// A6a: serve a single live session's state directly from the in-memory store
+// so the companion UI's MultiAgentSync can merge artifacts across sessions.
+app.get("/api/live-session/:sessionId", (c) => {
+  const sessionId = c.req.param("sessionId");
+  const store = sessions.get(sessionId);
+  if (!store) return c.json({ error: "unknown_session" }, 404);
+  return c.json(store.getFullState());
 });
 
 // --- Serve static web UI ---
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
-const webDistPath = path.join(__thisDir, "../../dist/web");
+const webDistPath = path.join(__thisDir, "../dist/web");
 
 if (fs.existsSync(webDistPath)) {
   app.get("/*", async (c, next) => {
@@ -201,6 +229,16 @@ function cleanup(): void {
   try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
 }
 
+function writeDaemonInfo(port: number): void {
+  const info = { pid: process.pid, port, startedAt: new Date().toISOString() };
+  try {
+    fs.mkdirSync(path.dirname(daemonInfoFile), { recursive: true });
+    fs.writeFileSync(daemonInfoFile, JSON.stringify(info, null, 2));
+  } catch (err) {
+    log(`Failed to write daemon.json: ${err}`);
+  }
+}
+
 async function main() {
   log(`Daemon starting (PID ${process.pid})`);
   log(`Project root: ${projectRoot}`);
@@ -211,6 +249,41 @@ async function main() {
   const port = DEFAULT_PORT;
   try {
     const server = serve({ fetch: app.fetch, port });
+
+    // A3: surface bind failures. `serve()` is async and reports EADDRINUSE via
+    // the server's 'error' event — not the surrounding try/catch. Detect it
+    // explicitly and exit with a clear message to stderr so the spawner sees it.
+    const listenResult = await new Promise<{ ok: true } | { ok: false; err: any }>((resolve) => {
+      const s: any = server;
+      const onError = (err: any) => {
+        s.off?.("listening", onListening);
+        resolve({ ok: false, err });
+      };
+      const onListening = () => {
+        s.off?.("error", onError);
+        resolve({ ok: true });
+      };
+      if (typeof s.once === "function") {
+        s.once("error", onError);
+        s.once("listening", onListening);
+      } else {
+        // Fallback for environments where listening fires before we subscribe.
+        setTimeout(() => resolve({ ok: true }), 50);
+      }
+    });
+
+    if (!("ok" in listenResult) || listenResult.ok === false) {
+      const err = (listenResult as any).err;
+      if (err?.code === "EADDRINUSE") {
+        const msg = `Port ${port} is already in use. Another daemon may be running; run 'deeppairing doctor' to diagnose.`;
+        log(`FATAL: ${msg}`);
+        process.stderr.write(`deepPairing daemon: ${msg}\n`);
+        process.exit(2);
+      }
+      log(`FATAL bind error: ${err}`);
+      process.stderr.write(`deepPairing daemon: bind failed — ${err?.message ?? err}\n`);
+      process.exit(3);
+    }
 
     // WebSocket server
     const wss = new WebSocketServer({ noServer: true });
@@ -239,7 +312,7 @@ async function main() {
         // Send session state on connect
         const store = sessions.get(sessionId);
         if (store) {
-          ws.send(JSON.stringify({ type: "connected", state: store.getFullState() }));
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot }));
         }
 
         ws.on("close", () => {
@@ -267,15 +340,18 @@ async function main() {
       log(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
     });
 
-    // Write daemon info file
-    const info = { pid: process.pid, port, startedAt: new Date().toISOString() };
-    fs.writeFileSync(daemonInfoFile, JSON.stringify(info, null, 2));
+    // A2: write daemon.json on startup AND on a recurring heartbeat so a
+    // missing/stale info file self-heals without user intervention.
+    writeDaemonInfo(port);
+    const heartbeat = setInterval(() => writeDaemonInfo(port), 30000);
+    heartbeat.unref?.();
 
     log(`Daemon running on http://localhost:${port}`);
   } catch (err: any) {
     if (err?.code === "EADDRINUSE") {
       log(`Port ${port} already in use — another daemon may be running`);
-      process.exit(1);
+      process.stderr.write(`deepPairing daemon: port ${port} already in use\n`);
+      process.exit(2);
     }
     throw err;
   }
