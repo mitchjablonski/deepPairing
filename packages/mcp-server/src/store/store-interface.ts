@@ -132,6 +132,12 @@ export interface IStore {
   recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): MaybePromise<void>;
   recordApprovedPattern(description: string): MaybePromise<void>;
   getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
+  /**
+   * Filesystem-sensed guardrails for this project (migrations, workflows,
+   * infra paths). Used by the MCP server in firstCallHint so the agent
+   * knows to escalate for changes in these paths.
+   */
+  getProjectGuardrails?(): MaybePromise<Array<{ category: string; paths: string[]; rationale: string }>>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;

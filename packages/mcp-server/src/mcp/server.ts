@@ -9,6 +9,7 @@ import {
 import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
+import { getGlobalStore, deriveStance } from "../store/global-store.js";
 
 /**
  * Check a set of proposal strings against previously rejected approaches.
@@ -324,6 +325,29 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
+        name: "deepPairing_recall_philosophy",
+        description:
+          "Query the user's cross-project philosophy ledger — concepts and approaches they've rejected or approved across EVERY deepPairing session and project they've used. Use this BEFORE present_options or present_plan when a proposal touches a concept you haven't seen tagged in the current session — the user may have a strong cross-project stance on it already.\n\nReturns entries with instance counts, reasons, and a derived stance (avoid / prefer / mixed). Use concept match liberally — even a partial match reveals the user's taste.\n\nThis is distinct from search_sessions (which finds artifacts) — this tool surfaces the user's engineering philosophy, distilled from years of deepPairing sessions.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            concept: {
+              type: "string",
+              description: "Concept to search for (substring match). Omit to list the whole ledger.",
+            },
+            stance: {
+              type: "string",
+              enum: ["avoid", "prefer", "mixed"],
+              description: "Filter to only entries with this derived stance",
+            },
+            limit: {
+              type: "number",
+              description: "Max entries to return (default 20)",
+            },
+          },
+        },
+      },
+      {
         name: "deepPairing_search_sessions",
         description:
           "Search across every past session in this project for artifacts matching a query. Use when the human references prior work ('did we look at this before?') or when you want to cite a past decision / finding that relates to the current task. Matches against artifact titles, concept names, rejected-approach entries, and artifact content. Returns the top results ranked by relevance.",
@@ -567,8 +591,68 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         );
       }
       if (memoryParts.length > 0) {
-        hintParts.push(`\n📋 From previous sessions:\n${memoryParts.join("\n")}`);
+        hintParts.push(`\n📋 From previous sessions in this project:\n${memoryParts.join("\n")}`);
       }
+
+      // J6 — codebase-sensed guardrails. Filesystem signals tell us which
+      // paths are sensitive (migrations, CI workflows, infra). The agent
+      // gets this list on first call so it knows to stay supervised for
+      // changes in those paths even when autonomy is "autonomous". Zero
+      // user configuration — we just detected it.
+      try {
+        if (typeof (store as any).getProjectGuardrails === "function") {
+          const guardrails = await (store as any).getProjectGuardrails();
+          if (Array.isArray(guardrails) && guardrails.length > 0) {
+            const lines = guardrails.map((g: any) =>
+              `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`,
+            );
+            hintParts.push(
+              `\n🛡 Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):\n${lines.join("\n")}`,
+            );
+          }
+        }
+      } catch {
+        // Non-fatal — we just won't surface guardrails
+      }
+
+      // J4 — cross-project philosophy kickoff brief. Pull the top few
+      // strongly-held cross-project stances so the agent has the user's
+      // taste before it proposes anything. Keep it tight (3 avoid + 3 prefer
+      // max) — this is a primer, not a dump.
+      try {
+        const avoidList = getGlobalStore().query({ stance: "avoid", limit: 3 });
+        const preferList = getGlobalStore().query({ stance: "prefer", limit: 3 });
+        const philosophyParts: string[] = [];
+        if (avoidList.length > 0) {
+          philosophyParts.push(
+            `Strong 'avoid' stances (multi-project):\n${avoidList
+              .map((e) => {
+                const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+                const projects = new Set(e.instances.map((i) => i.project)).size;
+                return `  - "${e.concept}"${latestReason ? ` — "${latestReason}"` : ""}${projects > 1 ? ` (${projects} projects)` : ""}`;
+              })
+              .join("\n")}`,
+          );
+        }
+        if (preferList.length > 0) {
+          philosophyParts.push(
+            `Patterns the user prefers:\n${preferList
+              .map((e) => {
+                const projects = new Set(e.instances.map((i) => i.project)).size;
+                return `  - "${e.concept}"${projects > 1 ? ` (${projects} projects)` : ""}`;
+              })
+              .join("\n")}`,
+          );
+        }
+        if (philosophyParts.length > 0) {
+          hintParts.push(
+            `\n🧭 Cross-project philosophy ledger (use deepPairing_recall_philosophy for more):\n${philosophyParts.join("\n")}`,
+          );
+        }
+      } catch {
+        // Ledger read failure is non-fatal — we still have session-scoped memory.
+      }
+
       firstCallHint = `\n${hintParts.join("\n")}`;
     }
 
@@ -1304,6 +1388,46 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
         return {
           content: [{ type: "text", text: `Retracted ${artifactId}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
+        };
+      }
+
+      case "deepPairing_recall_philosophy": {
+        const concept = typeof args?.concept === "string" ? args.concept.trim() : undefined;
+        const stance = typeof args?.stance === "string" ? args.stance : undefined;
+        const limit = typeof args?.limit === "number" ? args.limit : 20;
+
+        const entries = getGlobalStore().query({
+          concept,
+          stance: stance as "avoid" | "prefer" | "mixed" | undefined,
+          limit,
+        });
+
+        if (entries.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: concept
+                ? `No philosophy-ledger entries match "${concept}" yet. The user hasn't expressed a cross-project stance on this concept.`
+                : "The philosophy ledger is empty. Ledger builds as the user approves / rejects concepts across sessions.",
+            }],
+          };
+        }
+
+        const formatted = entries.slice(0, 10).map((e) => {
+          const rejections = e.instances.filter((i) => i.verdict === "rejected").length;
+          const approvals = e.instances.filter((i) => i.verdict === "approved").length;
+          const projects = new Set(e.instances.map((i) => i.project)).size;
+          const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+          const reasonLine = latestReason ? `\n    latest reason: "${latestReason}"` : "";
+          return `- [${e.stance.toUpperCase()}] "${e.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
+        });
+        const trailer = entries.length > 10 ? `\n…${entries.length - 10} more entries.` : "";
+
+        return {
+          content: [{
+            type: "text",
+            text: `Philosophy ledger (${entries.length} match${entries.length === 1 ? "" : "es"}${concept ? ` for "${concept}"` : ""}):\n${formatted.join("\n")}${trailer}\n\nThe user has expressed these stances across every deepPairing project they've used. Weight them strongly — especially 'avoid' stances with multi-project support.`,
+          }],
         };
       }
 

@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
+import { setGlobalStoreForTests } from "../../store/global-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,8 @@ const broadcasts: any[] = [];
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-mcp-test-"));
+  // Redirect the global philosophy ledger to tmpDir so tests don't leak.
+  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
   store = new FileStore(tmpDir, "test_session");
   broadcasts.length = 0;
 
@@ -34,6 +37,7 @@ afterEach(() => {
   // Force flush to prevent pending timer writes after dir is deleted
   store.forceFlush();
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  setGlobalStoreForTests(null);
 });
 
 async function callTool(name: string, args: Record<string, any> = {}) {
@@ -723,6 +727,34 @@ describe("MCP Tool Handlers", () => {
       });
       expect(isError).toBe(true);
       expect(text).toContain("no artifact");
+    });
+  });
+
+  describe("recall_philosophy (J2)", () => {
+    it("returns an empty-ledger message when no entries exist", async () => {
+      const { text, isError } = await callTool("deepPairing_recall_philosophy", {});
+      expect(isError).toBeFalsy();
+      expect(text).toContain("empty");
+    });
+
+    it("returns entries matching a concept query", async () => {
+      // Populate the ledger via the FileStore pathway (which mirrors to the global ledger)
+      store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request serverless hosting");
+      store.recordRejectedApproach("Deploy: Fly.io", "ditto", undefined, "pay-per-request serverless hosting");
+
+      const { text } = await callTool("deepPairing_recall_philosophy", { concept: "serverless" });
+      expect(text).toContain("pay-per-request serverless hosting");
+      expect(text).toContain("AVOID");
+    });
+
+    it("filters by stance", async () => {
+      store.recordApprovedPattern("Service layer");
+      store.recordApprovedPattern("Service layer"); // pushed again as if in another session
+      store.recordApprovedPattern("Service layer");
+
+      const { text } = await callTool("deepPairing_recall_philosophy", { stance: "prefer" });
+      expect(text).toContain("Service layer");
+      expect(text).toContain("PREFER");
     });
   });
 

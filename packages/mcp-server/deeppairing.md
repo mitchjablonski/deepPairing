@@ -339,6 +339,19 @@ of every session**, the response includes context from previous sessions:
   `REJECTED_APPROACH_BLOCKED` if you try.
 - **Approved patterns**: Approaches the human preferred. Default to these when
   facing similar decisions.
+- **Cross-project philosophy**: The user's stances on concepts across EVERY
+  deepPairing session they've ever run — not just this project. "Avoid" stances
+  backed by multiple projects are especially strong.
+- **Project guardrails**: Filesystem-sensed sensitive paths (migrations,
+  `.github/workflows/`, `Dockerfile`, `.env`). Even when autonomy is
+  "autonomous", escalate to supervised for changes touching these paths.
+
+### deepPairing_recall_philosophy
+Call when you want to check whether the user has a cross-project stance on a
+concept before proposing. Takes `{ concept?, stance?, limit? }` and returns
+ledger entries with instance counts and the derived stance (avoid / prefer /
+mixed). Use it liberally when proposing something the firstCallHint didn't
+already surface — the user's taste is broader than the current session.
 
 If pre-flight refuses your call, do NOT retry with the same approach. Either
 revise to exclude the rejected path, or — if you believe conditions have

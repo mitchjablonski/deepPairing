@@ -9,6 +9,7 @@ import { serve } from "@hono/node-server";
 import { createDaemonRoutes } from "../daemon-routes.js";
 import { DaemonClient } from "../daemon-client.js";
 import { FileStore } from "../store/file-store.js";
+import { setGlobalStoreForTests } from "../store/global-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -31,6 +32,7 @@ function createTestSession(sessionId: string): FileStore {
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-daemon-test-"));
+  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
   sessions = new Map();
   sessionMeta = new Map();
   broadcasts = [];
