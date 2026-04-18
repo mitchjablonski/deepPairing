@@ -41,8 +41,8 @@ export function ReasoningCard({ artifact }: Props) {
     <div className="space-y-4">
       {/* Action — the intent, rendered as a prominent thought */}
       <div className="relative px-4 py-3 bg-accent-blue-dim/25 border border-accent-blue/20 rounded-lg">
-        <div className="text-2xs font-semibold text-accent-blue/80 uppercase tracking-wide mb-1">
-          Intent
+        <div className="text-xs font-medium text-accent-blue/90 mb-1">
+          What I'm about to do
         </div>
         <SimpleMarkdown
           text={rc.action}
@@ -73,8 +73,8 @@ export function ReasoningCard({ artifact }: Props) {
 
       {/* Why prose */}
       <div>
-        <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-          Why
+        <div className="text-xs font-medium text-text-secondary mb-1.5">
+          Because…
         </div>
         <SimpleMarkdown
           text={rc.reasoning}
@@ -99,8 +99,8 @@ export function ReasoningCard({ artifact }: Props) {
       {/* Rejected alternatives — forks-not-taken */}
       {rc.alternativeDetails && rc.alternativeDetails.length > 0 && (
         <div>
-          <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-            Forks not taken
+          <div className="text-xs font-medium text-text-secondary mb-1.5">
+            Roads not taken
           </div>
           <div className="space-y-2">
             {rc.alternativeDetails.map((alt, i) => (
@@ -135,8 +135,8 @@ export function ReasoningCard({ artifact }: Props) {
       {/* Evidence strip */}
       {rc.evidence && rc.evidence.length > 0 && (
         <div>
-          <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-            Drawn from
+          <div className="text-xs font-medium text-text-secondary mb-1.5">
+            I looked at
           </div>
           <div className="space-y-1.5">
             {rc.evidence.map((ev, i) => (
@@ -159,11 +159,8 @@ function ConceptCallout({
   return (
     <div className="px-4 py-3 bg-accent-violet-dim/30 border border-accent-violet/25 rounded-lg">
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-2xs font-semibold text-accent-violet/80 uppercase tracking-wide">
-          Concept
-        </span>
-        <span className="inline-flex items-center px-1.5 py-0.5 text-2xs rounded bg-surface-elevated text-text-muted">
-          pattern
+        <span className="text-xs font-medium text-accent-violet/90">
+          The pattern at play
         </span>
       </div>
       <div className="text-sm font-semibold text-accent-violet mb-0.5">{name}</div>

@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { buildRepairPrompt } from "../lib/repairPrompt";
 import { API_BASE } from "../lib/api";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface Props {
   sessionId: string;
@@ -43,6 +44,8 @@ export function RepairDecisionModal({
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, true);
 
   const promptMarkdown = useMemo(
     () =>
@@ -95,6 +98,7 @@ export function RepairDecisionModal({
     <>
       <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
+        ref={panelRef}
         role="dialog"
         aria-label="Re-pair decision"
         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}

@@ -151,7 +151,7 @@ describe("DecisionCard — resolved state (initialResolved)", () => {
 describe("DecisionCard — keyboard navigation", () => {
   it("j advances focusedIndex, k retreats, Enter selects", async () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);
-    const container = screen.getByText("Decision Needed").closest("div")!.parentElement!;
+    const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
     // The container is the outer div with tabIndex={0}; focus it
     (container as HTMLElement).focus();
 
@@ -171,7 +171,7 @@ describe("DecisionCard — keyboard navigation", () => {
 
   it("ArrowDown/ArrowUp mirror j/k", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);
-    const container = screen.getByText("Decision Needed").closest("div")!.parentElement!;
+    const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
     // We just need to verify the keydown handler is wired — the selection
     // behavior was covered above.
     expect(() => fireEvent.keyDown(container, { key: "ArrowDown" })).not.toThrow();

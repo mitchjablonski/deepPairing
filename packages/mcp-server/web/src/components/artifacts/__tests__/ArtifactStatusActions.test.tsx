@@ -145,11 +145,43 @@ describe("ArtifactStatusActions — draft interactions", () => {
     );
   });
 
-  it("Approve label changes to 'Approve with comment' when a comment is typed", async () => {
+  it("Approve label changes to 'Approve with note' when a comment is typed", async () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     expect(screen.getByRole("button", { name: /^Approve$/ })).toBeInTheDocument();
     await userEvent.type(screen.getByRole("textbox"), "good work");
-    expect(screen.getByRole("button", { name: /Approve with comment/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approve with note/i })).toBeInTheDocument();
+  });
+
+  it("Respond button is the primary action — submits the comment without status change (I1)", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    // Disabled when empty
+    expect(screen.getByRole("button", { name: /^Respond$/ })).toBeDisabled();
+
+    await userEvent.type(screen.getByRole("textbox"), "a thought");
+    const respondBtn = screen.getByRole("button", { name: /^Respond$/ });
+    expect(respondBtn).not.toBeDisabled();
+
+    await userEvent.click(respondBtn);
+
+    await waitFor(() => {
+      const calls = (fetch as any).mock.calls.map((c: any) => c[0]);
+      // Responded: comment POST hit
+      expect(calls.some((u: string) => u.includes("/api/comments"))).toBe(true);
+      // But NOT a status update — the artifact stays in draft
+      expect(calls.some((u: string) => u.includes("/api/artifacts/art_x/status"))).toBe(false);
+    });
+  });
+
+  it("Cmd+Enter with text in the textarea sends a Respond, not an Approve (I1)", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    const textarea = screen.getByRole("textbox");
+    await userEvent.type(textarea, "here's my thought");
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+    await waitFor(() => {
+      const calls = (fetch as any).mock.calls.map((c: any) => c[0]);
+      expect(calls.some((u: string) => u.includes("/api/comments"))).toBe(true);
+      expect(calls.some((u: string) => u.includes("/api/artifacts/art_x/status"))).toBe(false);
+    });
   });
 });
 

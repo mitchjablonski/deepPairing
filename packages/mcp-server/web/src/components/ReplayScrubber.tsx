@@ -2,13 +2,66 @@ import { useEffect, useMemo, useState } from "react";
 import { useReplayStore, useAnnotationsByEvent } from "../stores/replay";
 import type { TimelineEvent } from "../lib/timeline";
 
-const kindIcon: Record<string, string> = {
-  artifact_created: "➕",
-  artifact_status_changed: "🔄",
-  comment_added: "💬",
-  decision_resolved: "⚖️",
-  plan_reviewed: "📋",
+const svgDefaults = {
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.4,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
 };
+
+function KindIcon({ kind, size = 11 }: { kind: string; size?: number }) {
+  const viewBox = "0 0 12 12";
+  switch (kind) {
+    case "artifact_created":
+      return (
+        <svg width={size} height={size} viewBox={viewBox} {...svgDefaults} aria-hidden="true">
+          <path d="M6 2v8M2 6h8" />
+        </svg>
+      );
+    case "artifact_status_changed":
+      return (
+        <svg width={size} height={size} viewBox={viewBox} {...svgDefaults} aria-hidden="true">
+          <path d="M2 6a4 4 0 017-2.6M10 6a4 4 0 01-7 2.6" />
+          <path d="M9 2v2h-2M3 10V8h2" />
+        </svg>
+      );
+    case "comment_added":
+      return (
+        <svg width={size} height={size} viewBox={viewBox} {...svgDefaults} aria-hidden="true">
+          <path d="M2 3.5A1.5 1.5 0 013.5 2h5A1.5 1.5 0 0110 3.5V7a1.5 1.5 0 01-1.5 1.5H5L3 10.5V8.5H3.5A1.5 1.5 0 012 7V3.5z" />
+        </svg>
+      );
+    case "decision_resolved":
+      return (
+        <svg width={size} height={size} viewBox={viewBox} {...svgDefaults} aria-hidden="true">
+          <path d="M6 2v8M3 4l3-2 3 2M2 7l4-1.5M6 5.5L10 7M2 7a1.5 1.5 0 003 0M7 7a1.5 1.5 0 003 0" />
+        </svg>
+      );
+    case "plan_reviewed":
+      return (
+        <svg width={size} height={size} viewBox={viewBox} {...svgDefaults} aria-hidden="true">
+          <path d="M3 2h6a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1z" />
+          <path d="M4 5h4M4 7h4M4 9h2" />
+        </svg>
+      );
+    default:
+      return (
+        <svg width={size} height={size} viewBox={viewBox} {...svgDefaults} aria-hidden="true">
+          <circle cx="6" cy="6" r="1.5" />
+        </svg>
+      );
+  }
+}
+
+function NoteIcon({ size = 10 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" {...svgDefaults} aria-hidden="true">
+      <path d="M2 2h7l1 1v7a1 1 0 01-1 1H2z" />
+      <path d="M4 5h4M4 7h3" />
+    </svg>
+  );
+}
 
 const kindLabel: Record<string, string> = {
   artifact_created: "Created",
@@ -157,8 +210,8 @@ export function ReplayScrubber() {
               style={{ left: `${left}%` }}
               title={`${event.label}\n${event.at}`}
             >
-              <span className="relative">
-                {kindIcon[event.kind] ?? "•"}
+              <span className="relative flex items-center justify-center">
+                <KindIcon kind={event.kind} size={11} />
                 {hasAnnotations > 0 && (
                   <span className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-accent-violet" />
                 )}
@@ -213,15 +266,16 @@ function CurrentEventRow({
   return (
     <div className="mt-2 space-y-1.5">
       <div className="flex items-center gap-2 text-2xs text-text-secondary">
-        <span>{kindIcon[event.kind] ?? "•"}</span>
+        <span className="text-text-muted"><KindIcon kind={event.kind} size={11} /></span>
         <span className="font-mono text-text-muted">{formatTime(event.at)}</span>
         <span className="truncate">{event.label}</span>
         <button
           onClick={() => setAnnotating(!annotating)}
-          className="ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px] text-accent-violet hover:bg-accent-violet-dim/40"
+          className="ml-auto shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-accent-violet hover:bg-accent-violet-dim/40"
           title="Leave a learner note on this event"
         >
-          📝 note
+          <NoteIcon size={10} />
+          note
         </button>
       </div>
 
@@ -232,7 +286,7 @@ function CurrentEventRow({
               key={a.id}
               className="flex items-start gap-2 text-2xs text-text-secondary bg-accent-violet-dim/20 border border-accent-violet/20 rounded px-2 py-1"
             >
-              <span className="text-accent-violet shrink-0">📝</span>
+              <span className="text-accent-violet shrink-0 mt-0.5"><NoteIcon size={10} /></span>
               <span className="flex-1 whitespace-pre-wrap">{a.note}</span>
               <button
                 onClick={() => removeAnnotation(a.id)}

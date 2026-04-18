@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePreferencesStore } from "../stores/preferences";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { EditorPicker } from "./OpenInEditor";
 import { ExportMenu } from "./ExportMenu";
 
@@ -13,6 +14,8 @@ import { ExportMenu } from "./ExportMenu";
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth } = usePreferencesStore();
   const panelRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(panelRef, true);
 
   useEffect(() => {
     panelRef.current?.focus();

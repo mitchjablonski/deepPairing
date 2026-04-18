@@ -151,11 +151,11 @@ export function DecisionCard({ event, decisionId, artifactId, initialResolved, s
     <div
       ref={containerRef}
       tabIndex={0}
-      className="mx-3 my-3 p-4 bg-accent-red-dim/30 border border-accent-red/15 rounded-lg focus:outline-none"
+      className="mx-3 my-3 p-4 bg-accent-violet-dim/25 border border-accent-violet/20 rounded-lg focus:outline-none"
     >
       <div className="flex items-center gap-2 mb-3">
-        <span className="inline-block w-2 h-2 rounded-full bg-accent-red animate-pulse" />
-        <span className="text-sm font-semibold text-accent-red">Decision Needed</span>
+        <span className="inline-block w-2 h-2 rounded-full bg-accent-violet animate-pulse" />
+        <span className="text-sm font-semibold text-accent-violet">Let's think this through</span>
         <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter select</span>
       </div>
       <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />

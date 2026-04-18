@@ -88,9 +88,9 @@ describe("ReplayScrubber", () => {
     expect(useReplayStore.getState().active).toBe(false);
   });
 
-  it("📝 note button + input saves an annotation via POST", async () => {
+  it("note button + input saves an annotation via POST", async () => {
     render(<ReplayScrubber />);
-    await userEvent.click(screen.getByRole("button", { name: /📝 note/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^note$/i }));
     const input = screen.getByPlaceholderText(/Note to future-you/i);
     await userEvent.type(input, "push back on perf framing");
     await userEvent.click(screen.getByRole("button", { name: /^Save$/ }));

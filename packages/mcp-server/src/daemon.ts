@@ -17,10 +17,26 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 
+import { spawn } from "node:child_process";
 import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
+
+/**
+ * Cross-platform "open URL in default browser" without pulling in an npm
+ * dep. macOS = open, Linux = xdg-open, Windows = start. Best-effort: failure
+ * is logged but non-fatal.
+ */
+async function openBrowser(url: string): Promise<void> {
+  const cmd = process.platform === "darwin" ? "open"
+    : process.platform === "win32" ? "cmd"
+    : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  const child = spawn(cmd, args, { stdio: "ignore", detached: true });
+  child.on("error", () => {}); // swallow spawn errors (e.g. xdg-open missing on headless Linux)
+  child.unref();
+}
 
 const DEFAULT_PORT = 3847;
 const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
@@ -347,6 +363,18 @@ async function main() {
     heartbeat.unref?.();
 
     log(`Daemon running on http://localhost:${port}`);
+
+    // H4: auto-open the companion UI on first daemon start. Skip if the user
+    // set DEEPPAIRING_OPEN_BROWSER=0/false (CI, VS Code extension mode, etc.).
+    // Skip if we're adopting an already-running daemon (only this fresh
+    // process hits this code path).
+    const openFlag = process.env.DEEPPAIRING_OPEN_BROWSER;
+    const shouldOpen = openFlag !== "0" && openFlag !== "false" && openFlag !== "no";
+    if (shouldOpen) {
+      openBrowser(`http://localhost:${port}`).catch((err) => {
+        log(`Failed to auto-open browser: ${err}`);
+      });
+    }
   } catch (err: any) {
     if (err?.code === "EADDRINUSE") {
       log(`Port ${port} already in use — another daemon may be running`);

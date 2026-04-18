@@ -168,6 +168,23 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     setComment("");
   };
 
+  /**
+   * "Respond" — post the comment to the artifact WITHOUT changing status.
+   * This is the pairing-primary action: a pair doesn't approve, they reply.
+   * The agent picks the comment up via check_feedback and may iterate
+   * (often via supersede_artifact). Approve/Revise/Reject remain as
+   * explicit terminal actions.
+   */
+  const handleRespond = async () => {
+    const trimmedComment = comment.trim();
+    if (!trimmedComment) return;
+    cancelCountdown();
+    setSubmitting(true);
+    await submitComment(artifact.id, trimmedComment);
+    setSubmitting(false);
+    setComment("");
+  };
+
   return (
     <div className="pt-3 border-t border-border-default space-y-2">
       {/* Auto-proceed countdown bar */}
@@ -193,58 +210,80 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
         </div>
       )}
 
-      {/* Comment input — always visible, submitted with any action.
-          Reject + Request Revision REQUIRE a reason: the reason flows into
-          session memory so the agent never re-proposes a rejected approach,
-          and replay can show future-you what you objected to. */}
+      {/* Comment/response textarea. Submitting it as a "Respond" (the primary
+          action) keeps the artifact in draft — the agent picks the comment
+          up and iterates. Approve/Revise/Reject are secondary terminal
+          actions. Cmd+Enter sends a Respond when there's text, or an Approve
+          when the field is empty (fast-path for "looks good"). */}
       <textarea
         ref={commentRef}
-        placeholder="Add a comment — required for Reject / Request Revision"
+        placeholder="Respond to the agent…  (⌘⏎ to send · empty ⌘⏎ = approve)"
         value={comment}
         onChange={(e) => setComment(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            handleAction("approved");
+            if (comment.trim()) {
+              handleRespond();
+            } else {
+              handleAction("approved");
+            }
           }
         }}
         rows={2}
         className="w-full px-3 py-2 bg-surface-secondary border border-border-default rounded text-xs text-text-primary resize-none
-                   placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                   placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
       />
 
-      {/* Action buttons */}
-      <div className="flex gap-2">
+      {/* Primary action: Respond (pair programming default) */}
+      <div className="flex items-center gap-2">
         <button
-          onClick={() => handleAction("approved")}
-          disabled={submitting}
-          className="px-3 py-1.5 bg-accent-green text-white text-xs font-medium rounded
-                     hover:bg-accent-green/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-        >
-          {comment.trim() ? "Approve with comment" : "Approve"}
-        </button>
-        <button
-          onClick={() => handleAction("revised")}
+          onClick={handleRespond}
           disabled={submitting || !comment.trim()}
-          className="px-3 py-1.5 bg-accent-amber-dim text-accent-amber text-xs font-medium rounded
-                     hover:bg-accent-amber-dim/80 disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-          title={comment.trim() ? "" : "Add a comment to request revision"}
+          className="px-3 py-1.5 bg-accent-violet text-white text-xs font-medium rounded
+                     hover:bg-accent-violet/80 disabled:bg-surface-elevated disabled:text-text-muted
+                     transition-all duration-[180ms] ease-out press-scale"
+          title="Send the comment; the agent will iterate (keeps artifact in draft)"
         >
-          Request Revision
+          Respond
         </button>
-        <button
-          onClick={() => handleAction("rejected")}
-          disabled={submitting || !comment.trim()}
-          className="px-3 py-1.5 bg-accent-red-dim text-accent-red text-xs font-medium rounded
-                     hover:bg-accent-red-dim/80 disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-          title={comment.trim() ? "" : "Add a comment so the agent knows why — this reason is remembered across sessions"}
-        >
-          Reject
-        </button>
+
+        <span className="text-2xs text-text-muted">or</span>
+
+        {/* Secondary terminal actions as outline pills */}
+        <div className="flex gap-1.5">
+          <button
+            onClick={() => handleAction("approved")}
+            disabled={submitting}
+            className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+                       hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+            title={comment.trim() ? "Approve and send this comment" : "Approve as-is"}
+          >
+            {comment.trim() ? "Approve with note" : "Approve"}
+          </button>
+          <button
+            onClick={() => handleAction("revised")}
+            disabled={submitting || !comment.trim()}
+            className="px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
+                       hover:bg-accent-amber-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
+            title={comment.trim() ? "Mark revised — agent will redraft" : "Add a reason first"}
+          >
+            Request revision
+          </button>
+          <button
+            onClick={() => handleAction("rejected")}
+            disabled={submitting || !comment.trim()}
+            className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
+                       hover:bg-accent-red-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
+            title={comment.trim() ? "Reject and remember the reason across sessions" : "Add a reason first"}
+          >
+            Reject
+          </button>
+        </div>
       </div>
       {!comment.trim() && (
         <div className="text-2xs text-text-muted">
-          Cmd+Enter to approve quickly · Reject / Revise need a reason — it's remembered across sessions
+          ⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)
         </div>
       )}
     </div>

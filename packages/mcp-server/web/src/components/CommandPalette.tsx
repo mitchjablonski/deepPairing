@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore } from "../stores/preferences";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
 
@@ -17,6 +18,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, true);
   const { artifacts, selectArtifact, updateArtifactStatus } = useArtifactStore();
   const { theme, setTheme, toggleSidebar } = usePreferencesStore();
 
@@ -110,8 +113,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={onClose} />
 
       {/* Palette */}
-      <div className="fixed top-[20%] left-1/2 -translate-x-1/2 z-50 w-[500px] max-w-[90vw]
-                      bg-surface-elevated border border-border-default rounded-xl shadow-2xl overflow-hidden">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-label="Command palette"
+        className="fixed top-[20%] left-1/2 -translate-x-1/2 z-50 w-[500px] max-w-[90vw]
+                      bg-surface-elevated border border-border-default rounded-xl shadow-2xl overflow-hidden"
+      >
         {/* Search input */}
         <div className="px-4 py-3 border-b border-border-default">
           <input
