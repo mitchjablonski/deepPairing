@@ -238,6 +238,23 @@ export class DaemonClient implements IStore {
     return res.json();
   }
 
+  /** Search across every session in the project. */
+  async searchSessions(query: string, limit = 50): Promise<Array<{
+    sessionId: string;
+    sessionTitle: string;
+    artifactId: string;
+    artifactType: string;
+    title: string;
+    excerpt: string;
+    score: number;
+    matchedVia: string[];
+  }>> {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}/api/search?${params}`);
+    const data = await res.json();
+    return data.results ?? [];
+  }
+
   private portFromBaseUrl(): number {
     // baseUrl = http://localhost:{port}/api/internal/sessions/{sessionId}
     const match = this.baseUrl.match(/localhost:(\d+)/);

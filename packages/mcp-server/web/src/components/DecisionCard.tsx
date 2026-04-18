@@ -4,6 +4,7 @@ import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { AskTrigger } from "./CommentThread";
+import { RepairDecisionModal } from "./RepairDecisionModal";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -11,6 +12,14 @@ interface DecisionCardProps {
   decisionId?: string;
   /** Artifact id — needed for AskTrigger targeting per-option questions */
   artifactId?: string;
+  /** If set (e.g. in replay mode for past decisions), start in the resolved state. */
+  initialResolved?: {
+    optionId: string;
+    reasoning?: string;
+    resolvedAt?: string;
+  };
+  /** For the Re-pair modal: which session this decision was recorded in. */
+  sessionId?: string;
   onResolved?: () => void;
 }
 
@@ -20,16 +29,17 @@ const badgeColors = {
   high: "bg-accent-red-dim text-accent-red",
 };
 
-export function DecisionCard({ event, decisionId, artifactId, onResolved }: DecisionCardProps) {
+export function DecisionCard({ event, decisionId, artifactId, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const { resolveDecision } = useArtifactStore();
   const [focusedIndex, setFocusedIndex] = useState(
     event.options.findIndex((o) => o.recommendation) ?? 0,
   );
-  const [reasoning, setReasoning] = useState("");
+  const [reasoning, setReasoning] = useState(initialResolved?.reasoning ?? "");
   const [showReasoning, setShowReasoning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [resolved, setResolved] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [resolved, setResolved] = useState(!!initialResolved);
+  const [selectedId, setSelectedId] = useState<string | null>(initialResolved?.optionId ?? null);
+  const [showRepair, setShowRepair] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleSelect = async (optionId: string) => {
@@ -78,28 +88,52 @@ export function DecisionCard({ event, decisionId, artifactId, onResolved }: Deci
     const rejected = event.options.filter((o) => o.id !== selectedId);
 
     return (
-      <motion.div
-        initial={{ opacity: 0, scale: 0.96 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
-        className="mx-3 my-2 p-4 bg-accent-green-dim border border-accent-green/20 rounded-lg"
-      >
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-accent-green text-lg">✓</span>
-          <span className="text-sm font-semibold text-accent-green">Decision Made</span>
-        </div>
-        <p className="text-sm text-text-primary">
-          <span className="font-medium">{chosen?.title}</span>
-          {reasoning && <span className="text-text-muted"> — {reasoning}</span>}
-        </p>
-        {rejected.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-accent-green/15">
-            <span className="text-xs text-text-muted">
-              Rejected: {rejected.map((o) => o.title).join(", ")}
-            </span>
+      <>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
+          className="mx-3 my-2 p-4 bg-accent-green-dim border border-accent-green/20 rounded-lg"
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-accent-green text-lg">✓</span>
+            <span className="text-sm font-semibold text-accent-green">Decision Made</span>
+            {sessionId && (
+              <button
+                onClick={() => setShowRepair(true)}
+                className="ml-auto px-2 py-0.5 rounded text-2xs font-medium text-accent-violet hover:bg-accent-violet-dim/40 transition-colors"
+                title="Generate a prompt to revisit this decision with fresh eyes in a new Claude Code session"
+              >
+                ↻ Re-pair
+              </button>
+            )}
           </div>
+          <p className="text-sm text-text-primary">
+            <span className="font-medium">{chosen?.title}</span>
+            {reasoning && <span className="text-text-muted"> — {reasoning}</span>}
+          </p>
+          {rejected.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-accent-green/15">
+              <span className="text-xs text-text-muted">
+                Rejected: {rejected.map((o) => o.title).join(", ")}
+              </span>
+            </div>
+          )}
+        </motion.div>
+
+        {showRepair && sessionId && (
+          <RepairDecisionModal
+            sessionId={sessionId}
+            decisionContext={event.context}
+            options={event.options}
+            chosenOptionId={selectedId ?? ""}
+            chosenReasoning={reasoning}
+            resolvedAt={initialResolved?.resolvedAt}
+            decisionId={decisionId}
+            onClose={() => setShowRepair(false)}
+          />
         )}
-      </motion.div>
+      </>
     );
   }
 

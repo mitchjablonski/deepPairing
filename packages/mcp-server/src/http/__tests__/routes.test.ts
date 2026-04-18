@@ -93,6 +93,95 @@ describe("HTTP Routes", () => {
     expect(res.headers.get("Content-Type")).toContain("text/markdown");
   });
 
+  describe("POST /api/prompts", () => {
+    it("saves a re-pair prompt into .deeppairing/prompts/", async () => {
+      const res = await app.request("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: "# Re-pair: Test prompt\n\nBody.",
+          sessionId: "session_abc",
+          decisionId: "dec_xyz",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("saved");
+
+      const promptsDir = path.join(tmpDir, ".deeppairing", "prompts");
+      const files = fs.readdirSync(promptsDir);
+      expect(files).toHaveLength(1);
+      const content = fs.readFileSync(path.join(promptsDir, files[0]), "utf-8");
+      expect(content).toContain("Re-pair: Test prompt");
+      // Filename sanitized: contains session + decision tags
+      expect(files[0]).toContain("session_abc");
+      expect(files[0]).toContain("dec_xyz");
+    });
+
+    it("rejects empty content", async () => {
+      const res = await app.request("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "   " }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("sanitizes decisionId/sessionId so ../ can't escape the prompts dir", async () => {
+      const res = await app.request("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: "# Test",
+          sessionId: "../../etc",
+          decisionId: "../../passwd",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const promptsDir = path.join(tmpDir, ".deeppairing", "prompts");
+      const files = fs.readdirSync(promptsDir);
+      // Sanitized filename contains only [a-zA-Z0-9_-]
+      for (const f of files) {
+        expect(f).not.toContain("..");
+        expect(f).not.toContain("/");
+      }
+    });
+  });
+
+  describe("GET /api/search", () => {
+    it("returns empty results for empty query", async () => {
+      const res = await app.request("/api/search?q=");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.results).toEqual([]);
+    });
+
+    it("returns matching artifacts across sessions", async () => {
+      // Seed an additional session via a fresh store
+      const other = new FileStore(tmpDir, "other_session");
+      other.createArtifact({ id: "a1", type: "research", title: "Auth review", content: {} });
+      other.forceFlush();
+
+      const res = await app.request("/api/search?q=auth");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.results.length).toBeGreaterThan(0);
+      expect(body.results[0].sessionId).toBe("other_session");
+    });
+
+    it("honors the limit query parameter", async () => {
+      const s = new FileStore(tmpDir, "many");
+      for (let i = 0; i < 20; i++) {
+        s.createArtifact({ id: `a${i}`, type: "research", title: `Cache ${i}`, content: {} });
+      }
+      s.forceFlush();
+
+      const res = await app.request("/api/search?q=cache&limit=5");
+      const body = await res.json();
+      expect(body.results.length).toBe(5);
+    });
+  });
+
   describe("CORS", () => {
     it("allows localhost origins", async () => {
       const res = await app.request("/api/state", {
