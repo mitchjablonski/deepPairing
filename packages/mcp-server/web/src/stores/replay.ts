@@ -11,6 +11,16 @@ import { API_BASE } from "../lib/api";
  * Kept as a separate store from `artifact` so entering/exiting replay doesn't
  * disturb the live-session store for active sessions.
  */
+interface DecisionRecord {
+  decisionId: string;
+  artifactId: string;
+  context: string;
+  options: any[];
+  response?: { optionId: string; reasoning?: string };
+  createdAt?: string;
+  resolvedAt?: string;
+}
+
 interface ReplayState {
   active: boolean;
   sessionId: string | null;
@@ -20,6 +30,8 @@ interface ReplayState {
   playing: boolean;
   speed: 1 | 4 | 16;
   annotations: SessionAnnotation[];
+  /** Resolved-decision records; lets DecisionCard show past choices. */
+  decisions: DecisionRecord[];
 
   enterReplay: (sessionId: string, state: {
     artifacts?: any[];
@@ -48,6 +60,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   playing: false,
   speed: 1,
   annotations: [],
+  decisions: [],
 
   enterReplay: async (sessionId, state) => {
     const events = buildTimeline(state);
@@ -72,12 +85,13 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       playing: false,
       speed: 1,
       annotations,
+      decisions: (state.decisions ?? []) as DecisionRecord[],
     });
   },
 
   exitReplay: () => {
     if (playTimer) { clearInterval(playTimer); playTimer = null; }
-    set({ active: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [] });
+    set({ active: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
   },
 
   setCursor: (cursor) => set({ cursor }),

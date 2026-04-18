@@ -1,8 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { useReplayStore } from "../stores/replay";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { demoArtifacts, demoComments } from "@deeppairing/shared/__fixtures__/demo-session";
+
+interface SearchResult {
+  sessionId: string;
+  sessionTitle: string;
+  artifactId: string;
+  artifactType: string;
+  title: string;
+  excerpt: string;
+  score: number;
+  matchedVia: string[];
+}
 
 const API_BASE = `http://${window.location.host}`;
 
@@ -20,6 +31,13 @@ export function SessionBrowser() {
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
   const { addArtifact, addComment, selectArtifact, reset } = useArtifactStore();
+
+  // Cross-session search state
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadDemo = () => {
     reset();
@@ -40,7 +58,7 @@ export function SessionBrowser() {
       .finally(() => setLoading(false));
   }, []);
 
-  const loadSession = async (sessionId: string) => {
+  const loadSession = async (sessionId: string, focusArtifactId?: string) => {
     setLoadingSession(sessionId);
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
@@ -57,12 +75,51 @@ export function SessionBrowser() {
       // above ArtifactPanel hides events after the cursor, so re-reading
       // feels like walking through the session as it happened.
       await useReplayStore.getState().enterReplay(sessionId, state);
+
+      // When a search result was clicked, advance the scrubber to the
+      // matched artifact's creation event so the user lands where they
+      // expected to land.
+      if (focusArtifactId) {
+        const target = (state.artifacts ?? []).find((a: any) => a.id === focusArtifactId);
+        if (target) {
+          useReplayStore.getState().setCursor(target.createdAt);
+          selectArtifact(focusArtifactId);
+        }
+      }
     } catch {
       // Failed to load
     } finally {
       setLoadingSession(null);
     }
   };
+
+  // Debounced search against /api/search
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    const q = query.trim();
+    if (!q) {
+      setResults([]);
+      setSearchError(null);
+      setSearching(false);
+      return;
+    }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      setSearchError(null);
+      try {
+        const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`);
+        if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+        const data = await res.json();
+        setResults(data.results ?? []);
+      } catch (err: any) {
+        setSearchError(err?.message ?? "Search failed");
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 220);
+    return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
+  }, [query]);
 
   const formatDate = (dateStr: string) => {
     try {
@@ -116,13 +173,55 @@ export function SessionBrowser() {
     );
   }
 
+  const showingSearchResults = query.trim().length > 0;
+
   return (
     <div className="p-4 space-y-2">
-      <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
-        Past Sessions ({sessions.length})
-      </h2>
+      {/* Cross-session search */}
+      <div className="mb-4">
+        <div className="relative">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search past sessions (titles, concepts, rejected approaches)..."
+            className="w-full px-3 py-2 pr-16 bg-surface-secondary border border-border-default rounded-lg text-sm text-text-primary
+                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
+          />
+          {searching && (
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-2xs text-text-muted animate-pulse">
+              searching…
+            </span>
+          )}
+          {query && !searching && (
+            <button
+              onClick={() => setQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary text-xs"
+              title="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        {searchError && (
+          <p className="mt-1 text-2xs text-accent-red">{searchError}</p>
+        )}
+      </div>
 
-      {sessions.map((session) => (
+      {/* Search results take precedence when a query is active */}
+      {showingSearchResults ? (
+        <SearchResults
+          results={results}
+          searching={searching}
+          onPick={(r) => loadSession(r.sessionId, r.artifactId)}
+        />
+      ) : (
+        <>
+          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
+            Past Sessions ({sessions.length})
+          </h2>
+
+          {sessions.map((session) => (
         <button
           key={session.id}
           onClick={() => loadSession(session.id)}
@@ -162,9 +261,87 @@ export function SessionBrowser() {
         </button>
       ))}
 
-      <p className="text-2xs text-text-muted text-center pt-2">
-        Past sessions are read-only
+          <p className="text-2xs text-text-muted text-center pt-2">
+            Past sessions are read-only
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SearchResults({
+  results,
+  searching,
+  onPick,
+}: {
+  results: SearchResult[];
+  searching: boolean;
+  onPick: (r: SearchResult) => void;
+}) {
+  if (results.length === 0) {
+    return (
+      <div className="text-xs text-text-muted text-center py-8">
+        {searching ? "Searching…" : "No matches. Try a different query."}
+      </div>
+    );
+  }
+
+  // Group by session so the user sees which session each hit belongs to
+  const bySession = new Map<string, SearchResult[]>();
+  for (const r of results) {
+    const list = bySession.get(r.sessionId) ?? [];
+    list.push(r);
+    bySession.set(r.sessionId, list);
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+        {results.length} match{results.length === 1 ? "" : "es"}
       </p>
+      {Array.from(bySession.entries()).map(([sessionId, hits]) => (
+        <div key={sessionId} className="space-y-1.5">
+          <div className="text-2xs text-text-muted truncate">
+            <span className="opacity-70">session:</span>{" "}
+            <span className="text-text-secondary font-mono">{hits[0].sessionTitle || sessionId}</span>
+          </div>
+          {hits.map((r) => (
+            <button
+              key={r.artifactId}
+              onClick={() => onPick(r)}
+              className="w-full text-left p-2.5 bg-surface-elevated border border-white/[0.06] rounded
+                         hover:border-accent-blue/40 hover:bg-surface-hover transition-all duration-[180ms] ease-out press-scale"
+            >
+              <div className="flex items-start gap-2">
+                <ArtifactIcon type={r.artifactType} className="w-3.5 h-3.5 mt-0.5 text-text-muted shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-medium text-text-primary truncate">{r.title}</span>
+                    {r.matchedVia.map((via) => (
+                      <span
+                        key={via}
+                        className={`text-[9px] uppercase tracking-wide px-1 py-0.5 rounded ${
+                          via === "concept"
+                            ? "bg-accent-violet-dim text-accent-violet"
+                            : via === "rejected"
+                              ? "bg-accent-red-dim text-accent-red"
+                              : via === "title"
+                                ? "bg-accent-blue-dim text-accent-blue"
+                                : "bg-surface-secondary text-text-muted"
+                        }`}
+                      >
+                        {via}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-2xs text-text-muted truncate mt-0.5">{r.excerpt}</p>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

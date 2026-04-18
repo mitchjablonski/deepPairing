@@ -324,6 +324,19 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
+        name: "deepPairing_search_sessions",
+        description:
+          "Search across every past session in this project for artifacts matching a query. Use when the human references prior work ('did we look at this before?') or when you want to cite a past decision / finding that relates to the current task. Matches against artifact titles, concept names, rejected-approach entries, and artifact content. Returns the top results ranked by relevance.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            query: { type: "string", description: "Free-text query (matches across titles, concepts, rejected approaches, and content)" },
+            limit: { type: "number", description: "Max results (default 50, cap 200)" },
+          },
+          required: ["query"],
+        },
+      },
+      {
         name: "deepPairing_export_session",
         description: "Export the current session as markdown. Formats: 'pr-description' (concise for PR bodies), 'adr' (architecture decision record), 'full' (complete session with code), 'replay' (chronological walkthrough with annotations — useful for re-reading and learning).",
         inputSchema: {
@@ -1274,6 +1287,44 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
         return {
           content: [{ type: "text", text: `Retracted ${artifactId}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
+        };
+      }
+
+      case "deepPairing_search_sessions": {
+        const query = String(args?.query ?? "").trim();
+        if (!query) {
+          return {
+            content: [{ type: "text", text: "search_sessions requires a non-empty query." }],
+            isError: true,
+          };
+        }
+        const limit = typeof args?.limit === "number" ? args.limit : 50;
+
+        // Only available when the store supports cross-session reads (DaemonClient)
+        if (typeof (store as any).searchSessions !== "function") {
+          return {
+            content: [{ type: "text", text: "search_sessions requires the daemon store (not available in this context)." }],
+            isError: true,
+          };
+        }
+
+        const results = await (store as any).searchSessions(query, limit);
+        if (results.length === 0) {
+          return {
+            content: [{ type: "text", text: `No matches for "${query}" across past sessions.` }],
+          };
+        }
+
+        const lines = results.slice(0, 20).map((r: any) => {
+          const via = r.matchedVia?.length ? ` (via ${r.matchedVia.join(", ")})` : "";
+          return `- [${r.sessionId}/${r.artifactId}] ${r.artifactType}: "${r.title}"${via}\n    ${r.excerpt}`;
+        });
+        const trailer = results.length > 20 ? `\n…${results.length - 20} more results.` : "";
+        return {
+          content: [{
+            type: "text",
+            text: `Found ${results.length} match${results.length === 1 ? "" : "es"} for "${query}":\n${lines.join("\n")}${trailer}\n\nRead a full session via resource deeppairing://session/{id} or a single artifact via deeppairing://artifact/{id}.`,
+          }],
         };
       }
 

@@ -192,18 +192,37 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       )}
       {artifact.type === "decision" && (() => {
         const dc = getTypedContent<DecisionContent>(artifact);
-        return dc.options ? (
+        if (!dc.options) return null;
+
+        // When viewing a past resolved decision via replay, pull the record so
+        // DecisionCard can open in the resolved state with the Re-pair button.
+        const replay = useReplayStore.getState();
+        const effectiveDecisionId = dc.decisionId ?? artifact.id;
+        const record = replay.decisions.find(
+          (d) => d.decisionId === effectiveDecisionId || d.artifactId === artifact.id,
+        );
+        const initialResolved = record?.response
+          ? {
+              optionId: record.response.optionId,
+              reasoning: record.response.reasoning,
+              resolvedAt: record.resolvedAt,
+            }
+          : undefined;
+
+        return (
           <DecisionCard
             event={{
               type: "decision_request",
-              decisionId: dc.decisionId ?? artifact.id,
+              decisionId: effectiveDecisionId,
               context: dc.context,
               options: dc.options,
             }}
-            decisionId={dc.decisionId ?? artifact.id}
+            decisionId={effectiveDecisionId}
             artifactId={artifact.id}
+            sessionId={artifact.sessionId}
+            initialResolved={initialResolved}
           />
-        ) : null;
+        );
       })()}
 
       {/* General comments */}

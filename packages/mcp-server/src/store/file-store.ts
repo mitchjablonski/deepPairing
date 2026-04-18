@@ -606,4 +606,137 @@ export class FileStore implements IStore {
     const store = new FileStore(projectRoot, sessionId);
     return store.getFullState();
   }
+
+  /**
+   * Search every session in the project for artifacts matching a free-text query.
+   * Scoring (simple, transparent):
+   *   concept name match   × 3
+   *   rejected-approach    × 2
+   *   title match          × 2
+   *   content match        × 1
+   * Case-insensitive substring across all token positions. Capped at {@link limit}
+   * results total so the UI stays fast on large projects.
+   */
+  static searchAll(
+    projectRoot: string,
+    query: string,
+    limit = 50,
+  ): Array<{
+    sessionId: string;
+    sessionTitle: string;
+    artifactId: string;
+    artifactType: string;
+    title: string;
+    excerpt: string;
+    score: number;
+    matchedVia: Array<"concept" | "title" | "content" | "rejected">;
+  }> {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const results: Array<{
+      sessionId: string;
+      sessionTitle: string;
+      artifactId: string;
+      artifactType: string;
+      title: string;
+      excerpt: string;
+      score: number;
+      matchedVia: Array<"concept" | "title" | "content" | "rejected">;
+    }> = [];
+
+    const sessions = FileStore.listSessions(projectRoot);
+    for (const session of sessions) {
+      const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
+      const artFile = path.join(sessionDir, "artifacts.json");
+      if (!fs.existsSync(artFile)) continue;
+      let artifacts: Artifact[];
+      try {
+        artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+      } catch {
+        continue;
+      }
+
+      // Pull rejected approaches from preferences.json for this project
+      const prefsFile = path.join(projectRoot, ".deeppairing", "preferences.json");
+      let rejected: Array<{ description?: string; concept?: string; reason?: string; sourceArtifactId?: string }> = [];
+      try {
+        if (fs.existsSync(prefsFile)) {
+          const prefs = JSON.parse(fs.readFileSync(prefsFile, "utf-8"));
+          const raw = prefs.rejectedApproaches ?? [];
+          rejected = Array.isArray(raw)
+            ? raw.map((r: any) => (typeof r === "string" ? { description: r } : r))
+            : [];
+        }
+      } catch {}
+
+      for (const artifact of artifacts) {
+        const matchedVia = new Set<"concept" | "title" | "content" | "rejected">();
+        let score = 0;
+
+        // Title
+        if (artifact.title && artifact.title.toLowerCase().includes(q)) {
+          score += 2;
+          matchedVia.add("title");
+        }
+
+        // Concept (reasoning artifacts)
+        const concept = (artifact.content as any)?.concept;
+        if (concept?.name && String(concept.name).toLowerCase().includes(q)) {
+          score += 3;
+          matchedVia.add("concept");
+        }
+
+        // Rejected approach tied to this artifact (or matching the query directly)
+        for (const rej of rejected) {
+          const matchesArtifact = rej.sourceArtifactId === artifact.id;
+          const desc = (rej.description ?? "").toLowerCase();
+          const reason = (rej.reason ?? "").toLowerCase();
+          const conceptStr = (rej.concept ?? "").toLowerCase();
+          const hit = desc.includes(q) || reason.includes(q) || conceptStr.includes(q);
+          if (matchesArtifact && hit) {
+            score += 2;
+            matchedVia.add("rejected");
+          }
+        }
+
+        // Content fallback — stringify and substring-check
+        let contentBlob = "";
+        try {
+          contentBlob = JSON.stringify(artifact.content ?? {}).toLowerCase();
+        } catch {}
+        if (contentBlob.includes(q)) {
+          score += 1;
+          matchedVia.add("content");
+        }
+
+        if (score === 0) continue;
+
+        // Excerpt: short context window around the first match in content/title
+        const source = artifact.title + " — " + contentBlob;
+        const idx = source.indexOf(q);
+        const excerpt =
+          idx >= 0
+            ? source
+                .slice(Math.max(0, idx - 40), idx + q.length + 80)
+                .replace(/\s+/g, " ")
+                .trim()
+            : artifact.title;
+
+        results.push({
+          sessionId: session.id,
+          sessionTitle: session.summary,
+          artifactId: artifact.id,
+          artifactType: artifact.type,
+          title: artifact.title,
+          excerpt,
+          score,
+          matchedVia: Array.from(matchedVia),
+        });
+      }
+    }
+
+    // Sort by score desc, then recency (session.lastActivity is already in
+    // listSessions order; we preserve insertion order via stable sort).
+    return results.sort((a, b) => b.score - a.score).slice(0, limit);
+  }
 }
