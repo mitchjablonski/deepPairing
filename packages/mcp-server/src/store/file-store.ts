@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
+import { getGlobalStore } from "./global-store.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -11,8 +12,70 @@ export type { DecisionRecord, PlanReviewRecord };
  * Stores data in .deeppairing/ directory within the project root.
  * In-memory cache with debounced disk flush.
  */
+export interface ProjectGuardrail {
+  /** Short identifier like "migrations" or "workflows". */
+  category: string;
+  /** Relative path(s) that triggered the guardrail. */
+  paths: string[];
+  /** Human-readable rationale — why the agent should escalate here. */
+  rationale: string;
+}
+
+/**
+ * Sense the project's sensitive areas by filesystem signals alone — no
+ * config. Runs once on FileStore construction; cached per instance. The
+ * agent receives these in firstCallHint and knows to stay supervised for
+ * changes in these paths even when global autonomy is "autonomous".
+ */
+function senseProjectGuardrails(projectRoot: string): ProjectGuardrail[] {
+  const guardrails: ProjectGuardrail[] = [];
+  const exists = (rel: string) => {
+    try { return fs.existsSync(path.join(projectRoot, rel)); } catch { return false; }
+  };
+
+  const migrationPaths = ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations"].filter(exists);
+  if (migrationPaths.length > 0) {
+    guardrails.push({
+      category: "migrations",
+      paths: migrationPaths,
+      rationale: "Migrations are hard to reverse — escalate to supervised for changes here.",
+    });
+  }
+
+  const workflowPath = ".github/workflows";
+  if (exists(workflowPath)) {
+    guardrails.push({
+      category: "workflows",
+      paths: [workflowPath],
+      rationale: "CI workflows affect every future deploy — escalate for changes here.",
+    });
+  }
+
+  const infraPaths = ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", "infrastructure", "terraform", "k8s", "kubernetes", "helm"].filter(exists);
+  if (infraPaths.length > 0) {
+    guardrails.push({
+      category: "infrastructure",
+      paths: infraPaths,
+      rationale: "Infrastructure changes affect production surfaces — escalate here.",
+    });
+  }
+
+  const secretPaths = [".env", ".env.local", ".env.production", "config/secrets.yml"].filter(exists);
+  if (secretPaths.length > 0) {
+    guardrails.push({
+      category: "secrets",
+      paths: secretPaths,
+      rationale: "Secret files must never leak into the session or a commit — escalate here.",
+    });
+  }
+
+  return guardrails;
+}
+
 export class FileStore implements IStore {
   private basePath: string;
+  private projectHint: string;
+  private guardrails: ProjectGuardrail[];
   private artifacts: Artifact[] = [];
   private comments: Comment[] = [];
   private decisions: Map<string, DecisionRecord> = new Map();
@@ -23,6 +86,14 @@ export class FileStore implements IStore {
 
   constructor(projectRoot: string, sessionId?: string) {
     this.basePath = path.join(projectRoot, ".deeppairing");
+    // Project hint for the global philosophy ledger — basename only so the
+    // ledger stays portable across machines (never store absolute paths).
+    this.projectHint = path.basename(projectRoot);
+    // J6: sense filesystem signals for guardrails (migrations, workflows,
+    // infra, secrets). The agent gets these on first tool call so it knows
+    // to escalate for changes in those paths even when global autonomy is
+    // "autonomous" — zero user configuration.
+    this.guardrails = senseProjectGuardrails(projectRoot);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
     // Prevent path traversal via sessionId
     if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
@@ -369,6 +440,25 @@ export class FileStore implements IStore {
    * Records are enriched objects; legacy string[] entries are migrated on next write.
    */
   recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): void {
+    // Mirror into the user-global philosophy ledger. The session-scoped
+    // preferences.json remains the source of truth for THIS project's
+    // pre-flight; the global ledger is additive context for future sessions
+    // across all projects.
+    const conceptKey = concept?.trim() || description.trim();
+    if (conceptKey) {
+      try {
+        getGlobalStore().recordInstance(conceptKey, {
+          project: this.projectHint,
+          sessionId: this.sessionId,
+          verdict: "rejected",
+          reason,
+          description,
+        });
+      } catch {
+        // Non-fatal — losing a ledger append doesn't break the session.
+      }
+    }
+
     const prefs = this.readPreferences();
     const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
     const existing = rejected.find((r) => r.description === description);
@@ -418,6 +508,20 @@ export class FileStore implements IStore {
    * Stored in .deeppairing/preferences.json under "approvedPatterns".
    */
   recordApprovedPattern(description: string): void {
+    // Mirror into global philosophy ledger (same rationale as rejection path).
+    if (description.trim()) {
+      try {
+        getGlobalStore().recordInstance(description, {
+          project: this.projectHint,
+          sessionId: this.sessionId,
+          verdict: "approved",
+          description,
+        });
+      } catch {
+        // Non-fatal
+      }
+    }
+
     const prefs = this.readPreferences();
     const approved: string[] = prefs.approvedPatterns ?? [];
     if (!approved.includes(description)) {
@@ -437,6 +541,10 @@ export class FileStore implements IStore {
       rejectedApproaches: this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []),
       approvedPatterns: prefs.approvedPatterns ?? [],
     };
+  }
+
+  getProjectGuardrails(): ProjectGuardrail[] {
+    return this.guardrails;
   }
 
   private readPreferences(): Record<string, any> {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { FileStore } from "../file-store.js";
+import { setGlobalStoreForTests } from "../global-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,12 +11,15 @@ const stores: FileStore[] = [];
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-test-"));
   stores.length = 0;
+  // Redirect the global philosophy ledger into tmpDir so test writes don't
+  // leak into the real ~/.deeppairing/.
+  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
 });
 
 afterEach(() => {
-  // Force flush all stores to prevent timer writes after dir cleanup
   for (const s of stores) s.forceFlush();
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  setGlobalStoreForTests(null);
 });
 
 /** Create a FileStore and track it for cleanup */
@@ -145,6 +149,43 @@ describe("FileStore", () => {
     const memory = store.getSessionMemory();
     expect(memory.approvedPatterns).toContain("Service pattern");
     expect(memory.rejectedApproaches.map((r) => r.description)).toContain("Inline refactor");
+  });
+
+  describe("project guardrails (J6)", () => {
+    it("detects migrations directory", () => {
+      fs.mkdirSync(path.join(tmpDir, "migrations"), { recursive: true });
+      const store = createStore("guard1");
+      const guardrails = store.getProjectGuardrails();
+      const migrationsRail = guardrails.find((g) => g.category === "migrations");
+      expect(migrationsRail).toBeDefined();
+      expect(migrationsRail?.paths).toContain("migrations");
+    });
+
+    it("detects .github/workflows", () => {
+      fs.mkdirSync(path.join(tmpDir, ".github", "workflows"), { recursive: true });
+      const store = createStore("guard2");
+      const guardrails = store.getProjectGuardrails();
+      expect(guardrails.some((g) => g.category === "workflows")).toBe(true);
+    });
+
+    it("detects infrastructure files", () => {
+      fs.writeFileSync(path.join(tmpDir, "Dockerfile"), "FROM node");
+      const store = createStore("guard3");
+      const guardrails = store.getProjectGuardrails();
+      expect(guardrails.some((g) => g.category === "infrastructure")).toBe(true);
+    });
+
+    it("detects .env files as secrets", () => {
+      fs.writeFileSync(path.join(tmpDir, ".env"), "SECRET=foo");
+      const store = createStore("guard4");
+      const guardrails = store.getProjectGuardrails();
+      expect(guardrails.some((g) => g.category === "secrets")).toBe(true);
+    });
+
+    it("returns empty for a bare project", () => {
+      const store = createStore("guard5");
+      expect(store.getProjectGuardrails()).toEqual([]);
+    });
   });
 
   describe("listSessions", () => {
