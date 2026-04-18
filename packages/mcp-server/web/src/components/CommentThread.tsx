@@ -213,6 +213,7 @@ export function AskTrigger({
       <button
         onClick={() => setOpen(!open)}
         title={unanswered > 0 ? `${unanswered} unanswered question` : "Ask the agent about this"}
+        aria-label={unanswered > 0 ? `Ask the agent — ${unanswered} unanswered question` : "Ask the agent about this"}
         className={`${classes} ${tint}`}
       >
         <span className="text-[10px] font-semibold">?</span>

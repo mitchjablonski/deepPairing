@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { API_BASE, sessionHeaders } from "../lib/api";
+
+// Stable empty-array reference so Zustand's store selector doesn't produce
+// a fresh `[]` on every render (which would trigger an infinite loop via
+// useSyncExternalStore).
+const EMPTY_COMMENTS: Comment[] = [];
 
 /**
  * Free-form message composer at the bottom of the companion UI.
@@ -20,7 +26,7 @@ export function MessageInput() {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const sessionComments = useArtifactStore((s) => s.comments["__session__"] ?? []);
+  const sessionComments = useArtifactStore((s) => s.comments["__session__"] ?? EMPTY_COMMENTS);
 
   // Thread history — last 3 session messages, newest at the bottom to read
   // naturally from older to newer as the eye travels down toward the input.
