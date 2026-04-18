@@ -67,6 +67,8 @@ export interface DecisionContent {
     recommendation: boolean;
   }>;
   decisionId: string;
+  /** How consequential this decision is. Only "high" triggers prediction capture. */
+  stakes?: "low" | "medium" | "high";
 }
 
 export interface CodeChangeContent {

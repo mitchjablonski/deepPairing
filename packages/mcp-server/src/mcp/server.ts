@@ -109,11 +109,18 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "deepPairing_present_options",
-        description: "USE THIS instead of listing options as plain text. Present 2-4 options with pros/cons/effort/risk for the human to choose in the companion UI. NON-BLOCKING — call check_feedback in a loop after to get their selection.",
+        description:
+          "USE THIS instead of listing options as plain text. Present 2-4 options with pros/cons/effort/risk for the human to choose in the companion UI. NON-BLOCKING — call check_feedback in a loop after to get their selection.\n\n" +
+          "SET `stakes: \"high\"` ONLY when the decision is architecturally significant or hard to reverse (schema changes, auth / billing flows, infra, language/framework choices, anything affecting production surfaces). On high-stakes decisions the UI prompts the human for a prediction — raw material for calibration. Default `stakes: \"medium\"` for most feature decisions; `\"low\"` for local refactors / style choices.",
         inputSchema: {
           type: "object" as const,
           properties: {
             context: { type: "string", description: "What decision needs to be made" },
+            stakes: {
+              type: "string",
+              enum: ["low", "medium", "high"],
+              description: "Consequentiality — on 'high', the UI captures the human's prediction + confidence",
+            },
             options: {
               type: "array",
               items: {
@@ -368,6 +375,28 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           properties: {
             format: { type: "string", enum: ["pr-description", "adr", "full", "replay"], description: "Export format" },
           },
+        },
+      },
+      {
+        name: "deepPairing_request_horizon_check",
+        description:
+          "Ask the human to predict a failure mode for an architecturally-significant artifact on a specific time horizon (3mo / 1y / 2y). Use this SPARINGLY — only for decisions or designs that could break in non-obvious ways as the system scales or evolves (schema shapes, auth flows, caching strategies, data pipelines, queue semantics).\n\n" +
+          "This creates an agent-authored 'horizon check' question on the artifact. The human replies in the companion UI; their prediction gets stored so they can learn from it later (was the prediction right? was the timeframe off?). This is deepPairing's craft-development surface — not a compliance checkbox.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            artifactId: { type: "string", description: "The artifact (plan, decision, code change) to anchor the horizon check to" },
+            horizon: {
+              type: "string",
+              enum: ["3mo", "1y", "2y"],
+              description: "How far out to project — shorter = operational risks, longer = scale/design risks",
+            },
+            prompt: {
+              type: "string",
+              description: "Optional concrete prompt. If omitted, a reasonable default is used based on the artifact type.",
+            },
+          },
+          required: ["artifactId", "horizon"],
         },
       },
       {
@@ -800,11 +829,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         const id = `art_${nanoid(10)}`;
         const decisionId = `dec_${nanoid(10)}`;
+        const stakes = ["low", "medium", "high"].includes(args?.stakes) ? args.stakes : undefined;
         const artifact = await store.createArtifact({
           id,
           type: "decision",
           title: args?.context ?? "Decision",
-          content: { context: args?.context, options: args?.options, decisionId },
+          content: { context: args?.context, options: args?.options, decisionId, stakes },
           relatedArtifactIds: args?.relatedFindings,
         });
         await store.recordDecisionRequest({
@@ -812,7 +842,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           artifactId: id,
           context: args?.context,
           options: args?.options,
-        });
+          stakes,
+        } as any);
         broadcast({ type: "artifact_created", artifact });
         broadcast({
           type: "decision_request",
@@ -820,6 +851,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           artifactId: id,
           context: args?.context,
           options: args?.options,
+          stakes,
         });
 
         // Try elicitation for quick selection
@@ -1216,6 +1248,67 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         return {
           content: [{ type: "text", text: parts.join("\n\n") }],
+        };
+      }
+
+      case "deepPairing_request_horizon_check": {
+        const artifactId = String(args?.artifactId ?? "").trim();
+        const horizon = String(args?.horizon ?? "").trim();
+        if (!artifactId) {
+          return {
+            content: [{ type: "text", text: "request_horizon_check requires artifactId." }],
+            isError: true,
+          };
+        }
+        if (!["3mo", "1y", "2y"].includes(horizon)) {
+          return {
+            content: [{ type: "text", text: "request_horizon_check: horizon must be '3mo', '1y', or '2y'." }],
+            isError: true,
+          };
+        }
+        const artifacts = await store.getArtifacts();
+        const artifact = artifacts.find((a) => a.id === artifactId);
+        if (!artifact) {
+          return {
+            content: [{ type: "text", text: `request_horizon_check: no artifact with id ${artifactId}.` }],
+            isError: true,
+          };
+        }
+
+        const horizonLabel =
+          horizon === "3mo" ? "3 months" :
+          horizon === "1y" ? "1 year" :
+          "2 years";
+
+        const customPrompt = typeof args?.prompt === "string" ? args.prompt.trim() : "";
+        const defaultPrompt =
+          artifact.type === "decision"
+            ? `In ${horizonLabel}, what's most likely to make us regret this choice? What signals would tell us it was wrong?`
+            : artifact.type === "plan"
+              ? `In ${horizonLabel}, what assumption in this plan is most likely to break? Which step has the most hidden coupling?`
+              : artifact.type === "code_change"
+                ? `In ${horizonLabel}, which line in this change would I look at first if this system broke?`
+                : `In ${horizonLabel}, what's most likely to go wrong with this?`;
+
+        const content = customPrompt || defaultPrompt;
+
+        const horizonCommentId = `cmt_${nanoid(10)}`;
+        const horizonComment = await store.addComment({
+          id: horizonCommentId,
+          artifactId,
+          content,
+          author: "agent",
+          target: { artifactId, sectionId: `horizon_check:${horizon}` } as any,
+          intent: "question",
+        } as any);
+
+        broadcast({ type: "comment_added", comment: horizonComment });
+
+        return {
+          content: [{
+            type: "text",
+            text: `Horizon check (${horizonLabel}) posted on ${artifactId}: "${content}"\nThe human will answer in the companion UI. Pick their reply up via check_feedback and consider it when you proceed.${await getPassiveFeedback()}`,
+          }],
         };
       }
 

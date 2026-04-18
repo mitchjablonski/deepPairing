@@ -12,11 +12,18 @@ interface DecisionCardProps {
   decisionId?: string;
   /** Artifact id — needed for AskTrigger targeting per-option questions */
   artifactId?: string;
+  /**
+   * Consequentiality — "high" triggers prediction + confidence capture
+   * after the human picks. Default: no prediction prompt.
+   */
+  stakes?: "low" | "medium" | "high";
   /** If set (e.g. in replay mode for past decisions), start in the resolved state. */
   initialResolved?: {
     optionId: string;
     reasoning?: string;
     resolvedAt?: string;
+    confidence?: "low" | "medium" | "high";
+    predictedOutcome?: string;
   };
   /** For the Re-pair modal: which session this decision was recorded in. */
   sessionId?: string;
@@ -29,7 +36,7 @@ const badgeColors = {
   high: "bg-accent-red-dim text-accent-red",
 };
 
-export function DecisionCard({ event, decisionId, artifactId, initialResolved, sessionId, onResolved }: DecisionCardProps) {
+export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const { resolveDecision } = useArtifactStore();
   const [focusedIndex, setFocusedIndex] = useState(
     event.options.findIndex((o) => o.recommendation) ?? 0,
@@ -40,16 +47,21 @@ export function DecisionCard({ event, decisionId, artifactId, initialResolved, s
   const [resolved, setResolved] = useState(!!initialResolved);
   const [selectedId, setSelectedId] = useState<string | null>(initialResolved?.optionId ?? null);
   const [showRepair, setShowRepair] = useState(false);
+  /** Prediction capture state — only shown when stakes="high" and an option is tentatively picked. */
+  const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
+  const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
+  const [confidence, setConfidence] = useState<"low" | "medium" | "high" | "">(initialResolved?.confidence ?? "");
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleSelect = async (optionId: string) => {
-    if (submitting || resolved) return;
+  const submitSelection = async (
+    optionId: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ) => {
     setSubmitting(true);
     setSelectedId(optionId);
-
     try {
       const id = decisionId ?? event.decisionId;
-      await resolveDecision(id, optionId, reasoning.trim() || undefined);
+      await resolveDecision(id, optionId, reasoning.trim() || undefined, prediction);
       setResolved(true);
       onResolved?.();
     } catch {
@@ -57,6 +69,32 @@ export function DecisionCard({ event, decisionId, artifactId, initialResolved, s
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSelect = async (optionId: string) => {
+    if (submitting || resolved) return;
+    // High-stakes → gate on a prediction capture step
+    if (stakes === "high") {
+      setPendingOptionId(optionId);
+      return;
+    }
+    await submitSelection(optionId);
+  };
+
+  const confirmWithPrediction = async () => {
+    if (!pendingOptionId) return;
+    const prediction = {
+      confidence: (confidence || undefined) as "low" | "medium" | "high" | undefined,
+      predictedOutcome: predictedOutcome.trim() || undefined,
+    };
+    await submitSelection(pendingOptionId, prediction);
+    setPendingOptionId(null);
+  };
+
+  const skipPrediction = async () => {
+    if (!pendingOptionId) return;
+    await submitSelection(pendingOptionId);
+    setPendingOptionId(null);
   };
 
   // Keyboard navigation
@@ -112,6 +150,25 @@ export function DecisionCard({ event, decisionId, artifactId, initialResolved, s
             <span className="font-medium">{chosen?.title}</span>
             {reasoning && <span className="text-text-muted"> — {reasoning}</span>}
           </p>
+          {(initialResolved?.predictedOutcome || initialResolved?.confidence) && (
+            <div className="mt-2 pt-2 border-t border-accent-green/15">
+              <div className="flex items-start gap-2">
+                <span className="text-2xs font-semibold text-accent-amber shrink-0 mt-0.5">
+                  Predicted:
+                </span>
+                <div className="flex-1 min-w-0">
+                  {initialResolved.predictedOutcome && (
+                    <p className="text-xs text-text-secondary">{initialResolved.predictedOutcome}</p>
+                  )}
+                  {initialResolved.confidence && (
+                    <span className="inline-block mt-1 text-2xs text-text-muted italic">
+                      ({initialResolved.confidence} confidence)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           {rejected.length > 0 && (
             <div className="mt-2 pt-2 border-t border-accent-green/15">
               <span className="text-xs text-text-muted">
@@ -156,6 +213,18 @@ export function DecisionCard({ event, decisionId, artifactId, initialResolved, s
       <div className="flex items-center gap-2 mb-3">
         <span className="inline-block w-2 h-2 rounded-full bg-accent-violet animate-pulse" />
         <span className="text-sm font-semibold text-accent-violet">Let's think this through</span>
+        {stakes && stakes !== "low" && (
+          <span
+            className={`text-2xs font-medium uppercase tracking-wide px-1.5 py-0.5 rounded ${
+              stakes === "high"
+                ? "bg-accent-red-dim text-accent-red"
+                : "bg-accent-amber-dim text-accent-amber"
+            }`}
+            title={stakes === "high" ? "High stakes — the agent flagged this as consequential" : "Medium stakes"}
+          >
+            {stakes} stakes
+          </span>
+        )}
         <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter select</span>
       </div>
       <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
@@ -252,6 +321,76 @@ export function DecisionCard({ event, decisionId, artifactId, initialResolved, s
           ))}
         </AnimatePresence>
       </div>
+
+      {/* Prediction capture — only on high-stakes decisions, only after the
+          user has tentatively picked. Raw material for calibration tracking. */}
+      {pendingOptionId && (
+        <div className="mt-3 p-3 bg-accent-amber-dim/25 border border-accent-amber/30 rounded-lg space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-accent-amber">
+              Before you commit — quick prediction
+            </span>
+            <span className="text-2xs text-text-muted italic">(skippable; agent flagged this high-stakes)</span>
+          </div>
+
+          <div>
+            <label className="text-2xs text-text-muted block mb-1">
+              What do you expect to happen as a result?
+            </label>
+            <textarea
+              rows={2}
+              autoFocus
+              value={predictedOutcome}
+              onChange={(e) => setPredictedOutcome(e.target.value)}
+              placeholder="e.g. cache hit rate hits 85% within 2 weeks; no new p99 regressions…"
+              className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber resize-none"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-2xs text-text-muted">Confidence:</span>
+            {(["low", "medium", "high"] as const).map((c) => (
+              <button
+                key={c}
+                onClick={() => setConfidence(c)}
+                className={`px-2 py-0.5 rounded text-2xs font-medium ${
+                  confidence === c
+                    ? "bg-accent-amber text-white"
+                    : "bg-surface-elevated text-text-muted hover:text-text-primary"
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={confirmWithPrediction}
+              disabled={submitting}
+              className="px-3 py-1 text-xs font-medium bg-accent-violet text-white rounded
+                         hover:bg-accent-violet/80 disabled:opacity-50 transition-colors press-scale"
+            >
+              Commit with prediction
+            </button>
+            <button
+              onClick={skipPrediction}
+              disabled={submitting}
+              className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
+            >
+              Skip, just commit
+            </button>
+            <button
+              onClick={() => { setPendingOptionId(null); setSelectedId(null); }}
+              disabled={submitting}
+              className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Reasoning — nudged because it becomes the rejection reason for the
           N-1 options you didn't pick. Without it, the agent only remembers

@@ -313,6 +313,7 @@ export class FileStore implements IStore {
     artifactId: string;
     context: string;
     options: any[];
+    stakes?: "low" | "medium" | "high";
   }): void {
     this.decisions.set(params.decisionId, {
       ...params,
@@ -321,10 +322,20 @@ export class FileStore implements IStore {
     this.scheduleFlush();
   }
 
-  resolveDecision(decisionId: string, optionId: string, reasoning?: string): void {
+  resolveDecision(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): void {
     const dec = this.decisions.get(decisionId);
     if (dec) {
-      dec.response = { optionId, reasoning };
+      dec.response = {
+        optionId,
+        reasoning,
+        confidence: prediction?.confidence,
+        predictedOutcome: prediction?.predictedOutcome,
+      };
       dec.resolvedAt = new Date().toISOString();
       this.scheduleFlush();
       this.notifyFeedbackWaiters();
@@ -404,6 +415,8 @@ export class FileStore implements IStore {
     commentDensity: number;
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
+    decisionsWithPredictions: number;
+    highStakesDecisions: number;
   } {
     const reviewed = this.artifacts.filter((a) => a.status !== "draft" && a.status !== "superseded");
     const approved = this.artifacts.filter((a) => a.status === "approved");
@@ -429,7 +442,24 @@ export class FileStore implements IStore {
       typeSummary[type] = { avgLatencyMs: Math.round(data.totalMs / data.count), count: data.count };
     }
 
-    return { avgReviewLatencyMs: Math.round(avgReviewLatencyMs), commentDensity, approvalRate, reviewsByType: typeSummary };
+    // K2: craft-development signals — how often the user captures predictions
+    // and how often the agent flags decisions as high-stakes.
+    let decisionsWithPredictions = 0;
+    let highStakesDecisions = 0;
+    for (const d of this.decisions.values()) {
+      const r = d.response as any;
+      if (r && (r.confidence || r.predictedOutcome)) decisionsWithPredictions++;
+      if ((d as any).stakes === "high") highStakesDecisions++;
+    }
+
+    return {
+      avgReviewLatencyMs: Math.round(avgReviewLatencyMs),
+      commentDensity,
+      approvalRate,
+      reviewsByType: typeSummary,
+      decisionsWithPredictions,
+      highStakesDecisions,
+    };
   }
 
   // --- Session Memory (persists across sessions) ---

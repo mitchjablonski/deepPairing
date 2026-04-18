@@ -206,6 +206,8 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
               optionId: record.response.optionId,
               reasoning: record.response.reasoning,
               resolvedAt: record.resolvedAt,
+              confidence: (record.response as any).confidence,
+              predictedOutcome: (record.response as any).predictedOutcome,
             }
           : undefined;
 
@@ -220,6 +222,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
             decisionId={effectiveDecisionId}
             artifactId={artifact.id}
             sessionId={artifact.sessionId}
+            stakes={dc.stakes}
             initialResolved={initialResolved}
           />
         );
