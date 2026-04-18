@@ -294,6 +294,25 @@ describe("MCP Tool Handlers", () => {
       expect(store.getArtifacts()).toHaveLength(0);
     });
 
+    it("broadcasts a preflight_blocked event so the UI can toast (H1)", async () => {
+      store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request hosting");
+
+      await callTool("deepPairing_present_options", {
+        context: "Pick a deploy target",
+        options: [
+          { id: "a", title: "Railway", description: "Fast", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+        ],
+      });
+
+      const blockEvent = broadcasts.find((b) => b.type === "preflight_blocked");
+      expect(blockEvent).toBeDefined();
+      expect(blockEvent.toolName).toBe("present_options");
+      expect(blockEvent.match.proposal).toBeTruthy();
+      expect(blockEvent.match.description).toContain("Railway");
+      expect(blockEvent.match.reason).toBe("too expensive");
+      expect(["surface", "concept"]).toContain(blockEvent.match.via);
+    });
+
     it("blocks present_plan when a step description matches a rejected approach", async () => {
       store.recordRejectedApproach("Inline refactor");
 

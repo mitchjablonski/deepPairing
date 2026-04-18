@@ -105,14 +105,14 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
         <CommentBubble key={comment.id} comment={comment} />
       ))}
 
-      <div className="flex gap-1.5">
-        <input
-          type="text"
-          placeholder="Add a comment..."
+      <div className="flex gap-1.5 items-end">
+        <textarea
+          rows={2}
+          placeholder="Add a comment… (⌘⏎ to send, Enter for newline)"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               handleSubmit();
             }
@@ -120,14 +120,14 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
           disabled={submitting}
           className="flex-1 px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
                      placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue
-                     disabled:opacity-50"
+                     disabled:opacity-50 resize-none"
         />
         <button
           onClick={handleSubmit}
           disabled={!input.trim() || submitting}
           className="px-2.5 py-1.5 bg-accent-blue text-white text-xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
-                     transition-colors"
+                     transition-colors shrink-0"
         >
           Send
         </button>

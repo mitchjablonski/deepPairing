@@ -1,3 +1,6 @@
+import { useRef } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
+
 const shortcuts = [
   { keys: "⌘K", description: "Command palette" },
   { keys: "⌘,", description: "Settings sheet" },
@@ -11,9 +14,19 @@ const shortcuts = [
 ];
 
 export function KeyboardShortcutHelp({ onClose }: { onClose: () => void }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, true);
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-surface-elevated border border-border-default rounded-xl shadow-2xl p-6 max-w-sm w-full"
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+      onClick={onClose}
+      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-label="Keyboard shortcuts"
+        className="bg-surface-elevated border border-border-default rounded-xl shadow-2xl p-6 max-w-sm w-full"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-text-primary">Keyboard Shortcuts</h2>

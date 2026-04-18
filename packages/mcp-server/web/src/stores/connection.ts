@@ -107,6 +107,29 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             store.updateArtifact(data.artifactId, "approved");
           }
           break;
+
+        case "preflight_blocked":
+          // The invisible moat made visible — toast so the user SEES
+          // that deepPairing just stopped the agent from re-proposing
+          // something they'd rejected.
+          import("./toast").then(({ useToastStore }) => {
+            const match = data.match ?? {};
+            const via = match.via === "concept" ? " (concept match)" : "";
+            const title = `Memory blocked a repeat proposal${via}`;
+            const bodyParts: string[] = [];
+            if (match.proposal) bodyParts.push(`"${match.proposal}"`);
+            if (match.description && match.description !== match.proposal) {
+              bodyParts.push(`previously rejected as "${match.description}"`);
+            }
+            if (match.reason) bodyParts.push(`— ${match.reason}`);
+            useToastStore.getState().push({
+              kind: "block",
+              title,
+              body: bodyParts.join(" "),
+              ttl: 8000,
+            });
+          });
+          break;
       }
     });
   }

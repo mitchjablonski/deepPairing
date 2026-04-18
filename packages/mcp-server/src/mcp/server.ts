@@ -627,6 +627,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         `Do NOT retry with this approach. Revise your proposal to exclude it, or — if you believe ` +
         `conditions have changed — present_findings first to make the case for reconsidering, then ` +
         `wait for the human's response via check_feedback. The artifact was NOT created.`;
+
+      // Make the invisible moat felt: broadcast the block so the companion UI
+      // can surface a toast. The MOST distinctive deepPairing mechanic — the
+      // agent being stopped from re-proposing something the human already
+      // rejected — used to happen silently. Now the human sees it.
+      broadcast({
+        type: "preflight_blocked",
+        toolName,
+        match: {
+          proposal: match.proposal,
+          description: match.rejected.description,
+          reason: match.rejected.reason,
+          concept: match.rejected.concept,
+          via: match.via,
+        },
+      });
+
       return {
         content: [{ type: "text", text: message }],
         isError: true as const,

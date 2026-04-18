@@ -275,14 +275,18 @@ export function CommentableCode({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      placeholder={mode === "ask" ? "Ask the agent about this line..." : "Add a comment on this line..."}
+                  <div className="flex gap-1.5 items-end">
+                    <textarea
+                      rows={2}
+                      placeholder={
+                        mode === "ask"
+                          ? "Ask the agent about this line… (⌘⏎ to send)"
+                          : "Add a comment on this line… (⌘⏎ to send)"
+                      }
                       value={commentText}
                       onChange={(e) => setCommentText(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                           e.preventDefault();
                           handleSubmit(lineNum);
                         }
@@ -291,7 +295,7 @@ export function CommentableCode({
                       disabled={submitting}
                       autoFocus
                       className={`flex-1 px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
-                                 placeholder-text-muted focus:outline-none focus:ring-1 ${
+                                 placeholder-text-muted focus:outline-none focus:ring-1 resize-none ${
                                    mode === "ask" ? "focus:ring-accent-violet focus:border-accent-violet" : "focus:ring-accent-blue focus:border-accent-blue"
                                  }`}
                     />

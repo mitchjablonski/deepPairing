@@ -11,6 +11,7 @@ import { SessionMetrics } from "./components/SessionMetrics";
 import { CommandPalette } from "./components/CommandPalette";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { ReplayScrubber } from "./components/ReplayScrubber";
+import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
@@ -242,6 +243,9 @@ function App() {
 
       {/* Keyboard shortcut help overlay */}
       {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}
+
+      {/* Ephemeral toast stack — pre-flight blocks, etc. */}
+      <ToastLayer />
     </div>
   );
 }

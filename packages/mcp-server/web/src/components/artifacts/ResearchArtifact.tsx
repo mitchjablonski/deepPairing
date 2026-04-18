@@ -67,6 +67,161 @@ function getCategoryColor(category: string): string {
 
 type ColorBy = "significance" | "category";
 
+type Verdict = "approved" | "revised" | "rejected";
+
+/**
+ * Per-finding triage chips. When auditing a research artifact with many
+ * findings, binary artifact-level Approve/Revise is too coarse — you want
+ * to accept findings 1, 3, 5 and push back on 2 and 4. This submits a
+ * finding-scoped comment the agent can use when supersedes.
+ */
+function FindingTriage({
+  artifactId,
+  findingIndex,
+  findingTitle,
+  comments,
+}: {
+  artifactId: string;
+  findingIndex: number;
+  findingTitle: string;
+  comments: Comment[];
+}) {
+  const [promptVerdict, setPromptVerdict] = useState<Verdict | null>(null);
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const { submitComment } = useArtifactStore();
+
+  // Look up any existing verdict (latest one with sectionId === "verdict")
+  const latestVerdict = useMemo<Verdict | null>(() => {
+    const verdicts = comments.filter((c) => (c.target as any).sectionId === "verdict");
+    const newest = verdicts[verdicts.length - 1];
+    if (!newest) return null;
+    const content = newest.content.toLowerCase();
+    if (content.startsWith("approved")) return "approved";
+    if (content.startsWith("needs revision")) return "revised";
+    if (content.startsWith("rejected")) return "rejected";
+    return null;
+  }, [comments]);
+
+  const submit = async (verdict: Verdict, reasonText = "") => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const label =
+        verdict === "approved" ? "Approved" :
+        verdict === "revised" ? "Needs revision" :
+        "Rejected";
+      const body = reasonText.trim() ? `${label}: ${reasonText.trim()}` : `${label} — finding #${findingIndex + 1}`;
+      await submitComment(
+        artifactId,
+        body,
+        { findingIndex, sectionId: "verdict" } as any,
+      );
+      setPromptVerdict(null);
+      setReason("");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const chipClass = (active: boolean, tone: "green" | "amber" | "red") => {
+    const base = "w-5 h-5 flex items-center justify-center rounded text-[10px] font-semibold transition-colors press-scale";
+    if (active) {
+      return `${base} ${
+        tone === "green" ? "bg-accent-green text-white" :
+        tone === "amber" ? "bg-accent-amber text-white" :
+        "bg-accent-red text-white"
+      }`;
+    }
+    return `${base} text-text-muted hover:text-text-primary ${
+      tone === "green" ? "hover:bg-accent-green-dim" :
+      tone === "amber" ? "hover:bg-accent-amber-dim" :
+      "hover:bg-accent-red-dim"
+    }`;
+  };
+
+  return (
+    <div className="relative flex items-center gap-0.5">
+      <button
+        onClick={() => submit("approved")}
+        disabled={submitting}
+        aria-label={`Approve finding ${findingIndex + 1}`}
+        title={`Approve — "${findingTitle.slice(0, 60)}"`}
+        className={chipClass(latestVerdict === "approved", "green")}
+      >
+        ✓
+      </button>
+      <button
+        onClick={() => {
+          setPromptVerdict("revised");
+          setReason("");
+        }}
+        disabled={submitting}
+        aria-label={`Request revision on finding ${findingIndex + 1}`}
+        title="Request revision — needs a reason"
+        className={chipClass(latestVerdict === "revised", "amber")}
+      >
+        ↻
+      </button>
+      <button
+        onClick={() => {
+          setPromptVerdict("rejected");
+          setReason("");
+        }}
+        disabled={submitting}
+        aria-label={`Reject finding ${findingIndex + 1}`}
+        title="Reject — needs a reason"
+        className={chipClass(latestVerdict === "rejected", "red")}
+      >
+        ✗
+      </button>
+
+      {promptVerdict && (
+        <div className="absolute top-full right-0 mt-1 p-2 bg-surface-elevated border border-border-default rounded-lg shadow-lg z-10 w-72">
+          <div className="text-2xs text-text-muted mb-1.5">
+            {promptVerdict === "revised" ? "Why should the agent revise?" : "Why reject?"}
+          </div>
+          <textarea
+            rows={2}
+            autoFocus
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && reason.trim()) {
+                e.preventDefault();
+                submit(promptVerdict, reason);
+              }
+              if (e.key === "Escape") {
+                setPromptVerdict(null);
+                setReason("");
+              }
+            }}
+            placeholder={`Reason (${promptVerdict === "revised" ? "agent redrafts this finding" : "remembered across sessions"})…`}
+            className="w-full px-2 py-1.5 bg-surface-secondary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet resize-none"
+          />
+          <div className="flex gap-1.5 mt-1.5 justify-end">
+            <button
+              onClick={() => { setPromptVerdict(null); setReason(""); }}
+              className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => submit(promptVerdict, reason)}
+              disabled={!reason.trim() || submitting}
+              className={`px-2 py-1 text-2xs text-white rounded press-scale disabled:opacity-50 ${
+                promptVerdict === "revised" ? "bg-accent-amber hover:bg-accent-amber/80" : "bg-accent-red hover:bg-accent-red/80"
+              }`}
+            >
+              {promptVerdict === "revised" ? "Request revision" : "Reject"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FindingLegend({ colorBy, findings }: { colorBy: ColorBy; findings: RichFinding[] }) {
   if (colorBy === "significance") {
     return (
@@ -344,6 +499,12 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            <FindingTriage
+              artifactId={artifact.id}
+              findingIndex={i}
+              findingTitle={finding.title ?? finding.detail}
+              comments={findingComments}
+            />
             <AskTrigger
               artifactId={artifact.id}
               target={{ findingIndex: i }}
