@@ -44,9 +44,13 @@ export {
   DecisionOptionSchema,
   DecisionRequestSchema,
   DecisionResponseSchema,
+  DecisionStakesSchema,
+  DecisionConfidenceSchema,
   type DecisionOption,
   type DecisionRequest,
   type DecisionResponse,
+  type DecisionStakes,
+  type DecisionConfidence,
 } from "./schemas/decision.js";
 
 export {

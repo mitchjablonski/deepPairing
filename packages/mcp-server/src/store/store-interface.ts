@@ -8,7 +8,14 @@ export interface DecisionRecord {
   artifactId: string;
   context: string;
   options: any[];
-  response?: { optionId: string; reasoning?: string };
+  /** Agent-asserted consequentiality of the decision. */
+  stakes?: "low" | "medium" | "high";
+  response?: {
+    optionId: string;
+    reasoning?: string;
+    confidence?: "low" | "medium" | "high";
+    predictedOutcome?: string;
+  };
   acknowledged?: boolean;
   createdAt: string;
   resolvedAt?: string;
@@ -50,6 +57,7 @@ export interface RecordDecisionParams {
   artifactId: string;
   context: string;
   options: any[];
+  stakes?: "low" | "medium" | "high";
 }
 
 export interface RejectedApproach {
@@ -108,7 +116,16 @@ export interface IStore {
 
   // Decisions
   recordDecisionRequest(params: RecordDecisionParams): MaybePromise<void>;
-  resolveDecision(decisionId: string, optionId: string, reasoning?: string): MaybePromise<void>;
+  /**
+   * Resolve a decision. Optional prediction payload carries craft-development
+   * signals (confidence + predicted outcome) captured on high-stakes decisions.
+   */
+  resolveDecision(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): MaybePromise<void>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;
@@ -128,6 +145,8 @@ export interface IStore {
     commentDensity: number;
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
+    decisionsWithPredictions?: number;
+    highStakesDecisions?: number;
   }>;
   recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): MaybePromise<void>;
   recordApprovedPattern(description: string): MaybePromise<void>;

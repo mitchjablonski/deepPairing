@@ -30,6 +30,7 @@ export interface ArtifactState {
     decisionId: string,
     optionId: string,
     reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ) => Promise<void>;
 
   renameArtifact: (artifactId: string, title: string) => Promise<void>;
@@ -95,11 +96,16 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     });
   },
 
-  resolveDecision: async (decisionId, optionId, reasoning) => {
+  resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
     await fetch(`${API_BASE}/api/decisions/${decisionId}`, {
       method: "POST",
       headers: sessionHeaders(),
-      body: JSON.stringify({ optionId, reasoning }),
+      body: JSON.stringify({
+        optionId,
+        reasoning,
+        confidence: prediction?.confidence,
+        predictedOutcome: prediction?.predictedOutcome,
+      }),
     });
   },
 

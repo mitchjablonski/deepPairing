@@ -730,6 +730,133 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("stakes + prediction capture (K1/K2)", () => {
+    it("passes stakes through present_options into the decision record + artifact", async () => {
+      await callTool("deepPairing_present_options", {
+        context: "Which queue tech?",
+        stakes: "high",
+        options: [
+          { id: "a", title: "SQS", description: "managed", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Kafka", description: "self-hosted", pros: [], cons: [], effort: "high", risk: "medium", recommendation: false },
+        ],
+      });
+      const artifact = store.getArtifacts().find((a) => a.type === "decision")!;
+      expect((artifact.content as any).stakes).toBe("high");
+      const pending = store.getPendingDecisions();
+      expect(pending).toHaveLength(1);
+      expect((pending[0] as any).stakes).toBe("high");
+    });
+
+    it("records confidence + predictedOutcome on resolveDecision (K1)", async () => {
+      await callTool("deepPairing_present_options", {
+        context: "Pick a pattern",
+        options: [
+          { id: "a", title: "A", description: "x", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "B", description: "y", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const dec = store.getPendingDecisions()[0];
+      store.resolveDecision(dec.decisionId, "a", "cleaner", { confidence: "high", predictedOutcome: "sub-50ms p95" });
+
+      const resolved = store.getDecision(dec.decisionId)!;
+      expect(resolved.response?.confidence).toBe("high");
+      expect(resolved.response?.predictedOutcome).toBe("sub-50ms p95");
+    });
+
+    it("counts decisions-with-predictions and high-stakes in engagement metrics (K2)", async () => {
+      await callTool("deepPairing_present_options", {
+        context: "High one",
+        stakes: "high",
+        options: [
+          { id: "a", title: "A", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "B", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      await callTool("deepPairing_present_options", {
+        context: "Low one",
+        options: [
+          { id: "a", title: "A", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "B", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const decisions = store.getPendingDecisions();
+      store.resolveDecision(decisions[0].decisionId, "a", undefined, { confidence: "medium", predictedOutcome: "reasonable" });
+      store.resolveDecision(decisions[1].decisionId, "a"); // no prediction
+
+      const metrics = store.getEngagementMetrics();
+      expect(metrics.decisionsWithPredictions).toBe(1);
+      expect(metrics.highStakesDecisions).toBe(1);
+    });
+  });
+
+  describe("request_horizon_check (K3)", () => {
+    it("posts an agent-authored horizon-check comment on the artifact", async () => {
+      await callTool("deepPairing_present_plan", {
+        title: "Cache layer",
+        steps: [{ description: "Add Redis", reasoning: "latency" }],
+        estimatedChanges: 1,
+      });
+      const plan = store.getArtifacts()[0];
+
+      const { text, isError } = await callTool("deepPairing_request_horizon_check", {
+        artifactId: plan.id,
+        horizon: "1y",
+      });
+      expect(isError).toBeFalsy();
+      expect(text).toContain("Horizon check (1 year)");
+
+      const comments = store.getCommentsForArtifact(plan.id);
+      const horizon = comments.find((c) => (c.target as any).sectionId?.startsWith("horizon_check:"));
+      expect(horizon).toBeDefined();
+      expect(horizon?.author).toBe("agent");
+      expect((horizon?.target as any).sectionId).toBe("horizon_check:1y");
+    });
+
+    it("uses a custom prompt when provided", async () => {
+      await callTool("deepPairing_present_plan", {
+        title: "x",
+        steps: [{ description: "y", reasoning: "z" }],
+        estimatedChanges: 1,
+      });
+      const plan = store.getArtifacts()[0];
+
+      await callTool("deepPairing_request_horizon_check", {
+        artifactId: plan.id,
+        horizon: "3mo",
+        prompt: "What's the first thing that will break under load?",
+      });
+
+      const comments = store.getCommentsForArtifact(plan.id);
+      const horizon = comments.find((c) => (c.target as any).sectionId?.startsWith("horizon_check:"));
+      expect(horizon?.content).toBe("What's the first thing that will break under load?");
+    });
+
+    it("rejects unknown artifactId", async () => {
+      const { isError, text } = await callTool("deepPairing_request_horizon_check", {
+        artifactId: "art_not_real",
+        horizon: "1y",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("no artifact");
+    });
+
+    it("rejects invalid horizon values", async () => {
+      await callTool("deepPairing_present_plan", {
+        title: "x",
+        steps: [{ description: "y", reasoning: "z" }],
+        estimatedChanges: 1,
+      });
+      const plan = store.getArtifacts()[0];
+
+      const { isError, text } = await callTool("deepPairing_request_horizon_check", {
+        artifactId: plan.id,
+        horizon: "100y",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("3mo");
+    });
+  });
+
   describe("recall_philosophy (J2)", () => {
     it("returns an empty-ledger message when no entries exist", async () => {
       const { text, isError } = await callTool("deepPairing_recall_philosophy", {});

@@ -110,8 +110,18 @@ export class DaemonClient implements IStore {
     await this.post("/decisions", params);
   }
 
-  async resolveDecision(decisionId: string, optionId: string, reasoning?: string): Promise<void> {
-    await this.post(`/decisions/${decisionId}/resolve`, { optionId, reasoning });
+  async resolveDecision(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): Promise<void> {
+    await this.post(`/decisions/${decisionId}/resolve`, {
+      optionId,
+      reasoning,
+      confidence: prediction?.confidence,
+      predictedOutcome: prediction?.predictedOutcome,
+    });
   }
 
   async getDecisionResponse(decisionId: string): Promise<{ optionId: string; reasoning?: string } | null> {
@@ -170,6 +180,8 @@ export class DaemonClient implements IStore {
     commentDensity: number;
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
+    decisionsWithPredictions?: number;
+    highStakesDecisions?: number;
   }> {
     return this.get("/metrics");
   }

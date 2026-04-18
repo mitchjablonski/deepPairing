@@ -150,9 +150,10 @@ export function createDaemonRoutes(
 
   app.post("/api/internal/sessions/:sessionId/decisions/:decisionId/resolve", async (c) => {
     const store = getStore(c.req.param("sessionId"));
-    const { optionId, reasoning } = await c.req.json();
-    store.resolveDecision(c.req.param("decisionId"), optionId, reasoning);
-    broadcast(c.req.param("sessionId"), { type: "decision_resolved", decisionId: c.req.param("decisionId"), optionId, reasoning });
+    const { optionId, reasoning, confidence, predictedOutcome } = await c.req.json();
+    const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
+    store.resolveDecision(c.req.param("decisionId"), optionId, reasoning, prediction);
+    broadcast(c.req.param("sessionId"), { type: "decision_resolved", decisionId: c.req.param("decisionId"), optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
 

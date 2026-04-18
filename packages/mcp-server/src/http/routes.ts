@@ -86,13 +86,16 @@ export function createHttpRoutes(
     const store = getStore(sid);
     const decisionId = c.req.param("decisionId");
     const body = await c.req.json();
-    const { optionId, reasoning } = body;
+    const { optionId, reasoning, confidence, predictedOutcome } = body;
 
     if (!optionId) {
       return c.json({ error: "optionId required" }, 400);
     }
 
-    await store.resolveDecision(decisionId, optionId, reasoning);
+    const prediction = confidence || predictedOutcome
+      ? { confidence, predictedOutcome }
+      : undefined;
+    await store.resolveDecision(decisionId, optionId, reasoning, prediction);
 
     const decision = await store.getDecision(decisionId);
     if (decision) {

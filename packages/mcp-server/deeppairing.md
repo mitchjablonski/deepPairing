@@ -353,6 +353,29 @@ ledger entries with instance counts and the derived stance (avoid / prefer /
 mixed). Use it liberally when proposing something the firstCallHint didn't
 already surface — the user's taste is broader than the current session.
 
+### deepPairing_request_horizon_check
+Call SPARINGLY, only on architecturally-significant artifacts where a
+failure mode 3 months / 1 year / 2 years out would be non-obvious. Takes
+`{ artifactId, horizon, prompt? }`. Posts an agent-authored question to the
+artifact — the human's answer becomes craft-development material they can
+look back on. Not a checkbox.
+
+Good candidates: auth / session flows, caching strategies, schema changes,
+queue semantics, data pipelines, infrastructure choices.
+Bad candidates: local refactors, style choices, test changes.
+
+## High-stakes decisions — set `stakes: "high"` on present_options
+
+Set `stakes: "high"` on present_options when the decision is architecturally
+significant or hard to reverse (schema changes, auth / billing flows, infra,
+language / framework choices, production-facing surfaces).
+
+On high-stakes decisions the companion UI gates the human's pick on a short
+prediction capture step: *"what do you expect to happen?"* plus a confidence
+chip. The data lands in the decision record so you — and future-you — can
+look back and calibrate. Use `"medium"` for most feature decisions and `"low"`
+for local / reversible choices. Default is unspecified (no prediction prompt).
+
 If pre-flight refuses your call, do NOT retry with the same approach. Either
 revise to exclude the rejected path, or — if you believe conditions have
 changed — call `present_findings` first to make the case for reconsidering,
