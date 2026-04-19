@@ -8,8 +8,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
-import { formatSessionMarkdown } from "../export/format-markdown.js";
+import { formatSessionMarkdown, buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
+import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
 
 /**
  * Check a set of proposal strings against previously rejected approaches.
@@ -390,6 +391,28 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             limit: { type: "number", description: "Max results (default 50, cap 200)" },
           },
           required: ["query"],
+        },
+      },
+      {
+        name: "deepPairing_post_pr_review",
+        description:
+          "Post this session's findings as inline review comments on a GitHub PR. Uses the `gh` CLI under the hood, so the user must have it installed and authenticated (`gh auth login`).\n\nCall this when the user says 'post these findings on PR 42' or similar. The tool (a) builds the GitHub review API payload from the session's approved research artifacts, (b) resolves the repo automatically if not specified, (c) POSTs via `gh api`, (d) returns the created review URL.\n\nFindings need structured evidence (filePath + lineStart) to become inline comments — generic findings fall through silently. Rejected / retracted / superseded artifacts are omitted.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            pr: {
+              type: "string",
+              description: "PR number (e.g. '42'), '#42', or a full https://github.com/owner/repo/pull/N URL",
+            },
+            event: {
+              type: "string",
+              enum: ["COMMENT", "REQUEST_CHANGES", "APPROVE"],
+              description: "The review event type. Default: COMMENT. Use REQUEST_CHANGES when findings are severe.",
+            },
+            owner: { type: "string", description: "Override repo owner (when pr is just a number and you're not in the repo)" },
+            repo: { type: "string", description: "Override repo name" },
+          },
+          required: ["pr"],
         },
       },
       {
@@ -1654,6 +1677,59 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             text: `Found ${results.length} match${results.length === 1 ? "" : "es"} for "${query}":\n${lines.join("\n")}${trailer}\n\nRead a full session via resource deeppairing://session/{id} or a single artifact via deeppairing://artifact/{id}.`,
           }],
         };
+      }
+
+      case "deepPairing_post_pr_review": {
+        const ref = String(args?.pr ?? "").trim();
+        if (!ref) {
+          return {
+            content: [{ type: "text", text: "post_pr_review requires a `pr` argument (number or URL)." }],
+            isError: true,
+          };
+        }
+        const event = ["COMMENT", "REQUEST_CHANGES", "APPROVE"].includes(args?.event)
+          ? (args.event as "COMMENT" | "REQUEST_CHANGES" | "APPROVE")
+          : "COMMENT";
+
+        // Build the payload from the current session.
+        const state = await store.getFullState();
+        const payload = buildGitHubReviewPayload(state as any, { event });
+
+        if (payload.comments.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: "No findings with structured evidence (filePath + lineStart) in this session — nothing to post as inline review comments. Use present_findings with structured Evidence objects to enable this.",
+            }],
+            isError: true,
+          };
+        }
+
+        try {
+          const result = await postPrReview({
+            ref,
+            payload,
+            owner: typeof args?.owner === "string" ? args.owner : undefined,
+            repo: typeof args?.repo === "string" ? args.repo : undefined,
+          });
+          return {
+            content: [{
+              type: "text",
+              text: `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`,
+            }],
+          };
+        } catch (err: any) {
+          if (err instanceof GhMissingError || err instanceof GhNotAuthedError) {
+            return {
+              content: [{ type: "text", text: err.message }],
+              isError: true,
+            };
+          }
+          return {
+            content: [{ type: "text", text: `post_pr_review failed: ${err?.message ?? err}` }],
+            isError: true,
+          };
+        }
       }
 
       case "deepPairing_export_session": {

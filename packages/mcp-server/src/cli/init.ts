@@ -409,6 +409,58 @@ async function exportCmd(format: string, sessionId?: string) {
   }
 }
 
+/**
+ * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT]`
+ *  — post the current (or specified) session's findings as inline review
+ *  comments on a GitHub PR. Uses the `gh` CLI.
+ */
+async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) {
+  const { FileStore } = await import("../store/file-store.js");
+  const { buildGitHubReviewPayload } = await import("../export/format-markdown.js");
+  const { postPrReview, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
+
+  let chosenSessionId = sessionId;
+  if (!chosenSessionId) {
+    const sessions = FileStore.listSessions(cwd);
+    if (sessions.length === 0) {
+      console.error(`  ${red("✗")} No sessions found in this project. Start a deepPairing session first.`);
+      process.exit(1);
+    }
+    chosenSessionId = sessions[0].id;
+  }
+
+  let state: any;
+  try {
+    state = FileStore.loadSession(cwd, chosenSessionId);
+  } catch (err: any) {
+    console.error(`  ${red("✗")} Could not load session "${chosenSessionId}": ${err?.message ?? err}`);
+    process.exit(1);
+  }
+
+  const payload = buildGitHubReviewPayload(state, {
+    event: (event as any) || "COMMENT",
+  });
+
+  if (payload.comments.length === 0) {
+    console.error(`  ${red("✗")} No findings with structured evidence (filePath + lineStart) in this session.`);
+    console.error(`  ${dim("   Use present_findings with structured Evidence objects to enable inline review comments.")}`);
+    process.exit(1);
+  }
+
+  try {
+    const result = await postPrReview({ ref, payload });
+    console.log(`  ${green("✓")} Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref}`);
+    if (result.htmlUrl) console.log(`    ${dim(result.htmlUrl)}`);
+  } catch (err: any) {
+    if (err instanceof GhMissingError || err instanceof GhNotAuthedError) {
+      console.error(`  ${red("✗")} ${err.message}`);
+    } else {
+      console.error(`  ${red("✗")} post-pr-review failed: ${err?.message ?? err}`);
+    }
+    process.exit(1);
+  }
+}
+
 // --- CLI entry point with argument parsing ---
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -422,13 +474,15 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   ${bold("deepPairing")} — Human-AI collaborative development
 
   ${bold("Usage:")}
-    npx deeppairing                    Set up deepPairing in current project
-    npx deeppairing init               Set up deepPairing in current project
-    npx deeppairing doctor             Diagnose a running / misbehaving daemon
-    npx deeppairing export <format>    Print a session as markdown
-                                       (format: full | pr-description | pr-review | adr | replay)
-    npx deeppairing --help             Show this help message
-    npx deeppairing --version          Show version
+    npx deeppairing                        Set up deepPairing in current project
+    npx deeppairing init                   Set up deepPairing in current project
+    npx deeppairing doctor                 Diagnose a running / misbehaving daemon
+    npx deeppairing export <format>        Print a session as markdown
+                                           (format: full | pr-description | pr-review | adr | replay)
+    npx deeppairing post-pr-review <pr>    Post the session's findings as inline review comments
+                                           on a GitHub PR. Requires \`gh\` CLI installed + authed.
+    npx deeppairing --help                 Show this help message
+    npx deeppairing --version              Show version
 `);
   }
 } else if (cmd === "--version" || cmd === "-v") {
@@ -449,6 +503,24 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   }
   exportCmd(format, sessionId).catch((err) => {
     console.error(`  ${red("✗")} export failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "post-pr-review") {
+  const ref = args[1];
+  if (!ref) {
+    console.error(`  ${red("✗")} post-pr-review requires a PR number or URL.`);
+    console.error(`  ${dim("   Example: npx deeppairing post-pr-review 42")}`);
+    process.exit(1);
+  }
+  // Parse optional --session-id and --event flags
+  let sessionId: string | undefined;
+  let event: string | undefined;
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === "--session-id" && args[i + 1]) { sessionId = args[i + 1]; i++; }
+    else if (args[i] === "--event" && args[i + 1]) { event = args[i + 1]; i++; }
+  }
+  postPrReviewCmd(ref, sessionId, event).catch((err) => {
+    console.error(`  ${red("✗")} post-pr-review failed: ${err?.message ?? err}`);
     process.exit(1);
   });
 } else {

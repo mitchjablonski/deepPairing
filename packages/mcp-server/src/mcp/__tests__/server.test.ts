@@ -857,6 +857,50 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("post_pr_review tool (M2)", () => {
+    it("errors when pr argument is missing", async () => {
+      const { text, isError } = await callTool("deepPairing_post_pr_review", {});
+      expect(isError).toBe(true);
+      expect(text).toContain("pr");
+    });
+
+    it("returns error when no findings have structured evidence", async () => {
+      // Session has no research findings — payload.comments will be empty
+      const { text, isError } = await callTool("deepPairing_post_pr_review", { pr: "42" });
+      expect(isError).toBe(true);
+      expect(text).toContain("No findings with structured evidence");
+    });
+
+    it("surfaces gh-missing errors clearly when gh is unavailable", async () => {
+      // Seed a finding with structured evidence so payload.comments is non-empty
+      await callTool("deepPairing_present_findings", {
+        title: "x",
+        summary: "y",
+        findings: [{
+          category: "Security",
+          detail: "z",
+          significance: "high",
+          evidence: [{ filePath: "a.ts", lineStart: 1, lineEnd: 1, snippet: "x", explanation: "x" }],
+        }],
+      });
+
+      // The actual gh spawn may fail with ENOENT on test runners without gh.
+      // If it does, we expect the GhMissingError message to surface. If gh is
+      // installed but not authed, we expect GhNotAuthedError. Either path is
+      // acceptable — we just can't post from a test environment.
+      const { text, isError } = await callTool("deepPairing_post_pr_review", { pr: "42" });
+      // Either a clear gh-related error, or a wrapped failure — all isError
+      expect(isError).toBe(true);
+      const lower = text.toLowerCase();
+      const isClean =
+        lower.includes("gh") ||
+        lower.includes("cli") ||
+        lower.includes("authenticated") ||
+        lower.includes("failed");
+      expect(isClean).toBe(true);
+    });
+  });
+
   describe("memory facade aliases (L2)", () => {
     it("memory_search surfaces philosophy ledger entries by concept", async () => {
       // Philosophy ledger keys by concept, so we query on a word that lives

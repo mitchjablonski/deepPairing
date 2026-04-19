@@ -52,12 +52,43 @@ On your first tool call, the response includes:
   stance.
 - **`search_sessions`** — when the user references prior work ("did we
   look at this before?").
+- **`post_pr_review`** — when the user says "post these findings on PR N"
+  or similar. Builds the GitHub review API payload from approved findings
+  and POSTs via the `gh` CLI. Requires gh installed + authenticated. Use
+  `event: "REQUEST_CHANGES"` when findings are severe (high / critical);
+  default `COMMENT`.
 - **`answer_question`** — when `check_feedback` surfaces a ❓QUESTION, use
   this tool (not a plain comment) so the reply gets linked to the original
   question.
 - **`check_feedback`** — poll for human responses in a loop. Each call
   waits up to 30s. If it returns WAITING, call again immediately. Human
   responds in the companion UI, NOT the terminal.
+
+## Reviewing a PR (a common workflow)
+
+When the user says "review this PR", "audit this branch", or similar,
+don't just dump a list of issues. Run this pattern:
+
+1. **Fetch context.** Use `gh pr diff <N>` (or read the changed files
+   directly) to see what changed.
+2. **`present_findings`** — one call with ALL issues you found, each with
+   structured `Evidence` (filePath + lineStart + lineEnd + snippet +
+   explanation) and a `severity` (info / low / medium / high / critical).
+   Group by file when there are many. NEVER list findings as plain chat
+   text — the UI's inline-triage affordance only works with structured
+   artifacts.
+3. **Poll `check_feedback` in a loop** while the user triages findings
+   in the companion UI. They can approve/revise/reject each one with
+   per-finding chips (✓ / ↻ / ✗). Rejected findings get a reason that
+   flows into session memory so you don't re-propose them.
+4. **When the user says to post it** (or equivalently: "we're done",
+   "ship this review") — call `post_pr_review` with the PR number.
+   Only the findings approved (or not explicitly rejected) will post.
+   Use `event: "REQUEST_CHANGES"` if there are critical / high severity
+   findings; `COMMENT` otherwise.
+
+The user never has to know the tool names. Just the outcome:
+*review → post when approved*.
 
 ## Polling, not blocking
 
