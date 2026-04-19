@@ -4,7 +4,9 @@ const API_BASE = `http://${window.location.host}`;
 
 const formats = [
   { id: "pr-description", label: "PR Description", description: "Concise summary for pull requests" },
+  { id: "pr-review", label: "PR Review Comments", description: "Findings as file:line anchored review comments" },
   { id: "adr", label: "ADR", description: "Architecture Decision Record" },
+  { id: "replay", label: "Replay Narrative", description: "Chronological walkthrough with annotations" },
   { id: "full", label: "Full Report", description: "Complete session with code" },
 ] as const;
 

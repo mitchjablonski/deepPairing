@@ -183,7 +183,7 @@ export function createHttpRoutes(
   // Export session as markdown
   app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
-    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "adr";
+    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "pr-review" | "adr" | "replay";
     const state = await store.getFullState();
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
