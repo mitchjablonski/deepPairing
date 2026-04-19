@@ -346,6 +346,69 @@ async function doctor() {
   console.log();
 }
 
+/**
+ * `deeppairing export <format> [sessionId]` — print a session export to
+ * stdout so users can pipe it into clipboard / file / PR tooling.
+ *   format: full | pr-description | pr-review | adr | replay
+ *   sessionId: defaults to the most recent session in this project
+ */
+async function exportCmd(format: string, sessionId?: string) {
+  const validFormats = ["full", "pr-description", "pr-review", "adr", "replay"];
+  if (!validFormats.includes(format)) {
+    console.error(`  ${red("✗")} Unknown format "${format}". Valid: ${validFormats.join(", ")}`);
+    process.exit(1);
+  }
+
+  // Prefer the daemon if it's reachable — it has active-session data. Fall
+  // back to reading the session directly from disk via FileStore.
+  const port = 3847;
+  let chosenSessionId = sessionId;
+
+  try {
+    const res = await fetch(`http://localhost:${port}/api/sessions`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      const data: any = await res.json();
+      const sessions: any[] = data.sessions ?? [];
+      if (!chosenSessionId && sessions.length > 0) {
+        chosenSessionId = sessions[0].id; // most recent — listSessions sorts by lastActivity
+      }
+    }
+  } catch {
+    // daemon unreachable — we'll try the filesystem fallback below
+  }
+
+  if (!chosenSessionId) {
+    console.error(`  ${red("✗")} No sessionId provided and no sessions found. Start a deepPairing session first.`);
+    process.exit(1);
+  }
+
+  try {
+    const res = await fetch(`http://localhost:${port}/api/export?format=${encodeURIComponent(format)}`, {
+      signal: AbortSignal.timeout(3000),
+      headers: { "X-Session-Id": chosenSessionId },
+    });
+    if (res.ok) {
+      const markdown = await res.text();
+      process.stdout.write(markdown);
+      return;
+    }
+  } catch {
+    // fall through to filesystem path
+  }
+
+  // Filesystem fallback — load the session directly
+  const { FileStore } = await import("../store/file-store.js");
+  const { formatSessionMarkdown } = await import("../export/format-markdown.js");
+  try {
+    const state = FileStore.loadSession(cwd, chosenSessionId);
+    const markdown = formatSessionMarkdown(state as any, format as any);
+    process.stdout.write(markdown);
+  } catch (err: any) {
+    console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${err?.message ?? err}`);
+    process.exit(1);
+  }
+}
+
 // --- CLI entry point with argument parsing ---
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -359,11 +422,13 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   ${bold("deepPairing")} — Human-AI collaborative development
 
   ${bold("Usage:")}
-    npx deeppairing              Set up deepPairing in current project
-    npx deeppairing init         Set up deepPairing in current project
-    npx deeppairing doctor       Diagnose a running / misbehaving daemon
-    npx deeppairing --help       Show this help message
-    npx deeppairing --version    Show version
+    npx deeppairing                    Set up deepPairing in current project
+    npx deeppairing init               Set up deepPairing in current project
+    npx deeppairing doctor             Diagnose a running / misbehaving daemon
+    npx deeppairing export <format>    Print a session as markdown
+                                       (format: full | pr-description | pr-review | adr | replay)
+    npx deeppairing --help             Show this help message
+    npx deeppairing --version          Show version
 `);
   }
 } else if (cmd === "--version" || cmd === "-v") {
@@ -373,6 +438,17 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 } else if (cmd === "doctor") {
   doctor().catch((err) => {
     console.error(`  ${red("✗")} doctor failed: ${err}`);
+    process.exit(1);
+  });
+} else if (cmd === "export") {
+  const format = args[1];
+  const sessionId = args[2];
+  if (!format) {
+    console.error(`  ${red("✗")} export requires a format. Run 'npx deeppairing --help'.`);
+    process.exit(1);
+  }
+  exportCmd(format, sessionId).catch((err) => {
+    console.error(`  ${red("✗")} export failed: ${err?.message ?? err}`);
     process.exit(1);
   });
 } else {

@@ -332,6 +332,31 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
+        name: "memory_search",
+        description:
+          "Memory-protocol facade — query deepPairing's corpus using generic memory-server naming. Matches against past artifacts (title / concept / content / rejected-approach tags) AND the cross-project philosophy ledger. Returns ranked results.\n\nUseful when another memory-aware MCP client wants to query deepPairing's knowledge without learning deepPairing-specific tool names. Thin wrapper over search_sessions + recall_philosophy.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            query: { type: "string", description: "Free-text query" },
+            limit: { type: "number", description: "Max results (default 20)" },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        name: "memory_recall",
+        description:
+          "Memory-protocol facade — return the cross-project stance on a single concept. Thin wrapper over recall_philosophy for a specific concept name. Returns the stance (avoid/prefer/mixed), instance count, and latest reason.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            key: { type: "string", description: "The concept name to recall a stance on" },
+          },
+          required: ["key"],
+        },
+      },
+      {
         name: "deepPairing_recall_philosophy",
         description:
           "Query the user's cross-project philosophy ledger — concepts and approaches they've rejected or approved across EVERY deepPairing session and project they've used. Use this BEFORE present_options or present_plan when a proposal touches a concept you haven't seen tagged in the current session — the user may have a strong cross-project stance on it already.\n\nReturns entries with instance counts, reasons, and a derived stance (avoid / prefer / mixed). Use concept match liberally — even a partial match reveals the user's taste.\n\nThis is distinct from search_sessions (which finds artifacts) — this tool surfaces the user's engineering philosophy, distilled from years of deepPairing sessions.",
@@ -369,11 +394,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "deepPairing_export_session",
-        description: "Export the current session as markdown. Formats: 'pr-description' (concise for PR bodies), 'adr' (architecture decision record), 'full' (complete session with code), 'replay' (chronological walkthrough with annotations — useful for re-reading and learning).",
+        description: "Export the current session as markdown. Formats: 'pr-description' (concise for PR bodies), 'pr-review' (findings formatted as GitHub-style PR review comments with file:line anchors and suggestion blocks — paste directly into a PR review), 'adr' (architecture decision record), 'full' (complete session with code), 'replay' (chronological walkthrough with annotations — useful for re-reading and learning).",
         inputSchema: {
           type: "object" as const,
           properties: {
-            format: { type: "string", enum: ["pr-description", "adr", "full", "replay"], description: "Export format" },
+            format: { type: "string", enum: ["pr-description", "pr-review", "adr", "full", "replay"], description: "Export format" },
           },
         },
       },
@@ -1484,6 +1509,75 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
+      case "memory_search": {
+        const query = String(args?.query ?? "").trim();
+        if (!query) {
+          return {
+            content: [{ type: "text", text: "memory_search requires a non-empty query." }],
+            isError: true,
+          };
+        }
+        const limit = typeof args?.limit === "number" ? args.limit : 20;
+
+        // Combine philosophy ledger hits (cross-project) with session search
+        // (current project). Philosophy first — it's the highest-signal layer.
+        const philosophyHits = getGlobalStore().query({ concept: query, limit: Math.max(5, Math.floor(limit / 2)) });
+        const sessionHits = typeof (store as any).searchSessions === "function"
+          ? await (store as any).searchSessions(query, Math.max(5, Math.floor(limit / 2)))
+          : [];
+
+        if (philosophyHits.length === 0 && sessionHits.length === 0) {
+          return {
+            content: [{ type: "text", text: `No deepPairing memory matches "${query}".` }],
+          };
+        }
+
+        const lines: string[] = [];
+        if (philosophyHits.length > 0) {
+          lines.push(`## Philosophy ledger (cross-project stances)`);
+          for (const e of philosophyHits) {
+            const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+            lines.push(`- [${e.stance.toUpperCase()}] "${e.concept}" × ${e.instances.length}${latestReason ? ` — "${latestReason}"` : ""}`);
+          }
+        }
+        if (sessionHits.length > 0) {
+          if (lines.length > 0) lines.push("");
+          lines.push(`## Session artifacts (this project)`);
+          for (const h of sessionHits.slice(0, 10)) {
+            lines.push(`- ${h.artifactType}: "${h.title}" [${h.sessionId}]`);
+          }
+        }
+
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      case "memory_recall": {
+        const key = String(args?.key ?? "").trim();
+        if (!key) {
+          return {
+            content: [{ type: "text", text: "memory_recall requires a key (concept name)." }],
+            isError: true,
+          };
+        }
+        const entry = getGlobalStore().get(key);
+        if (!entry) {
+          return {
+            content: [{ type: "text", text: `No stance recorded for "${key}".` }],
+          };
+        }
+        const stance = deriveStance(entry);
+        const rejections = entry.instances.filter((i) => i.verdict === "rejected").length;
+        const approvals = entry.instances.filter((i) => i.verdict === "approved").length;
+        const latestReason = [...entry.instances].reverse().find((i) => i.reason)?.reason;
+        const projects = new Set(entry.instances.map((i) => i.project)).size;
+        return {
+          content: [{
+            type: "text",
+            text: `[${stance.toUpperCase()}] "${entry.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}.${latestReason ? ` Latest reason: "${latestReason}".` : ""}`,
+          }],
+        };
+      }
+
       case "deepPairing_recall_philosophy": {
         const concept = typeof args?.concept === "string" ? args.concept.trim() : undefined;
         const stance = typeof args?.stance === "string" ? args.stance : undefined;
@@ -1563,7 +1657,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "deepPairing_export_session": {
-        const format = (args?.format ?? "full") as "full" | "pr-description" | "adr" | "replay";
+        const format = (args?.format ?? "full") as "full" | "pr-description" | "pr-review" | "adr" | "replay";
         const state = await store.getFullState();
         // Include learner annotations when exporting as replay.
         const enriched =

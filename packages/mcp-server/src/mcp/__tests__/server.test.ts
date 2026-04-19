@@ -857,6 +857,110 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("memory facade aliases (L2)", () => {
+    it("memory_search surfaces philosophy ledger entries by concept", async () => {
+      // Philosophy ledger keys by concept, so we query on a word that lives
+      // in the concept (not just the description).
+      store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request hosting");
+      const { text } = await callTool("memory_search", { query: "pay-per-request" });
+      expect(text).toContain("Philosophy ledger");
+      expect(text.toLowerCase()).toContain("pay-per-request hosting");
+    });
+
+    it("memory_search errors on empty query", async () => {
+      const { isError } = await callTool("memory_search", { query: "" });
+      expect(isError).toBe(true);
+    });
+
+    it("memory_recall returns a formatted stance for a known concept", async () => {
+      store.recordRejectedApproach("concept-x", "reason-y");
+      const { text } = await callTool("memory_recall", { key: "concept-x" });
+      expect(text).toContain("AVOID");
+      expect(text).toContain("concept-x");
+    });
+
+    it("memory_recall reports no-stance for an unknown concept", async () => {
+      const { text } = await callTool("memory_recall", { key: "some-fresh-concept" });
+      expect(text).toContain("No stance");
+    });
+  });
+
+  describe("pr-review export format (L3)", () => {
+    it("formats findings with severity, file:line anchors, and snippets", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "Auth audit",
+        summary: "x",
+        findings: [
+          {
+            category: "Security",
+            title: "Weak hash",
+            detail: "bcrypt rounds too low",
+            severity: "high",
+            significance: "high",
+            impact: "brute force risk",
+            recommendation: "use argon2id",
+            evidence: [
+              {
+                filePath: "src/auth.ts",
+                lineStart: 10,
+                lineEnd: 12,
+                snippet: "const hash = await bcrypt.hash(pw, 10);",
+                explanation: "Only 10 rounds",
+              },
+            ],
+          },
+        ],
+      });
+
+      const { text } = await callTool("deepPairing_export_session", { format: "pr-review" });
+      expect(text).toContain("deepPairing review");
+      expect(text).toContain("### src/auth.ts");
+      expect(text).toContain("🟠"); // severity emoji for high
+      expect(text).toContain("HIGH");
+      expect(text).toContain("src/auth.ts:L10-L12");
+      expect(text).toContain("bcrypt.hash(pw, 10)");
+      expect(text).toContain("Impact:");
+      expect(text).toContain("Recommendation:");
+    });
+
+    it("groups findings by filePath", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "Multi-file",
+        summary: "x",
+        findings: [
+          {
+            category: "Perf",
+            detail: "A",
+            significance: "low",
+            evidence: [{ filePath: "a.ts", lineStart: 1, lineEnd: 1, snippet: "x", explanation: "" }],
+          },
+          {
+            category: "Perf",
+            detail: "B",
+            significance: "low",
+            evidence: [{ filePath: "b.ts", lineStart: 1, lineEnd: 1, snippet: "y", explanation: "" }],
+          },
+        ],
+      });
+      const { text } = await callTool("deepPairing_export_session", { format: "pr-review" });
+      expect(text).toContain("### a.ts");
+      expect(text).toContain("### b.ts");
+    });
+
+    it("omits rejected research artifacts", async () => {
+      await callTool("deepPairing_present_findings", {
+        title: "Proposed",
+        summary: "x",
+        findings: [{ category: "x", detail: "should not appear", significance: "low" }],
+      });
+      const a = store.getArtifacts()[0];
+      store.updateArtifactStatus(a.id, "rejected");
+
+      const { text } = await callTool("deepPairing_export_session", { format: "pr-review" });
+      expect(text).toContain("No reviewable findings");
+    });
+  });
+
   describe("recall_philosophy (J2)", () => {
     it("returns an empty-ledger message when no entries exist", async () => {
       const { text, isError } = await callTool("deepPairing_recall_philosophy", {});
