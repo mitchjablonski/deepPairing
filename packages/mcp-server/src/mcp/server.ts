@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
+import type { TeamPreference } from "@deeppairing/shared";
 import { formatSessionMarkdown, buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
 import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
@@ -25,6 +26,104 @@ import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-r
  *      paraphrased re-proposals — e.g. "Deploy to Fly.io" still blocks after
  *      rejecting Railway with concept "pay-per-request serverless hosting".
  */
+/**
+ * Concept-token check used by both rejected-approach matching and team-pref
+ * matching. Returns true when every meaningful (≥4 char) token from `concept`
+ * appears in `proposal`. Substring-based and case-insensitive — good enough
+ * to catch paraphrases without false positives on common words.
+ */
+function conceptMatchesProposal(concept: string, proposal: string): boolean {
+  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  if (tokens.length === 0) return false;
+  const p = proposal.toLowerCase();
+  return tokens.every((t) => p.includes(t));
+}
+
+/**
+ * Minimal glob matcher for team-preference scope paths. Supports:
+ *   - `**` matches any sequence (including path separators)
+ *   - `*`  matches any run of non-separator chars
+ * Everything else is literal. Good enough for scoping rules like
+ * `packages/auth/**`, `src/*.ts`. We avoid adding minimatch as a dependency
+ * just for this.
+ */
+export function matchesGlob(pathStr: string, glob: string): boolean {
+  const escape = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === "*" && glob[i + 1] === "*") {
+      re += ".*";
+      i++; // consume second *
+    } else if (glob[i] === "*") {
+      re += "[^/]*";
+    } else {
+      re += escape(glob[i]);
+    }
+  }
+  return new RegExp(`^${re}$`).test(pathStr);
+}
+
+/**
+ * Team-preference violation check. Two paths:
+ *   - kind: "avoid"   → matches just like a rejected approach (concept tokens
+ *     present in proposal). Returns the matched preference.
+ *   - kind: "require" → only enforced when the concept is phrased as
+ *     "<thing> for <domain>" (e.g. "argon2id for password hashing"). A
+ *     proposal mentioning the domain ("password hashing") but lacking the
+ *     required thing ("argon2id") is a violation. Concepts without a "for"
+ *     clause stay advisory (firstCallHint surfaces them).
+ *
+ * Why advisory require: detecting "you should have done X but didn't" without
+ * a domain ontology is too noisy. The "X for Y" convention is opt-in; teams
+ * that want enforcement write their preferences that way.
+ */
+function findTeamPreferenceViolation(
+  proposalStrings: string[],
+  prefs: TeamPreference[],
+  proposalPaths: string[] = [],
+): { proposal: string; pref: TeamPreference; via: "avoid" | "require" } | null {
+  for (const pref of prefs) {
+    if (pref.kind === "prefer") continue; // 'prefer' is taste, never blocks
+
+    // Scope check: if the pref is scoped AND the proposal carries path info,
+    // require at least one proposal path to match the scope. If the proposal
+    // has NO paths, skip this pref — we can't verify scope, so we bias toward
+    // NOT blocking (avoid false positives on unrelated work).
+    if (pref.scope?.paths?.length) {
+      if (proposalPaths.length === 0) continue;
+      const hit = proposalPaths.some((p) => pref.scope!.paths!.some((g) => matchesGlob(p, g)));
+      if (!hit) continue;
+    }
+
+    if (pref.kind === "avoid") {
+      for (const proposal of proposalStrings) {
+        if (!proposal.trim()) continue;
+        if (conceptMatchesProposal(pref.concept, proposal)) {
+          return { proposal, pref, via: "avoid" };
+        }
+      }
+    }
+
+    if (pref.kind === "require") {
+      const forIdx = pref.concept.toLowerCase().indexOf(" for ");
+      if (forIdx === -1) continue; // no "X for Y" → can't infer domain → advisory only
+      const required = pref.concept.slice(0, forIdx).trim();
+      const domain = pref.concept.slice(forIdx + 5).trim();
+      if (!required || !domain) continue;
+      for (const proposal of proposalStrings) {
+        if (!proposal.trim()) continue;
+        const mentionsDomain = conceptMatchesProposal(domain, proposal);
+        if (!mentionsDomain) continue;
+        const hasRequired = conceptMatchesProposal(required, proposal);
+        if (!hasRequired) {
+          return { proposal, pref, via: "require" };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function findRejectedApproachMatch(
   proposalStrings: string[],
   rejected: RejectedApproach[],
@@ -74,8 +173,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
-        name: "deepPairing_present_findings",
-        description: `USE THIS instead of presenting research as plain text. Present findings with rich evidence (code snippets, explanations) in the companion UI at localhost:${port}. This is NON-BLOCKING — call check_feedback after to get the human's response. Always include a descriptive title.\n\nPopulate BOTH significance (how note-worthy this finding is) AND severity (risk level if not addressed: info / low / medium / high / critical). Severity tells the human what to study first.`,
+        name: "present_findings",
+        description: `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence (code snippets with explanations), category, significance, and severity. Use instead of dumping findings as plain chat text.`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -109,10 +208,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_present_options",
+        name: "present_options",
         description:
-          "USE THIS instead of listing options as plain text. Present 2-4 options with pros/cons/effort/risk for the human to choose in the companion UI. NON-BLOCKING — call check_feedback in a loop after to get their selection.\n\n" +
-          "SET `stakes: \"high\"` ONLY when the decision is architecturally significant or hard to reverse (schema changes, auth / billing flows, infra, language/framework choices, anything affecting production surfaces). On high-stakes decisions the UI prompts the human for a prediction — raw material for calibration. Default `stakes: \"medium\"` for most feature decisions; `\"low\"` for local refactors / style choices.",
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Set `stakes: \"high\"` for architecturally significant / hard-to-reverse decisions (schema, auth, billing, infra); the UI then prompts the human for a prediction (calibration material).",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -146,9 +244,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_present_spec",
+        name: "present_spec",
         description:
-          "USE THIS for any non-trivial feature BEFORE present_plan. The spec is the pairing artifact for 'think together before building' — each requirement has a rationale the human can challenge and acceptance criteria you can verify against later. This is NOT a compliance document; it's a learning artifact that makes the mental model explicit.\n\nWhen to use: new features, cross-cutting changes, anything where you'd otherwise jump straight to code without agreement on 'what are we actually building'.\n\nNON-BLOCKING — call check_feedback after to get approval / revisions.",
+          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial features, cross-cutting changes, or anything that'd otherwise skip straight to code without agreement on what's being built.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -193,8 +291,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_present_plan",
-        description: "USE THIS instead of describing plans as plain text. Present implementation steps with file changes and before/after previews. NON-BLOCKING — call check_feedback in a loop after for approval/revision/rejection.",
+        name: "present_plan",
+        description: "Present an implementation plan as steps with file changes and before/after previews.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -240,14 +338,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_log_reasoning",
+        name: "log_reasoning",
         description:
-          "REQUIRED before every Edit or Write. Log what you're about to do and why. " +
-          "\n\nPAIRING IMPERATIVE: whenever a real engineering concept or pattern is at play, NAME IT via `concept` (e.g. 'dependency inversion', 'optimistic UI', 'debounce vs throttle'). " +
-          "Name the concept even when it feels obvious — the human is learning FROM you, and surfacing the pattern name turns every action into a teaching moment. " +
-          "Include `evidence` pointing at the files/lines that motivated this step when the reasoning came from the codebase. " +
-          "Use `alternativeDetails` for structured rejected alternatives with reasons. " +
-          "The human sees this in the companion UI.",
+          "Log the reasoning for an action before taking it. Name the underlying concept in `concept` (e.g. 'dependency inversion', 'optimistic UI') whenever one applies — the human learns the pattern, not just the fix. Attach `evidence` for reasoning grounded in the codebase, and `alternativeDetails` for structured rejected alternatives.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -308,16 +401,16 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_check_feedback",
-        description: "Poll for human feedback from the companion UI. The human responds in the browser, NOT the terminal. Call this in a loop after presenting artifacts — if it returns WAITING, call it again immediately. Do NOT stop polling to ask the user in the terminal.",
+        name: "check_feedback",
+        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.",
         inputSchema: {
           type: "object" as const,
           properties: {},
         },
       },
       {
-        name: "deepPairing_present_code_change",
-        description: "USE THIS to present code changes with before/after diffs for human review in the companion UI. NON-BLOCKING — call check_feedback in a loop after to get approval. Include reasoning and confidence level.",
+        name: "present_code_change",
+        description: "Present a code change as a before/after diff with reasoning and confidence.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -333,70 +426,31 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "memory_search",
+        name: "recall",
         description:
-          "Memory-protocol facade — query deepPairing's corpus using generic memory-server naming. Matches against past artifacts (title / concept / content / rejected-approach tags) AND the cross-project philosophy ledger. Returns ranked results.\n\nUseful when another memory-aware MCP client wants to query deepPairing's knowledge without learning deepPairing-specific tool names. Thin wrapper over search_sessions + recall_philosophy.",
+          "Search deepPairing memory. `mode: 'philosophy'` queries cross-project stances (avoid/prefer/mixed) with optional stance filter; empty query lists the whole ledger. `mode: 'sessions'` queries past artifacts in this project. `mode: 'any'` (default) unions both, philosophy first. All modes require a query except philosophy.",
         inputSchema: {
           type: "object" as const,
           properties: {
-            query: { type: "string", description: "Free-text query" },
-            limit: { type: "number", description: "Max results (default 20)" },
-          },
-          required: ["query"],
-        },
-      },
-      {
-        name: "memory_recall",
-        description:
-          "Memory-protocol facade — return the cross-project stance on a single concept. Thin wrapper over recall_philosophy for a specific concept name. Returns the stance (avoid/prefer/mixed), instance count, and latest reason.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            key: { type: "string", description: "The concept name to recall a stance on" },
-          },
-          required: ["key"],
-        },
-      },
-      {
-        name: "deepPairing_recall_philosophy",
-        description:
-          "Query the user's cross-project philosophy ledger — concepts and approaches they've rejected or approved across EVERY deepPairing session and project they've used. Use this BEFORE present_options or present_plan when a proposal touches a concept you haven't seen tagged in the current session — the user may have a strong cross-project stance on it already.\n\nReturns entries with instance counts, reasons, and a derived stance (avoid / prefer / mixed). Use concept match liberally — even a partial match reveals the user's taste.\n\nThis is distinct from search_sessions (which finds artifacts) — this tool surfaces the user's engineering philosophy, distilled from years of deepPairing sessions.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            concept: {
+            query: { type: "string", description: "Free-text query (concept, title, or content substring). Empty string with mode='philosophy' lists the whole ledger." },
+            mode: {
               type: "string",
-              description: "Concept to search for (substring match). Omit to list the whole ledger.",
+              enum: ["philosophy", "sessions", "any"],
+              description: "Which layer to search. Default 'any'.",
             },
             stance: {
               type: "string",
               enum: ["avoid", "prefer", "mixed"],
-              description: "Filter to only entries with this derived stance",
+              description: "Only applies when mode='philosophy' — filter to this derived stance.",
             },
-            limit: {
-              type: "number",
-              description: "Max entries to return (default 20)",
-            },
+            limit: { type: "number", description: "Max results (default 20, cap 100)" },
           },
         },
       },
       {
-        name: "deepPairing_search_sessions",
+        name: "post_pr_review",
         description:
-          "Search across every past session in this project for artifacts matching a query. Use when the human references prior work ('did we look at this before?') or when you want to cite a past decision / finding that relates to the current task. Matches against artifact titles, concept names, rejected-approach entries, and artifact content. Returns the top results ranked by relevance.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            query: { type: "string", description: "Free-text query (matches across titles, concepts, rejected approaches, and content)" },
-            limit: { type: "number", description: "Max results (default 50, cap 200)" },
-          },
-          required: ["query"],
-        },
-      },
-      {
-        name: "deepPairing_post_pr_review",
-        description:
-          "Post this session's findings as inline review comments on a GitHub PR. Uses the `gh` CLI under the hood, so the user must have it installed and authenticated (`gh auth login`).\n\nCall this when the user says 'post these findings on PR 42' or similar. The tool (a) builds the GitHub review API payload from the session's approved research artifacts, (b) resolves the repo automatically if not specified, (c) POSTs via `gh api`, (d) returns the created review URL.\n\nFindings need structured evidence (filePath + lineStart) to become inline comments — generic findings fall through silently. Rejected / retracted / superseded artifacts are omitted.",
+          "Post this session's approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -416,20 +470,19 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_export_session",
-        description: "Export the current session as markdown. Formats: 'pr-description' (concise for PR bodies), 'pr-review' (findings formatted as GitHub-style PR review comments with file:line anchors and suggestion blocks — paste directly into a PR review), 'adr' (architecture decision record), 'full' (complete session with code), 'replay' (chronological walkthrough with annotations — useful for re-reading and learning).",
+        name: "export_session",
+        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough).",
         inputSchema: {
           type: "object" as const,
           properties: {
-            format: { type: "string", enum: ["pr-description", "pr-review", "adr", "full", "replay"], description: "Export format" },
+            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay"], description: "Export format" },
           },
         },
       },
       {
-        name: "deepPairing_request_horizon_check",
+        name: "request_horizon_check",
         description:
-          "Ask the human to predict a failure mode for an architecturally-significant artifact on a specific time horizon (3mo / 1y / 2y). Use this SPARINGLY — only for decisions or designs that could break in non-obvious ways as the system scales or evolves (schema shapes, auth flows, caching strategies, data pipelines, queue semantics).\n\n" +
-          "This creates an agent-authored 'horizon check' question on the artifact. The human replies in the companion UI; their prediction gets stored so they can learn from it later (was the prediction right? was the timeframe off?). This is deepPairing's craft-development surface — not a compliance checkbox.",
+          "Ask the human to predict a failure mode for an architecturally-significant artifact on a 3mo / 1y / 2y horizon. The human's prediction is stored for later review; good signal for calibration. Use sparingly on schema, auth, caching, pipeline, or queue-semantics decisions.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -448,9 +501,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_answer_question",
+        name: "answer_question",
         description:
-          "Reply to a question comment the human asked about an artifact. The human asked via the companion UI's 'Ask why' affordance; check_feedback surfaces these with a ❓QUESTION prefix and the commentId. Answering via this tool (rather than a plain reply) links your answer back to the question so the UI can collapse it under the original ask, and marks the question resolved.\n\nTreat this as a teaching moment — include evidence when the answer points at real code.",
+          "Reply to a question comment from the human. Use instead of a plain comment reply so the answer is linked to the question and the UI collapses the pair. Attach `evidence` when the answer points at real code.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -475,34 +528,26 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
-        name: "deepPairing_supersede_artifact",
+        name: "revise_artifact",
         description:
-          "Replace a prior artifact with a revised version. Use this when the human requests revisions — produce a fresh v(N+1) artifact linked to the original via parentId, and the original flips to 'superseded'. The supersede chain preserves the learning history (the human can still replay earlier drafts). Do NOT re-call present_findings / present_plan / etc. for a revision — use this tool so the relationship is recorded.\n\nThe new artifact starts as draft, so it goes through the normal review loop.",
+          "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.",
         inputSchema: {
           type: "object" as const,
           properties: {
-            oldArtifactId: { type: "string", description: "The id of the artifact being replaced (art_...)" },
-            title: { type: "string", description: "Updated title (may match the old one if revising content only)" },
+            artifactId: { type: "string", description: "Id of the artifact being revised (art_...)." },
+            mode: {
+              type: "string",
+              enum: ["supersede", "retract"],
+              description: "'supersede' to replace with a v(N+1) draft; 'retract' to mark as retracted.",
+            },
+            reason: { type: "string", description: "Brief explanation — shown to the human." },
+            title: { type: "string", description: "(supersede only) Updated title. Defaults to the original title when omitted." },
             content: {
               type: "object",
-              description: "Full content object for the new version — same shape as the type-specific present_* tools accept",
+              description: "(supersede only) Full content for the new version — same shape as the original present_* tool accepts.",
             },
-            reason: { type: "string", description: "Brief explanation of what changed and why — shown to the human" },
           },
-          required: ["oldArtifactId", "content", "reason"],
-        },
-      },
-      {
-        name: "deepPairing_retract_artifact",
-        description:
-          "Gracefully back out an artifact you just presented. Use this when you realize mid-flight you shouldn't have presented something (e.g. you proposed a rejected approach, you noticed an error, or context changed). Marks the artifact as retracted with your reason so the human sees why. Continue your workflow; do NOT stop to ask in the terminal.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            artifactId: { type: "string", description: "The id returned when the artifact was presented (e.g. 'art_abc123')." },
-            reason: { type: "string", description: "Short explanation of why you're retracting — shown to the human." },
-          },
-          required: ["artifactId", "reason"],
+          required: ["artifactId", "mode", "reason"],
         },
       },
     ],
@@ -692,6 +737,38 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // Non-fatal — we just won't surface guardrails
       }
 
+      // N6.3 — team conventions from .deeppairing/team.json. Kept in a
+      // distinct section from personal philosophy and structural guardrails
+      // (NEVER merged — they're different kinds of authority). Groups by
+      // kind so the agent can act on require/avoid first, prefer as taste.
+      try {
+        if (typeof (store as any).getTeamPreferences === "function") {
+          const prefs = await (store as any).getTeamPreferences();
+          if (Array.isArray(prefs) && prefs.length > 0) {
+            const render = (p: any) => {
+              const scope = p.scope?.paths?.length
+                ? ` (scope: ${p.scope.paths.join(", ")})`
+                : "";
+              return `  - "${p.concept}"${scope} — ${p.rationale}`;
+            };
+            const required = prefs.filter((p: any) => p.kind === "require").map(render);
+            const avoided = prefs.filter((p: any) => p.kind === "avoid").map(render);
+            const preferred = prefs.filter((p: any) => p.kind === "prefer").map(render);
+            const sections: string[] = [];
+            if (required.length) sections.push(`Required:\n${required.join("\n")}`);
+            if (avoided.length) sections.push(`Avoid:\n${avoided.join("\n")}`);
+            if (preferred.length) sections.push(`Preferred:\n${preferred.join("\n")}`);
+            if (sections.length > 0) {
+              hintParts.push(
+                `\n🏢 Team conventions (from .deeppairing/team.json — treat 'require' as hard rules, 'avoid' as refusal triggers, 'prefer' as taste):\n${sections.join("\n")}`,
+              );
+            }
+          }
+        }
+      } catch {
+        // Non-fatal — team prefs are advisory; keep polling shape intact.
+      }
+
       // J4 — cross-project philosophy kickoff brief. Pull the top few
       // strongly-held cross-project stances so the agent has the user's
       // taste before it proposes anything. Keep it tight (3 avoid + 3 prefer
@@ -723,11 +800,31 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
         if (philosophyParts.length > 0) {
           hintParts.push(
-            `\n🧭 Cross-project philosophy ledger (use deepPairing_recall_philosophy for more):\n${philosophyParts.join("\n")}`,
+            `\n🧭 Cross-project philosophy ledger (use recall with mode='philosophy' for more):\n${philosophyParts.join("\n")}`,
           );
         }
       } catch {
         // Ledger read failure is non-fatal — we still have session-scoped memory.
+      }
+
+      // N2.2: if the user installed via the plugin (which doesn't touch
+      // CLAUDE.md), surface a one-line tip pointing at `npx deeppairing init`.
+      // CLAUDE.md mutation is intentionally opt-in — the daemon won't do it
+      // silently. Detect by checking for the deepPairing marker in CLAUDE.md.
+      try {
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        const claudeMd = path.join(process.cwd(), "CLAUDE.md");
+        if (fs.existsSync(claudeMd)) {
+          const content = fs.readFileSync(claudeMd, "utf-8");
+          if (!content.includes("<!-- deepPairing -->")) {
+            hintParts.push(
+              "\n💡 Tip: run `npx deeppairing init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
+            );
+          }
+        }
+      } catch {
+        // Non-fatal — skip the tip
       }
 
       firstCallHint = `\n${hintParts.join("\n")}`;
@@ -763,52 +860,109 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
     /**
      * Pre-flight: refuse to record an artifact whose content matches an
-     * approach the human previously rejected. Returns a tool error response
-     * if a match is found, or null if the tool should proceed.
+     * approach the human previously rejected (session-scoped) OR violates a
+     * team-agreed avoid/require preference (committed to .deeppairing/team.json).
+     * Returns a tool error response if either lane matches, or null otherwise.
+     *
+     * Order: session-rejected first (it's the user's most recent stance, and
+     * it's what their brain expects to be enforced), then team prefs.
      */
     const preflightRejectedApproaches = async (
       toolName: string,
       proposalStrings: string[],
+      proposalPaths: string[] = [],
     ): Promise<{ content: Array<{ type: "text"; text: string }>; isError: true } | null> => {
       const memory = await store.getSessionMemory();
-      if (memory.rejectedApproaches.length === 0) return null;
-      const match = findRejectedApproachMatch(proposalStrings, memory.rejectedApproaches);
-      if (!match) return null;
-      const reasonLine = match.rejected.reason
-        ? `\nPrior rejection reason: "${match.rejected.reason}"`
-        : "";
-      const conceptLine =
-        match.via === "concept" && match.rejected.concept
-          ? `\nMatched on underlying concept: "${match.rejected.concept}". ` +
-            `A paraphrased proposal still counts — the user has rejected this kind of approach.`
-          : "";
-      const message =
-        `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
-        `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
-        `Do NOT retry with this approach. Revise your proposal to exclude it, or — if you believe ` +
-        `conditions have changed — present_findings first to make the case for reconsidering, then ` +
-        `wait for the human's response via check_feedback. The artifact was NOT created.`;
+      if (memory.rejectedApproaches.length > 0) {
+        const match = findRejectedApproachMatch(proposalStrings, memory.rejectedApproaches);
+        if (match) {
+          const reasonLine = match.rejected.reason
+            ? `\nPrior rejection reason: "${match.rejected.reason}"`
+            : "";
+          const conceptLine =
+            match.via === "concept" && match.rejected.concept
+              ? `\nMatched on underlying concept: "${match.rejected.concept}". ` +
+                `A paraphrased proposal still counts — the user has rejected this kind of approach.`
+              : "";
+          const message =
+            `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
+            `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
+            `Do NOT retry with this approach. Revise your proposal to exclude it, or — if you believe ` +
+            `conditions have changed — present_findings first to make the case for reconsidering, then ` +
+            `wait for the human's response via check_feedback. The artifact was NOT created.`;
 
-      // Make the invisible moat felt: broadcast the block so the companion UI
-      // can surface a toast. The MOST distinctive deepPairing mechanic — the
-      // agent being stopped from re-proposing something the human already
-      // rejected — used to happen silently. Now the human sees it.
-      broadcast({
-        type: "preflight_blocked",
-        toolName,
-        match: {
-          proposal: match.proposal,
-          description: match.rejected.description,
-          reason: match.rejected.reason,
-          concept: match.rejected.concept,
-          via: match.via,
-        },
-      });
+          // Make the invisible moat felt: broadcast the block so the companion UI
+          // can surface a toast. The MOST distinctive deepPairing mechanic — the
+          // agent being stopped from re-proposing something the human already
+          // rejected — used to happen silently. Now the human sees it.
+          broadcast({
+            type: "preflight_blocked",
+            toolName,
+            source: "session",
+            match: {
+              proposal: match.proposal,
+              description: match.rejected.description,
+              reason: match.rejected.reason,
+              concept: match.rejected.concept,
+              via: match.via,
+            },
+          });
 
-      return {
-        content: [{ type: "text", text: message }],
-        isError: true as const,
-      };
+          return {
+            content: [{ type: "text", text: message }],
+            isError: true as const,
+          };
+        }
+      }
+
+      // N6.4 — team-preferences lane. Distinct authority from session memory:
+      // a team pref is something the team committed to a file in the repo, so
+      // the block message attributes to "team policy" not "the user".
+      const teamPrefs: TeamPreference[] = typeof (store as any).getTeamPreferences === "function"
+        ? (await (store as any).getTeamPreferences()) ?? []
+        : [];
+      if (teamPrefs.length > 0) {
+        const teamMatch = findTeamPreferenceViolation(proposalStrings, teamPrefs, proposalPaths);
+        if (teamMatch) {
+          const { pref, proposal, via } = teamMatch;
+          const attribution = pref.addedBy ? ` (added by ${pref.addedBy})` : "";
+          const scope = pref.scope?.paths?.length
+            ? `\nScope: ${pref.scope.paths.join(", ")}`
+            : "";
+          const headline = via === "avoid"
+            ? `your proposal touches "${proposal}" which conflicts with the team's "avoid: ${pref.concept}" policy`
+            : `your proposal addresses "${proposal}" but is missing the team-required "${pref.concept}"`;
+          const message =
+            `REJECTED_APPROACH_BLOCKED: ${toolName} refused — ${headline}.\n` +
+            `Team rationale: "${pref.rationale}"${attribution}.${scope}\n\n` +
+            (via === "avoid"
+              ? `Do NOT propose this. Revise to use an alternative approach, or call present_findings to make a case for changing the team policy. The artifact was NOT created.`
+              : `Revise your proposal to use the required approach, or call present_findings to surface why this case warrants an exception. The artifact was NOT created.`);
+
+          broadcast({
+            type: "preflight_blocked",
+            toolName,
+            source: "team",
+            match: {
+              proposal,
+              description: pref.concept,
+              reason: pref.rationale,
+              concept: pref.concept,
+              via,
+              kind: pref.kind,
+              addedBy: pref.addedBy,
+              scope: pref.scope?.paths,
+            },
+          });
+
+          return {
+            content: [{ type: "text", text: message }],
+            isError: true as const,
+          };
+        }
+      }
+
+      return null;
     };
 
     /** Auto-name the session from the first meaningful artifact title */
@@ -822,7 +976,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     };
 
     const result = await (async () => { switch (name) {
-      case "deepPairing_present_findings": {
+      case "present_findings": {
         const findings: any[] = Array.isArray(args?.findings) ? args.findings : [];
         const proposals: string[] = [
           args?.title ?? "",
@@ -830,7 +984,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           ...findings.map((f) => f?.title ?? ""),
           ...findings.map((f) => f?.recommendation ?? ""),
         ].filter(Boolean);
-        const blocked = await preflightRejectedApproaches("present_findings", proposals);
+        // Paths from structured evidence feed scope-aware team-pref enforcement.
+        const proposalPaths: string[] = findings.flatMap((f) =>
+          Array.isArray(f?.evidence)
+            ? f.evidence.map((e: any) => (typeof e === "object" && e?.filePath) || "").filter(Boolean)
+            : [],
+        );
+        const blocked = await preflightRejectedApproaches("present_findings", proposals, proposalPaths);
         if (blocked) return blocked;
 
         const id = `art_${nanoid(10)}`;
@@ -861,11 +1021,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
 
         return {
-          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${port}. Call deepPairing_check_feedback for their response.${await getPassiveFeedback()}` }],
+          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${port}. Call check_feedback for their response.${await getPassiveFeedback()}` }],
         };
       }
 
-      case "deepPairing_present_options": {
+      case "present_options": {
         const proposedOptions: any[] = Array.isArray(args?.options) ? args.options : [];
         const proposals: string[] = [
           args?.context ?? "",
@@ -908,11 +1068,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // Skip elicitation — the option comparison UI is much richer than a terminal form
 
         return {
-          content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${port}. Call deepPairing_check_feedback for their choice.${await getPassiveFeedback()}` }],
+          content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${port}. Call check_feedback for their choice.${await getPassiveFeedback()}` }],
         };
       }
 
-      case "deepPairing_present_spec": {
+      case "present_spec": {
         const requirementsArr: any[] = Array.isArray(args?.requirements) ? args.requirements : [];
         const tasksArr: any[] = Array.isArray(args?.tasks) ? args.tasks : [];
         const proposals: string[] = [
@@ -956,11 +1116,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
 
         return {
-          content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${port}. Call deepPairing_check_feedback for their response.${await getPassiveFeedback()}` }],
+          content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${port}. Call check_feedback for their response.${await getPassiveFeedback()}` }],
         };
       }
 
-      case "deepPairing_present_plan": {
+      case "present_plan": {
         const planSteps: any[] = Array.isArray(args?.steps) ? args.steps : [];
         const proposals: string[] = [
           args?.title ?? "",
@@ -970,7 +1130,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             Array.isArray(s?.files) ? s.files.map((f: any) => String(f)) : [],
           ),
         ].filter(Boolean);
-        const blocked = await preflightRejectedApproaches("present_plan", proposals);
+        const proposalPaths: string[] = planSteps.flatMap((s) =>
+          Array.isArray(s?.files)
+            ? s.files.map((f: any) => (typeof f === "string" ? f : f?.filePath)).filter(Boolean)
+            : [],
+        );
+        const blocked = await preflightRejectedApproaches("present_plan", proposals, proposalPaths);
         if (blocked) return blocked;
 
         const id = `art_${nanoid(10)}`;
@@ -1000,11 +1165,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
 
         return {
-          content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${port}. Call deepPairing_check_feedback for their verdict.${await getPassiveFeedback()}` }],
+          content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${port}. Call check_feedback for their verdict.${await getPassiveFeedback()}` }],
         };
       }
 
-      case "deepPairing_log_reasoning": {
+      case "log_reasoning": {
         const id = `art_${nanoid(10)}`;
         const relatedIds = args?.relatesTo?.artifactId ? [args.relatesTo.artifactId] : undefined;
         const artifact = await store.createArtifact({
@@ -1035,12 +1200,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "deepPairing_present_code_change": {
+      case "present_code_change": {
         const proposals: string[] = [
           args?.filePath ?? "",
           args?.reasoning ?? "",
         ].filter(Boolean);
-        const blocked = await preflightRejectedApproaches("present_code_change", proposals);
+        const proposalPaths: string[] = args?.filePath ? [String(args.filePath)] : [];
+        const blocked = await preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
         if (blocked) return blocked;
 
         const id = `art_${nanoid(10)}`;
@@ -1065,7 +1231,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "deepPairing_check_feedback": {
+      case "check_feedback": {
         // If no immediate feedback exists, long-poll for up to 30 seconds
         const unackComments = await store.getUnacknowledgedComments();
         const resolvedDecs = await store.getResolvedDecisions();
@@ -1174,7 +1340,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
             if ((c as any).intent === "question" && !(c as any).answeredByCommentId) {
               questionLines.push(
-                `- ❓ QUESTION [${loc}] ${c.content}\n    → Answer via deepPairing_answer_question with commentId="${c.id}"`,
+                `- ❓ QUESTION [${loc}] ${c.content}\n    → Answer via answer_question with commentId="${c.id}"`,
               );
               continue;
             }
@@ -1202,19 +1368,49 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           for (const d of resolved) {
             const option = d.options.find((o: any) => o.id === d.response?.optionId);
             if (option) {
-              await store.recordApprovedPattern(`${d.context}: ${option.title}`);
+              const approvedDescription = `${d.context}: ${option.title}`;
+              await store.recordApprovedPattern(approvedDescription);
+              broadcast({
+                type: "ledger_write",
+                kind: "approved",
+                description: approvedDescription,
+                sourceArtifactId: d.artifactId,
+              });
               const rejected = d.options.filter((o: any) => o.id !== d.response?.optionId);
               // The winning option's description often encodes the concept
               // ("a managed queue — we pay per job, not per month"). Use it
               // as the concept tag so future pre-flight catches paraphrases.
               const concept = option?.description ?? undefined;
               for (const rej of rejected) {
+                const rejectedDescription = `${d.context}: ${rej.title}`;
                 await store.recordRejectedApproach(
-                  `${d.context}: ${rej.title}`,
+                  rejectedDescription,
                   d.response?.reasoning,
                   d.artifactId,
                   concept,
                 );
+                broadcast({
+                  type: "ledger_write",
+                  kind: "rejected",
+                  description: rejectedDescription,
+                  concept,
+                  reason: d.response?.reasoning,
+                  sourceArtifactId: d.artifactId,
+                });
+              }
+              // O7: high-stakes decisions also fire a "decision_resolved_hero"
+              // event so the UI can toast the captured prediction — otherwise
+              // the prediction disappears into the decision record.
+              const stakes = (d as any).stakes ?? (d as any).request?.stakes;
+              if (stakes === "high" && d.response?.predictedOutcome) {
+                broadcast({
+                  type: "decision_resolved_hero",
+                  artifactId: d.artifactId,
+                  context: d.context,
+                  chosenTitle: option.title,
+                  predictedOutcome: d.response.predictedOutcome,
+                  confidence: (d.response as any).confidence,
+                });
               }
             }
             formattedDecisions.push(`- Decision "${d.context}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
@@ -1241,15 +1437,15 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         );
         if (draftArtifacts.length > 0) {
           const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
-          parts.push(`⏳ WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call deepPairing_check_feedback again to pick up their response.`);
+          parts.push(`⏳ WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
         }
 
         const pendingDec = await store.getPendingDecisions();
         if (pendingDec.length > 0) {
-          parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending. The human will select in the companion UI. Call deepPairing_check_feedback again to pick up their choice.`);
+          parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
         }
         if (pendingPlans.length > 0) {
-          parts.push(`⏳ WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call deepPairing_check_feedback again to pick up their verdict.`);
+          parts.push(`⏳ WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);
         }
 
         // Session memory is delivered once on the very first tool call (see
@@ -1299,7 +1495,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "deepPairing_request_horizon_check": {
+      case "request_horizon_check": {
         const artifactId = String(args?.artifactId ?? "").trim();
         const horizon = String(args?.horizon ?? "").trim();
         if (!artifactId) {
@@ -1360,7 +1556,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "deepPairing_answer_question": {
+      case "answer_question": {
         const commentId = String(args?.commentId ?? "").trim();
         const answer = String(args?.answer ?? "").trim();
         if (!commentId || !answer) {
@@ -1416,106 +1612,107 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
 
         broadcast({ type: "comment_added", comment: answerComment });
+        // O7: distinct event so the UI can toast the answer moment (otherwise
+        // it just blends into the artifact's comment thread and the human
+        // might not notice their question was picked up).
+        broadcast({
+          type: "question_answered",
+          questionId: commentId,
+          answerId,
+          artifactId: parent.target?.artifactId,
+          answerExcerpt: answer.slice(0, 120),
+        });
         return {
           content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await getPassiveFeedback()}` }],
         };
       }
 
-      case "deepPairing_supersede_artifact": {
-        const oldArtifactId = String(args?.oldArtifactId ?? "").trim();
-        const reason = String(args?.reason ?? "").trim();
-        const content = (args?.content && typeof args.content === "object") ? args.content : null;
-        if (!oldArtifactId || !reason || !content) {
-          return {
-            content: [{ type: "text", text: "supersede_artifact requires oldArtifactId, content, and reason." }],
-            isError: true,
-          };
-        }
-
-        const all = await store.getArtifacts();
-        const old = all.find((a) => a.id === oldArtifactId);
-        if (!old) {
-          return {
-            content: [{ type: "text", text: `supersede_artifact: no artifact with id ${oldArtifactId}.` }],
-            isError: true,
-          };
-        }
-        if (old.status === "superseded" || old.status === "retracted") {
-          return {
-            content: [{ type: "text", text: `supersede_artifact: ${oldArtifactId} is already ${old.status}.` }],
-            isError: true,
-          };
-        }
-
-        const title = String(args?.title ?? old.title);
-        const newId = `art_${nanoid(10)}`;
-        const newArtifact = await store.createArtifact({
-          id: newId,
-          type: old.type,
-          title,
-          content: content as Record<string, unknown>,
-          agentReasoning: reason,
-          parentId: old.id,
-          version: old.version + 1,
-        });
-        await store.updateArtifactStatus(old.id, "superseded");
-
-        // Agent-authored comment on the OLD artifact records the reason visibly
-        await store.addComment({
-          id: `cmt_${nanoid(10)}`,
-          artifactId: old.id,
-          content: `Superseded by ${newId}: ${reason}`,
-          author: "agent",
-        });
-
-        // For decisions and plans, the daemon-side record also needs the new
-        // review cycle so check_feedback surfaces pending verdicts.
-        if (old.type === "decision" && (content as any).options && (content as any).decisionId) {
-          await store.recordDecisionRequest({
-            decisionId: (content as any).decisionId,
-            artifactId: newId,
-            context: (content as any).context ?? title,
-            options: (content as any).options,
-          });
-        }
-        if (old.type === "plan") {
-          await store.recordPlanReview(newId);
-        }
-
-        broadcast({ type: "artifact_created", artifact: newArtifact });
-        broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
-
-        return {
-          content: [{ type: "text", text: `Superseded ${oldArtifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review.${await getPassiveFeedback()}` }],
-        };
-      }
-
-      case "deepPairing_retract_artifact": {
+      case "revise_artifact": {
         const artifactId = String(args?.artifactId ?? "").trim();
+        const mode = args?.mode as "supersede" | "retract" | undefined;
         const reason = String(args?.reason ?? "").trim();
-        if (!artifactId) {
+        if (!artifactId || !reason || (mode !== "supersede" && mode !== "retract")) {
           return {
-            content: [{ type: "text", text: "retract_artifact requires artifactId." }],
+            content: [{ type: "text", text: "revise_artifact requires artifactId, mode ('supersede' | 'retract'), and reason." }],
             isError: true,
           };
         }
-        if (!reason) {
+
+        if (mode === "supersede") {
+          const content = (args?.content && typeof args.content === "object") ? args.content : null;
+          if (!content) {
+            return {
+              content: [{ type: "text", text: "revise_artifact with mode='supersede' requires a `content` object (same shape the original present_* tool accepts)." }],
+              isError: true,
+            };
+          }
+          const all = await store.getArtifacts();
+          const old = all.find((a) => a.id === artifactId);
+          if (!old) {
+            return {
+              content: [{ type: "text", text: `revise_artifact: no artifact with id ${artifactId}.` }],
+              isError: true,
+            };
+          }
+          if (old.status === "superseded" || old.status === "retracted") {
+            return {
+              content: [{ type: "text", text: `revise_artifact: ${artifactId} is already ${old.status}.` }],
+              isError: true,
+            };
+          }
+
+          const title = String(args?.title ?? old.title);
+          const newId = `art_${nanoid(10)}`;
+          const newArtifact = await store.createArtifact({
+            id: newId,
+            type: old.type,
+            title,
+            content: content as Record<string, unknown>,
+            agentReasoning: reason,
+            parentId: old.id,
+            version: old.version + 1,
+          });
+          await store.updateArtifactStatus(old.id, "superseded");
+
+          await store.addComment({
+            id: `cmt_${nanoid(10)}`,
+            artifactId: old.id,
+            content: `Superseded by ${newId}: ${reason}`,
+            author: "agent",
+          });
+
+          if (old.type === "decision" && (content as any).options && (content as any).decisionId) {
+            await store.recordDecisionRequest({
+              decisionId: (content as any).decisionId,
+              artifactId: newId,
+              context: (content as any).context ?? title,
+              options: (content as any).options,
+            });
+          }
+          if (old.type === "plan") {
+            await store.recordPlanReview(newId);
+          }
+
+          broadcast({ type: "artifact_created", artifact: newArtifact });
+          broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
+
           return {
-            content: [{ type: "text", text: "retract_artifact requires a reason — the human sees why you're backing out." }],
-            isError: true,
+            content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review.${await getPassiveFeedback()}` }],
           };
         }
+
+        // mode === "retract"
         const artifacts = await store.getArtifacts();
         const artifact = artifacts.find((a) => a.id === artifactId);
         if (!artifact) {
           return {
-            content: [{ type: "text", text: `retract_artifact: no artifact with id ${artifactId}.` }],
+            content: [{ type: "text", text: `revise_artifact: no artifact with id ${artifactId}.` }],
             isError: true,
           };
         }
         if (artifact.status !== "draft" && artifact.status !== "reviewing") {
           return {
-            content: [{ type: "text", text: `retract_artifact: ${artifactId} is ${artifact.status}, too late to retract. Use check_feedback instead.` }],
+            content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to retract. Use check_feedback instead.` }],
             isError: true,
           };
         }
@@ -1532,22 +1729,104 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "memory_search": {
+      case "recall": {
         const query = String(args?.query ?? "").trim();
+        const mode = (args?.mode ?? "any") as "philosophy" | "sessions" | "any";
+        const stanceFilter = typeof args?.stance === "string" ? args.stance : undefined;
+        const limit = Math.min(
+          Math.max(typeof args?.limit === "number" ? args.limit : 20, 1),
+          100,
+        );
+
+        // --- Philosophy branch ---
+        const runPhilosophy = async () => {
+          const concept = query || undefined;
+          const entries = getGlobalStore().query({
+            concept,
+            stance: stanceFilter as "avoid" | "prefer" | "mixed" | undefined,
+            limit,
+          });
+          return entries;
+        };
+
+        // --- Sessions branch ---
+        const runSessions = async () => {
+          if (!query) return [];
+          if (typeof (store as any).searchSessions !== "function") return [];
+          return (store as any).searchSessions(query, limit);
+        };
+
+        if (mode === "philosophy") {
+          const entries = await runPhilosophy();
+          if (entries.length === 0) {
+            return {
+              content: [{
+                type: "text",
+                text: query
+                  ? `No philosophy-ledger entries match "${query}" yet. The user hasn't expressed a cross-project stance on this concept.`
+                  : "The philosophy ledger is empty. It builds as the user approves / rejects concepts across sessions.",
+              }],
+            };
+          }
+          const formatted = entries.slice(0, 10).map((e) => {
+            const rejections = e.instances.filter((i) => i.verdict === "rejected").length;
+            const approvals = e.instances.filter((i) => i.verdict === "approved").length;
+            const projects = new Set(e.instances.map((i) => i.project)).size;
+            const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+            const reasonLine = latestReason ? `\n    latest reason: "${latestReason}"` : "";
+            return `- [${e.stance.toUpperCase()}] "${e.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
+          });
+          const trailer = entries.length > 10 ? `\n…${entries.length - 10} more entries.` : "";
+          return {
+            content: [{
+              type: "text",
+              text: `Philosophy ledger (${entries.length} match${entries.length === 1 ? "" : "es"}${query ? ` for "${query}"` : ""}):\n${formatted.join("\n")}${trailer}\n\nWeight these strongly — especially 'avoid' stances with multi-project support.`,
+            }],
+          };
+        }
+
+        if (mode === "sessions") {
+          if (!query) {
+            return {
+              content: [{ type: "text", text: "recall with mode='sessions' requires a query." }],
+              isError: true,
+            };
+          }
+          if (typeof (store as any).searchSessions !== "function") {
+            return {
+              content: [{ type: "text", text: "recall with mode='sessions' requires the daemon store (not available here)." }],
+              isError: true,
+            };
+          }
+          const results = await runSessions();
+          if (results.length === 0) {
+            return {
+              content: [{ type: "text", text: `No past-session matches for "${query}".` }],
+            };
+          }
+          const lines = results.slice(0, 20).map((r: any) => {
+            const via = r.matchedVia?.length ? ` (via ${r.matchedVia.join(", ")})` : "";
+            return `- [${r.sessionId}/${r.artifactId}] ${r.artifactType}: "${r.title}"${via}\n    ${r.excerpt}`;
+          });
+          const trailer = results.length > 20 ? `\n…${results.length - 20} more results.` : "";
+          return {
+            content: [{
+              type: "text",
+              text: `Found ${results.length} match${results.length === 1 ? "" : "es"} for "${query}":\n${lines.join("\n")}${trailer}\n\nRead a full session via resource deeppairing://session/{id} or an artifact via deeppairing://artifact/{id}.`,
+            }],
+          };
+        }
+
+        // mode === "any" — union with philosophy first.
         if (!query) {
           return {
-            content: [{ type: "text", text: "memory_search requires a non-empty query." }],
+            content: [{ type: "text", text: "recall with mode='any' requires a query (or use mode='philosophy' with no query to list the ledger)." }],
             isError: true,
           };
         }
-        const limit = typeof args?.limit === "number" ? args.limit : 20;
-
-        // Combine philosophy ledger hits (cross-project) with session search
-        // (current project). Philosophy first — it's the highest-signal layer.
-        const philosophyHits = getGlobalStore().query({ concept: query, limit: Math.max(5, Math.floor(limit / 2)) });
-        const sessionHits = typeof (store as any).searchSessions === "function"
-          ? await (store as any).searchSessions(query, Math.max(5, Math.floor(limit / 2)))
-          : [];
+        const halfLimit = Math.max(5, Math.floor(limit / 2));
+        const philosophyHits = getGlobalStore().query({ concept: query, limit: halfLimit });
+        const sessionHits = await runSessions();
 
         if (philosophyHits.length === 0 && sessionHits.length === 0) {
           return {
@@ -1570,116 +1849,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             lines.push(`- ${h.artifactType}: "${h.title}" [${h.sessionId}]`);
           }
         }
-
         return { content: [{ type: "text", text: lines.join("\n") }] };
       }
 
-      case "memory_recall": {
-        const key = String(args?.key ?? "").trim();
-        if (!key) {
-          return {
-            content: [{ type: "text", text: "memory_recall requires a key (concept name)." }],
-            isError: true,
-          };
-        }
-        const entry = getGlobalStore().get(key);
-        if (!entry) {
-          return {
-            content: [{ type: "text", text: `No stance recorded for "${key}".` }],
-          };
-        }
-        const stance = deriveStance(entry);
-        const rejections = entry.instances.filter((i) => i.verdict === "rejected").length;
-        const approvals = entry.instances.filter((i) => i.verdict === "approved").length;
-        const latestReason = [...entry.instances].reverse().find((i) => i.reason)?.reason;
-        const projects = new Set(entry.instances.map((i) => i.project)).size;
-        return {
-          content: [{
-            type: "text",
-            text: `[${stance.toUpperCase()}] "${entry.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}.${latestReason ? ` Latest reason: "${latestReason}".` : ""}`,
-          }],
-        };
-      }
-
-      case "deepPairing_recall_philosophy": {
-        const concept = typeof args?.concept === "string" ? args.concept.trim() : undefined;
-        const stance = typeof args?.stance === "string" ? args.stance : undefined;
-        const limit = typeof args?.limit === "number" ? args.limit : 20;
-
-        const entries = getGlobalStore().query({
-          concept,
-          stance: stance as "avoid" | "prefer" | "mixed" | undefined,
-          limit,
-        });
-
-        if (entries.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: concept
-                ? `No philosophy-ledger entries match "${concept}" yet. The user hasn't expressed a cross-project stance on this concept.`
-                : "The philosophy ledger is empty. Ledger builds as the user approves / rejects concepts across sessions.",
-            }],
-          };
-        }
-
-        const formatted = entries.slice(0, 10).map((e) => {
-          const rejections = e.instances.filter((i) => i.verdict === "rejected").length;
-          const approvals = e.instances.filter((i) => i.verdict === "approved").length;
-          const projects = new Set(e.instances.map((i) => i.project)).size;
-          const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-          const reasonLine = latestReason ? `\n    latest reason: "${latestReason}"` : "";
-          return `- [${e.stance.toUpperCase()}] "${e.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
-        });
-        const trailer = entries.length > 10 ? `\n…${entries.length - 10} more entries.` : "";
-
-        return {
-          content: [{
-            type: "text",
-            text: `Philosophy ledger (${entries.length} match${entries.length === 1 ? "" : "es"}${concept ? ` for "${concept}"` : ""}):\n${formatted.join("\n")}${trailer}\n\nThe user has expressed these stances across every deepPairing project they've used. Weight them strongly — especially 'avoid' stances with multi-project support.`,
-          }],
-        };
-      }
-
-      case "deepPairing_search_sessions": {
-        const query = String(args?.query ?? "").trim();
-        if (!query) {
-          return {
-            content: [{ type: "text", text: "search_sessions requires a non-empty query." }],
-            isError: true,
-          };
-        }
-        const limit = typeof args?.limit === "number" ? args.limit : 50;
-
-        // Only available when the store supports cross-session reads (DaemonClient)
-        if (typeof (store as any).searchSessions !== "function") {
-          return {
-            content: [{ type: "text", text: "search_sessions requires the daemon store (not available in this context)." }],
-            isError: true,
-          };
-        }
-
-        const results = await (store as any).searchSessions(query, limit);
-        if (results.length === 0) {
-          return {
-            content: [{ type: "text", text: `No matches for "${query}" across past sessions.` }],
-          };
-        }
-
-        const lines = results.slice(0, 20).map((r: any) => {
-          const via = r.matchedVia?.length ? ` (via ${r.matchedVia.join(", ")})` : "";
-          return `- [${r.sessionId}/${r.artifactId}] ${r.artifactType}: "${r.title}"${via}\n    ${r.excerpt}`;
-        });
-        const trailer = results.length > 20 ? `\n…${results.length - 20} more results.` : "";
-        return {
-          content: [{
-            type: "text",
-            text: `Found ${results.length} match${results.length === 1 ? "" : "es"} for "${query}":\n${lines.join("\n")}${trailer}\n\nRead a full session via resource deeppairing://session/{id} or a single artifact via deeppairing://artifact/{id}.`,
-          }],
-        };
-      }
-
-      case "deepPairing_post_pr_review": {
+      case "post_pr_review": {
         const ref = String(args?.pr ?? "").trim();
         if (!ref) {
           return {
@@ -1732,8 +1905,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
       }
 
-      case "deepPairing_export_session": {
-        const format = (args?.format ?? "full") as "full" | "pr-description" | "pr-review" | "adr" | "replay";
+      case "export_session": {
+        const format = (args?.format ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay";
         const state = await store.getFullState();
         // Include learner annotations when exporting as replay.
         const enriched =

@@ -16,7 +16,8 @@ export interface DaemonInfo {
 }
 
 const DAEMON_FILE = "daemon.json";
-const DEFAULT_PORT = 3847;
+export const DEFAULT_PORT = 3847;
+export const MAX_PORT_ATTEMPTS = 10;
 
 function daemonInfoPath(projectRoot: string): string {
   return path.join(projectRoot, ".deeppairing", DAEMON_FILE);
@@ -57,12 +58,36 @@ async function probeDaemon(port: number, timeoutMs = 1500): Promise<boolean> {
   }
 }
 
+/** Ask a running daemon who it is. Returns null if unreachable or not a deepPairing daemon. */
+export async function probeDaemonIdentity(port: number, timeoutMs = 1500): Promise<{ pid: number; projectRoot: string; startedAt: string } | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(`http://localhost:${port}/api/daemon-info`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    if (typeof data?.pid !== "number" || typeof data?.projectRoot !== "string") return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Check if the daemon is running. Unlike the old version, this probes the
  * actual HTTP port rather than relying solely on the info file — if the
  * daemon is healthy but daemon.json is missing/stale, we still adopt it.
+ *
+ * N2.1: multi-project support — each project's daemon can bind a different
+ * port (3847, 3848, …), so we sweep the range when daemon.json is missing
+ * and only adopt a daemon whose /api/daemon-info reports OUR projectRoot.
  */
-export async function isDaemonRunning(projectRoot: string): Promise<DaemonInfo | null> {
+export async function isDaemonRunning(
+  projectRoot: string,
+  /** Optional port range override — primarily for tests so we don't hit 3847 in CI. */
+  range: { start: number; count: number } = { start: DEFAULT_PORT, count: MAX_PORT_ATTEMPTS },
+): Promise<DaemonInfo | null> {
   const info = readDaemonInfo(projectRoot);
 
   // Fast path: info file present — verify PID and probe port.
@@ -72,12 +97,18 @@ export async function isDaemonRunning(projectRoot: string): Promise<DaemonInfo |
     if (pidAlive && await probeDaemon(info.port)) return info;
   }
 
-  // Probe the default port even if info file is missing or stale.
-  if (await probeDaemon(DEFAULT_PORT)) {
+  // Slow path: daemon.json missing or stale. Sweep the candidate port range
+  // and adopt only a daemon whose projectRoot matches ours — otherwise we'd
+  // latch onto another project's daemon on port 3847.
+  for (let attempt = 0; attempt < range.count; attempt++) {
+    const port = range.start + attempt;
+    const identity = await probeDaemonIdentity(port);
+    if (!identity) continue;
+    if (identity.projectRoot !== projectRoot) continue;
     const adopted: DaemonInfo = {
-      pid: info?.pid ?? 0,
-      port: DEFAULT_PORT,
-      startedAt: info?.startedAt ?? new Date().toISOString(),
+      pid: identity.pid,
+      port,
+      startedAt: identity.startedAt,
     };
     writeDaemonInfo(projectRoot, adopted);
     return adopted;
@@ -99,17 +130,19 @@ async function waitForDaemon(projectRoot: string, timeoutMs = 10000): Promise<Da
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  // A4: informative timeout — include the port + anything we can observe about
-  // what might be holding it.
-  const hint = await describePortHolder(DEFAULT_PORT, projectRoot);
+  // A4: informative timeout — include the port range we swept + anything
+  // we can observe about what might be holding it.
+  const hint = await describePortHolders(projectRoot);
+  const first = DEFAULT_PORT;
+  const last = DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1;
   throw new Error(
-    `deepPairing daemon did not become ready within ${timeoutMs}ms on port ${DEFAULT_PORT}.\n${hint}\n` +
+    `deepPairing daemon did not become ready within ${timeoutMs}ms (swept ports ${first}–${last}).\n${hint}\n` +
     `Run 'npx deeppairing doctor' to diagnose, or check .deeppairing/daemon.log.`,
   );
 }
 
 /** Best-effort port-holder description for the timeout error. */
-async function describePortHolder(port: number, projectRoot: string): Promise<string> {
+async function describePortHolders(projectRoot: string): Promise<string> {
   const parts: string[] = [];
   const info = readDaemonInfo(projectRoot);
   if (info) {
@@ -117,18 +150,29 @@ async function describePortHolder(port: number, projectRoot: string): Promise<st
     try { process.kill(info.pid, 0); pidAlive = true; } catch {}
     parts.push(
       pidAlive
-        ? `daemon.json reports PID ${info.pid} (started ${info.startedAt}) but it is not responding on /api/state`
+        ? `daemon.json reports PID ${info.pid} on port ${info.port} (started ${info.startedAt}) but it is not responding on /api/state`
         : `daemon.json reports PID ${info.pid} but that process is gone`,
     );
   } else {
     parts.push("No daemon.json found.");
   }
-  const responsive = await probeDaemon(port);
-  parts.push(
-    responsive
-      ? `Port ${port} IS responding — something may have raced the readiness check. Retry.`
-      : `Port ${port} is not accepting connections — the daemon either failed to bind or crashed on startup.`,
-  );
+  // Report what's holding each candidate port so the user can tell if 3847
+  // is a different project's daemon vs. nothing.
+  const observations: string[] = [];
+  for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
+    const port = DEFAULT_PORT + attempt;
+    const identity = await probeDaemonIdentity(port);
+    if (identity) {
+      const mine = identity.projectRoot === projectRoot ? " (this project)" : ` (other project: ${identity.projectRoot})`;
+      observations.push(`  :${port} — deepPairing daemon, PID ${identity.pid}${mine}`);
+    }
+  }
+  if (observations.length) {
+    parts.push("Ports holding a daemon:");
+    parts.push(...observations);
+  } else {
+    parts.push(`No daemons responding on ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}.`);
+  }
   return parts.join("\n");
 }
 

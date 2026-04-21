@@ -125,7 +125,7 @@ describe("buildGitHubReviewPayload", () => {
 
   it("body summarizes empty-findings state", () => {
     const payload = buildGitHubReviewPayload(state());
-    expect(payload.body).toContain("deepPairing review");
+    expect(payload.body).toContain("deepPairing notes");
     expect(payload.body).toContain("No reviewable findings");
   });
 

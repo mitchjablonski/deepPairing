@@ -188,6 +188,66 @@ describe("FileStore", () => {
     });
   });
 
+  describe("team preferences (N6.2)", () => {
+    function writeTeamJson(content: unknown): void {
+      fs.mkdirSync(path.join(tmpDir, ".deeppairing"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, ".deeppairing", "team.json"),
+        typeof content === "string" ? content : JSON.stringify(content),
+      );
+    }
+
+    it("returns empty when team.json is missing", () => {
+      const store = createStore("team1");
+      expect(store.getTeamPreferences()).toEqual([]);
+    });
+
+    it("loads a well-formed team.json on construction", () => {
+      writeTeamJson({
+        version: 1,
+        preferences: [
+          { id: "p1", kind: "require", concept: "argon2id for password hashing", rationale: "bcrypt is brute-forceable" },
+          { id: "p2", kind: "avoid", concept: "global state", rationale: "breaks testability" },
+        ],
+      });
+      const store = createStore("team2");
+      const prefs = store.getTeamPreferences();
+      expect(prefs).toHaveLength(2);
+      expect(prefs[0].concept).toContain("argon2id");
+      expect(prefs[1].kind).toBe("avoid");
+    });
+
+    it("returns empty (not throws) on malformed team.json", () => {
+      writeTeamJson("{ not valid json");
+      const store = createStore("team3");
+      expect(store.getTeamPreferences()).toEqual([]);
+    });
+
+    it("returns empty (not throws) on schema-invalid team.json", () => {
+      writeTeamJson({ version: 999, preferences: [{ nope: true }] });
+      const store = createStore("team4");
+      expect(store.getTeamPreferences()).toEqual([]);
+    });
+
+    it("is cached per-instance — file changes don't affect a live store", () => {
+      writeTeamJson({ version: 1, preferences: [{ id: "p1", kind: "prefer", concept: "x", rationale: "y" }] });
+      const store = createStore("team5");
+      expect(store.getTeamPreferences()).toHaveLength(1);
+      writeTeamJson({ version: 1, preferences: [] });
+      // Same store — stale cache is intentional, reloaded on next construction.
+      expect(store.getTeamPreferences()).toHaveLength(1);
+    });
+
+    it("picks up changes for a new store instance (next session)", () => {
+      writeTeamJson({ version: 1, preferences: [{ id: "p1", kind: "prefer", concept: "x", rationale: "y" }] });
+      const s1 = createStore("team6a");
+      expect(s1.getTeamPreferences()).toHaveLength(1);
+      writeTeamJson({ version: 1, preferences: [] });
+      const s2 = createStore("team6b");
+      expect(s2.getTeamPreferences()).toHaveLength(0);
+    });
+  });
+
   describe("listSessions", () => {
     it("returns sessions and includes session data", () => {
       const s1 = createStore( "session_1");

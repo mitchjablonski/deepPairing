@@ -3,7 +3,7 @@ description: Check the philosophy ledger for my cross-project stance on a concep
 argument-hint: [concept]
 ---
 
-Call `deepPairing_recall_philosophy` with concept: "$ARGUMENTS"
+Call `recall` with query: "$ARGUMENTS", mode: "philosophy"
 
 If there's an 'avoid' stance, walk me through:
 - What I rejected and why (latest reason)

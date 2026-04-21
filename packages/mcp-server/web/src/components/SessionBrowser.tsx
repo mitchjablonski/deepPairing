@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
+import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
+import { WaitingForClaude } from "./WaitingForClaude";
 import { demoArtifacts, demoComments } from "@deeppairing/shared/__fixtures__/demo-session";
 
 interface SearchResult {
@@ -31,6 +33,7 @@ export function SessionBrowser() {
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
   const { addArtifact, addComment, selectArtifact, reset } = useArtifactStore();
+  const hasActiveSession = useConnectionStore((s) => s.activeSessions.length > 0);
 
   // Cross-session search state
   const [query, setQuery] = useState("");
@@ -155,20 +158,18 @@ export function SessionBrowser() {
 
   if (sessions.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-text-muted gap-3 p-8">
-        <ArtifactIcon type="research" className="w-8 h-8 opacity-30" />
-        <div className="text-center">
-          <p className="text-sm">No sessions yet</p>
-          <p className="text-xs mt-1">Start a conversation with Claude Code using deepPairing tools</p>
+      <div className="p-4 max-w-2xl mx-auto space-y-4">
+        <WaitingForClaude />
+        <div className="flex flex-col items-center text-text-muted gap-2 pt-2">
+          <button
+            onClick={loadDemo}
+            className="px-4 py-2 bg-accent-blue text-white text-xs font-medium rounded-lg
+                       hover:bg-accent-blue/80 transition-all duration-[180ms] ease-out press-scale"
+          >
+            Or try the demo session
+          </button>
+          <p className="text-2xs text-text-muted">See what deepPairing looks like with real data</p>
         </div>
-        <button
-          onClick={loadDemo}
-          className="px-4 py-2 bg-accent-blue text-white text-xs font-medium rounded-lg
-                     hover:bg-accent-blue/80 transition-all duration-[180ms] ease-out press-scale"
-        >
-          Try Demo
-        </button>
-        <p className="text-2xs text-text-muted">See what a deepPairing session looks like</p>
       </div>
     );
   }
@@ -177,6 +178,12 @@ export function SessionBrowser() {
 
   return (
     <div className="p-4 space-y-2">
+      {/* O1b: when the user has past sessions on disk but no active live
+          session, nudge them — otherwise the "list of old sessions" reads as
+          the product's empty state, not as "you can start a new one right
+          now." */}
+      {!hasActiveSession && !showingSearchResults && <WaitingForClaude />}
+
       {/* Cross-session search */}
       <div className="mb-4">
         <div className="relative">

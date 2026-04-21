@@ -50,7 +50,24 @@ interface ReplayState {
   removeAnnotation: (annotationId: string) => Promise<void>;
 }
 
+/**
+ * Base tick rate for replay playback at 1× speed. Higher speeds divide this
+ * — see the `Math.max(120, …)` floor in play().
+ */
+const REPLAY_BASE_TICK_MS = 1200;
+const REPLAY_MIN_TICK_MS = 120;
+
 let playTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Stop the shared play timer (no-op when already idle). Centralized so the
+ *  five previous inline `if (playTimer) { clearInterval(…); playTimer = null; }`
+ *  instances stay in sync. */
+function clearPlayTimer(): void {
+  if (playTimer) {
+    clearInterval(playTimer);
+    playTimer = null;
+  }
+}
 
 export const useReplayStore = create<ReplayState>((set, get) => ({
   active: false,
@@ -76,7 +93,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       }
     } catch {}
 
-    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    clearPlayTimer();
     set({
       active: true,
       sessionId,
@@ -90,7 +107,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   },
 
   exitReplay: () => {
-    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    clearPlayTimer();
     set({ active: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
   },
 
@@ -117,20 +134,21 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       const idx = events.findIndex((e) => e.at === cursor);
       const nextIdx = idx + 1;
       if (nextIdx >= events.length) {
-        if (playTimer) { clearInterval(playTimer); playTimer = null; }
+        clearPlayTimer();
         set({ playing: false });
         return;
       }
       set({ cursor: events[nextIdx].at });
-      // Reschedule with current speed
-      if (playTimer) { clearInterval(playTimer); }
-      playTimer = setInterval(tick, Math.max(120, 1200 / speed));
+      // Reschedule with current speed (keeps tick rate honest when speed
+      // changes mid-playback).
+      clearPlayTimer();
+      playTimer = setInterval(tick, Math.max(REPLAY_MIN_TICK_MS, REPLAY_BASE_TICK_MS / speed));
     };
-    playTimer = setInterval(tick, 1200 / get().speed);
+    playTimer = setInterval(tick, REPLAY_BASE_TICK_MS / get().speed);
   },
 
   pause: () => {
-    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    clearPlayTimer();
     set({ playing: false });
   },
 

@@ -42,7 +42,7 @@ export const CommentSchema = z.object({
   codeReferences: z.array(CodeReferenceSchema).optional().describe("Code snippets referenced in this comment"),
   /**
    * Default "comment". "question" means the human wants an explanation and
-   * the agent should respond with deepPairing_answer_question.
+   * the agent should respond with answer_question.
    */
   intent: CommentIntentSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */

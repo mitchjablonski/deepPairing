@@ -22,6 +22,7 @@ import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
+import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -39,10 +40,12 @@ async function openBrowser(url: string): Promise<void> {
 }
 
 const DEFAULT_PORT = 3847;
+const MAX_PORT_ATTEMPTS = 10;
 const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
 const daemonInfoFile = path.join(dpDir, "daemon.json");
+const startedAt = new Date().toISOString();
 
 // --- Logging ---
 
@@ -175,6 +178,68 @@ const publicRoutes = createHttpRoutes(
 );
 app.route("/", publicRoutes);
 
+// N2.1: daemon identity endpoint so multi-project clients can verify they're
+// adopting the right daemon before trusting a port (avoids cross-project
+// adoption when daemon.json has been deleted). Includes projectRoot + port.
+app.get("/api/daemon-info", (c) => {
+  return c.json({ pid: process.pid, projectRoot, startedAt });
+});
+
+// O1a: skill-load detection. Two signals inform whether the agent is likely
+// wired up to actually call deepPairing tools:
+//   (a) Config signal — CLAUDE.md has the deepPairing marker, which means
+//       `npx deeppairing init` has run.
+//   (b) Runtime signal — any session has created an artifact recently, which
+//       proves the agent is picking up the pairing-protocol skill (since only
+//       MCP tool calls create artifacts).
+// Either signal flips `pairingProtocolSkillLikelyLoaded` to true. The UI uses
+// this to decide whether to show a "Claude isn't using deepPairing" banner.
+app.get("/api/skill-status", (c) => {
+  const claudeMdPath = path.join(projectRoot, "CLAUDE.md");
+  let claudeMdHasMarker = false;
+  try {
+    if (fs.existsSync(claudeMdPath)) {
+      claudeMdHasMarker = fs.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+    }
+  } catch {}
+
+  // Runtime signal: scan live sessions for a recent artifact.
+  const RECENT_WINDOW_MS = 10 * 60 * 1000;
+  const now = Date.now();
+  let recentArtifactActivity = false;
+  let latestArtifactAt: string | null = null;
+  for (const store of sessions.values()) {
+    const artifacts = store.getArtifacts();
+    for (const a of artifacts) {
+      const t = new Date(a.createdAt).getTime();
+      if (!Number.isFinite(t)) continue;
+      if (!latestArtifactAt || t > new Date(latestArtifactAt).getTime()) {
+        latestArtifactAt = a.createdAt;
+      }
+      if (now - t < RECENT_WINDOW_MS) {
+        recentArtifactActivity = true;
+      }
+    }
+  }
+
+  const likely = claudeMdHasMarker || recentArtifactActivity;
+  const evidence = likely
+    ? claudeMdHasMarker
+      ? recentArtifactActivity
+        ? "CLAUDE.md carries the deepPairing marker AND the agent has created an artifact in the last 10 min"
+        : "CLAUDE.md carries the deepPairing marker"
+      : "the agent has created an artifact in the last 10 min (skill appears active)"
+    : "no CLAUDE.md marker AND no artifact created in the last 10 min";
+
+  return c.json({
+    claudeMdHasMarker,
+    recentArtifactActivity,
+    latestArtifactAt,
+    pairingProtocolSkillLikelyLoaded: likely,
+    evidence,
+  });
+});
+
 // Active sessions endpoint for the web UI
 app.get("/api/active-sessions", (c) => {
   const list = Array.from(sessions.entries()).map(([id, store]) => {
@@ -246,7 +311,7 @@ function cleanup(): void {
 }
 
 function writeDaemonInfo(port: number): void {
-  const info = { pid: process.pid, port, startedAt: new Date().toISOString() };
+  const info = { pid: process.pid, port, startedAt, projectRoot };
   try {
     fs.mkdirSync(path.dirname(daemonInfoFile), { recursive: true });
     fs.writeFileSync(daemonInfoFile, JSON.stringify(info, null, 2));
@@ -259,46 +324,68 @@ async function main() {
   log(`Daemon starting (PID ${process.pid})`);
   log(`Project root: ${projectRoot}`);
 
-  // Ensure .deeppairing directory exists
-  fs.mkdirSync(dpDir, { recursive: true });
+  // N2.2: plugin install path doesn't run `npx deeppairing init`, so the
+  // daemon picks up the slack: ensure .deeppairing/, .gitignore entry, and
+  // Stop hook. CLAUDE.md mutation stays opt-in via init — too invasive to
+  // do silently from a backgrounded MCP server.
+  for (const result of runDaemonStartupSetup(projectRoot)) {
+    if (!result.ok) {
+      log(`Setup task warning: ${result.message}`);
+    } else if (result.changed) {
+      log(`Setup task: ${result.message}`);
+    }
+  }
 
-  const port = DEFAULT_PORT;
-  try {
-    const server = serve({ fetch: app.fetch, port });
+    // N2.1: probe sequential ports on EADDRINUSE so multiple projects can run
+    // concurrent daemons (project A on 3847, project B on 3848, …). The bound
+    // port is then written into daemon.json so each project's wrapper connects
+    // to the right daemon.
+    let port = DEFAULT_PORT;
+    let server: ReturnType<typeof serve> | null = null;
+    let lastBindErr: any = null;
+    for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
+      const candidate = DEFAULT_PORT + attempt;
+      const candidateServer = serve({ fetch: app.fetch, port: candidate });
+      const result = await new Promise<{ ok: true } | { ok: false; err: any }>((resolve) => {
+        const s: any = candidateServer;
+        const onError = (err: any) => {
+          s.off?.("listening", onListening);
+          resolve({ ok: false, err });
+        };
+        const onListening = () => {
+          s.off?.("error", onError);
+          resolve({ ok: true });
+        };
+        if (typeof s.once === "function") {
+          s.once("error", onError);
+          s.once("listening", onListening);
+        } else {
+          // Fallback for environments where listening fires before we subscribe.
+          setTimeout(() => resolve({ ok: true }), 50);
+        }
+      });
 
-    // A3: surface bind failures. `serve()` is async and reports EADDRINUSE via
-    // the server's 'error' event — not the surrounding try/catch. Detect it
-    // explicitly and exit with a clear message to stderr so the spawner sees it.
-    const listenResult = await new Promise<{ ok: true } | { ok: false; err: any }>((resolve) => {
-      const s: any = server;
-      const onError = (err: any) => {
-        s.off?.("listening", onListening);
-        resolve({ ok: false, err });
-      };
-      const onListening = () => {
-        s.off?.("error", onError);
-        resolve({ ok: true });
-      };
-      if (typeof s.once === "function") {
-        s.once("error", onError);
-        s.once("listening", onListening);
-      } else {
-        // Fallback for environments where listening fires before we subscribe.
-        setTimeout(() => resolve({ ok: true }), 50);
+      if (result.ok) {
+        server = candidateServer;
+        port = candidate;
+        if (attempt > 0) log(`Port ${DEFAULT_PORT} through ${candidate - 1} busy — bound to ${candidate} instead.`);
+        break;
       }
-    });
-
-    if (!("ok" in listenResult) || listenResult.ok === false) {
-      const err = (listenResult as any).err;
-      if (err?.code === "EADDRINUSE") {
-        const msg = `Port ${port} is already in use. Another daemon may be running; run 'deeppairing doctor' to diagnose.`;
-        log(`FATAL: ${msg}`);
-        process.stderr.write(`deepPairing daemon: ${msg}\n`);
-        process.exit(2);
+      lastBindErr = result.err;
+      if (result.err?.code !== "EADDRINUSE") {
+        log(`FATAL bind error on port ${candidate}: ${result.err}`);
+        process.stderr.write(`deepPairing daemon: bind failed — ${result.err?.message ?? result.err}\n`);
+        process.exit(3);
       }
-      log(`FATAL bind error: ${err}`);
-      process.stderr.write(`deepPairing daemon: bind failed — ${err?.message ?? err}\n`);
-      process.exit(3);
+      // Close the failed server before trying the next port.
+      try { (candidateServer as any).close?.(); } catch {}
+    }
+
+    if (!server) {
+      const msg = `No free port in range ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}. Last error: ${lastBindErr?.message ?? lastBindErr}. Run 'deeppairing doctor' to diagnose.`;
+      log(`FATAL: ${msg}`);
+      process.stderr.write(`deepPairing daemon: ${msg}\n`);
+      process.exit(2);
     }
 
     // WebSocket server
@@ -375,14 +462,6 @@ async function main() {
         log(`Failed to auto-open browser: ${err}`);
       });
     }
-  } catch (err: any) {
-    if (err?.code === "EADDRINUSE") {
-      log(`Port ${port} already in use — another daemon may be running`);
-      process.stderr.write(`deepPairing daemon: port ${port} already in use\n`);
-      process.exit(2);
-    }
-    throw err;
-  }
 
   // Graceful shutdown
   process.on("exit", cleanup);

@@ -2,7 +2,7 @@
   "mcpServers": {
     "deeppairing": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/../packages/mcp-server/dist/standalone.js"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server.mjs"]
     }
   }
 }

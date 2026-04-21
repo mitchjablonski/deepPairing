@@ -3,6 +3,7 @@ import { usePreferencesStore } from "../stores/preferences";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { EditorPicker } from "./OpenInEditor";
 import { ExportMenu } from "./ExportMenu";
+import { SessionMetrics } from "./SessionMetrics";
 
 /**
  * Settings sheet — slide-in panel that hosts all the low-frequency chrome
@@ -125,6 +126,16 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               Download the current session as markdown (full, PR description, or ADR).
             </div>
             <ExportMenu />
+          </section>
+
+          {/* O3: session metrics — moved out of the always-on footer so the
+              chrome reads as "pair surface" not "audit dashboard." Here on
+              demand for anyone who wants to see the numbers. */}
+          <section>
+            <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
+              Session metrics
+            </div>
+            <SessionMetrics />
           </section>
         </div>
       </div>

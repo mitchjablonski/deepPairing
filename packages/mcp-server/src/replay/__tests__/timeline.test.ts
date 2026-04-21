@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTimeline, eventsUpTo } from "../timeline.js";
+import { buildTimeline } from "../timeline.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function artifact(id: string, createdAt: string, updatedAt = createdAt, status: any = "draft"): Artifact {
@@ -87,19 +87,4 @@ describe("buildTimeline", () => {
     expect(transitions.map((e) => (e.payload as any).status)).toEqual(["reviewing", "approved"]);
   });
 
-  it("eventsUpTo filters by cursor", () => {
-    const events = buildTimeline({
-      artifacts: [artifact("a1", "2026-04-16T10:00:00.000Z")],
-      comments: [
-        comment("c1", "a1", "2026-04-16T10:05:00.000Z"),
-        comment("c2", "a1", "2026-04-16T10:10:00.000Z"),
-      ],
-    });
-    const before = eventsUpTo(events, "2026-04-16T10:06:00.000Z");
-    expect(before).toHaveLength(2);
-    expect(before.map((e) => e.id)).toEqual([
-      expect.stringContaining("create_a1"),
-      expect.stringContaining("comment_c1"),
-    ]);
-  });
 });

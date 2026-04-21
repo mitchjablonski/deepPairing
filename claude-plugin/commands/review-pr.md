@@ -1,24 +1,26 @@
 ---
-description: Review a GitHub PR and (after my approval) post the findings as inline review comments
+description: Pair on a GitHub PR with me — surface findings together, then (after my approval) post them as inline comments
 argument-hint: [pr-number-or-url]
 ---
 
-Walk through the PR review workflow for PR $ARGUMENTS:
+Pair with me on PR $ARGUMENTS. The PR is the surface we're looking at
+together; this is NOT an automated review pass. Run this pattern:
 
-1. Fetch the diff via `gh pr diff $ARGUMENTS` so you know exactly what
-   changed.
-2. Call `deepPairing_present_findings` with ONE artifact containing every
-   issue you spot. For each finding, attach structured evidence
-   (`filePath`, `lineStart`, `lineEnd`, `snippet`, `explanation`) and a
-   `severity` (info / low / medium / high / critical). Name the concept
-   at play via the `log_reasoning` tool alongside each issue so I learn
-   from it.
-3. Poll `deepPairing_check_feedback` and let me triage each finding in
-   the companion UI. Do NOT post anything yet.
-4. When I say "post it" (or "ship the review", etc.), call
-   `deepPairing_post_pr_review` with pr: "$ARGUMENTS". Use
-   `event: "REQUEST_CHANGES"` if any surviving finding is high or
-   critical; `event: "COMMENT"` otherwise.
+1. Fetch the diff via `gh pr diff $ARGUMENTS` so we're looking at the
+   same thing.
+2. Call `present_findings` with ONE artifact containing
+   everything that stood out to you. For each finding, attach structured
+   evidence (`filePath`, `lineStart`, `lineEnd`, `snippet`, `explanation`)
+   and a `severity` (info / low / medium / high / critical). Name the
+   concept at play via `log_reasoning` alongside each finding so I learn
+   from the pattern, not just the fix.
+3. Poll `check_feedback` and let me triage each finding in
+   the companion UI. We decide together what's load-bearing. Do NOT post
+   anything yet.
+4. When I say "post it" / "ship what we found" / "we're done here", call
+   `post_pr_review` with pr: "$ARGUMENTS". Only the
+   surviving findings post. Use `event: "REQUEST_CHANGES"` only if a
+   surviving finding is high or critical; `event: "COMMENT"` otherwise.
 5. Report the review URL.
 
 If I reject a finding with a reason, remember it — that reason goes into

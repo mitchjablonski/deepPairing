@@ -134,10 +134,6 @@ export function buildTimeline(state: {
   });
 }
 
-export function eventsUpTo(events: TimelineEvent[], cursor: string): TimelineEvent[] {
-  return events.filter((e) => e.at <= cursor);
-}
-
 export function annotationsByEventId(
   annotations: SessionAnnotation[],
 ): Map<string, SessionAnnotation[]> {

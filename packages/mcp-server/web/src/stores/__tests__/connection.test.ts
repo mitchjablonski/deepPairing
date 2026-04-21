@@ -195,6 +195,107 @@ describe("connection store — handleMessage dispatch", () => {
 
     expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
   });
+
+  describe("pair-tempo events (O7)", () => {
+    it("pushes a 'preflight-block' hero toast on `preflight_blocked`", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "preflight_blocked",
+        toolName: "present_options",
+        source: "team",
+        match: {
+          concept: "global state",
+          proposal: "add a global config store",
+          reason: "breaks testability",
+          via: "avoid",
+          addedBy: "alex",
+        },
+      });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("preflight-block");
+      expect(toasts[0].hero?.source).toBe("team");
+      expect(toasts[0].hero?.concept).toBe("global state");
+      expect(toasts[0].hero?.addedBy).toBe("alex");
+    });
+
+    it("pushes an info toast on `ledger_write` with the truncated description", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "ledger_write",
+        kind: "rejected",
+        description: "Auth refactor: rolling your own JWT signing",
+        reason: "maintenance overhead",
+      });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("info");
+      expect(toasts[0].title).toContain("+ avoid");
+      expect(toasts[0].body).toContain("Auth refactor");
+    });
+
+    it("differentiates approved vs rejected in the ledger-write title", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({ type: "ledger_write", kind: "approved", description: "Service layer" });
+      await flush();
+      expect(useToastStore.getState().toasts[0].title).toContain("+ prefer");
+    });
+
+    it("pushes a success toast on `question_answered` with a jump-to-answer action", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "question_answered",
+        questionId: "cmt_q1",
+        answerId: "cmt_a1",
+        artifactId: "art_1",
+        answerExcerpt: "because the repository layer would double-wrap the error",
+      });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("success");
+      expect(toasts[0].title).toMatch(/question was answered/i);
+      expect(toasts[0].action?.label).toMatch(/jump to answer/i);
+    });
+
+    it("pushes a success toast on `decision_resolved_hero` with the captured prediction", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "decision_resolved_hero",
+        artifactId: "art_d1",
+        context: "Password hashing",
+        chosenTitle: "argon2id",
+        predictedOutcome: "zero-downtime migration",
+        confidence: "medium",
+      });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].title).toContain("argon2id");
+      expect(toasts[0].body).toContain("zero-downtime migration");
+      expect(toasts[0].body).toContain("medium confidence");
+    });
+  });
 });
 
 describe("connection store — lifecycle", () => {

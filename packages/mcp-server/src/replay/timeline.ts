@@ -132,7 +132,3 @@ export function buildTimeline(state: SessionSnapshot): TimelineEvent[] {
   });
 }
 
-/** Return all events up to and including the cursor timestamp. */
-export function eventsUpTo(events: TimelineEvent[], cursor: string): TimelineEvent[] {
-  return events.filter((e) => e.at <= cursor);
-}

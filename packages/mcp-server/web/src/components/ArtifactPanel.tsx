@@ -14,6 +14,7 @@ import { SpecArtifact } from "./artifacts/SpecArtifact";
 import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { CausalChain } from "./CausalChain";
+import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 
 const statusDots: Record<string, string> = {
   draft: "bg-text-muted",
@@ -212,19 +213,29 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           : undefined;
 
         return (
-          <DecisionCard
-            event={{
-              type: "decision_request",
-              decisionId: effectiveDecisionId,
-              context: dc.context,
-              options: dc.options,
-            }}
-            decisionId={effectiveDecisionId}
-            artifactId={artifact.id}
-            sessionId={artifact.sessionId}
-            stakes={dc.stakes}
-            initialResolved={initialResolved}
-          />
+          <>
+            {/* N3.3: on high-stakes decisions, surface prior predictions on
+                similar decisions so the user can calibrate before choosing. */}
+            {dc.stakes === "high" && (
+              <PredictionsBreadcrumb
+                concept={`${artifact.title} ${dc.context ?? ""}`}
+                excludeArtifactId={artifact.id}
+              />
+            )}
+            <DecisionCard
+              event={{
+                type: "decision_request",
+                decisionId: effectiveDecisionId,
+                context: dc.context,
+                options: dc.options,
+              }}
+              decisionId={effectiveDecisionId}
+              artifactId={artifact.id}
+              sessionId={artifact.sessionId}
+              stakes={dc.stakes}
+              initialResolved={initialResolved}
+            />
+          </>
         );
       })()}
 

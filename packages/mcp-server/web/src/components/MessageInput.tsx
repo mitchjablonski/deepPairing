@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { API_BASE, sessionHeaders } from "../lib/api";
+import { useSentFlash } from "../hooks/useSentFlash";
 
 // Stable empty-array reference so Zustand's store selector doesn't produce
 // a fresh `[]` on every render (which would trigger an infinite loop via
@@ -22,7 +23,7 @@ const EMPTY_COMMENTS: Comment[] = [];
 export function MessageInput() {
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
+  const { sent, flash } = useSentFlash();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const artifacts = useArtifactStore((s) => s.artifacts);
@@ -101,8 +102,7 @@ export function MessageInput() {
         }),
       });
       setMessage("");
-      setSent(true);
-      setTimeout(() => setSent(false), 2000);
+      flash();
     } catch {
       // Failed to send
     } finally {

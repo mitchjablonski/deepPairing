@@ -7,6 +7,7 @@ import type { IStore } from "../store/store-interface.js";
 import { FileStore } from "../store/file-store.js";
 import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
+import { getGlobalStore } from "../store/global-store.js";
 
 type StoreGetter = (sessionId?: string) => IStore;
 type BroadcastFn = (event: any, sessionId?: string) => void;
@@ -150,6 +151,13 @@ export function createHttpRoutes(
           feedback?.trim() || undefined,
           artifactId,
         );
+        broadcast({
+          type: "ledger_write",
+          kind: "rejected",
+          description: artifact.title,
+          reason: feedback?.trim() || undefined,
+          sourceArtifactId: artifactId,
+        }, sid);
       }
     }
 
@@ -180,10 +188,120 @@ export function createHttpRoutes(
     return c.json({ comments: await store.getCommentsForArtifact(artifactId) });
   });
 
+  // N3.1: Philosophy ledger (cross-project, shared across all sessions).
+  // Powers the "Your taste" drawer. Read-only — mutations happen via the
+  // MCP tools during live sessions.
+  app.get("/api/philosophy", (c) => {
+    const stance = c.req.query("stance") as "avoid" | "prefer" | "mixed" | undefined;
+    const concept = c.req.query("concept") ?? undefined;
+    const limit = Number(c.req.query("limit") ?? 50);
+    const entries = getGlobalStore().query({
+      stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : undefined,
+      concept,
+      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50,
+    });
+    // Trim to the bits the UI needs so we don't ship every full instance
+    // history on page load. The drawer can click-to-expand for details.
+    const summary = entries.map((e) => {
+      const projects = new Set(e.instances.map((i) => i.project));
+      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+      const verdicts = e.instances.reduce(
+        (acc, i) => { acc[i.verdict]++; return acc; },
+        { approved: 0, rejected: 0 } as { approved: number; rejected: number },
+      );
+      return {
+        key: e.key,
+        concept: e.concept,
+        stance: e.stance,
+        projectCount: projects.size,
+        projects: Array.from(projects).slice(0, 5), // surface the first few
+        instanceCount: e.instances.length,
+        approved: verdicts.approved,
+        rejected: verdicts.rejected,
+        latestReason,
+        firstSeenAt: e.firstSeenAt,
+        lastSeenAt: e.lastSeenAt,
+      };
+    });
+    return c.json({ entries: summary, total: summary.length });
+  });
+
+  // N3.2: Weekly Ledger Digest — what compounded in your Philosophy Ledger
+  // over the last N days. Point is to make the moat felt: the user sees the
+  // new stances added, existing stances strengthened by new instances, and
+  // multi-project reuse. Derives everything from the same ledger N3.1 reads.
+  app.get("/api/philosophy/digest", (c) => {
+    const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
+    const now = Date.now();
+    const fromMs = now - sinceDays * 24 * 60 * 60 * 1000;
+    const fromIso = new Date(fromMs).toISOString();
+    const toIso = new Date(now).toISOString();
+
+    // Pull a wide slice — the digest computes its own breakdowns.
+    const entries = getGlobalStore().query({ limit: 500 });
+
+    const totals = {
+      concepts: entries.length,
+      instances: entries.reduce((a, e) => a + e.instances.length, 0),
+      multiProjectConcepts: entries.filter((e) => new Set(e.instances.map((i) => i.project)).size > 1).length,
+    };
+
+    const mapEntry = (e: typeof entries[number]) => {
+      const projects = new Set(e.instances.map((i) => i.project));
+      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+      return {
+        key: e.key,
+        concept: e.concept,
+        stance: e.stance,
+        projectCount: projects.size,
+        firstSeenAt: e.firstSeenAt,
+        lastSeenAt: e.lastSeenAt,
+        latestReason,
+      };
+    };
+
+    const newThisPeriod = entries
+      .filter((e) => new Date(e.firstSeenAt).getTime() >= fromMs)
+      .map(mapEntry);
+
+    const strengthenedThisPeriod = entries
+      .filter((e) => new Date(e.firstSeenAt).getTime() < fromMs)
+      .map((e) => {
+        const newInstancesInPeriod = e.instances.filter((i) => new Date(i.at).getTime() >= fromMs).length;
+        return { ...mapEntry(e), newInstancesInPeriod };
+      })
+      .filter((e) => e.newInstancesInPeriod > 0);
+
+    return c.json({
+      window: { sinceDays, fromIso, toIso },
+      totals,
+      newThisPeriod,
+      strengthenedThisPeriod,
+    });
+  });
+
+  // N3.3: past-predictions lookup. Powers the breadcrumb above high-stakes
+  // decisions that asks "you predicted X on a similar decision N months ago".
+  // Project-scoped (walks .deeppairing/sessions/*); returns empty if the
+  // daemon wasn't started with a projectRoot.
+  app.get("/api/predictions", (c) => {
+    const concept = (c.req.query("concept") ?? "").trim();
+    const excludeArtifactId = c.req.query("excludeArtifactId") ?? undefined;
+    const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 3), 1), 10);
+    if (!concept || !projectRoot) {
+      return c.json({ predictions: [] });
+    }
+    const predictions = FileStore.findPastPredictions(projectRoot, concept, {
+      excludeArtifactId,
+      limit,
+    });
+    return c.json({ predictions });
+  });
+
   // Export session as markdown
   app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
-    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "pr-review" | "adr" | "replay";
+    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay";
     const state = await store.getFullState();
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });

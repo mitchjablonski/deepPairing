@@ -6,7 +6,7 @@ Before we start, do three things:
 
 1. Read the `deeppairing://session/current` MCP resource to see what's
    already in this session (if anything).
-2. Call `deepPairing_recall_philosophy` with no arguments to show me the
+2. Call `recall` with mode: "philosophy" (no query) to show me the
    top stances from my cross-project philosophy ledger. Call it out if any
    'avoid' stances look like they'll collide with the task I'm about to
    describe.

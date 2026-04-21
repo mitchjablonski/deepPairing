@@ -54,7 +54,7 @@ Not every task needs the full workflow. Match your ceremony to the task:
 
 ## Tools
 
-### deepPairing_present_findings
+### present_findings
 Call AFTER researching the codebase, BEFORE proposing solutions.
 
 Provide RICH evidence — actual code snippets, not file references:
@@ -91,15 +91,15 @@ surfacing?). `severity` is *risk-level-if-unaddressed* (info / low / medium /
 high / critical). Both populated gives the human both signals: what's
 interesting and what to study first.
 
-### deepPairing_present_options
+### present_options
 Call at ANY decision point with multiple valid approaches. Present 2-4 options.
 
 This tool is **non-blocking** — it records the options and returns immediately.
 The human can select in the companion UI or tell you directly.
 
-Call `deepPairing_check_feedback` afterward to see if they've decided.
+Call `check_feedback` afterward to see if they've decided.
 
-### deepPairing_present_spec
+### present_spec
 Call BEFORE `present_plan` for non-trivial features. The spec is
 "think together before building" — the human challenges rationales and
 acceptance criteria before you commit to an approach.
@@ -117,15 +117,15 @@ Fields:
 After approval, call `present_plan` to translate requirements into
 implementation steps.
 
-### deepPairing_present_plan
+### present_plan
 Call BEFORE multi-file changes. Present implementation steps with:
 - Which findings motivated each step (motivatedBy)
 - Before/after code previews for non-trivial changes
 - Structured file changes with descriptions
 
-This tool is **non-blocking** — call `deepPairing_check_feedback` for approval.
+This tool is **non-blocking** — call `check_feedback` for approval.
 
-### deepPairing_log_reasoning
+### log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.
 
 **PAIRING IMPERATIVE — name the concept.** Every time an engineering concept
@@ -167,7 +167,7 @@ Example:
 }
 ```
 
-### deepPairing_present_code_change
+### present_code_change
 Call to present a code change with before/after content for human review.
 Use this when you want the human to see exactly what you're changing and why.
 
@@ -177,7 +177,7 @@ Include: `filePath`, `changeType` (create/modify/delete), `before`, `after`,
 
 The human can review the diff, comment inline, and approve/reject in the companion UI.
 
-### deepPairing_check_feedback
+### check_feedback
 **CRITICAL: This is a polling tool. You MUST call it in a loop when waiting for
 human responses. Do NOT stop and wait for terminal input.**
 
@@ -205,25 +205,25 @@ Returns:
 If no response after several polls, an escalation hint will tell you to ask the
 human directly in the terminal as a fallback.
 
-### deepPairing_supersede_artifact
-Call when the human requests a revision on a prior artifact (findings, plan,
-options, code change). Pass the old artifact id, updated content, and a short
-reason. deepPairing creates a v(N+1) draft linked via parentId; the old
-artifact flips to "superseded". The reason is preserved as an agent comment
-on the retired artifact so the human can see what changed and why.
+### revise_artifact
+One tool for both flavors of revising something you've already presented.
 
-Do NOT re-call present_findings / present_plan / etc. for a revision — use
-this tool so the version history is explicit and replay can walk the drafts.
+`mode: "supersede"` — the human asked for revisions. Pass the old artifact
+id, the updated `content` (same shape the original present_* tool accepts),
+an optional new `title`, and a `reason`. deepPairing creates a v(N+1) draft
+linked via parentId; the old artifact flips to "superseded". The reason
+lands as an agent comment on the retired artifact so the human can see what
+changed and why. Do NOT re-call present_findings / present_plan / etc. for
+a revision — use this so the version history is explicit and replay can
+walk the drafts.
 
-### deepPairing_retract_artifact
-Call when you realize mid-flight you shouldn't have presented an artifact — you
-noticed an error, the context changed, or you tried a rejected approach. Pass
-the artifact id and a short reason. The UI marks it as retracted with your
-reason visible to the human, and you can keep polling check_feedback as normal.
+`mode: "retract"` — you realized mid-flight you shouldn't have presented
+something (noticed an error, context changed, you tried a rejected
+approach). Pass the artifact id and a reason. The UI marks it as retracted
+with your reason visible; continue your workflow via check_feedback. Do
+NOT bail out to the terminal to apologize.
 
-Do NOT bail out to the terminal to apologize or retract manually. Use this tool.
-
-### deepPairing_export_session
+### export_session
 Export the current session as markdown. Three formats:
 - `pr-description`: Concise summary for pull request bodies
 - `adr`: Architecture Decision Record format
@@ -346,14 +346,18 @@ of every session**, the response includes context from previous sessions:
   `.github/workflows/`, `Dockerfile`, `.env`). Even when autonomy is
   "autonomous", escalate to supervised for changes touching these paths.
 
-### deepPairing_recall_philosophy
-Call when you want to check whether the user has a cross-project stance on a
-concept before proposing. Takes `{ concept?, stance?, limit? }` and returns
-ledger entries with instance counts and the derived stance (avoid / prefer /
-mixed). Use it liberally when proposing something the firstCallHint didn't
-already surface — the user's taste is broader than the current session.
+### recall
+Unified memory lookup across both layers. Takes `{ query?, mode?, stance?, limit? }`.
 
-### deepPairing_request_horizon_check
+- `mode: "philosophy"` — cross-project stances on concepts. Use to check
+  whether the user has prior taste on a concept before proposing. Empty
+  query lists the whole ledger; `stance` narrows to avoid / prefer / mixed.
+- `mode: "sessions"` — past artifacts in this project. Use when the user
+  references prior work ("did we look at this before?"). Requires a query.
+- `mode: "any"` (default) — union of both. Requires a query; returns
+  philosophy hits first (highest-signal) then session hits.
+
+### request_horizon_check
 Call SPARINGLY, only on architecturally-significant artifacts where a
 failure mode 3 months / 1 year / 2 years out would be non-obvious. Takes
 `{ artifactId, horizon, prompt? }`. Posts an agent-authored question to the

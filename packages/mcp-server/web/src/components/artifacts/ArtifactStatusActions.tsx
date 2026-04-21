@@ -57,10 +57,6 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [countdown, countdownPaused]);
 
-  useEffect(() => {
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, []);
-
   // Keyboard shortcut handler. App.tsx dispatches "dp:artifact-shortcut" when
   // the user presses `a` or `r` on the selected artifact. We NEVER commit
   // silently — `a` arms a short confirm countdown; `r` focuses the comment
@@ -172,8 +168,8 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
    * "Respond" — post the comment to the artifact WITHOUT changing status.
    * This is the pairing-primary action: a pair doesn't approve, they reply.
    * The agent picks the comment up via check_feedback and may iterate
-   * (often via supersede_artifact). Approve/Revise/Reject remain as
-   * explicit terminal actions.
+   * (often via revise_artifact with mode='supersede'). Approve/Revise/Reject
+   * remain as explicit terminal actions.
    */
   const handleRespond = async () => {
     const trimmedComment = comment.trim();
