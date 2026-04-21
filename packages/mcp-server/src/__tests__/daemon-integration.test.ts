@@ -223,6 +223,20 @@ describe("Daemon Routes", () => {
     expect(memory.rejectedApproaches.map((r: any) => r.description)).toContain("Inline refactor");
   });
 
+  it("exposes guardrails and team-preferences routes", async () => {
+    await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+
+    const gRes = await app.request(`/api/internal/sessions/${SESSION}/guardrails`);
+    expect(gRes.status).toBe(200);
+    const gBody = await gRes.json();
+    expect(Array.isArray(gBody.guardrails)).toBe(true);
+
+    const tRes = await app.request(`/api/internal/sessions/${SESSION}/team-preferences`);
+    expect(tRes.status).toBe(200);
+    const tBody = await tRes.json();
+    expect(Array.isArray(tBody.preferences)).toBe(true);
+  });
+
   it("lists active sessions", async () => {
     await app.request(`/api/internal/sessions/sess_1/register`, { method: "POST" });
     await app.request(`/api/internal/sessions/sess_2/register`, { method: "POST" });

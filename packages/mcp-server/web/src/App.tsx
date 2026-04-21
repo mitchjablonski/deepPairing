@@ -3,16 +3,16 @@ import { ArtifactPanel } from "./components/ArtifactPanel";
 import { SessionBrowser } from "./components/SessionBrowser";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
-import { ReviewGate } from "./components/ReviewGate";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { AutonomySlider } from "./components/AutonomySlider";
-import { SessionMetrics } from "./components/SessionMetrics";
 import { CommandPalette } from "./components/CommandPalette";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { YourTasteDrawer } from "./components/YourTasteDrawer";
+import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 
@@ -22,6 +22,7 @@ function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTaste, setShowTaste] = useState(false);
 
   // Fetch active sessions on mount, auto-connect to the first one
   useEffect(() => {
@@ -71,6 +72,7 @@ function App() {
         setShowHelp(false);
         setShowPalette(false);
         setShowSettings(false);
+        setShowTaste(false);
       }
 
       const store = useArtifactStore.getState();
@@ -118,8 +120,33 @@ function App() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
+  // O2: the PreflightBlockToast action dispatches this event to open the
+  // Your Taste drawer. Decoupled so the toast doesn't need a ref to App state.
+  useEffect(() => {
+    const openTaste = () => setShowTaste(true);
+    window.addEventListener("dp:open-your-taste", openTaste);
+    return () => window.removeEventListener("dp:open-your-taste", openTaste);
+  }, []);
+
+  // O7: question-answered toast's "Jump to answer" action selects the
+  // artifact the answer belongs to, scrolling it into view.
+  useEffect(() => {
+    const focus = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail as { artifactId?: string } | undefined;
+      if (!detail?.artifactId) return;
+      useArtifactStore.getState().selectArtifact(detail.artifactId);
+    };
+    window.addEventListener("dp:focus-artifact", focus);
+    return () => window.removeEventListener("dp:focus-artifact", focus);
+  }, []);
+
   return (
     <div className="h-screen bg-surface-primary text-text-primary flex flex-col">
+      {/* O6: surfaces when the pairing-protocol skill isn't active so the
+          plugin-install path doesn't fail silently. Dismissible; auto-hides
+          once any artifact arrives. */}
+      <SkillLoadBanner />
+
       {/* Header — pared back to the essentials. Low-frequency chrome
           (theme, font size, content width, editor picker, export) lives in
           the Settings sheet (⌘,). Quick actions live in the Command palette (⌘K). */}
@@ -130,6 +157,20 @@ function App() {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <AutonomySlider />
+          <span className="text-2xs text-text-muted mx-1">·</span>
+          <button
+            onClick={() => setShowTaste(true)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            title="Your cross-project taste from the Philosophy Ledger"
+            aria-label="Open Your Taste drawer"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+              <path d="M6 1.5c2.5 0 4.5 2 4.5 4.5 0 1.5-.8 2.8-2 3.5" />
+              <circle cx="6" cy="9.5" r="1" fill="currentColor" />
+              <path d="M6 1.5v2M1.5 6h2M10.5 6h-2" />
+            </svg>
+            <span className="hidden min-[700px]:inline">Your taste</span>
+          </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
             onClick={() => setShowPalette(true)}
@@ -213,8 +254,10 @@ function App() {
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />
 
-      {/* Review gate — approve all draft artifacts to proceed */}
-      <ReviewGate />
+      {/* O3: the sticky "Accept All" ReviewGate is gone — it read as
+          autonomous-agent chrome, not pairing. Bulk approve still lives in
+          the Command palette for keyboard users who want it. The per-artifact
+          review happens inside ArtifactStatusActions. */}
       {/* Pending decision/plan banner */}
       <PendingBanner />
 
@@ -232,9 +275,6 @@ function App() {
       {/* Free-form message to agent */}
       {hasArtifacts && <MessageInput />}
 
-      {/* Session metrics */}
-      {hasArtifacts && <SessionMetrics />}
-
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}
 
@@ -243,6 +283,9 @@ function App() {
 
       {/* Keyboard shortcut help overlay */}
       {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}
+
+      {/* Your taste drawer — cross-project Philosophy Ledger, read-only */}
+      {showTaste && <YourTasteDrawer onClose={() => setShowTaste(false)} />}
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
       <ToastLayer />

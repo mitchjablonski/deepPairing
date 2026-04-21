@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildTimeline, eventsUpTo, annotationsByEventId } from "../timeline";
+import { buildTimeline, annotationsByEventId } from "../timeline";
 import type { Artifact, Comment, SessionAnnotation } from "@deeppairing/shared";
 
 function artifact(id: string, createdAt: string, overrides: Partial<Artifact> = {}): Artifact {
@@ -114,22 +114,6 @@ describe("web buildTimeline — chronological interleave", () => {
       ],
     });
     expect(events).toHaveLength(0);
-  });
-});
-
-describe("eventsUpTo", () => {
-  it("returns events with at <= cursor", () => {
-    const events = buildTimeline({
-      artifacts: [artifact("a1", "2026-04-16T10:00:00.000Z")],
-      comments: [
-        comment("c1", "a1", "2026-04-16T10:05:00.000Z"),
-        comment("c2", "a1", "2026-04-16T10:10:00.000Z"),
-      ],
-    });
-    const snapshot = eventsUpTo(events, "2026-04-16T10:05:00.000Z");
-    expect(snapshot).toHaveLength(2);
-    expect(snapshot[0].kind).toBe("artifact_created");
-    expect(snapshot[1].kind).toBe("comment_added");
   });
 });
 

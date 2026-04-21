@@ -49,7 +49,7 @@ async function callTool(name: string, args: Record<string, any> = {}) {
 describe("MCP Tool Handlers", () => {
   describe("present_findings", () => {
     it("creates a research artifact and returns the ID", async () => {
-      const { text } = await callTool("deepPairing_present_findings", {
+      const { text } = await callTool("present_findings", {
         summary: "Found issues",
         findings: [{ category: "Security", detail: "Weak hashing", significance: "high" }],
       });
@@ -64,7 +64,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("present_options", () => {
     it("creates a decision artifact and records the decision request", async () => {
-      const { text } = await callTool("deepPairing_present_options", {
+      const { text } = await callTool("present_options", {
         context: "Which pattern?",
         options: [
           { id: "a", title: "A", description: "Option A", pros: ["fast"], cons: ["risky"], effort: "low", risk: "high", recommendation: true },
@@ -81,7 +81,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("present_plan", () => {
     it("creates a plan artifact and records a plan review", async () => {
-      const { text } = await callTool("deepPairing_present_plan", {
+      const { text } = await callTool("present_plan", {
         title: "Refactoring Plan",
         steps: [{ description: "Step 1", reasoning: "Because" }],
         estimatedChanges: 2,
@@ -96,7 +96,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("log_reasoning", () => {
     it("creates a reasoning artifact with structured alternatives", async () => {
-      const { text } = await callTool("deepPairing_log_reasoning", {
+      const { text } = await callTool("log_reasoning", {
         action: "Create service",
         reasoning: "Service pattern is cleaner",
         confidence: "high",
@@ -114,7 +114,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("present_code_change", () => {
     it("creates a code_change artifact with confidence", async () => {
-      const { text } = await callTool("deepPairing_present_code_change", {
+      const { text } = await callTool("present_code_change", {
         filePath: "/src/auth.ts",
         changeType: "modify",
         before: "const x = 1;",
@@ -130,9 +130,97 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("firstCallHint — team conventions (N6.3)", () => {
+    it("is absent from the hint when team.json is missing", async () => {
+      // Outer beforeEach already created `store` without a team.json.
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).not.toContain("🏢 Team conventions");
+    });
+
+    it("renders require / avoid / prefer groups with scope and rationale", async () => {
+      // Need a FRESH store: team.json is read in the FileStore constructor.
+      // Write it to a new tmpDir, then spin up a new server bound to it.
+      const freshTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-team-hint-"));
+      fs.mkdirSync(path.join(freshTmp, ".deeppairing"), { recursive: true });
+      fs.writeFileSync(
+        path.join(freshTmp, ".deeppairing", "team.json"),
+        JSON.stringify({
+          version: 1,
+          preferences: [
+            { id: "req1", kind: "require", concept: "argon2id for password hashing", rationale: "bcrypt is brute-forceable", scope: { paths: ["packages/auth/**"] } },
+            { id: "avoid1", kind: "avoid", concept: "global state", rationale: "breaks testability" },
+            { id: "prefer1", kind: "prefer", concept: "repository pattern", rationale: "keeps SQL out of handlers" },
+          ],
+        }),
+      );
+      const freshStore = new FileStore(freshTmp, "team_hint_session");
+      const { server: freshServer } = createMcpServer(freshStore, () => {}, 4000);
+      const [c, s] = InMemoryTransport.createLinkedPair();
+      await freshServer.connect(s);
+      const freshClient = new Client({ name: "t", version: "1.0" });
+      await freshClient.connect(c);
+
+      const result = await freshClient.callTool({
+        name: "present_findings",
+        arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
+      });
+      const text = (result.content as any[])?.[0]?.text ?? "";
+
+      expect(text).toContain("🏢 Team conventions");
+      expect(text).toContain("Required:");
+      expect(text).toContain("argon2id for password hashing");
+      expect(text).toContain("bcrypt is brute-forceable");
+      expect(text).toContain("scope: packages/auth/**");
+      expect(text).toContain("Avoid:");
+      expect(text).toContain("global state");
+      expect(text).toContain("Preferred:");
+      expect(text).toContain("repository pattern");
+
+      // Team conventions + personal philosophy + guardrails are NEVER merged —
+      // each has its own header so the agent can see the authority distinction.
+      expect(text).toContain("🏢 Team conventions");
+      // No stray merged "Team + personal" header.
+      expect(text).not.toMatch(/Team\s*\+\s*personal/i);
+
+      freshStore.forceFlush();
+      fs.rmSync(freshTmp, { recursive: true, force: true });
+    });
+
+    it("omits the section entirely when the only prefs would produce empty groups", async () => {
+      // With zero valid preferences, the section must not appear (low-signal
+      // empty sections just add noise to the hint).
+      const freshTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-team-empty-"));
+      fs.mkdirSync(path.join(freshTmp, ".deeppairing"), { recursive: true });
+      fs.writeFileSync(
+        path.join(freshTmp, ".deeppairing", "team.json"),
+        JSON.stringify({ version: 1, preferences: [] }),
+      );
+      const freshStore = new FileStore(freshTmp, "team_empty_session");
+      const { server: freshServer } = createMcpServer(freshStore, () => {}, 4000);
+      const [c, s] = InMemoryTransport.createLinkedPair();
+      await freshServer.connect(s);
+      const freshClient = new Client({ name: "t", version: "1.0" });
+      await freshClient.connect(c);
+
+      const result = await freshClient.callTool({
+        name: "present_findings",
+        arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
+      });
+      const text = (result.content as any[])?.[0]?.text ?? "";
+
+      expect(text).not.toContain("🏢 Team conventions");
+
+      freshStore.forceFlush();
+      fs.rmSync(freshTmp, { recursive: true, force: true });
+    });
+  });
+
   describe("port in responses", () => {
     it("includes the correct port in tool responses", async () => {
-      const { text } = await callTool("deepPairing_present_findings", {
+      const { text } = await callTool("present_findings", {
         summary: "Test",
         findings: [{ category: "Test", detail: "Test", significance: "low" }],
       });
@@ -142,7 +230,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("includes correct port in first-call hint", async () => {
-      const { text } = await callTool("deepPairing_present_findings", {
+      const { text } = await callTool("present_findings", {
         summary: "First call",
         findings: [{ category: "Test", detail: "Test", significance: "low" }],
       });
@@ -153,26 +241,26 @@ describe("MCP Tool Handlers", () => {
 
   describe("check_feedback", () => {
     it("returns session status preamble", async () => {
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       expect(text).toContain("Session:");
       expect(text).toContain("Suggested action:");
     });
 
     it("returns unacknowledged comments", async () => {
       // Create an artifact and add a comment
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "Test",
         findings: [{ category: "Test", detail: "Test", significance: "low" }],
       });
       const artId = store.getArtifacts()[0].id;
       store.addComment({ id: "cmt_1", artifactId: artId, content: "Good work", author: "human" });
 
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       expect(text).toContain("Good work");
     });
 
     it("returns resolved decisions", async () => {
-      await callTool("deepPairing_present_options", {
+      await callTool("present_options", {
         context: "Which pattern?",
         options: [
           { id: "a", title: "Service", description: "A", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
@@ -182,7 +270,7 @@ describe("MCP Tool Handlers", () => {
       const dec = store.getPendingDecisions()[0];
       store.resolveDecision(dec.decisionId, "a", "Cleaner");
 
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       expect(text).toContain("Service");
     });
 
@@ -195,13 +283,13 @@ describe("MCP Tool Handlers", () => {
       store.recordRejectedApproach("Inline refactor");
 
       // Burn the first tool call on something other than check_feedback
-      await callTool("deepPairing_log_reasoning", {
+      await callTool("log_reasoning", {
         action: "warm-up",
         reasoning: "trigger the first-call hint elsewhere",
         confidence: "low",
       });
 
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       expect(text).not.toContain("previous sessions");
       expect(text).not.toContain("Rejected approaches");
     });
@@ -212,7 +300,7 @@ describe("MCP Tool Handlers", () => {
       store.recordRejectedApproach("Deploy to Railway", "too expensive for our scale");
       store.recordApprovedPattern("Service pattern");
 
-      const { text } = await callTool("deepPairing_log_reasoning", {
+      const { text } = await callTool("log_reasoning", {
         action: "first call",
         reasoning: "test",
         confidence: "low",
@@ -227,10 +315,10 @@ describe("MCP Tool Handlers", () => {
     it("does NOT repeat session memory on subsequent tool calls", async () => {
       store.recordRejectedApproach("Inline refactor");
 
-      await callTool("deepPairing_log_reasoning", {
+      await callTool("log_reasoning", {
         action: "first", reasoning: "x", confidence: "low",
       });
-      const { text } = await callTool("deepPairing_log_reasoning", {
+      const { text } = await callTool("log_reasoning", {
         action: "second", reasoning: "y", confidence: "low",
       });
 
@@ -240,13 +328,13 @@ describe("MCP Tool Handlers", () => {
 
     it("resets poll counter when feedback arrives", async () => {
       // Poll 3 times with no feedback (no drafts = no long-poll)
-      await callTool("deepPairing_check_feedback");
-      await callTool("deepPairing_check_feedback");
-      await callTool("deepPairing_check_feedback");
+      await callTool("check_feedback");
+      await callTool("check_feedback");
+      await callTool("check_feedback");
 
       // Now add human feedback — counter should reset
       store.addComment({ id: "cmt_1", artifactId: "__session__", content: "hello", author: "human" });
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
 
       expect(text).toContain("Human directive");
       expect(text).not.toContain("No human response"); // Counter was reset
@@ -254,11 +342,11 @@ describe("MCP Tool Handlers", () => {
 
     it("increments poll counter on empty polls", async () => {
       // Poll 4 times with no feedback, no drafts = instant return
-      await callTool("deepPairing_check_feedback");
-      await callTool("deepPairing_check_feedback");
-      await callTool("deepPairing_check_feedback");
+      await callTool("check_feedback");
+      await callTool("check_feedback");
+      await callTool("check_feedback");
       // 4th poll — counter is now 4
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       // No pending items, so escalation hint won't appear,
       // but counter is tracked correctly (tested via reset above)
       expect(text).toContain("Session:");
@@ -267,12 +355,12 @@ describe("MCP Tool Handlers", () => {
 
   describe("export_session", () => {
     it("returns markdown in the specified format", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "Auth issues",
         findings: [{ category: "Security", detail: "Weak hashing", significance: "high" }],
       });
 
-      const { text } = await callTool("deepPairing_export_session", { format: "full" });
+      const { text } = await callTool("export_session", { format: "full" });
       expect(text).toContain("Session Report");
       expect(text).toContain("Weak hashing");
     });
@@ -282,7 +370,7 @@ describe("MCP Tool Handlers", () => {
     it("blocks present_options when an option matches a rejected approach", async () => {
       store.recordRejectedApproach("Deploy: Railway", "too expensive for our scale");
 
-      const result = await callTool("deepPairing_present_options", {
+      const result = await callTool("present_options", {
         context: "Choose a hosting provider",
         options: [
           { id: "a", title: "Railway", description: "Easy deploy", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
@@ -301,7 +389,7 @@ describe("MCP Tool Handlers", () => {
     it("broadcasts a preflight_blocked event so the UI can toast (H1)", async () => {
       store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request hosting");
 
-      await callTool("deepPairing_present_options", {
+      await callTool("present_options", {
         context: "Pick a deploy target",
         options: [
           { id: "a", title: "Railway", description: "Fast", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
@@ -320,7 +408,7 @@ describe("MCP Tool Handlers", () => {
     it("blocks present_plan when a step description matches a rejected approach", async () => {
       store.recordRejectedApproach("Inline refactor");
 
-      const result = await callTool("deepPairing_present_plan", {
+      const result = await callTool("present_plan", {
         title: "Cleanup",
         steps: [{ description: "Inline refactor of auth module", reasoning: "simpler" }],
         estimatedChanges: 1,
@@ -334,7 +422,7 @@ describe("MCP Tool Handlers", () => {
     it("allows present_findings when nothing matches", async () => {
       store.recordRejectedApproach("Deploy: Railway");
 
-      const { isError } = await callTool("deepPairing_present_findings", {
+      const { isError } = await callTool("present_findings", {
         summary: "Auth analysis",
         findings: [{ category: "Security", detail: "Weak hash", significance: "high" }],
       });
@@ -353,7 +441,7 @@ describe("MCP Tool Handlers", () => {
       );
 
       // Agent now proposes Fly.io with language that matches the concept tokens
-      const result = await callTool("deepPairing_present_options", {
+      const result = await callTool("present_options", {
         context: "Pick a deploy target",
         options: [
           {
@@ -378,7 +466,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("rejected approaches captured from artifact rejections (U1+U6)", () => {
     it("records a rejected approach with reason when a finding is rejected", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "Proposed caching layer",
         summary: "add Redis cache",
         findings: [{ category: "Perf", detail: "cache user profiles", significance: "high" }],
@@ -403,16 +491,17 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
-  describe("retract_artifact", () => {
+  describe("revise_artifact — mode: retract (N4)", () => {
     it("transitions the artifact to retracted and records the reason", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "hasty analysis",
         findings: [{ category: "other", detail: "something", significance: "low" }],
       });
       const artifact = store.getArtifacts()[0];
 
-      const { text, isError } = await callTool("deepPairing_retract_artifact", {
+      const { text, isError } = await callTool("revise_artifact", {
         artifactId: artifact.id,
+        mode: "retract",
         reason: "realised I had the wrong file",
       });
 
@@ -427,8 +516,9 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("errors when the artifact id is unknown", async () => {
-      const { isError, text } = await callTool("deepPairing_retract_artifact", {
+      const { isError, text } = await callTool("revise_artifact", {
         artifactId: "art_does_not_exist",
+        mode: "retract",
         reason: "oops",
       });
       expect(isError).toBe(true);
@@ -436,35 +526,40 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("errors when trying to retract an already-approved artifact", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "x",
         findings: [{ category: "y", detail: "z", significance: "low" }],
       });
       const artifact = store.getArtifacts()[0];
       store.updateArtifactStatus(artifact.id, "approved");
 
-      const { isError, text } = await callTool("deepPairing_retract_artifact", {
+      const { isError, text } = await callTool("revise_artifact", {
         artifactId: artifact.id,
+        mode: "retract",
         reason: "second thoughts",
       });
       expect(isError).toBe(true);
       expect(text).toContain("too late to retract");
     });
 
-    it("requires both artifactId and reason", async () => {
-      const missingReason = await callTool("deepPairing_retract_artifact", { artifactId: "art_x" });
+    it("requires artifactId, mode, and reason", async () => {
+      const missingReason = await callTool("revise_artifact", { artifactId: "art_x", mode: "retract" });
       expect(missingReason.isError).toBe(true);
       expect(missingReason.text).toContain("reason");
 
-      const missingId = await callTool("deepPairing_retract_artifact", { reason: "no id" });
+      const missingId = await callTool("revise_artifact", { mode: "retract", reason: "no id" });
       expect(missingId.isError).toBe(true);
       expect(missingId.text).toContain("artifactId");
+
+      const missingMode = await callTool("revise_artifact", { artifactId: "art_x", reason: "no mode" });
+      expect(missingMode.isError).toBe(true);
+      expect(missingMode.text).toContain("mode");
     });
   });
 
   describe("answer_question + question prioritization", () => {
     it("prioritizes question comments in check_feedback with an answer hint", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "x",
         findings: [{ category: "y", detail: "z", significance: "low" }],
       });
@@ -483,11 +578,11 @@ describe("MCP Tool Handlers", () => {
         intent: "question",
       });
 
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       // Questions section appears and carries the answer hint
       expect(text).toContain("Human questions");
       expect(text).toContain("why did you pick this approach");
-      expect(text).toContain("deepPairing_answer_question");
+      expect(text).toContain("answer_question");
       expect(text).toContain("cmt_q1");
       // Questions are listed before regular comments in the final text
       const qIdx = text.indexOf("Human questions");
@@ -497,7 +592,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("answer_question links the reply and marks the question answered", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "x",
         findings: [{ category: "y", detail: "z", significance: "low" }],
       });
@@ -510,7 +605,7 @@ describe("MCP Tool Handlers", () => {
         intent: "question",
       });
 
-      const { text, isError } = await callTool("deepPairing_answer_question", {
+      const { text, isError } = await callTool("answer_question", {
         commentId: question.id,
         answer: "I considered X but rejected it because Y.",
       });
@@ -532,7 +627,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("already-answered questions drop out of the priority lane", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "x",
         findings: [{ category: "y", detail: "z", significance: "low" }],
       });
@@ -546,7 +641,7 @@ describe("MCP Tool Handlers", () => {
       });
       // Acknowledge so the existing check_feedback exchange doesn't re-surface it first
       store.acknowledgeComments([q.id]);
-      await callTool("deepPairing_answer_question", {
+      await callTool("answer_question", {
         commentId: q.id,
         answer: "It's a guard clause.",
       });
@@ -559,13 +654,13 @@ describe("MCP Tool Handlers", () => {
         author: "human",
       });
 
-      const { text } = await callTool("deepPairing_check_feedback");
+      const { text } = await callTool("check_feedback");
       expect(text).not.toContain("Human questions");
       expect(text).toContain("Human comments");
     });
 
     it("errors when answering an unknown commentId", async () => {
-      const { isError, text } = await callTool("deepPairing_answer_question", {
+      const { isError, text } = await callTool("answer_question", {
         commentId: "cmt_not_real",
         answer: "hi",
       });
@@ -576,7 +671,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("present_spec", () => {
     it("creates a spec artifact with requirements, tasks, and open questions", async () => {
-      const { text, isError } = await callTool("deepPairing_present_spec", {
+      const { text, isError } = await callTool("present_spec", {
         title: "Auth rate limiting",
         objective: "Prevent credential-stuffing without locking out legitimate users",
         context: "The login endpoint currently has no throttle.",
@@ -619,7 +714,7 @@ describe("MCP Tool Handlers", () => {
 
     it("refuses when a requirement matches a rejected approach", async () => {
       store.recordRejectedApproach("Auth: Railway", "too expensive");
-      const { isError, text } = await callTool("deepPairing_present_spec", {
+      const { isError, text } = await callTool("present_spec", {
         title: "Auth",
         objective: "stand up login",
         requirements: [
@@ -637,16 +732,17 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
-  describe("supersede_artifact", () => {
+  describe("revise_artifact — mode: supersede (N4)", () => {
     it("creates a versioned child and retires the old one", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "first pass",
         findings: [{ category: "Security", detail: "weak hash", significance: "high" }],
       });
       const old = store.getArtifacts()[0];
 
-      const { text, isError } = await callTool("deepPairing_supersede_artifact", {
-        oldArtifactId: old.id,
+      const { text, isError } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
         title: "Second pass: actually it's argon2",
         content: {
           summary: "revised: weak hash turned out to be argon2id",
@@ -678,15 +774,16 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("refuses to supersede an already-superseded artifact", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         summary: "x",
         findings: [{ category: "y", detail: "z", significance: "low" }],
       });
       const old = store.getArtifacts()[0];
       store.updateArtifactStatus(old.id, "superseded");
 
-      const { isError, text } = await callTool("deepPairing_supersede_artifact", {
-        oldArtifactId: old.id,
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
         content: { summary: "x2", findings: [] },
         reason: "retry",
       });
@@ -695,7 +792,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("records a new plan review cycle when superseding a plan", async () => {
-      await callTool("deepPairing_present_plan", {
+      await callTool("present_plan", {
         title: "Original plan",
         steps: [{ description: "step A", reasoning: "because" }],
         estimatedChanges: 1,
@@ -703,8 +800,9 @@ describe("MCP Tool Handlers", () => {
       const oldPlan = store.getArtifacts()[0];
       expect(store.getPendingPlanReviews().map((p) => p.artifactId)).toContain(oldPlan.id);
 
-      const result = await callTool("deepPairing_supersede_artifact", {
-        oldArtifactId: oldPlan.id,
+      const result = await callTool("revise_artifact", {
+        artifactId: oldPlan.id,
+        mode: "supersede",
         title: "Revised plan",
         content: {
           steps: [{ description: "step A'", reasoning: "incorporate feedback" }],
@@ -719,20 +817,36 @@ describe("MCP Tool Handlers", () => {
       expect(pending.map((p) => p.artifactId)).toContain(newPlan.id);
     });
 
-    it("errors on missing oldArtifactId", async () => {
-      const { isError, text } = await callTool("deepPairing_supersede_artifact", {
-        oldArtifactId: "art_nope",
+    it("errors on unknown artifactId", async () => {
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: "art_nope",
+        mode: "supersede",
         content: { summary: "x", findings: [] },
         reason: "x",
       });
       expect(isError).toBe(true);
       expect(text).toContain("no artifact");
     });
+
+    it("errors when mode='supersede' is missing content", async () => {
+      await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const old = store.getArtifacts()[0];
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
+        reason: "revise it",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("content");
+    });
   });
 
   describe("stakes + prediction capture (K1/K2)", () => {
     it("passes stakes through present_options into the decision record + artifact", async () => {
-      await callTool("deepPairing_present_options", {
+      await callTool("present_options", {
         context: "Which queue tech?",
         stakes: "high",
         options: [
@@ -748,7 +862,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("records confidence + predictedOutcome on resolveDecision (K1)", async () => {
-      await callTool("deepPairing_present_options", {
+      await callTool("present_options", {
         context: "Pick a pattern",
         options: [
           { id: "a", title: "A", description: "x", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
@@ -764,7 +878,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("counts decisions-with-predictions and high-stakes in engagement metrics (K2)", async () => {
-      await callTool("deepPairing_present_options", {
+      await callTool("present_options", {
         context: "High one",
         stakes: "high",
         options: [
@@ -772,7 +886,7 @@ describe("MCP Tool Handlers", () => {
           { id: "b", title: "B", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
         ],
       });
-      await callTool("deepPairing_present_options", {
+      await callTool("present_options", {
         context: "Low one",
         options: [
           { id: "a", title: "A", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
@@ -791,14 +905,14 @@ describe("MCP Tool Handlers", () => {
 
   describe("request_horizon_check (K3)", () => {
     it("posts an agent-authored horizon-check comment on the artifact", async () => {
-      await callTool("deepPairing_present_plan", {
+      await callTool("present_plan", {
         title: "Cache layer",
         steps: [{ description: "Add Redis", reasoning: "latency" }],
         estimatedChanges: 1,
       });
       const plan = store.getArtifacts()[0];
 
-      const { text, isError } = await callTool("deepPairing_request_horizon_check", {
+      const { text, isError } = await callTool("request_horizon_check", {
         artifactId: plan.id,
         horizon: "1y",
       });
@@ -813,14 +927,14 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("uses a custom prompt when provided", async () => {
-      await callTool("deepPairing_present_plan", {
+      await callTool("present_plan", {
         title: "x",
         steps: [{ description: "y", reasoning: "z" }],
         estimatedChanges: 1,
       });
       const plan = store.getArtifacts()[0];
 
-      await callTool("deepPairing_request_horizon_check", {
+      await callTool("request_horizon_check", {
         artifactId: plan.id,
         horizon: "3mo",
         prompt: "What's the first thing that will break under load?",
@@ -832,7 +946,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("rejects unknown artifactId", async () => {
-      const { isError, text } = await callTool("deepPairing_request_horizon_check", {
+      const { isError, text } = await callTool("request_horizon_check", {
         artifactId: "art_not_real",
         horizon: "1y",
       });
@@ -841,14 +955,14 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("rejects invalid horizon values", async () => {
-      await callTool("deepPairing_present_plan", {
+      await callTool("present_plan", {
         title: "x",
         steps: [{ description: "y", reasoning: "z" }],
         estimatedChanges: 1,
       });
       const plan = store.getArtifacts()[0];
 
-      const { isError, text } = await callTool("deepPairing_request_horizon_check", {
+      const { isError, text } = await callTool("request_horizon_check", {
         artifactId: plan.id,
         horizon: "100y",
       });
@@ -859,21 +973,21 @@ describe("MCP Tool Handlers", () => {
 
   describe("post_pr_review tool (M2)", () => {
     it("errors when pr argument is missing", async () => {
-      const { text, isError } = await callTool("deepPairing_post_pr_review", {});
+      const { text, isError } = await callTool("post_pr_review", {});
       expect(isError).toBe(true);
       expect(text).toContain("pr");
     });
 
     it("returns error when no findings have structured evidence", async () => {
       // Session has no research findings — payload.comments will be empty
-      const { text, isError } = await callTool("deepPairing_post_pr_review", { pr: "42" });
+      const { text, isError } = await callTool("post_pr_review", { pr: "42" });
       expect(isError).toBe(true);
       expect(text).toContain("No findings with structured evidence");
     });
 
     it("surfaces gh-missing errors clearly when gh is unavailable", async () => {
       // Seed a finding with structured evidence so payload.comments is non-empty
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "x",
         summary: "y",
         findings: [{
@@ -888,7 +1002,7 @@ describe("MCP Tool Handlers", () => {
       // If it does, we expect the GhMissingError message to surface. If gh is
       // installed but not authed, we expect GhNotAuthedError. Either path is
       // acceptable — we just can't post from a test environment.
-      const { text, isError } = await callTool("deepPairing_post_pr_review", { pr: "42" });
+      const { text, isError } = await callTool("post_pr_review", { pr: "42" });
       // Either a clear gh-related error, or a wrapped failure — all isError
       expect(isError).toBe(true);
       const lower = text.toLowerCase();
@@ -901,37 +1015,59 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
-  describe("memory facade aliases (L2)", () => {
-    it("memory_search surfaces philosophy ledger entries by concept", async () => {
-      // Philosophy ledger keys by concept, so we query on a word that lives
-      // in the concept (not just the description).
+  describe("recall — unified memory tool (N4)", () => {
+    it("mode='any' surfaces philosophy ledger entries by concept", async () => {
       store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request hosting");
-      const { text } = await callTool("memory_search", { query: "pay-per-request" });
+      const { text } = await callTool("recall", { query: "pay-per-request", mode: "any" });
       expect(text).toContain("Philosophy ledger");
       expect(text.toLowerCase()).toContain("pay-per-request hosting");
     });
 
-    it("memory_search errors on empty query", async () => {
-      const { isError } = await callTool("memory_search", { query: "" });
+    it("mode='any' errors on empty query", async () => {
+      const { isError, text } = await callTool("recall", { query: "", mode: "any" });
       expect(isError).toBe(true);
+      expect(text).toContain("requires a query");
     });
 
-    it("memory_recall returns a formatted stance for a known concept", async () => {
+    it("mode='philosophy' returns a formatted stance for a known concept", async () => {
       store.recordRejectedApproach("concept-x", "reason-y");
-      const { text } = await callTool("memory_recall", { key: "concept-x" });
+      const { text } = await callTool("recall", { query: "concept-x", mode: "philosophy" });
       expect(text).toContain("AVOID");
       expect(text).toContain("concept-x");
     });
 
-    it("memory_recall reports no-stance for an unknown concept", async () => {
-      const { text } = await callTool("memory_recall", { key: "some-fresh-concept" });
-      expect(text).toContain("No stance");
+    it("mode='philosophy' reports no-stance for an unknown concept", async () => {
+      const { text } = await callTool("recall", { query: "some-fresh-concept", mode: "philosophy" });
+      expect(text).toContain("No philosophy-ledger entries");
+    });
+
+    it("mode='philosophy' with no query lists the whole ledger", async () => {
+      store.recordRejectedApproach("a", "x");
+      store.recordRejectedApproach("b", "y");
+      const { text, isError } = await callTool("recall", { mode: "philosophy" });
+      expect(isError).toBeFalsy();
+      expect(text).toContain("Philosophy ledger");
+    });
+
+    it("mode='philosophy' filters by stance", async () => {
+      store.recordApprovedPattern("Service layer");
+      store.recordApprovedPattern("Service layer");
+      store.recordApprovedPattern("Service layer");
+      const { text } = await callTool("recall", { mode: "philosophy", stance: "prefer" });
+      expect(text).toContain("Service layer");
+      expect(text).toContain("PREFER");
+    });
+
+    it("mode='sessions' errors without a query", async () => {
+      const { isError, text } = await callTool("recall", { query: "", mode: "sessions" });
+      expect(isError).toBe(true);
+      expect(text).toContain("requires a query");
     });
   });
 
-  describe("pr-review export format (L3)", () => {
+  describe("pr-comments export format (L3)", () => {
     it("formats findings with severity, file:line anchors, and snippets", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "Auth audit",
         summary: "x",
         findings: [
@@ -956,8 +1092,8 @@ describe("MCP Tool Handlers", () => {
         ],
       });
 
-      const { text } = await callTool("deepPairing_export_session", { format: "pr-review" });
-      expect(text).toContain("deepPairing review");
+      const { text } = await callTool("export_session", { format: "pr-comments" });
+      expect(text).toContain("deepPairing notes");
       expect(text).toContain("### src/auth.ts");
       expect(text).toContain("🟠"); // severity emoji for high
       expect(text).toContain("HIGH");
@@ -968,7 +1104,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("groups findings by filePath", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "Multi-file",
         summary: "x",
         findings: [
@@ -986,13 +1122,13 @@ describe("MCP Tool Handlers", () => {
           },
         ],
       });
-      const { text } = await callTool("deepPairing_export_session", { format: "pr-review" });
+      const { text } = await callTool("export_session", { format: "pr-comments" });
       expect(text).toContain("### a.ts");
       expect(text).toContain("### b.ts");
     });
 
     it("omits rejected research artifacts", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "Proposed",
         summary: "x",
         findings: [{ category: "x", detail: "should not appear", significance: "low" }],
@@ -1000,42 +1136,14 @@ describe("MCP Tool Handlers", () => {
       const a = store.getArtifacts()[0];
       store.updateArtifactStatus(a.id, "rejected");
 
-      const { text } = await callTool("deepPairing_export_session", { format: "pr-review" });
-      expect(text).toContain("No reviewable findings");
-    });
-  });
-
-  describe("recall_philosophy (J2)", () => {
-    it("returns an empty-ledger message when no entries exist", async () => {
-      const { text, isError } = await callTool("deepPairing_recall_philosophy", {});
-      expect(isError).toBeFalsy();
-      expect(text).toContain("empty");
-    });
-
-    it("returns entries matching a concept query", async () => {
-      // Populate the ledger via the FileStore pathway (which mirrors to the global ledger)
-      store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request serverless hosting");
-      store.recordRejectedApproach("Deploy: Fly.io", "ditto", undefined, "pay-per-request serverless hosting");
-
-      const { text } = await callTool("deepPairing_recall_philosophy", { concept: "serverless" });
-      expect(text).toContain("pay-per-request serverless hosting");
-      expect(text).toContain("AVOID");
-    });
-
-    it("filters by stance", async () => {
-      store.recordApprovedPattern("Service layer");
-      store.recordApprovedPattern("Service layer"); // pushed again as if in another session
-      store.recordApprovedPattern("Service layer");
-
-      const { text } = await callTool("deepPairing_recall_philosophy", { stance: "prefer" });
-      expect(text).toContain("Service layer");
-      expect(text).toContain("PREFER");
+      const { text } = await callTool("export_session", { format: "pr-comments" });
+      expect(text).toContain("No findings from this pairing session");
     });
   });
 
   describe("MCP resources (E1)", () => {
     it("lists the current session + per-artifact resources", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "Auth review",
         summary: "findings",
         findings: [{ category: "Security", detail: "weak hash", significance: "high" }],
@@ -1054,7 +1162,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("reads the current session resource as JSON", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "x",
         summary: "y",
         findings: [{ category: "z", detail: "w", significance: "low" }],
@@ -1068,7 +1176,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("reads a single artifact resource by id", async () => {
-      await callTool("deepPairing_present_findings", {
+      await callTool("present_findings", {
         title: "Target",
         summary: "x",
         findings: [{ category: "y", detail: "z", significance: "low" }],
@@ -1098,7 +1206,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("unknown tool", () => {
     it("returns an error for unknown tools", async () => {
-      const result = await callTool("deepPairing_nonexistent");
+      const result = await callTool("nonexistent");
       expect(result.isError).toBe(true);
       expect(result.text).toContain("Unknown tool");
     });

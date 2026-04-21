@@ -258,6 +258,24 @@ export function createDaemonRoutes(
     return c.json({ status: "recorded" });
   });
 
+  // --- Project context (guardrails + team preferences) ---
+
+  app.get("/api/internal/sessions/:sessionId/guardrails", (c) => {
+    const store = getStore(c.req.param("sessionId"));
+    const guardrails = typeof (store as any).getProjectGuardrails === "function"
+      ? (store as any).getProjectGuardrails()
+      : [];
+    return c.json({ guardrails });
+  });
+
+  app.get("/api/internal/sessions/:sessionId/team-preferences", (c) => {
+    const store = getStore(c.req.param("sessionId"));
+    const preferences = typeof (store as any).getTeamPreferences === "function"
+      ? (store as any).getTeamPreferences()
+      : [];
+    return c.json({ preferences });
+  });
+
   // --- Autonomy ---
 
   app.get("/api/internal/sessions/:sessionId/autonomy", (c) => {

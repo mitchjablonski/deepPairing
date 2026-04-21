@@ -3,7 +3,7 @@ description: Review past deepPairing sessions — search for a concept, artifact
 argument-hint: [query]
 ---
 
-Run `deepPairing_search_sessions` with query: $ARGUMENTS
+Run `recall` with query: $ARGUMENTS, mode: "sessions"
 
 Summarize the top 5 matches with:
 - Artifact title and type

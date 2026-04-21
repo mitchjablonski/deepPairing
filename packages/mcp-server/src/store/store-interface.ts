@@ -157,6 +157,21 @@ export interface IStore {
    * knows to escalate for changes in these paths.
    */
   getProjectGuardrails?(): MaybePromise<Array<{ category: string; paths: string[]; rationale: string }>>;
+  /**
+   * Team-agreed conventions loaded from `.deeppairing/team.json`. Empty
+   * array when absent. Surfaced separately from personal philosophy and
+   * structural guardrails — never merged. See team-preferences.ts for the
+   * three-layer rationale.
+   */
+  getTeamPreferences?(): MaybePromise<Array<{
+    id: string;
+    kind: "require" | "prefer" | "avoid";
+    concept: string;
+    rationale: string;
+    scope?: { paths?: string[] };
+    addedBy?: string;
+    addedAt?: string;
+  }>>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;

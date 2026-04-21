@@ -2,7 +2,7 @@
  * DaemonClient — HTTP client that implements IStore by proxying
  * all operations to the shared deepPairing daemon.
  */
-import type { Artifact, ArtifactStatus, Comment } from "@deeppairing/shared";
+import type { Artifact, ArtifactStatus, Comment, TeamPreference } from "@deeppairing/shared";
 import type {
   IStore,
   DecisionRecord,
@@ -196,6 +196,18 @@ export class DaemonClient implements IStore {
 
   async getSessionMemory(): Promise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }> {
     return this.get("/memory");
+  }
+
+  // --- Project context (guardrails + team preferences) ---
+
+  async getProjectGuardrails(): Promise<Array<{ category: string; paths: string[]; rationale: string }>> {
+    const data = await this.get<{ guardrails: Array<{ category: string; paths: string[]; rationale: string }> }>("/guardrails");
+    return data.guardrails ?? [];
+  }
+
+  async getTeamPreferences(): Promise<TeamPreference[]> {
+    const data = await this.get<{ preferences: TeamPreference[] }>("/team-preferences");
+    return data.preferences ?? [];
   }
 
   // --- Autonomy ---

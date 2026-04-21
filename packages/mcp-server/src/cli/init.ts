@@ -13,6 +13,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity } from "../daemon-lifecycle.js";
+import { ensureDeepPairingDir, ensureGitignoreEntry, ensureStopHook } from "./setup-tasks.js";
 
 const cwd = process.cwd();
 
@@ -58,9 +60,9 @@ previously rejected. Do NOT propose those — present_findings / present_options
 REJECTED_APPROACH_BLOCKED error if you try.
 
 If you realize mid-flight that you shouldn't have presented an artifact
-(e.g. you noticed an error after the fact), call retract_artifact with the
-artifact id and a short reason. Do NOT bail out to the terminal. Keep polling
-check_feedback for the human's response.
+(e.g. you noticed an error after the fact), call revise_artifact with mode
+"retract", the artifact id, and a short reason. Do NOT bail out to the
+terminal. Keep polling check_feedback for the human's response.
 `;
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -132,19 +134,19 @@ function main() {
     console.log(`  ${green("✓")} Created .mcp.json`);
   }
 
-  // 2. Update .gitignore
-  const gitignorePath = path.join(cwd, ".gitignore");
-  if (fs.existsSync(gitignorePath)) {
-    const content = fs.readFileSync(gitignorePath, "utf-8");
-    if (!content.includes(".deeppairing/")) {
-      fs.appendFileSync(gitignorePath, "\n.deeppairing/\n");
-      console.log(`  ${green("✓")} Added .deeppairing/ to .gitignore`);
-    } else {
-      console.log(`  ${dim("✓")} .gitignore already has .deeppairing/`);
-    }
-  } else {
-    fs.writeFileSync(gitignorePath, ".deeppairing/\n");
+  // 2. Update .gitignore (idempotent; shared with daemon startup setup)
+  const gitignoreResult = ensureGitignoreEntry(cwd);
+  if (!gitignoreResult.ok) {
+    console.log(`  ${yellow("!")} ${gitignoreResult.message}`);
+  } else if (gitignoreResult.changed) {
+    console.log(`  ${green("✓")} ${gitignoreResult.message}`);
+  } else if (!fs.existsSync(path.join(cwd, ".gitignore"))) {
+    // init still creates .gitignore from scratch when missing — opt-in via init,
+    // not from the daemon. The shared task no-ops if .gitignore is absent.
+    fs.writeFileSync(path.join(cwd, ".gitignore"), ".deeppairing/\n");
     console.log(`  ${green("✓")} Created .gitignore with .deeppairing/`);
+  } else {
+    console.log(`  ${dim("✓")} ${gitignoreResult.message}`);
   }
 
   // 3. Add deepPairing instructions to CLAUDE.md so Claude follows the protocol
@@ -183,50 +185,22 @@ function main() {
     console.log(`  ${green("✓")} Added deepPairing protocol to CLAUDE.md`);
   }
 
-  // 4. Create .deeppairing directory
-  const dpDir = path.join(cwd, ".deeppairing");
-  if (!fs.existsSync(dpDir)) {
-    fs.mkdirSync(dpDir, { recursive: true });
-    console.log(`  ${green("✓")} Created .deeppairing/ directory`);
+  // 4. Create .deeppairing directory (idempotent; shared with daemon startup setup)
+  const dirResult = ensureDeepPairingDir(cwd);
+  if (!dirResult.ok) {
+    console.log(`  ${red("✗")} ${dirResult.message}`);
+  } else if (dirResult.changed) {
+    console.log(`  ${green("✓")} ${dirResult.message}`);
   }
 
-  // 5. Set up Claude Code hooks for deepPairing workflow
-  const claudeDir = path.join(cwd, ".claude");
-  const hooksFile = path.join(claudeDir, "settings.local.json");
-
-  let hooksNeedSetup = true;
-  if (fs.existsSync(hooksFile)) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(hooksFile, "utf-8"));
-      if (settings.hooks?.Stop) {
-        hooksNeedSetup = false;
-        console.log(`  ${dim("✓")} Claude Code hooks already configured`);
-      }
-    } catch {}
-  }
-
-  if (hooksNeedSetup) {
-    fs.mkdirSync(claudeDir, { recursive: true });
-
-    // Read existing settings or create new
-    let settings: any = {};
-    if (fs.existsSync(hooksFile)) {
-      try { settings = JSON.parse(fs.readFileSync(hooksFile, "utf-8")); } catch {}
-    }
-
-    // Add Stop hook — checks for pending deepPairing artifacts and forces continue
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.Stop = settings.hooks.Stop ?? [];
-
-    // Check if we already have a deepPairing stop hook
-    const hasDpHook = settings.hooks.Stop.some((h: any) => h.command?.includes("deeppairing"));
-    if (!hasDpHook) {
-      settings.hooks.Stop.push({
-        command: `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>x.status==='draft'&&['research','spec','plan','decision','code_change'].includes(x.type))){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`,
-      });
-      fs.writeFileSync(hooksFile, JSON.stringify(settings, null, 2));
-      console.log(`  ${green("✓")} Added Claude Code Stop hook (prevents stopping with pending reviews)`);
-    }
+  // 5. Set up Claude Code Stop hook (idempotent; shared with daemon startup setup)
+  const hookResult = ensureStopHook(cwd);
+  if (!hookResult.ok) {
+    console.log(`  ${yellow("!")} ${hookResult.message}`);
+  } else if (hookResult.changed) {
+    console.log(`  ${green("✓")} ${hookResult.message} (prevents stopping with pending reviews)`);
+  } else {
+    console.log(`  ${dim("✓")} ${hookResult.message}`);
   }
 
   // Done
@@ -284,8 +258,21 @@ async function doctor() {
     console.log(`  ${alive ? green("✓") : red("✗")} PID ${info.pid} is ${alive ? "alive" : "not running"}`);
   }
 
-  // 3. Probe /api/state on the reported port (or default)
-  const port = info?.port ?? 3847;
+  // 3. Probe /api/state on the reported port. If daemon.json is missing,
+  //    sweep the candidate range to find a daemon that belongs to us.
+  let port = info?.port;
+  if (!port) {
+    for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
+      const candidate = DEFAULT_PORT + attempt;
+      const identity = await probeDaemonIdentity(candidate);
+      if (identity && identity.projectRoot === cwd) {
+        port = candidate;
+        console.log(`  ${green("✓")} Swept ports; found this project's daemon on :${candidate}`);
+        break;
+      }
+    }
+    if (!port) port = DEFAULT_PORT; // fall through and report the failed probe
+  }
   let probeOk = false;
   let probeStatus: number | string = "no-response";
   try {
@@ -349,19 +336,29 @@ async function doctor() {
 /**
  * `deeppairing export <format> [sessionId]` — print a session export to
  * stdout so users can pipe it into clipboard / file / PR tooling.
- *   format: full | pr-description | pr-review | adr | replay
+ *   format: full | pr-description | pr-comments | adr | replay
  *   sessionId: defaults to the most recent session in this project
  */
 async function exportCmd(format: string, sessionId?: string) {
-  const validFormats = ["full", "pr-description", "pr-review", "adr", "replay"];
+  const validFormats = ["full", "pr-description", "pr-comments", "adr", "replay"];
   if (!validFormats.includes(format)) {
     console.error(`  ${red("✗")} Unknown format "${format}". Valid: ${validFormats.join(", ")}`);
     process.exit(1);
   }
 
   // Prefer the daemon if it's reachable — it has active-session data. Fall
-  // back to reading the session directly from disk via FileStore.
-  const port = 3847;
+  // back to reading the session directly from disk via FileStore. Read the
+  // port from daemon.json (written by the daemon on bind); fall back to the
+  // default for the "no daemon running" case (we'll then land in the
+  // filesystem path below).
+  let port = DEFAULT_PORT;
+  try {
+    const daemonInfoPath = path.join(cwd, ".deeppairing", "daemon.json");
+    if (fs.existsSync(daemonInfoPath)) {
+      const infoFile = JSON.parse(fs.readFileSync(daemonInfoPath, "utf-8"));
+      if (typeof infoFile?.port === "number") port = infoFile.port;
+    }
+  } catch {}
   let chosenSessionId = sessionId;
 
   try {
@@ -411,7 +408,7 @@ async function exportCmd(format: string, sessionId?: string) {
 
 /**
  * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT]`
- *  — post the current (or specified) session's findings as inline review
+ *  — post the current (or specified) pairing session's findings as inline
  *  comments on a GitHub PR. Uses the `gh` CLI.
  */
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) {
@@ -478,8 +475,8 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     npx deeppairing init                   Set up deepPairing in current project
     npx deeppairing doctor                 Diagnose a running / misbehaving daemon
     npx deeppairing export <format>        Print a session as markdown
-                                           (format: full | pr-description | pr-review | adr | replay)
-    npx deeppairing post-pr-review <pr>    Post the session's findings as inline review comments
+                                           (format: full | pr-description | pr-comments | adr | replay)
+    npx deeppairing post-pr-review <pr>    Post the pairing session's findings as inline comments
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     npx deeppairing --help                 Show this help message
     npx deeppairing --version              Show version

@@ -8,6 +8,7 @@ import {
 import { useArtifactStore } from "../../stores/artifact";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { OpenInEditorLink } from "../OpenInEditor";
+import { useSentFlash } from "../../hooks/useSentFlash";
 
 interface Props {
   artifact: Artifact;
@@ -181,16 +182,15 @@ function AlternativeRow({
 }) {
   const [asking, setAsking] = useState(false);
   const [question, setQuestion] = useState("");
-  const [sent, setSent] = useState(false);
+  const { sent, flash } = useSentFlash();
 
   const send = async () => {
     const trimmed = question.trim();
     if (!trimmed) return;
     await onAskWhy(trimmed);
-    setSent(true);
+    flash();
     setQuestion("");
     setAsking(false);
-    setTimeout(() => setSent(false), 2000);
   };
 
   return (

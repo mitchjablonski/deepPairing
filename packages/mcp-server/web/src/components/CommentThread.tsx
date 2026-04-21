@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
+import { useSentFlash } from "../hooks/useSentFlash";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -166,7 +167,7 @@ export function AskTrigger({
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
+  const { sent, flash } = useSentFlash();
   const { submitComment, comments } = useArtifactStore();
 
   // Look up existing question(s) + their answers for this target
@@ -191,9 +192,8 @@ export function AskTrigger({
     setSending(true);
     await submitComment(artifactId, trimmed, target, { intent: "question" });
     setQuestion("");
-    setSent(true);
+    flash();
     setOpen(false);
-    setTimeout(() => setSent(false), 2000);
     setSending(false);
   };
 

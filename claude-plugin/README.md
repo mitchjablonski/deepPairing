@@ -29,6 +29,25 @@ claude plugin install ./claude-plugin --scope project
 claude plugin install deeppairing
 ```
 
+### How the plugin finds the MCP server
+
+The plugin's `.mcp.json` invokes a small launcher (`server.mjs`) that
+resolves the MCP server entry point across three install layouts:
+
+1. **Bundled** — `${CLAUDE_PLUGIN_ROOT}/server/standalone.js`. This is
+   what the marketplace pack will ship: the compiled server lives inside
+   the plugin so it has zero external dependencies.
+2. **Monorepo dev checkout** —
+   `${CLAUDE_PLUGIN_ROOT}/../packages/mcp-server/dist/standalone.js`.
+   What you're using when you `claude --plugin-dir ./claude-plugin` from
+   this repo after `pnpm build`.
+3. **npm-installed package** — `require.resolve("@deeppairing/mcp-server")`.
+   Use `npm i -g @deeppairing/mcp-server` once the package is published.
+
+If none resolve, the launcher prints a clear message naming each path it
+tried and the recovery command, so install failures don't show up as
+opaque "module not found" errors.
+
 ## What you get
 
 **Slash commands**
@@ -49,16 +68,41 @@ claude plugin install deeppairing
 
 - 13 tools: `present_findings`, `present_spec`, `present_options`,
   `present_plan`, `present_code_change`, `log_reasoning`,
-  `answer_question`, `supersede_artifact`, `retract_artifact`,
-  `search_sessions`, `recall_philosophy`, `request_horizon_check`,
-  `export_session`, `check_feedback`.
+  `answer_question`, `revise_artifact` (mode: supersede | retract),
+  `recall` (mode: philosophy | sessions | any),
+  `request_horizon_check`, `post_pr_review`, `export_session`,
+  `check_feedback`.
 - MCP resources: `deeppairing://session/current`,
   `deeppairing://artifact/{id}`, `deeppairing://sessions`,
   `deeppairing://session/{id}`.
 - MCP elicitation for quick approvals in-terminal.
 
-**Companion web UI** — `http://localhost:3847`. Auto-opens on first daemon
-start (unless `DEEPPAIRING_OPEN_BROWSER=0`).
+**Companion web UI** — `http://localhost:3847` (or the next free port if
+3847 is in use; check `.deeppairing/daemon.json` for the actual port).
+Auto-opens on first daemon start (unless `DEEPPAIRING_OPEN_BROWSER=0`).
+
+## What the plugin sets up automatically
+
+When the deepPairing daemon spawns in a project for the first time, it
+runs an idempotent setup pass:
+
+- Creates `.deeppairing/` for session data.
+- Adds `.deeppairing/` to `.gitignore` (only if `.gitignore` already exists).
+- Adds a Claude Code Stop hook to `.claude/settings.local.json` so the
+  agent can't declare "done" while artifacts still need human review.
+
+It does **not** touch `CLAUDE.md` — silently rewriting your repo-level
+agent instructions from a backgrounded MCP server would surprise people.
+For that, run:
+
+```bash
+npx deeppairing init
+```
+
+That appends a deepPairing protocol block to `CLAUDE.md` so the agent
+follows the collaboration protocol even outside the plugin's skill
+context. The plugin's `pairing-protocol` skill already covers most of
+the same ground, so this is optional.
 
 ## What makes this different
 

@@ -96,6 +96,18 @@ export {
 } from "./schemas/annotation.js";
 
 export {
+  TeamPreferenceKindSchema,
+  TeamPreferenceScopeSchema,
+  TeamPreferenceSchema,
+  TeamPreferencesFileSchema,
+  parseTeamPreferencesFile,
+  type TeamPreferenceKind,
+  type TeamPreferenceScope,
+  type TeamPreference,
+  type TeamPreferencesFile,
+} from "./schemas/team-preferences.js";
+
+export {
   FindingSchema,
   FindingSeveritySchema,
   ResearchContentSchema,

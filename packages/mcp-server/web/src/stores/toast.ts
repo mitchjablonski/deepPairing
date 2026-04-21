@@ -10,13 +10,32 @@ import { create } from "zustand";
  * invisible moat becomes a felt one.
  */
 
-export type ToastKind = "info" | "success" | "block" | "error";
+export type ToastKind = "info" | "success" | "block" | "error" | "preflight-block";
+
+/**
+ * Rich data for a preflight-block toast — the moment deepPairing refuses to
+ * let the agent re-propose something the human already rejected. Kept here
+ * rather than flattened into the generic title/body so the toast component
+ * can render it as a hero card instead of a line of text.
+ */
+export interface PreflightBlockHero {
+  source: "session" | "team";
+  concept: string;
+  proposal?: string;
+  reason?: string;
+  via: "surface" | "concept" | "avoid" | "require";
+  addedBy?: string;
+  rejectedAt?: string;
+  projectCount?: number;
+}
 
 export interface Toast {
   id: string;
   kind: ToastKind;
   title: string;
   body?: string;
+  /** Rich payload for kind: "preflight-block". Ignored for other kinds. */
+  hero?: PreflightBlockHero;
   /** Milliseconds before auto-dismiss. 0 = sticky (user must dismiss). */
   ttl?: number;
   /** Optional action label + handler (e.g. "Open Memory"). */

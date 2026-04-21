@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference } from "@deeppairing/shared";
+import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach } from "./store-interface.js";
@@ -72,10 +73,33 @@ function senseProjectGuardrails(projectRoot: string): ProjectGuardrail[] {
   return guardrails;
 }
 
+/**
+ * Load and validate `.deeppairing/team.json`. Returns [] for any failure
+ * mode (missing, unreadable, malformed) — team prefs are advisory; we never
+ * crash a session over a broken file. The caller can log if it cares.
+ */
+function loadTeamPreferences(basePath: string): TeamPreference[] {
+  const filePath = path.join(basePath, "team.json");
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const parsed = parseTeamPreferencesFile(raw);
+    if (!parsed) {
+      console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
+      return [];
+    }
+    return parsed.preferences;
+  } catch (err) {
+    console.warn(`[deepPairing] Could not load team.json: ${err}`);
+    return [];
+  }
+}
+
 export class FileStore implements IStore {
   private basePath: string;
   private projectHint: string;
   private guardrails: ProjectGuardrail[];
+  private teamPreferences: TeamPreference[];
   private artifacts: Artifact[] = [];
   private comments: Comment[] = [];
   private decisions: Map<string, DecisionRecord> = new Map();
@@ -94,6 +118,10 @@ export class FileStore implements IStore {
     // to escalate for changes in those paths even when global autonomy is
     // "autonomous" — zero user configuration.
     this.guardrails = senseProjectGuardrails(projectRoot);
+    // N6.2: load committable team preferences from .deeppairing/team.json.
+    // Cached for the lifetime of the FileStore — the file is meant to be
+    // edited via PR, so a session reload is the right reload point.
+    this.teamPreferences = loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
     // Prevent path traversal via sessionId
     if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
@@ -577,6 +605,10 @@ export class FileStore implements IStore {
     return this.guardrails;
   }
 
+  getTeamPreferences(): TeamPreference[] {
+    return this.teamPreferences;
+  }
+
   private readPreferences(): Record<string, any> {
     const prefsPath = path.join(this.basePath, "preferences.json");
     return this.loadJsonFile<Record<string, any>>(prefsPath, {});
@@ -876,5 +908,96 @@ export class FileStore implements IStore {
     // Sort by score desc, then recency (session.lastActivity is already in
     // listSessions order; we preserve insertion order via stable sort).
     return results.sort((a, b) => b.score - a.score).slice(0, limit);
+  }
+
+  /**
+   * N3.3: find the user's past predictions on similar past decisions.
+   * Source: resolved decisions with a non-empty `response.predictedOutcome`
+   * (captured by the companion UI on high-stakes decisions).
+   *
+   * Match is concept-token overlap between `query` and each past decision's
+   * artifact title + context + chosen option text. We don't use exact match
+   * because the phrasing of a decision evolves; we do cap at tokens ≥4 chars
+   * to keep the signal-to-noise reasonable.
+   */
+  static findPastPredictions(
+    projectRoot: string,
+    query: string,
+    opts: { excludeArtifactId?: string; limit?: number } = {},
+  ): Array<{
+    sessionId: string;
+    sessionTitle?: string;
+    artifactId: string;
+    artifactTitle: string;
+    context: string;
+    chosenOptionTitle: string;
+    predictedOutcome: string;
+    confidence?: "low" | "medium" | "high";
+    resolvedAt: string;
+    daysAgo: number;
+  }> {
+    const q = query.toLowerCase().trim();
+    if (!q) return [];
+    const tokens = q.split(/\s+/).filter((t) => t.length >= 4);
+    if (tokens.length === 0) return [];
+
+    const limit = opts.limit ?? 3;
+    const now = Date.now();
+
+    const out: ReturnType<typeof FileStore.findPastPredictions> = [];
+    const sessions = FileStore.listSessions(projectRoot);
+    for (const session of sessions) {
+      const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
+      const artFile = path.join(sessionDir, "artifacts.json");
+      const decFile = path.join(sessionDir, "decisions.json");
+      if (!fs.existsSync(artFile) || !fs.existsSync(decFile)) continue;
+
+      let artifacts: Artifact[];
+      let decisions: DecisionRecord[];
+      try {
+        artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+        decisions = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+      } catch {
+        continue;
+      }
+
+      for (const dec of decisions) {
+        if (!dec.response?.predictedOutcome) continue;
+        if (opts.excludeArtifactId && dec.artifactId === opts.excludeArtifactId) continue;
+        const artifact = artifacts.find((a) => a.id === dec.artifactId);
+        if (!artifact) continue;
+
+        const haystack = (
+          artifact.title + " " +
+          (dec.context ?? "") + " " +
+          ((dec.options ?? []).find((o: any) => o.id === dec.response!.optionId)?.title ?? "") + " " +
+          ((dec.options ?? []).find((o: any) => o.id === dec.response!.optionId)?.description ?? "")
+        ).toLowerCase();
+
+        const hits = tokens.filter((t) => haystack.includes(t));
+        // Require majority of tokens to match so we don't surface unrelated decisions.
+        if (hits.length < Math.ceil(tokens.length / 2)) continue;
+
+        const chosen = (dec.options ?? []).find((o: any) => o.id === dec.response!.optionId);
+        const resolvedAt = dec.resolvedAt ?? dec.createdAt;
+        const daysAgo = Math.max(0, Math.floor((now - new Date(resolvedAt).getTime()) / (24 * 60 * 60 * 1000)));
+
+        out.push({
+          sessionId: session.id,
+          sessionTitle: session.summary,
+          artifactId: dec.artifactId,
+          artifactTitle: artifact.title,
+          context: dec.context ?? "",
+          chosenOptionTitle: chosen?.title ?? dec.response!.optionId,
+          predictedOutcome: dec.response!.predictedOutcome,
+          confidence: (dec.response as any).confidence,
+          resolvedAt,
+          daysAgo,
+        });
+      }
+    }
+
+    // Newest first — the user likely remembers recent predictions better.
+    return out.sort((a, b) => b.resolvedAt.localeCompare(a.resolvedAt)).slice(0, limit);
   }
 }

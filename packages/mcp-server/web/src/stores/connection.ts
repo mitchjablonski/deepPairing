@@ -109,24 +109,97 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           break;
 
         case "preflight_blocked":
-          // The invisible moat made visible — toast so the user SEES
-          // that deepPairing just stopped the agent from re-proposing
-          // something they'd rejected.
+          // O2: the rejection-block hero toast. This is THE distinctive
+          // deepPairing moment — the UI treats it as such.
           import("./toast").then(({ useToastStore }) => {
             const match = data.match ?? {};
-            const via = match.via === "concept" ? " (concept match)" : "";
-            const title = `Memory blocked a repeat proposal${via}`;
-            const bodyParts: string[] = [];
-            if (match.proposal) bodyParts.push(`"${match.proposal}"`);
-            if (match.description && match.description !== match.proposal) {
-              bodyParts.push(`previously rejected as "${match.description}"`);
-            }
-            if (match.reason) bodyParts.push(`— ${match.reason}`);
+            const source: "session" | "team" = data.source === "team" ? "team" : "session";
+            const title = source === "team"
+              ? "Blocked by team policy"
+              : "Blocked by your taste";
             useToastStore.getState().push({
-              kind: "block",
+              kind: "preflight-block",
               title,
-              body: bodyParts.join(" "),
-              ttl: 8000,
+              // body not used for preflight-block; render from hero
+              hero: {
+                source,
+                concept: match.concept ?? match.description ?? "this approach",
+                proposal: match.proposal,
+                reason: match.reason,
+                via: match.via ?? "surface",
+                addedBy: match.addedBy,
+                rejectedAt: match.rejectedAt,
+                projectCount: match.projectCount,
+              },
+              ttl: 12000,
+              action: {
+                label: "Open Your taste",
+                onClick: () => window.dispatchEvent(new CustomEvent("dp:open-your-taste")),
+              },
+            });
+          });
+          break;
+
+        case "ledger_write":
+          // O7: taste compounds as the user works — surface each write so
+          // the Philosophy Ledger stops being "visible on demand" and
+          // becomes felt in the moment it grows.
+          import("./toast").then(({ useToastStore }) => {
+            const kind = data.kind === "approved" ? "approved" : "rejected";
+            const desc = String(data.description ?? "this approach");
+            const trimmed = desc.length > 60 ? desc.slice(0, 57) + "…" : desc;
+            const icon = kind === "approved" ? "+ prefer" : "+ avoid";
+            useToastStore.getState().push({
+              kind: "info",
+              title: `🧭 Added to Your taste: ${icon}`,
+              body: `"${trimmed}"`,
+              ttl: 5000,
+              action: {
+                label: "Open Your taste",
+                onClick: () => window.dispatchEvent(new CustomEvent("dp:open-your-taste")),
+              },
+            });
+          });
+          break;
+
+        case "question_answered":
+          // O7: link the user back to their question so a flurry of comment
+          // threads doesn't bury the one reply they were waiting on.
+          import("./toast").then(({ useToastStore }) => {
+            const excerpt = String(data.answerExcerpt ?? "").trim();
+            const body = excerpt ? `"${excerpt}${excerpt.length >= 120 ? "…" : ""}"` : undefined;
+            const artifactId = data.artifactId;
+            useToastStore.getState().push({
+              kind: "success",
+              title: "❓→✓ Your question was answered",
+              body,
+              ttl: 6000,
+              action: artifactId
+                ? {
+                    label: "Jump to answer",
+                    onClick: () =>
+                      window.dispatchEvent(
+                        new CustomEvent("dp:focus-artifact", { detail: { artifactId } }),
+                      ),
+                  }
+                : undefined,
+            });
+          });
+          break;
+
+        case "decision_resolved_hero":
+          // O7: captured prediction doesn't disappear into the decision
+          // record — it's a calibration moment worth pinning for a few
+          // seconds.
+          import("./toast").then(({ useToastStore }) => {
+            const chosen = String(data.chosenTitle ?? "");
+            const predicted = String(data.predictedOutcome ?? "").trim();
+            const confidence = data.confidence ? ` (${data.confidence} confidence)` : "";
+            useToastStore.getState().push({
+              kind: "success",
+              title: `✅ Chose ${chosen}`,
+              body: predicted ? `Prediction captured: "${predicted}"${confidence}` : undefined,
+              ttl: 7000,
             });
           });
           break;

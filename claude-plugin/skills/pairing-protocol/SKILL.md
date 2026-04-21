@@ -1,6 +1,6 @@
 ---
 name: pairing-protocol
-description: Use deepPairing's MCP tools (present_findings, present_options, present_spec, present_plan, log_reasoning, etc.) instead of plain text when researching, deciding, planning, or executing on this project. Turns Claude Code from a black box into a pairing partner.
+description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, present_code_change, log_reasoning, recall, revise_artifact, request_horizon_check, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
 ---
 
 # deepPairing Collaboration Protocol
@@ -39,23 +39,29 @@ On your first tool call, the response includes:
   concept** in the `concept` field (e.g. "dependency inversion",
   "optimistic UI"). This is the pairing-learning lever — surface the
   pattern so the human learns it, not just the fix.
-- **`supersede_artifact`** — when the human requests revision. Creates a v2
-  artifact linked via parentId; the old one flips to "superseded".
-- **`retract_artifact`** — when you realize mid-flight you shouldn't have
-  presented something. Graceful mid-flight exit without breaking the
-  polling loop.
+- **`revise_artifact`** — one tool for both flavors of taking something back:
+  - `mode: "supersede"` + new `content` → creates a v(N+1) draft linked via
+    parentId; the old one flips to "superseded". Use when the human
+    requests a revision.
+  - `mode: "retract"` → marks the artifact retracted with your reason. Use
+    when you realize mid-flight you shouldn't have presented something.
+    Graceful exit without breaking the polling loop.
 - **`request_horizon_check`** — sparingly, on architecturally significant
   artifacts. Captures the human's prediction about what will fail in 3mo /
   1y / 2y.
-- **`recall_philosophy`** — before proposing, when a concept comes up that
-  isn't already surfaced in session memory. Pulls the user's cross-project
-  stance.
-- **`search_sessions`** — when the user references prior work ("did we
-  look at this before?").
-- **`post_pr_review`** — when the user says "post these findings on PR N"
-  or similar. Builds the GitHub review API payload from approved findings
+- **`recall`** — unified memory lookup across two layers:
+  - `mode: "philosophy"` — the user's cross-project stances on concepts
+    (avoid / prefer / mixed). Use before proposing when a concept comes up
+    that isn't already in session memory.
+  - `mode: "sessions"` — past artifacts in THIS project. Use when the user
+    references prior work ("did we look at this before?").
+  - `mode: "any"` — union of both. Default when you're not sure.
+- **`post_pr_review`** — when the user says "post what we found on PR N"
+  or "ship this on the PR" after a pairing session. The PR is a *surface
+  to share what you paired on*, not a code-review pass run from the
+  outside. Builds the GitHub API payload from the pair-approved findings
   and POSTs via the `gh` CLI. Requires gh installed + authenticated. Use
-  `event: "REQUEST_CHANGES"` when findings are severe (high / critical);
+  `event: "REQUEST_CHANGES"` only if a surviving finding is high/critical;
   default `COMMENT`.
 - **`answer_question`** — when `check_feedback` surfaces a ❓QUESTION, use
   this tool (not a plain comment) so the reply gets linked to the original
@@ -64,31 +70,35 @@ On your first tool call, the response includes:
   waits up to 30s. If it returns WAITING, call again immediately. Human
   responds in the companion UI, NOT the terminal.
 
-## Reviewing a PR (a common workflow)
+## Pairing on a PR (a common workflow)
 
-When the user says "review this PR", "audit this branch", or similar,
-don't just dump a list of issues. Run this pattern:
+When the user says "let's look at this PR", "review this PR", "walk me
+through this branch", or similar — treat the PR as a *pairing surface*,
+not a review target. The output is what the two of you noticed together,
+posted as inline comments. deepPairing is **not** a CodeRabbit/Greptile
+style automated reviewer; the human is in the loop on every finding.
 
-1. **Fetch context.** Use `gh pr diff <N>` (or read the changed files
-   directly) to see what changed.
-2. **`present_findings`** — one call with ALL issues you found, each with
-   structured `Evidence` (filePath + lineStart + lineEnd + snippet +
+Run this pattern:
+
+1. **Fetch context.** `gh pr diff <N>` (or read the changed files
+   directly) so you can pair on what actually changed.
+2. **`present_findings`** — one call with everything that surfaced, each
+   with structured `Evidence` (filePath + lineStart + lineEnd + snippet +
    explanation) and a `severity` (info / low / medium / high / critical).
    Group by file when there are many. NEVER list findings as plain chat
-   text — the UI's inline-triage affordance only works with structured
-   artifacts.
-3. **Poll `check_feedback` in a loop** while the user triages findings
-   in the companion UI. They can approve/revise/reject each one with
-   per-finding chips (✓ / ↻ / ✗). Rejected findings get a reason that
-   flows into session memory so you don't re-propose them.
-4. **When the user says to post it** (or equivalently: "we're done",
-   "ship this review") — call `post_pr_review` with the PR number.
-   Only the findings approved (or not explicitly rejected) will post.
-   Use `event: "REQUEST_CHANGES"` if there are critical / high severity
-   findings; `COMMENT` otherwise.
+   text — the inline-triage affordance only works on structured artifacts.
+3. **Poll `check_feedback` in a loop** while the human triages each
+   finding in the companion UI (✓ / ↻ / ✗). Rejected findings get a
+   reason that flows into session memory so you don't re-propose them.
+   The pair decides together what's load-bearing — your job is not to
+   "be right," it's to surface what's worth talking about.
+4. **When the human says to post it** ("ship it", "post what we found",
+   "we're done here") — call `post_pr_review` with the PR number. Only
+   the surviving findings post. Use `event: "REQUEST_CHANGES"` only when
+   a surviving finding is critical/high; `COMMENT` otherwise.
 
-The user never has to know the tool names. Just the outcome:
-*review → post when approved*.
+The human never needs to know the tool names. The outcome is:
+*pair on the PR → post what you both landed on*.
 
 ## Polling, not blocking
 
@@ -125,5 +135,5 @@ to supervised for changes touching these paths.
 - Dump findings, options, or plans as plain-text bullet lists.
 - Propose anything matching a rejected approach.
 - Stop polling and ask the human in the terminal.
-- Bail to terminal to apologize mid-flight — use `retract_artifact`.
+- Bail to terminal to apologize mid-flight — use `revise_artifact` with `mode: "retract"`.
 - Call `request_horizon_check` on every artifact.
