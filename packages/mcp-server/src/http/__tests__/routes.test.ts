@@ -440,6 +440,144 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("GET /api/team-preferences (P3)", () => {
+    it("returns { exists: false, preferences: [] } when team.json is absent", async () => {
+      const res = await app.request("/api/team-preferences");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({ preferences: [], exists: false });
+    });
+
+    it("returns the parsed preferences when team.json exists", async () => {
+      // FileStore reads team.json at construction time, so rebuild the store
+      // + app pair after the file lands on disk.
+      fs.mkdirSync(path.join(tmpDir, ".deeppairing"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, ".deeppairing", "team.json"),
+        JSON.stringify({
+          version: 1,
+          preferences: [
+            { id: "p1", kind: "avoid", concept: "global state", rationale: "testability" },
+          ],
+        }),
+      );
+      store.forceFlush();
+      const freshStore = new FileStore(tmpDir, "refresh");
+      const freshApp = createHttpRoutes(freshStore, tmpDir);
+      const res = await freshApp.request("/api/team-preferences");
+      const body = await res.json();
+      expect(body.exists).toBe(true);
+      expect(body.preferences).toHaveLength(1);
+      expect(body.preferences[0].kind).toBe("avoid");
+      freshStore.forceFlush();
+    });
+  });
+
+  describe("POST /api/retrospectives (P2)", () => {
+    function seedPastDecision(sessionId: string, decisionId: string, artifactId = "art_x"): void {
+      const sessDir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+      fs.mkdirSync(sessDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sessDir, "artifacts.json"),
+        JSON.stringify([{
+          id: artifactId, sessionId, type: "decision", version: 1, parentId: null,
+          title: "Pick hashing algorithm", status: "approved",
+          content: { context: "x", options: [] }, agentReasoning: null,
+          createdAt: "2026-01-15", updatedAt: "2026-01-15",
+        }]),
+      );
+      fs.writeFileSync(
+        path.join(sessDir, "decisions.json"),
+        JSON.stringify([{
+          decisionId,
+          artifactId,
+          context: "Pick hashing algorithm",
+          options: [{ id: "a", title: "argon2id", description: "", pros: [], cons: [], effort: "low", risk: "low", recommendation: true }],
+          response: { optionId: "a", predictedOutcome: "zero-downtime migration", confidence: "medium" },
+          createdAt: "2026-01-15",
+          resolvedAt: "2026-01-15",
+        }]),
+      );
+    }
+
+    it("400s when decisionId or verdict are missing / invalid", async () => {
+      const res = await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionId: "x" }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("404s when no session owns the decisionId", async () => {
+      const res = await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionId: "does-not-exist", verdict: "right" }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("creates a retrospective on the owning session and returns it", async () => {
+      seedPastDecision("past_sess", "dec_past");
+      const res = await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          decisionId: "dec_past",
+          verdict: "right",
+          note: "migration went clean",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.retrospective.decisionId).toBe("dec_past");
+      expect(body.retrospective.verdict).toBe("right");
+      expect(body.retrospective.note).toBe("migration went clean");
+      expect(body.sessionId).toBe("past_sess");
+
+      // File landed in the owning session's retrospectives.json
+      const retrosPath = path.join(tmpDir, ".deeppairing", "sessions", "past_sess", "retrospectives.json");
+      const onDisk = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+      expect(onDisk).toHaveLength(1);
+      expect(onDisk[0].verdict).toBe("right");
+    });
+
+    it("replaces an existing retrospective for the same decision (verdicts can change)", async () => {
+      seedPastDecision("past_sess", "dec_past");
+      await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionId: "dec_past", verdict: "right" }),
+      });
+      const res2 = await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionId: "dec_past", verdict: "wrong", note: "more evidence came in" }),
+      });
+      expect(res2.status).toBe(200);
+      const retrosPath = path.join(tmpDir, ".deeppairing", "sessions", "past_sess", "retrospectives.json");
+      const onDisk = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+      expect(onDisk).toHaveLength(1);
+      expect(onDisk[0].verdict).toBe("wrong");
+      expect(onDisk[0].note).toBe("more evidence came in");
+    });
+
+    it("GET /api/predictions surfaces the retrospective inline", async () => {
+      seedPastDecision("past_sess", "dec_past");
+      await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionId: "dec_past", verdict: "mixed" }),
+      });
+      const res = await app.request("/api/predictions?concept=hashing%20algorithm");
+      const body = await res.json();
+      expect(body.predictions).toHaveLength(1);
+      expect(body.predictions[0].decisionId).toBe("dec_past");
+      expect(body.predictions[0].retrospective?.verdict).toBe("mixed");
+    });
+  });
+
   describe("CORS", () => {
     it("allows localhost origins", async () => {
       const res = await app.request("/api/state", {

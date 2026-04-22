@@ -96,6 +96,15 @@ export {
 } from "./schemas/annotation.js";
 
 export {
+  RetrospectiveVerdictSchema,
+  RetrospectiveSchema,
+  CreateRetrospectiveRequestSchema,
+  type RetrospectiveVerdict,
+  type Retrospective,
+  type CreateRetrospectiveRequest,
+} from "./schemas/retrospective.js";
+
+export {
   TeamPreferenceKindSchema,
   TeamPreferenceScopeSchema,
   TeamPreferenceSchema,

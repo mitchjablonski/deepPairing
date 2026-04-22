@@ -133,4 +133,97 @@ describe("GlobalStore — resilience", () => {
     const store = new GlobalStore(ledgerPath);
     expect(store.query({})).toEqual([]);
   });
+
+  describe("export / import (P5)", () => {
+    it("exportLedger returns the current LedgerFile shape", () => {
+      const store = new GlobalStore(ledgerPath);
+      store.recordInstance("concept-a", { project: "p1", sessionId: "s1", verdict: "rejected", reason: "r" });
+      const dump = store.exportLedger();
+      expect(dump.version).toBe(1);
+      expect(Object.keys(dump.concepts)).toContain("concept-a");
+    });
+
+    it("importLedger merges new concepts into the current ledger", () => {
+      const a = new GlobalStore(ledgerPath);
+      a.recordInstance("first-concept", { project: "p1", sessionId: "s1", verdict: "rejected", reason: "a" });
+
+      const incoming = {
+        version: 1,
+        concepts: {
+          "second-concept": {
+            key: "second-concept",
+            concept: "second-concept",
+            instances: [{
+              project: "p2", sessionId: "s2", verdict: "approved",
+              at: "2026-01-01T00:00:00.000Z",
+            }],
+            firstSeenAt: "2026-01-01T00:00:00.000Z",
+            lastSeenAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      };
+      const summary = a.importLedger(incoming);
+      expect(summary.conceptsAdded).toBe(1);
+      expect(summary.instancesAdded).toBe(1);
+      expect(a.size()).toBe(2);
+    });
+
+    it("importLedger dedups instances — re-importing the same file is idempotent", () => {
+      const store = new GlobalStore(ledgerPath);
+      store.recordInstance("dup-concept", {
+        project: "p1", sessionId: "s1", verdict: "rejected", at: "2026-01-01T00:00:00.000Z",
+      });
+      const exported = store.exportLedger();
+
+      const first = store.importLedger(exported);
+      expect(first.instancesAdded).toBe(0);
+      expect(first.conceptsAdded).toBe(0);
+
+      const second = store.importLedger(exported);
+      expect(second.instancesAdded).toBe(0);
+
+      // Size unchanged, no duplicate instances.
+      const entry = store.get("dup-concept")!;
+      expect(entry.instances).toHaveLength(1);
+    });
+
+    it("importLedger adds only-new instances for a concept that exists in both", () => {
+      const store = new GlobalStore(ledgerPath);
+      store.recordInstance("shared", {
+        project: "p1", sessionId: "s1", verdict: "rejected", at: "2026-01-01T00:00:00.000Z",
+      });
+      const incoming = {
+        version: 1,
+        concepts: {
+          shared: {
+            key: "shared",
+            concept: "shared",
+            instances: [
+              // Duplicate of existing
+              { project: "p1", sessionId: "s1", verdict: "rejected", at: "2026-01-01T00:00:00.000Z" },
+              // New instance from another machine
+              { project: "p2", sessionId: "s99", verdict: "rejected", at: "2026-03-01T00:00:00.000Z", reason: "remote" },
+            ],
+            firstSeenAt: "2026-01-01T00:00:00.000Z",
+            lastSeenAt: "2026-03-01T00:00:00.000Z",
+          },
+        },
+      };
+      const summary = store.importLedger(incoming);
+      expect(summary.instancesAdded).toBe(1);
+      expect(summary.conceptsMerged).toBe(1);
+
+      const entry = store.get("shared")!;
+      expect(entry.instances).toHaveLength(2);
+      expect(entry.instances.some((i) => i.reason === "remote")).toBe(true);
+    });
+
+    it("importLedger rejects malformed input", () => {
+      const store = new GlobalStore(ledgerPath);
+      expect(() => store.importLedger({ concepts: "nope" })).toThrow();
+      expect(() => store.importLedger({ version: 99, concepts: {} })).toThrow();
+      expect(() => store.importLedger(null)).toThrow();
+      expect(() => store.importLedger({ version: 1, concepts: { x: { instances: "nope" } } })).toThrow();
+    });
+  });
 });

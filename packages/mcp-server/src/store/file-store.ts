@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference, Retrospective, RetrospectiveVerdict } from "@deeppairing/shared";
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
@@ -78,11 +78,24 @@ function senseProjectGuardrails(projectRoot: string): ProjectGuardrail[] {
  * mode (missing, unreadable, malformed) — team prefs are advisory; we never
  * crash a session over a broken file. The caller can log if it cares.
  */
+/**
+ * Strip JSONC-style `//` line comments so team.json can ship with a header
+ * explaining what the kinds mean. Naive but good enough: strips a leading
+ * `//...` only when the comment starts at the beginning of the line
+ * (after whitespace) — avoids clobbering `//` inside strings like URLs.
+ */
+function stripJsoncComments(src: string): string {
+  return src
+    .split("\n")
+    .map((line) => (/^\s*\/\//.test(line) ? "" : line))
+    .join("\n");
+}
+
 function loadTeamPreferences(basePath: string): TeamPreference[] {
   const filePath = path.join(basePath, "team.json");
   try {
     if (!fs.existsSync(filePath)) return [];
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    const raw = JSON.parse(stripJsoncComments(fs.readFileSync(filePath, "utf-8")));
     const parsed = parseTeamPreferencesFile(raw);
     if (!parsed) {
       console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
@@ -930,11 +943,13 @@ export class FileStore implements IStore {
     artifactId: string;
     artifactTitle: string;
     context: string;
+    decisionId: string;
     chosenOptionTitle: string;
     predictedOutcome: string;
     confidence?: "low" | "medium" | "high";
     resolvedAt: string;
     daysAgo: number;
+    retrospective?: Retrospective;
   }> {
     const q = query.toLowerCase().trim();
     if (!q) return [];
@@ -982,22 +997,85 @@ export class FileStore implements IStore {
         const resolvedAt = dec.resolvedAt ?? dec.createdAt;
         const daysAgo = Math.max(0, Math.floor((now - new Date(resolvedAt).getTime()) / (24 * 60 * 60 * 1000)));
 
+        // Hydrate any existing retrospective for this decision so the
+        // breadcrumb can render the verdict alongside the prediction.
+        const retrosPath = path.join(sessionDir, "retrospectives.json");
+        let retrospective: Retrospective | undefined;
+        try {
+          if (fs.existsSync(retrosPath)) {
+            const retros: Retrospective[] = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+            retrospective = retros.find((r) => r.decisionId === dec.decisionId);
+          }
+        } catch {}
+
         out.push({
           sessionId: session.id,
           sessionTitle: session.summary,
           artifactId: dec.artifactId,
           artifactTitle: artifact.title,
           context: dec.context ?? "",
+          decisionId: dec.decisionId,
           chosenOptionTitle: chosen?.title ?? dec.response!.optionId,
           predictedOutcome: dec.response!.predictedOutcome,
           confidence: (dec.response as any).confidence,
           resolvedAt,
           daysAgo,
+          retrospective,
         });
       }
     }
 
     // Newest first — the user likely remembers recent predictions better.
     return out.sort((a, b) => b.resolvedAt.localeCompare(a.resolvedAt)).slice(0, limit);
+  }
+
+  /**
+   * P2 — write a retrospective for a decision that was made in some past
+   * session. Walks sessions to find the one owning the decisionId; replaces
+   * any existing retrospective for that decision (users can change their
+   * minds as more evidence comes in).
+   *
+   * Returns the hydrated retrospective on success, or null if no session
+   * owns the decisionId (caller should 404).
+   */
+  static addRetrospective(
+    projectRoot: string,
+    params: { decisionId: string; verdict: RetrospectiveVerdict; note?: string },
+  ): { retrospective: Retrospective; sessionId: string } | null {
+    const sessions = FileStore.listSessions(projectRoot);
+    for (const session of sessions) {
+      const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
+      const decFile = path.join(sessionDir, "decisions.json");
+      if (!fs.existsSync(decFile)) continue;
+      let decisions: DecisionRecord[];
+      try {
+        decisions = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+      } catch {
+        continue;
+      }
+      if (!decisions.some((d) => d.decisionId === params.decisionId)) continue;
+
+      const retrospective: Retrospective = {
+        id: `retro_${nanoid(10)}`,
+        decisionId: params.decisionId,
+        verdict: params.verdict,
+        note: params.note?.trim() || undefined,
+        createdAt: new Date().toISOString(),
+      };
+
+      const retrosPath = path.join(sessionDir, "retrospectives.json");
+      let existing: Retrospective[] = [];
+      try {
+        if (fs.existsSync(retrosPath)) {
+          existing = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+        }
+      } catch {}
+      const filtered = existing.filter((r) => r.decisionId !== params.decisionId);
+      filtered.push(retrospective);
+      fs.writeFileSync(retrosPath, JSON.stringify(filtered, null, 2));
+
+      return { retrospective, sessionId: session.id };
+    }
+    return null;
   }
 }

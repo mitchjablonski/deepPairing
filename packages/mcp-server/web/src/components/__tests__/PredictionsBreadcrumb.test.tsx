@@ -34,6 +34,7 @@ describe("PredictionsBreadcrumb", () => {
         artifactId: "art_1",
         artifactTitle: "Pick hashing algorithm",
         context: "choose password hashing",
+        decisionId: "dec_1",
         chosenOptionTitle: "argon2id",
         predictedOutcome: "zero-downtime migration",
         confidence: "medium",
@@ -88,5 +89,80 @@ describe("PredictionsBreadcrumb", () => {
     const { container } = render(<PredictionsBreadcrumb concept="password hashing" />);
     await new Promise((r) => setTimeout(r, 20));
     expect(container.firstChild).toBeNull();
+  });
+
+  describe("retrospective affordance (P2)", () => {
+    const predictionFixture = {
+      sessionId: "s1",
+      artifactId: "art_1",
+      artifactTitle: "Pick hashing algorithm",
+      context: "choose password hashing",
+      decisionId: "dec_1",
+      chosenOptionTitle: "argon2id",
+      predictedOutcome: "zero-downtime migration",
+      confidence: "medium",
+      resolvedAt: "2026-01-15T10:00:00Z",
+      daysAgo: 94,
+    };
+
+    it("renders ✓ / ◐ / ✗ buttons when no retrospective exists yet", async () => {
+      vi.stubGlobal("fetch", mockPredictionsFetch([predictionFixture]));
+      render(<PredictionsBreadcrumb concept="password hashing" />);
+      const userEvent = (await import("@testing-library/user-event")).default;
+      await userEvent.click(await screen.findByRole("button", { name: /show 1 prior prediction/i }));
+
+      expect(screen.getByText(/looking back, was this prediction right/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /mark prediction as right/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /mark prediction as mixed/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /mark prediction as wrong/i })).toBeInTheDocument();
+    });
+
+    it("POSTs to /api/retrospectives with verdict and optimistically shows the result", async () => {
+      const fetchMock = vi.fn((url: string) => {
+        if (url.includes("/api/retrospectives")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ retrospective: { id: "r1", decisionId: "dec_1", verdict: "right", createdAt: "2026-04-20" } }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ predictions: [predictionFixture] }) });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<PredictionsBreadcrumb concept="password hashing" />);
+      const userEvent = (await import("@testing-library/user-event")).default;
+      await userEvent.click(await screen.findByRole("button", { name: /show 1 prior prediction/i }));
+      await userEvent.click(screen.getByRole("button", { name: /mark prediction as right/i }));
+
+      // POST was made with the expected payload
+      const postCall = fetchMock.mock.calls.find((c: any[]) => String(c[0]).includes("/api/retrospectives"));
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall![1].body);
+      expect(body).toEqual({ decisionId: "dec_1", verdict: "right" });
+
+      // Optimistic verdict label appears immediately
+      await waitFor(() => expect(screen.getByText(/prediction held up/i)).toBeInTheDocument());
+    });
+
+    it("renders the verdict + note inline when a retrospective already exists", async () => {
+      vi.stubGlobal("fetch", mockPredictionsFetch([{
+        ...predictionFixture,
+        retrospective: {
+          id: "retro_1",
+          decisionId: "dec_1",
+          verdict: "wrong",
+          note: "locked us into an incompatible salt format",
+          createdAt: "2026-04-01T10:00:00Z",
+        },
+      }]));
+      render(<PredictionsBreadcrumb concept="password hashing" />);
+      const userEvent = (await import("@testing-library/user-event")).default;
+      await userEvent.click(await screen.findByRole("button", { name: /show 1 prior prediction/i }));
+
+      expect(screen.getByText(/prediction was wrong/i)).toBeInTheDocument();
+      expect(screen.getByText(/incompatible salt format/i)).toBeInTheDocument();
+      // No action buttons — the verdict is already captured.
+      expect(screen.queryByRole("button", { name: /mark prediction as/i })).not.toBeInTheDocument();
+    });
   });
 });

@@ -298,6 +298,50 @@ export function createHttpRoutes(
     return c.json({ predictions });
   });
 
+  // P3: project-scoped team preferences for the companion UI. Reads
+  // .deeppairing/team.json via any active session's FileStore (all
+  // sessions in a project share the same team.json). Returns both the
+  // preferences and an `exists` flag so the UI can nudge `team init`
+  // when no file has been created yet.
+  app.get("/api/team-preferences", (c) => {
+    const store = getStore(getSessionId(c));
+    const preferences = typeof (store as any).getTeamPreferences === "function"
+      ? (store as any).getTeamPreferences()
+      : [];
+    // "exists" proxy: the file existed at FileStore-construction time if
+    // any preference landed; otherwise we need another signal. Simplest
+    // truth: a non-empty array implies the file exists. An empty array is
+    // ambiguous — treat as "not yet configured" (the UI treats both empty
+    // and missing the same way: nudge toward `team init`).
+    return c.json({ preferences, exists: preferences.length > 0 });
+  });
+
+  // P2: capture a retrospective on a past decision's prediction — the
+  // calibration loop closure. Walks sessions to find the owning session
+  // and writes into its retrospectives.json, replacing any prior entry
+  // for the same decisionId (verdict can change as evidence accumulates).
+  app.post("/api/retrospectives", async (c) => {
+    if (!projectRoot) return c.json({ error: "projectRoot not configured" }, 400);
+    const body = await c.req.json().catch(() => null);
+    const decisionId = String(body?.decisionId ?? "").trim();
+    const verdict = body?.verdict;
+    const note = typeof body?.note === "string" ? body.note.slice(0, 2000) : undefined;
+    if (!decisionId || !["right", "wrong", "mixed"].includes(verdict)) {
+      return c.json({ error: "decisionId and verdict ('right' | 'wrong' | 'mixed') are required" }, 400);
+    }
+    const result = FileStore.addRetrospective(projectRoot, { decisionId, verdict, note });
+    if (!result) {
+      return c.json({ error: `no decision found with id "${decisionId}"` }, 404);
+    }
+    broadcast({
+      type: "retrospective_recorded",
+      decisionId,
+      verdict,
+      retrospectiveId: result.retrospective.id,
+    }, result.sessionId);
+    return c.json({ retrospective: result.retrospective, sessionId: result.sessionId });
+  });
+
   // Export session as markdown
   app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
