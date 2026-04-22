@@ -37,7 +37,7 @@ const badgeColors = {
 };
 
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
-  const { resolveDecision } = useArtifactStore();
+  const { resolveDecision, submitComment } = useArtifactStore();
   const [focusedIndex, setFocusedIndex] = useState(
     event.options.findIndex((o) => o.recommendation) ?? 0,
   );
@@ -47,6 +47,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const [resolved, setResolved] = useState(!!initialResolved);
   const [selectedId, setSelectedId] = useState<string | null>(initialResolved?.optionId ?? null);
   const [showRepair, setShowRepair] = useState(false);
+  /** Q3: horizon-check request state — one request per artifact view. */
+  const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
   /** Prediction capture state — only shown when stakes="high" and an option is tentatively picked. */
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
@@ -120,6 +122,22 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     return () => el.removeEventListener("keydown", handler);
   }, [focusedIndex, resolved, showReasoning, event.options]);
 
+  // Q3: file a comment that nudges the agent to call request_horizon_check.
+  // The comment carries intent:"question" and sectionId="horizon_check:request"
+  // so check_feedback surfaces it prominently; SKILL.md tells the agent how
+  // to respond. Tracks local state to prevent double-firing from a trigger-
+  // happy click.
+  const requestHorizonCheck = async (horizon: "3mo" | "1y" | "2y") => {
+    if (!artifactId || horizonRequested) return;
+    setHorizonRequested(horizon);
+    await submitComment(
+      artifactId,
+      `Please call request_horizon_check on this decision with horizon "${horizon}".`,
+      { sectionId: `horizon_check:request:${horizon}` } as any,
+      { intent: "question" },
+    );
+  };
+
   // Resolved state
   if (resolved) {
     const chosen = event.options.find((o) => o.id === selectedId);
@@ -174,6 +192,40 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               <span className="text-xs text-text-muted">
                 Rejected: {rejected.map((o) => o.title).join(", ")}
               </span>
+            </div>
+          )}
+
+          {/* Q3: horizon-check trigger — only on high-stakes decisions.
+              Fires a question-intent comment telling the agent to call
+              request_horizon_check. The tool is most useful for schema,
+              auth, caching, pipeline, and queue semantics — exactly what
+              `stakes: "high"` flags. */}
+          {stakes === "high" && artifactId && (
+            <div className="mt-2 pt-2 border-t border-accent-green/15">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-2xs text-text-muted italic shrink-0">
+                  Ask for a horizon prediction:
+                </span>
+                {horizonRequested ? (
+                  <span className="text-2xs text-accent-violet font-medium">
+                    ✓ Asked ({horizonRequested}) — the agent will respond via a comment.
+                  </span>
+                ) : (
+                  <>
+                    {(["3mo", "1y", "2y"] as const).map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => requestHorizonCheck(h)}
+                        className="px-2 py-0.5 rounded border border-accent-violet/40 text-2xs text-accent-violet hover:bg-accent-violet-dim/30 transition-colors"
+                        aria-label={`Request horizon check at ${h}`}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
             </div>
           )}
         </motion.div>

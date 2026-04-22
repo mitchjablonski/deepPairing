@@ -807,6 +807,25 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // Ledger read failure is non-fatal — we still have session-scoped memory.
       }
 
+      // Q4: surface unanswered questions from the human at first-call so the
+      // agent knows to reach for answer_question. Catches the case where a
+      // previous agent session left questions dangling — the new session's
+      // first call learns about them immediately, not after several
+      // check_feedback polls.
+      try {
+        const fullState = await store.getFullState();
+        const unanswered = (fullState.comments ?? []).filter(
+          (c: any) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId,
+        );
+        if (unanswered.length > 0) {
+          hintParts.push(
+            `\n❓ ${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
+          );
+        }
+      } catch {
+        // Non-fatal — agent will catch them on the next check_feedback anyway
+      }
+
       // N2.2: if the user installed via the plugin (which doesn't touch
       // CLAUDE.md), surface a one-line tip pointing at `npx deeppairing init`.
       // CLAUDE.md mutation is intentionally opt-in — the daemon won't do it

@@ -1,6 +1,11 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { WaitingForClaude } from "../WaitingForClaude";
+
+beforeEach(() => {
+  try { localStorage.clear(); } catch {}
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -40,5 +45,33 @@ describe("WaitingForClaude", () => {
     expect(screen.queryByText(/PID/i)).not.toBeInTheDocument();
     // Primary content still renders
     expect(screen.getByRole("status", { name: /waiting for claude/i })).toBeInTheDocument();
+  });
+
+  describe("learn-more walkthrough (Q2)", () => {
+    it("hides the walkthrough cards by default", () => {
+      vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+      render(<WaitingForClaude />);
+      expect(screen.getByRole("button", { name: /what is deepPairing/i })).toBeInTheDocument();
+      expect(screen.queryByText(/watch it think/i)).not.toBeInTheDocument();
+    });
+
+    it("reveals the 3-card walkthrough when expanded", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+      render(<WaitingForClaude />);
+      await userEvent.click(screen.getByRole("button", { name: /what is deepPairing/i }));
+      expect(screen.getByText(/watch it think/i)).toBeInTheDocument();
+      expect(screen.getByText(/ask why, anywhere/i)).toBeInTheDocument();
+      expect(screen.getByText(/memory that works for you/i)).toBeInTheDocument();
+    });
+
+    it("persists the expanded state across remounts via localStorage", async () => {
+      vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+      const first = render(<WaitingForClaude />);
+      await userEvent.click(screen.getByRole("button", { name: /what is deepPairing/i }));
+      first.unmount();
+      render(<WaitingForClaude />);
+      // Second mount remembers the open state — cards render immediately.
+      expect(screen.getByText(/watch it think/i)).toBeInTheDocument();
+    });
   });
 });
