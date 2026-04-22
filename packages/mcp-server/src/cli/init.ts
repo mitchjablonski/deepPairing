@@ -102,7 +102,7 @@ function getMcpServerConfig(): { command: string; args: string[] } {
   return { command: "npx", args: ["@deeppairing/mcp-server"] };
 }
 
-function main() {
+async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: true }) {
   console.log(bold("\n  deepPairing init\n"));
 
   // 1. Create .mcp.json
@@ -222,6 +222,23 @@ function main() {
   ${dim("Claude will present findings, decisions, and plans. You review")}
   ${dim("and steer in the companion UI. Try: \"Analyze the auth module.\"")}
 `);
+
+  // Q1: offer to launch the scripted demo so the user SEES the hook fire in
+  // under a minute. The rejection-block moment is deepPairing's single most
+  // distinctive mechanic; make it the first thing a new user experiences
+  // rather than hoping they read the help and find `demo` themselves.
+  if (opts.offerDemo === false) return;
+  if (!opts.yes && !process.stdin.isTTY) return; // scripted setup — skip silently
+  const shouldRun =
+    opts.yes ||
+    (await confirmPrompt(`  Want to see deepPairing's concept-aware rejection-block fire right now? [Y/n] `, /* default */ true));
+  if (!shouldRun) {
+    console.log(`  ${dim("Skipped. Run")} ${bold("npx deeppairing demo")} ${dim("any time.")}`);
+    console.log();
+    return;
+  }
+  console.log();
+  await demoCmd();
 }
 
 /**
@@ -435,13 +452,17 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   console.log();
 }
 
-/** Tiny y/N prompt. Resolves to true on "y" / "yes" (case-insensitive). */
-function confirmPrompt(question: string): Promise<boolean> {
+/** Tiny y/N prompt. Resolves to true on "y" / "yes" (case-insensitive).
+ *  When `defaultYes` is true, bare Enter (empty answer) counts as yes — use
+ *  for "[Y/n]" prompts where the expected path is to proceed. */
+function confirmPrompt(question: string, defaultYes = false): Promise<boolean> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
       rl.close();
-      resolve(/^y(es)?$/i.test(answer.trim()));
+      const trimmed = answer.trim();
+      if (trimmed === "" && defaultYes) return resolve(true);
+      resolve(/^y(es)?$/i.test(trimmed));
     });
   });
 }
@@ -763,14 +784,15 @@ const cmd = args[0];
 if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   // With no arguments, default to init (most common use case from npx)
   if (!cmd) {
-    main();
+    main().catch((err) => { console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`); process.exit(1); });
   } else {
     console.log(`
   ${bold("deepPairing")} — Human-AI collaborative development
 
   ${bold("Usage:")}
-    npx deeppairing                        Set up deepPairing in current project
-    npx deeppairing init                   Set up deepPairing in current project
+    npx deeppairing                        Set up deepPairing in current project (interactive; offers demo)
+    npx deeppairing init [--no-demo] [-y]  Set up deepPairing in current project
+                                           --no-demo skips the "see it fire" prompt; -y auto-accepts
     npx deeppairing demo                   Watch the rejection-block fire in the companion UI (no Claude Code needed)
     npx deeppairing team init [--force]    Scaffold .deeppairing/team.json with example team conventions
     npx deeppairing philosophy export      Print your cross-project Philosophy Ledger as JSON to stdout
@@ -788,7 +810,12 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 } else if (cmd === "--version" || cmd === "-v") {
   console.log("0.1.0");
 } else if (cmd === "init") {
-  main();
+  const offerDemo = !args.includes("--no-demo");
+  const yes = args.includes("--yes") || args.includes("-y");
+  main({ offerDemo, yes }).catch((err) => {
+    console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
 } else if (cmd === "doctor") {
   const fix = args.includes("--fix");
   const yes = args.includes("--yes") || args.includes("-y");

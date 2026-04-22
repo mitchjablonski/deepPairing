@@ -148,6 +148,73 @@ describe("DecisionCard — resolved state (initialResolved)", () => {
   });
 });
 
+describe("DecisionCard — horizon check trigger (Q3)", () => {
+  it("does NOT render the horizon-check buttons on non-high-stakes decisions", () => {
+    render(
+      <DecisionCard
+        event={event}
+        artifactId="art_1"
+        initialResolved={{ optionId: "o1" }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /request horizon check/i })).not.toBeInTheDocument();
+  });
+
+  it("renders 3mo / 1y / 2y buttons on high-stakes decisions", () => {
+    render(
+      <DecisionCard
+        event={event}
+        artifactId="art_1"
+        stakes="high"
+        initialResolved={{ optionId: "o1" }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /request horizon check at 3mo/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /request horizon check at 1y/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /request horizon check at 2y/i })).toBeInTheDocument();
+  });
+
+  it("POSTs a question-intent comment with the horizon sectionId when clicked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DecisionCard
+        event={event}
+        artifactId="art_1"
+        stakes="high"
+        initialResolved={{ optionId: "o1" }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /request horizon check at 1y/i }));
+
+    const call = fetchMock.mock.calls.find((c: any[]) =>
+      String(c[0]).includes("/api/comments") ||
+      (c[1]?.body && String(c[1].body).includes("artifactId"))
+    );
+    expect(call).toBeTruthy();
+    const body = JSON.parse(call![1].body);
+    expect(body.artifactId).toBe("art_1");
+    expect(body.intent).toBe("question");
+    expect(body.target?.sectionId).toBe("horizon_check:request:1y");
+    expect(body.content).toMatch(/request_horizon_check/);
+  });
+
+  it("replaces the buttons with an 'Asked' confirmation after click (prevents double-fire)", async () => {
+    render(
+      <DecisionCard
+        event={event}
+        artifactId="art_1"
+        stakes="high"
+        initialResolved={{ optionId: "o1" }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /request horizon check at 3mo/i }));
+    expect(screen.queryByRole("button", { name: /request horizon check/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/✓ Asked \(3mo\)/)).toBeInTheDocument();
+  });
+});
+
 describe("DecisionCard — keyboard navigation", () => {
   it("j advances focusedIndex, k retreats, Enter selects", async () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);

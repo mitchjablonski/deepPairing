@@ -38,6 +38,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   // Expose on window so artifact store can read sessionId without circular import
   const storeRef = { getState: () => get() };
   if (typeof window !== "undefined") (window as any).__dpConnectionStore = storeRef;
+
+  // Q5: last time we surfaced a "feedback received" signal. Debounces the
+  // toast during comment bursts so the user who comments on five findings
+  // in quick succession sees ONE pair-tempo pip, not five.
+  let lastFeedbackToastAt = 0;
+  const FEEDBACK_TOAST_DEBOUNCE_MS = 8000;
+
   function handleMessage(data: any) {
     // Import artifact store lazily to avoid circular deps
     import("./artifact").then(({ useArtifactStore }) => {
@@ -105,6 +112,27 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         case "decision_resolved":
           if (data.artifactId) {
             store.updateArtifact(data.artifactId, "approved");
+          }
+          break;
+
+        case "feedback_received":
+          // Q5: synthetic "I see you" signal. The server acknowledges
+          // receipt of a human comment; the agent won't actually see it
+          // until its next check_feedback poll, but the user gets immediate
+          // pair-tempo feedback that their message entered the session.
+          // Debounced so a burst of comments doesn't spam the toast queue.
+          {
+            const now = Date.now();
+            if (now - lastFeedbackToastAt < FEEDBACK_TOAST_DEBOUNCE_MS) break;
+            lastFeedbackToastAt = now;
+            import("./toast").then(({ useToastStore }) => {
+              useToastStore.getState().push({
+                kind: "info",
+                title: "✓ Sent — Claude will see this on its next check",
+                body: "check_feedback polls every ~30s while Claude is working.",
+                ttl: 4000,
+              });
+            });
           }
           break;
 

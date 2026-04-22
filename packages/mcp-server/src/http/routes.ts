@@ -78,6 +78,17 @@ export function createHttpRoutes(
     });
 
     broadcast({ type: "comment_added", comment }, sid);
+    // Q5: a synthetic "I see you" — the server acknowledges the human's
+    // comment immediately so the UI can show a pair-tempo pip. The agent
+    // won't SEE it until its next check_feedback poll (≤30s), but server-
+    // receipt is a useful signal on its own: the message left the human's
+    // hand, entered the pair session, and will be surfaced to the agent.
+    broadcast({
+      type: "feedback_received",
+      commentId: comment.id,
+      artifactId,
+      intent: intent ?? "comment",
+    }, sid);
     return c.json({ comment });
   });
 

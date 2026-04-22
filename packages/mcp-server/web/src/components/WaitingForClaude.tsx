@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { WalkthroughCards } from "./WalkthroughCards";
 
 /**
  * O1b — "Waiting for Claude" zero-state panel.
@@ -28,9 +29,22 @@ const SUGGESTIONS = [
   "I want to refactor the config loader. Pair with me.",
 ];
 
+const LEARN_MORE_KEY = "dp:waiting-learn-more-open";
+
 export function WaitingForClaude() {
   const [info, setInfo] = useState<DaemonInfo | null>(null);
   const [suggestion] = useState(() => SUGGESTIONS[Math.floor(Math.random() * SUGGESTIONS.length)]);
+  // Q2: optional learn-more expansion with the three pairing primitives,
+  // for users who didn't see the post-init demo. Remembered across reloads
+  // so re-expanding isn't necessary for a user who already cares.
+  const [learnMoreOpen, setLearnMoreOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(LEARN_MORE_KEY) === "1"; } catch { return false; }
+  });
+  const toggleLearnMore = () => {
+    const next = !learnMoreOpen;
+    setLearnMoreOpen(next);
+    try { localStorage.setItem(LEARN_MORE_KEY, next ? "1" : "0"); } catch {}
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +98,25 @@ export function WaitingForClaude() {
           </div>
         </div>
       )}
+
+      {/* Q2: collapsed-by-default walkthrough for users who declined the
+          post-init demo. Expansion state persists so a user who actually
+          wants this doesn't have to re-expand on every reload. */}
+      <div className="pt-1 border-t border-border-default/60">
+        <button
+          type="button"
+          onClick={toggleLearnMore}
+          aria-expanded={learnMoreOpen}
+          className="text-2xs text-text-muted hover:text-text-secondary transition-colors"
+        >
+          {learnMoreOpen ? "▾" : "▸"} What is deepPairing, briefly?
+        </button>
+        {learnMoreOpen && (
+          <div className="mt-3">
+            <WalkthroughCards compact />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

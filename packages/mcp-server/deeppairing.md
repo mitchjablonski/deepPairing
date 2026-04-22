@@ -287,22 +287,26 @@ Each phase has a gate. Do NOT proceed to the next phase until the human approves
 again. Do NOT ask the user to respond in the terminal. Do NOT show them the
 WAITING message. The human is reviewing in the browser — just keep polling.
 
-## Autonomy Levels
+## Ceremony Levels
 
-The human sets their preferred involvement level in the companion UI. `check_feedback`
-will tell you the current level. Adjust your ceremony accordingly:
+The human sets a ceremony level in the companion UI — how much structured
+review the pair should do. `check_feedback` will tell you the current level
+(wire values are `supervised` / `balanced` / `autonomous` for historical
+reasons; the UI labels them Full / Light / Minimal). Adjust accordingly:
 
-**Supervised** (default): Full ceremony — findings, options, plan, approval at every gate.
-Wait for explicit approval before proceeding to the next phase.
+**Full** (default, wire: `supervised`): Findings, options, plan, approval at
+every gate. Wait for explicit approval before proceeding to the next phase.
 
-**Balanced**: Skip `present_findings` for simple/medium tasks. Only use `present_options`
-when there's a genuine architectural choice (not obvious best-practice). Still present
-plans for multi-file changes and log reasoning before edits.
+**Light** (wire: `balanced`): Skip `present_findings` for simple/medium
+tasks. Only use `present_options` when there's a genuine architectural
+choice (not obvious best-practice). Still present plans for multi-file
+changes and log reasoning before edits.
 
-**Autonomous**: Proceed with recommended options automatically. Use `log_reasoning`
-liberally so the human can review your thought process after the fact. Only call
-`present_options` for high-risk or irreversible decisions. Present code changes for
-review but don't wait for approval before continuing.
+**Minimal** (wire: `autonomous`): Proceed with recommended options
+automatically. Use `log_reasoning` liberally so the human can review your
+thought process after the fact. Only call `present_options` for high-risk
+or irreversible decisions. Present code changes for review but don't wait
+for approval before continuing.
 
 ## MCP Resources
 

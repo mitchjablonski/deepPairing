@@ -295,6 +295,39 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0].body).toContain("zero-downtime migration");
       expect(toasts[0].body).toContain("medium confidence");
     });
+
+    it("pushes an info toast on `feedback_received` (Q5 pair-tempo signal)", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "feedback_received",
+        commentId: "cmt_1",
+        artifactId: "art_1",
+        intent: "comment",
+      });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("info");
+      expect(toasts[0].title).toMatch(/claude will see this/i);
+    });
+
+    it("debounces `feedback_received` bursts — 2 emits in quick succession = 1 toast", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({ type: "feedback_received", commentId: "cmt_1" });
+      await flush();
+      activeAdapter.emit({ type: "feedback_received", commentId: "cmt_2" });
+      await flush();
+
+      // Two emits within the debounce window — only one toast.
+      expect(useToastStore.getState().toasts).toHaveLength(1);
+    });
   });
 });
 
