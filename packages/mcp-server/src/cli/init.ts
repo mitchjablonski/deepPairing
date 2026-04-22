@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity } from "../daemon-lifecycle.js";
 import { ensureDeepPairingDir, ensureGitignoreEntry, ensureStopHook } from "./setup-tasks.js";
+import readline from "node:readline";
 
 const cwd = process.cwd();
 
@@ -224,16 +225,21 @@ function main() {
 }
 
 /**
- * `deeppairing doctor` — one-shot diagnostic. Prints daemon PID/port, the
- * daemon.json state, /api/state response, and a log tail so the user doesn't
- * have to manually run lsof/cat/ls to debug a stuck MCP.
+ * `deeppairing doctor [--fix] [--yes]` — one-shot diagnostic that can also
+ * heal the most common failure modes. Prints daemon PID/port, daemon.json
+ * state, /api/state response, and a log tail. With --fix, collects a list
+ * of healing actions and (after confirmation, unless --yes) applies them.
  */
-async function doctor() {
+async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   console.log(bold("\n  deepPairing doctor\n"));
 
   const dpDir = path.join(cwd, ".deeppairing");
   const infoFile = path.join(dpDir, "daemon.json");
   const logFile = path.join(dpDir, "daemon.log");
+
+  /** Healing actions the user can opt into via --fix. Collected during
+   *  diagnosis; applied at the end with confirmation. */
+  const fixes: Array<{ label: string; apply: () => { ok: boolean; message: string } }> = [];
 
   // 1. daemon.json
   let info: { pid?: number; port?: number; startedAt?: string } | null = null;
@@ -246,6 +252,13 @@ async function doctor() {
       console.log(`    ${dim("startedAt:")} ${info?.startedAt ?? "?"}`);
     } catch (err) {
       console.log(`  ${red("✗")} .deeppairing/daemon.json is malformed: ${err}`);
+      fixes.push({
+        label: "Delete malformed .deeppairing/daemon.json",
+        apply: () => {
+          try { fs.unlinkSync(infoFile); return { ok: true, message: "Deleted" }; }
+          catch (e: any) { return { ok: false, message: e?.message ?? String(e) }; }
+        },
+      });
     }
   } else {
     console.log(`  ${yellow("!")} .deeppairing/daemon.json missing`);
@@ -256,6 +269,15 @@ async function doctor() {
     let alive = false;
     try { process.kill(info.pid, 0); alive = true; } catch {}
     console.log(`  ${alive ? green("✓") : red("✗")} PID ${info.pid} is ${alive ? "alive" : "not running"}`);
+    if (!alive) {
+      fixes.push({
+        label: `Remove stale daemon.json (PID ${info.pid} is dead)`,
+        apply: () => {
+          try { fs.unlinkSync(infoFile); return { ok: true, message: "Removed" }; }
+          catch (e: any) { return { ok: false, message: e?.message ?? String(e) }; }
+        },
+      });
+    }
   }
 
   // 3. Probe /api/state on the reported port. If daemon.json is missing,
@@ -319,18 +341,109 @@ async function doctor() {
     console.log(`  ${yellow("!")} No daemon.log found`);
   }
 
-  // 6. Overall verdict
+  // 6. Project-setup checks (.gitignore + Stop hook). These catch the
+  //    "plugin install half-configured this project" failure mode.
+  const gitignorePath = path.join(cwd, ".gitignore");
+  if (fs.existsSync(gitignorePath)) {
+    const content = fs.readFileSync(gitignorePath, "utf-8");
+    if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
+      console.log(`  ${green("✓")} .gitignore lists .deeppairing/`);
+    } else {
+      console.log(`  ${yellow("!")} .gitignore does NOT list .deeppairing/`);
+      fixes.push({
+        label: "Append .deeppairing/ to .gitignore",
+        apply: () => {
+          const r = ensureGitignoreEntry(cwd);
+          return { ok: r.ok, message: r.message };
+        },
+      });
+    }
+  } else {
+    console.log(`  ${dim("·")} No .gitignore in this directory (skipping that check)`);
+  }
+
+  const hooksPath = path.join(cwd, ".claude", "settings.local.json");
+  let stopHookPresent = false;
+  if (fs.existsSync(hooksPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
+      const stopHooks = settings?.hooks?.Stop ?? [];
+      stopHookPresent = Array.isArray(stopHooks) && stopHooks.some(
+        (h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"),
+      );
+    } catch {}
+  }
+  if (stopHookPresent) {
+    console.log(`  ${green("✓")} Claude Code Stop hook configured`);
+  } else {
+    console.log(`  ${yellow("!")} Claude Code Stop hook NOT configured (agent can stop while artifacts are unreviewed)`);
+    fixes.push({
+      label: "Add Stop hook to .claude/settings.local.json",
+      apply: () => {
+        const r = ensureStopHook(cwd);
+        return { ok: r.ok, message: r.message };
+      },
+    });
+  }
+
+  // 7. Overall verdict
   console.log();
   if (probeOk) {
     console.log(`  ${green(bold("Daemon healthy"))} on port ${port}`);
   } else if (info?.pid) {
     console.log(`  ${red(bold("Daemon unhealthy"))} — daemon.json points at PID ${info.pid} but port ${port} is not responding`);
-    console.log(`  ${dim("Try: kill ") + info.pid + dim(" && rm .deeppairing/daemon.json")}`);
+    console.log(`  ${dim("Try: kill ") + info.pid + dim(" && rm .deeppairing/daemon.json — or re-run with --fix")}`);
   } else {
     console.log(`  ${yellow(bold("No daemon detected"))} on port ${port}`);
     console.log(`  ${dim("Start one by opening a Claude Code session with deepPairing configured, or run the daemon directly.")}`);
   }
   console.log();
+
+  // 8. Healing phase — only when --fix was passed AND there's something to heal.
+  if (!opts.fix) {
+    if (fixes.length > 0) {
+      console.log(`  ${dim(`${fixes.length} fix${fixes.length === 1 ? "" : "es"} available. Re-run with --fix to apply.`)}`);
+      console.log();
+    }
+    return;
+  }
+  if (fixes.length === 0) {
+    console.log(`  ${green("Nothing to fix.")}`);
+    console.log();
+    return;
+  }
+
+  console.log(bold(`  Proposed fixes (${fixes.length}):`));
+  fixes.forEach((f, i) => console.log(`    ${dim(`${i + 1}.`)} ${f.label}`));
+  console.log();
+
+  const confirmed = opts.yes || !process.stdin.isTTY
+    ? (opts.yes ?? false)
+    : await confirmPrompt(`  Apply all ${fixes.length}? [y/N] `);
+
+  if (!confirmed) {
+    console.log(`  ${dim("Cancelled. No changes made.")}`);
+    console.log();
+    return;
+  }
+
+  for (const f of fixes) {
+    const r = f.apply();
+    const mark = r.ok ? green("✓") : red("✗");
+    console.log(`  ${mark} ${f.label}${r.message ? dim(` — ${r.message}`) : ""}`);
+  }
+  console.log();
+}
+
+/** Tiny y/N prompt. Resolves to true on "y" / "yes" (case-insensitive). */
+function confirmPrompt(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
 }
 
 /**
@@ -407,6 +520,191 @@ async function exportCmd(format: string, sessionId?: string) {
 }
 
 /**
+ * P5 — `deeppairing philosophy {export|import}`. The Philosophy Ledger at
+ * `~/.deeppairing/philosophy/v1.json` compounds across every deepPairing
+ * project; these commands make it portable so the "your taste travels
+ * with you" claim survives moving machines.
+ */
+async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<void> {
+  const { GlobalStore } = await import("../store/global-store.js");
+  const store = new GlobalStore();
+
+  if (sub === "export") {
+    // Print to stdout so callers can redirect: `npx deeppairing philosophy export > stances.json`
+    process.stdout.write(JSON.stringify(store.exportLedger(), null, 2) + "\n");
+    return;
+  }
+
+  if (sub === "import") {
+    const file = rest.find((a) => !a.startsWith("-"));
+    const merge = rest.includes("--merge");
+    if (!file) {
+      console.error(`  ${red("✗")} philosophy import requires a file path.`);
+      console.error(`  ${dim("   Example: npx deeppairing philosophy import stances.json --merge")}`);
+      process.exit(1);
+    }
+    if (!merge) {
+      console.error(`  ${red("✗")} Refusing to import without --merge (prevents accidental replace).`);
+      console.error(`  ${dim("   Re-run with --merge to add stances into your existing ledger.")}`);
+      process.exit(1);
+    }
+    if (!fs.existsSync(file!)) {
+      console.error(`  ${red("✗")} File not found: ${file}`);
+      process.exit(1);
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(file!, "utf-8"));
+    } catch (err: any) {
+      console.error(`  ${red("✗")} ${file} is not valid JSON: ${err?.message ?? err}`);
+      process.exit(1);
+    }
+    const summary = store.importLedger(raw);
+    console.log(bold("\n  deepPairing philosophy import"));
+    console.log(`  ${green("✓")} Merged ${file} into ${store.getLedgerPath()}`);
+    console.log(`    ${dim("concepts added:")}   ${summary.conceptsAdded}`);
+    console.log(`    ${dim("concepts merged:")}  ${summary.conceptsMerged}`);
+    console.log(`    ${dim("instances added:")}  ${summary.instancesAdded}`);
+    console.log();
+    return;
+  }
+
+  console.error(`  ${red("✗")} Unknown philosophy subcommand: ${sub ?? "(none)"}. Try: export | import <file> --merge`);
+  process.exit(1);
+}
+
+/**
+ * P3 — `deeppairing team init` — scaffold a .deeppairing/team.json for a
+ * repo. The file is committable; each preference carries a concept,
+ * rationale, and a require/prefer/avoid kind. Surfaced to the agent
+ * alongside personal philosophy + structural guardrails (never merged).
+ */
+function teamInitCmd(force: boolean): void {
+  console.log(bold("\n  deepPairing team init"));
+
+  const dpDir = path.join(cwd, ".deeppairing");
+  const teamFile = path.join(dpDir, "team.json");
+
+  if (fs.existsSync(teamFile) && !force) {
+    console.log(`  ${yellow("!")} ${teamFile} already exists.`);
+    console.log(`  ${dim("Edit it directly, or re-run with --force to overwrite.")}`);
+    return;
+  }
+
+  const template = {
+    version: 1,
+    preferences: [
+      {
+        id: "example-prefer-repository-pattern",
+        kind: "prefer",
+        concept: "repository pattern for data access",
+        rationale: "keeps SQL and transaction logic out of route handlers; easier to test in isolation",
+        scope: { paths: ["packages/api/**"] },
+        addedBy: "your-handle",
+        addedAt: new Date().toISOString(),
+      },
+      {
+        id: "example-avoid-global-mutable-state",
+        kind: "avoid",
+        concept: "global mutable state for config",
+        rationale: "broke testability on prior project — prefer dependency injection",
+        addedBy: "your-handle",
+        addedAt: new Date().toISOString(),
+      },
+    ],
+  };
+
+  fs.mkdirSync(dpDir, { recursive: true });
+  const body =
+    `// .deeppairing/team.json — team-agreed conventions, committable.\n` +
+    `// The agent sees these on first tool call and the pre-flight validator\n` +
+    `// uses them to refuse proposals that conflict with 'avoid' rules or\n` +
+    `// that touch a domain without the required approach.\n` +
+    `//\n` +
+    `// Kinds:\n` +
+    `//   'require' — phrase as "<thing> for <domain>" (e.g. "argon2id for\n` +
+    `//               password hashing"). A proposal mentioning the domain\n` +
+    `//               but not the thing is a violation.\n` +
+    `//   'avoid'   — match on concept tokens against the proposal.\n` +
+    `//   'prefer'  — taste; agent sees it, pre-flight never blocks.\n` +
+    `//\n` +
+    `// Edit these examples or replace with your team's real stances.\n\n` +
+    JSON.stringify(template, null, 2) + "\n";
+
+  fs.writeFileSync(teamFile, body);
+  console.log(`  ${green("✓")} Wrote ${teamFile}`);
+  console.log();
+  console.log(`  ${dim("Next steps:")}`);
+  console.log(`    1. Edit the two example preferences to match your team's stances.`);
+  console.log(`    2. Commit the file — teammates' deepPairing sessions will pick it up.`);
+  console.log(`    3. Restart any active Claude Code sessions so the new prefs load.`);
+  console.log();
+}
+
+/**
+ * `deeppairing demo` — prove the hook in under a minute.
+ *
+ * Spins up the daemon, creates a demo session, walks it through a
+ * rejection → re-proposal → pre-flight block, then opens the companion UI
+ * to watch it land. No Claude Code needed. This is the "in 5 minutes, a
+ * new user sees the agent being refused by concept" thesis, made concrete.
+ */
+async function demoCmd(): Promise<void> {
+  const { ensureDaemon } = await import("../daemon-lifecycle.js");
+  console.log(bold("\n  deepPairing demo"));
+  console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
+
+  const port = await ensureDaemon(cwd);
+  console.log(`  ${green("✓")} Daemon ready on port ${port}`);
+
+  let data: { sessionId: string };
+  try {
+    const res = await fetch(`http://localhost:${port}/api/demo/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) throw new Error(`daemon responded ${res.status}`);
+    data = (await res.json()) as { sessionId: string };
+  } catch (err: any) {
+    console.error(`  ${red("✗")} Could not start demo: ${err?.message ?? err}`);
+    process.exit(1);
+  }
+
+  // Open the companion UI scoped to the demo session. If the browser fails
+  // to open (headless CI, WSL without xdg-open), fall back to logging.
+  const url = `http://localhost:${port}/?session=${data.sessionId}`;
+  try {
+    const { spawn } = await import("node:child_process");
+    const cmd = process.platform === "darwin" ? "open"
+      : process.platform === "win32" ? "cmd"
+      : "xdg-open";
+    const spawnArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+    const child = spawn(cmd, spawnArgs, { stdio: "ignore", detached: true });
+    child.on("error", () => {});
+    child.unref();
+  } catch {}
+
+  console.log();
+  console.log(`  ${bold("Demo running — open the companion UI and watch:")}`);
+  console.log(`    ${dim("→")} ${url}`);
+  console.log();
+  console.log(`  ${dim("Script:")}`);
+  console.log(`    ${dim("t+0.5s")}  Agent proposes a global mutable ConfigStore singleton.`);
+  console.log(`    ${dim("t+2.5s")}  You reject it with reason "${"breaks testability"}".`);
+  console.log(`    ${dim("        →")} Added to Your taste (the ledger grows).`);
+  console.log(`    ${dim("t+5.0s")}  Agent tries a paraphrase: "Add a global config cache".`);
+  console.log(`    ${dim("        →")} ${bold("🛡 Pre-flight catches it by concept. Hero toast fires.")}`);
+  console.log();
+  console.log(`  ${dim("That toast is the single most distinctive deepPairing moment —")}`);
+  console.log(`  ${dim("the moat the product is built around. It compounds: today it's one")}`);
+  console.log(`  ${dim("project; after a few sessions it spans every deepPairing project.")}`);
+  console.log();
+  console.log(`  ${green("Session:")} ${data.sessionId}`);
+  console.log();
+}
+
+/**
  * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT]`
  *  — post the current (or specified) pairing session's findings as inline
  *  comments on a GitHub PR. Uses the `gh` CLI.
@@ -473,7 +771,12 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   ${bold("Usage:")}
     npx deeppairing                        Set up deepPairing in current project
     npx deeppairing init                   Set up deepPairing in current project
-    npx deeppairing doctor                 Diagnose a running / misbehaving daemon
+    npx deeppairing demo                   Watch the rejection-block fire in the companion UI (no Claude Code needed)
+    npx deeppairing team init [--force]    Scaffold .deeppairing/team.json with example team conventions
+    npx deeppairing philosophy export      Print your cross-project Philosophy Ledger as JSON to stdout
+    npx deeppairing philosophy import <f> --merge
+                                           Merge an exported ledger into your current one (idempotent)
+    npx deeppairing doctor [--fix] [--yes] Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     npx deeppairing export <format>        Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay)
     npx deeppairing post-pr-review <pr>    Post the pairing session's findings as inline comments
@@ -487,7 +790,9 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 } else if (cmd === "init") {
   main();
 } else if (cmd === "doctor") {
-  doctor().catch((err) => {
+  const fix = args.includes("--fix");
+  const yes = args.includes("--yes") || args.includes("-y");
+  doctor({ fix, yes }).catch((err) => {
     console.error(`  ${red("✗")} doctor failed: ${err}`);
     process.exit(1);
   });
@@ -502,6 +807,31 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     console.error(`  ${red("✗")} export failed: ${err?.message ?? err}`);
     process.exit(1);
   });
+} else if (cmd === "demo") {
+  demoCmd().catch((err) => {
+    console.error(`  ${red("✗")} demo failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "philosophy") {
+  const sub = args[1];
+  philosophyCmd(sub, args.slice(2)).catch((err) => {
+    console.error(`  ${red("✗")} philosophy ${sub ?? ""} failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "team") {
+  const sub = args[1];
+  const force = args.includes("--force");
+  if (sub === "init") {
+    try {
+      teamInitCmd(force);
+    } catch (err: any) {
+      console.error(`  ${red("✗")} team init failed: ${err?.message ?? err}`);
+      process.exit(1);
+    }
+  } else {
+    console.error(`  ${red("✗")} Unknown team subcommand: ${sub ?? "(none)"}. Try: team init [--force]`);
+    process.exit(1);
+  }
 } else if (cmd === "post-pr-review") {
   const ref = args[1];
   if (!ref) {

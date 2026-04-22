@@ -24,16 +24,20 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showTaste, setShowTaste] = useState(false);
 
-  // Fetch active sessions on mount, auto-connect to the first one
+  // Fetch active sessions on mount, auto-connect to the first one (or to the
+  // session named in ?session=... — used by `npx deeppairing demo` to land
+  // the user directly on the demo session).
   useEffect(() => {
     const init = async () => {
       refreshSessions();
-      // Fetch sessions and auto-connect to the first (or only) one
+      const requested = new URLSearchParams(window.location.search).get("session");
       try {
         const res = await fetch(`http://${window.location.host}/api/active-sessions`);
         const data = await res.json();
         const sessions = data.sessions ?? [];
-        if (sessions.length > 0) {
+        if (requested && sessions.some((s: any) => s.sessionId === requested)) {
+          connect(requested);
+        } else if (sessions.length > 0) {
           connect(sessions[0].sessionId);
         } else {
           connect(); // Fallback: global connection

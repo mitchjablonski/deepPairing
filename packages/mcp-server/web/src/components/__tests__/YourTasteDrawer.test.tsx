@@ -189,4 +189,55 @@ describe("YourTasteDrawer", () => {
       await waitFor(() => expect(screen.getByText(/could not load the digest/i)).toBeInTheDocument());
     });
   });
+
+  describe("Team tab (P3)", () => {
+    it("nudges `team init` when team.json is absent", async () => {
+      vi.stubGlobal("fetch", mockFetchByUrl({
+        "/api/philosophy?": { entries: [], total: 0 },
+        "/api/team-preferences": { preferences: [], exists: false },
+      }));
+      render(<YourTasteDrawer onClose={() => {}} />);
+      await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
+      await waitFor(() => expect(screen.getByText(/no team conventions set up yet/i)).toBeInTheDocument());
+      expect(screen.getByText(/npx deeppairing team init/i)).toBeInTheDocument();
+    });
+
+    it("renders preferences grouped by kind when team.json exists", async () => {
+      vi.stubGlobal("fetch", mockFetchByUrl({
+        "/api/philosophy?": { entries: [], total: 0 },
+        "/api/team-preferences": {
+          exists: true,
+          preferences: [
+            { id: "r1", kind: "require", concept: "argon2id for password hashing", rationale: "bcrypt is brute-forceable", addedBy: "alex" },
+            { id: "a1", kind: "avoid", concept: "global mutable state", rationale: "testability", scope: { paths: ["packages/auth/**"] } },
+            { id: "p1", kind: "prefer", concept: "repository pattern", rationale: "keeps SQL out of handlers" },
+          ],
+        },
+      }));
+      render(<YourTasteDrawer onClose={() => {}} />);
+      await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
+
+      await waitFor(() => expect(screen.getByText(/required \(1\)/i)).toBeInTheDocument());
+      expect(screen.getByText(/avoid \(1\)/i)).toBeInTheDocument();
+      expect(screen.getByText(/preferred \(1\)/i)).toBeInTheDocument();
+
+      expect(screen.getByText("argon2id for password hashing")).toBeInTheDocument();
+      expect(screen.getByText(/bcrypt is brute-forceable/)).toBeInTheDocument();
+      expect(screen.getByText(/added by alex/i)).toBeInTheDocument();
+      expect(screen.getByText(/scope: packages\/auth\/\*\*/)).toBeInTheDocument();
+
+      expect(screen.getByText(/read-only here/i)).toBeInTheDocument();
+    });
+
+    it("surfaces fetch failures on the team tab", async () => {
+      vi.stubGlobal("fetch", vi.fn((url: string) =>
+        url.includes("/api/team-preferences")
+          ? Promise.resolve({ ok: false, status: 500 })
+          : Promise.resolve({ ok: true, json: async () => ({ entries: [], total: 0 }) }),
+      ));
+      render(<YourTasteDrawer onClose={() => {}} />);
+      await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
+      await waitFor(() => expect(screen.getByText(/could not load team preferences/i)).toBeInTheDocument());
+    });
+  });
 });

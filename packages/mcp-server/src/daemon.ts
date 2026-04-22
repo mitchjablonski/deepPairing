@@ -23,6 +23,7 @@ import { createHttpRoutes } from "./http/routes.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
+import { runDemoScript } from "./demo-script.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -238,6 +239,23 @@ app.get("/api/skill-status", (c) => {
     pairingProtocolSkillLikelyLoaded: likely,
     evidence,
   });
+});
+
+// P1: scripted demo session that proves the hook (concept-aware rejection
+// block) in under a minute. Creates a fresh session, walks it through a
+// rejection, then fires the hero preflight_blocked broadcast — all without
+// requiring Claude Code to be connected. This is the PMF-thesis validator:
+// a fresh-install user must SEE the block fire, not just read about it.
+app.post("/api/demo/run", (c) => {
+  const sessionId = `demo_${Date.now()}`;
+  const store = createSession(sessionId);
+  sessionMeta.set(sessionId, {
+    title: "deepPairing demo",
+    project: "demo",
+    registeredAt: new Date().toISOString(),
+  });
+  runDemoScript({ sessionId, store, broadcast });
+  return c.json({ sessionId, startedAt: new Date().toISOString() });
 });
 
 // Active sessions endpoint for the web UI
