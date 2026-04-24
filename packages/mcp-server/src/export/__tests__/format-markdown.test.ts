@@ -166,6 +166,92 @@ describe("formatSessionMarkdown", () => {
     });
   });
 
+  describe("learnings format (R3)", () => {
+    it("lists named concepts with their count and one-line explanation", () => {
+      const state = makeState({
+        artifacts: [
+          makeArtifact("reasoning", "Use DI", {
+            action: "Extract the cache into a repository",
+            reasoning: "r",
+            concept: { name: "dependency inversion", oneLineExplanation: "high-level code shouldn't depend on low-level details" },
+            confidence: "high",
+          }),
+          {
+            ...makeArtifact("reasoning", "Cache again", {
+              action: "Wrap the prefetch in a repository",
+              reasoning: "r",
+              concept: { name: "dependency inversion" },
+              confidence: "medium",
+            }),
+            id: "art_reasoning_2",
+          },
+          makeArtifact("reasoning", "Pin retry rate", {
+            action: "Cap retries at 3 exponential",
+            reasoning: "r",
+            concept: { name: "exponential backoff", oneLineExplanation: "escalate wait time with each failure" },
+            confidence: "high",
+          }),
+        ],
+      });
+      const md = formatSessionMarkdown(state, "learnings");
+      expect(md).toContain("# Learnings");
+      expect(md).toContain("## Concepts the pair named");
+      expect(md).toContain("**dependency inversion**");
+      expect(md).toContain("_(×2)_");
+      expect(md).toContain("high-level code shouldn't depend on low-level details");
+      expect(md).toContain("**exponential backoff**");
+      // Recurring concepts sort first.
+      expect(md.indexOf("dependency inversion")).toBeLessThan(md.indexOf("exponential backoff"));
+    });
+
+    it("cross-references predictions with retrospectives when present", () => {
+      const state = {
+        ...makeState({
+          decisions: [{
+            decisionId: "d1",
+            artifactId: "art_decision_1",
+            context: "Password hashing",
+            options: [{ id: "a", title: "argon2id" }, { id: "b", title: "bcrypt" }],
+            response: { optionId: "a", reasoning: "future-proof", predictedOutcome: "zero-downtime migration", confidence: "medium" },
+          }],
+        }),
+        retrospectives: [{ id: "r1", decisionId: "d1", verdict: "right" as const, note: "rolled out clean" }],
+      };
+      const md = formatSessionMarkdown(state, "learnings");
+      expect(md).toContain("## Predictions captured");
+      expect(md).toContain("argon2id");
+      expect(md).toContain("zero-downtime migration");
+      expect(md).toContain("medium confidence");
+      expect(md).toContain("✓ right");
+      expect(md).toContain("rolled out clean");
+    });
+
+    it("surfaces rejected approaches from session memory with reasons", () => {
+      const state: any = {
+        ...makeState(),
+        sessionMemory: {
+          rejectedApproaches: [
+            { description: "Deploy: Railway", reason: "too expensive", concept: "pay-per-request hosting" },
+            { description: "Global mutable state", reason: "breaks testability" },
+          ],
+        },
+      };
+      const md = formatSessionMarkdown(state, "learnings");
+      expect(md).toContain("## Approaches you won't re-propose");
+      expect(md).toContain("**Deploy: Railway**");
+      expect(md).toContain("_(concept: pay-per-request hosting)_");
+      expect(md).toContain("too expensive");
+      expect(md).toContain("**Global mutable state**");
+      expect(md).toContain("breaks testability");
+    });
+
+    it("renders a 'nothing crystallized yet' line on an empty session", () => {
+      const md = formatSessionMarkdown(makeState(), "learnings");
+      expect(md).toContain("# Learnings");
+      expect(md).toContain("Nothing crystallized yet");
+    });
+  });
+
   it("handles empty session gracefully", () => {
     const md = formatSessionMarkdown(makeState(), "full");
     expect(md).toContain("Session Report");

@@ -218,6 +218,49 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("firstCallHint — welcome-back ledger line (R2)", () => {
+    it("stays silent when the ledger has fewer than 5 concepts", async () => {
+      // The outer test suite's store has an empty ledger by default.
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      expect(text).not.toContain("🌱");
+      expect(text).not.toContain("Your deepPairing ledger");
+    });
+
+    it("surfaces the compounding summary once ≥5 concepts exist across projects", async () => {
+      // Seed the global ledger with 5 concepts spanning 2 projects, mix of
+      // avoid + prefer — then fire the first tool call.
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      ledger.recordInstance("global mutable state", {
+        project: "project-a", sessionId: "s1", verdict: "rejected", reason: "broke testability",
+      });
+      ledger.recordInstance("god object", {
+        project: "project-a", sessionId: "s1", verdict: "rejected",
+      });
+      ledger.recordInstance("primitive obsession", {
+        project: "project-b", sessionId: "s2", verdict: "rejected",
+      });
+      ledger.recordInstance("repository pattern", {
+        project: "project-a", sessionId: "s1", verdict: "approved",
+      });
+      ledger.recordInstance("service layer", {
+        project: "project-b", sessionId: "s2", verdict: "approved",
+      });
+
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      expect(text).toContain("🌱 Your deepPairing ledger");
+      expect(text).toContain("5 concepts");
+      expect(text).toContain("3 avoid / 2 prefer");
+      expect(text).toContain("2 projects");
+    });
+  });
+
   describe("port in responses", () => {
     it("includes the correct port in tool responses", async () => {
       const { text } = await callTool("present_findings", {

@@ -29,7 +29,7 @@
   },
   "scripts": {
     "prebuild": "rm -rf dist",
-    "build": "tsc && cd web && npx vite build",
+    "build": "tsc && cd web && npx vite build && cd .. && node scripts/bundle-plugin.mjs",
     "start": "tsx src/standalone.ts",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",

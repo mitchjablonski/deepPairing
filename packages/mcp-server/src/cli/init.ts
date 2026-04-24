@@ -470,11 +470,11 @@ function confirmPrompt(question: string, defaultYes = false): Promise<boolean> {
 /**
  * `deeppairing export <format> [sessionId]` — print a session export to
  * stdout so users can pipe it into clipboard / file / PR tooling.
- *   format: full | pr-description | pr-comments | adr | replay
+ *   format: full | pr-description | pr-comments | adr | replay | learnings
  *   sessionId: defaults to the most recent session in this project
  */
 async function exportCmd(format: string, sessionId?: string) {
-  const validFormats = ["full", "pr-description", "pr-comments", "adr", "replay"];
+  const validFormats = ["full", "pr-description", "pr-comments", "adr", "replay", "learnings"];
   if (!validFormats.includes(format)) {
     console.error(`  ${red("✗")} Unknown format "${format}". Valid: ${validFormats.join(", ")}`);
     process.exit(1);
@@ -800,7 +800,7 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
                                            Merge an exported ledger into your current one (idempotent)
     npx deeppairing doctor [--fix] [--yes] Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     npx deeppairing export <format>        Print a session as markdown
-                                           (format: full | pr-description | pr-comments | adr | replay)
+                                           (format: full | pr-description | pr-comments | adr | replay | learnings)
     npx deeppairing post-pr-review <pr>    Post the pairing session's findings as inline comments
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     npx deeppairing --help                 Show this help message

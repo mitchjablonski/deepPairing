@@ -24,6 +24,8 @@ import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
+import { recordMetricEvent } from "./store/metrics-store.js";
+import { buildPingPayload, decidePing, sendPing } from "./ping.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -67,6 +69,12 @@ function createSession(sessionId: string): FileStore {
   log(`Creating session: ${sessionId}`);
   const store = new FileStore(projectRoot, sessionId);
   sessions.set(sessionId, store);
+  // R1: count session starts so "N sessions deep" stats become real.
+  // Demo sessions are excluded — they're throwaway proof of the hook,
+  // not pairing work worth measuring.
+  if (!sessionId.startsWith("demo_")) {
+    try { recordMetricEvent(projectRoot, { kind: "session_started" }); } catch {}
+  }
   return store;
 }
 
@@ -97,6 +105,48 @@ function broadcast(sessionId: string, event: any): void {
   // Send to global (all-sessions) clients
   for (const ws of globalClients) {
     try { (ws as any).send(data); } catch { globalClients.delete(ws); }
+  }
+
+  // R1: local telemetry. Broadcast is the canonical point where every
+  // metric-worthy event passes through, so we tap it once here instead of
+  // scattering recordMetricEvent calls across routes / MCP handlers.
+  try {
+    recordEventForMetrics(event);
+  } catch {
+    // Telemetry must never break a broadcast.
+  }
+}
+
+function recordEventForMetrics(event: any): void {
+  switch (event?.type) {
+    case "preflight_blocked":
+      recordMetricEvent(projectRoot, {
+        kind: "preflight_block",
+        source: event.source === "team" ? "team" : "session",
+      });
+      break;
+    case "ledger_write":
+      recordMetricEvent(projectRoot, {
+        kind: "ledger_write",
+        verdict: event.kind === "approved" ? "approved" : "rejected",
+      });
+      break;
+    case "retrospective_recorded":
+      if (event.verdict === "right" || event.verdict === "wrong" || event.verdict === "mixed") {
+        recordMetricEvent(projectRoot, { kind: "retrospective", verdict: event.verdict });
+      }
+      break;
+    case "question_answered":
+      recordMetricEvent(projectRoot, { kind: "question_answered" });
+      break;
+    case "feedback_received":
+      if (event.intent === "question") {
+        recordMetricEvent(projectRoot, { kind: "question_asked" });
+      }
+      // Horizon-check requests come through as comments with a specific
+      // sectionId. The feedback_received broadcast carries only intent,
+      // not the full target, so routes.ts records this one inline.
+      break;
   }
 }
 
@@ -479,6 +529,49 @@ async function main() {
       openBrowser(`http://localhost:${port}`).catch((err) => {
         log(`Failed to auto-open browser: ${err}`);
       });
+    }
+
+    // R4: opt-in install-health ping. 60s after bind so skill status has
+    // had a chance to stabilize (either CLAUDE.md marker is visible or an
+    // artifact has landed, or nothing ever will). Aggregate-only payload:
+    // no projectRoot, no content, no identifiers. Gated on explicit env.
+    const pingDecision = decidePing(process.env);
+    if (pingDecision.shouldSend) {
+      const pingTimer = setTimeout(() => {
+        // Compute skill-loaded signal the same way /api/skill-status does,
+        // so the aggregate matches what the UI surfaces.
+        const claudeMdPath = path.join(projectRoot, "CLAUDE.md");
+        let claudeMdHasMarker = false;
+        try {
+          if (fs.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          }
+        } catch {}
+        const now = Date.now();
+        const RECENT_WINDOW_MS = 10 * 60 * 1000;
+        let recentArtifactActivity = false;
+        for (const store of sessions.values()) {
+          for (const a of store.getArtifacts()) {
+            const t = new Date(a.createdAt).getTime();
+            if (Number.isFinite(t) && now - t < RECENT_WINDOW_MS) {
+              recentArtifactActivity = true;
+              break;
+            }
+          }
+          if (recentArtifactActivity) break;
+        }
+        const payload = buildPingPayload({
+          version: "0.1.0",
+          skillLikelyLoaded: claudeMdHasMarker || recentArtifactActivity,
+          recentArtifactActivity,
+        });
+        void sendPing(pingDecision.url!, payload).then((r) => {
+          log(`Install-health ping: ${r.ok ? "ok" : `failed (${r.error ?? r.status})`}`);
+        });
+      }, 60_000);
+      pingTimer.unref?.();
+    } else {
+      log(`Install-health ping: skipped (${pingDecision.reason})`);
     }
 
   // Graceful shutdown

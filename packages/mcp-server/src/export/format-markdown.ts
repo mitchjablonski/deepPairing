@@ -26,7 +26,7 @@ interface SessionState {
   annotations?: SessionAnnotation[];
 }
 
-type ExportFormat = "full" | "pr-description" | "adr" | "replay" | "pr-comments";
+type ExportFormat = "full" | "pr-description" | "adr" | "replay" | "pr-comments" | "learnings";
 
 export function formatSessionMarkdown(
   state: SessionState,
@@ -41,6 +41,8 @@ export function formatSessionMarkdown(
       return formatReplay(state);
     case "pr-comments":
       return formatPrComments(state);
+    case "learnings":
+      return formatLearnings(state);
     case "full":
     default:
       return formatFull(state);
@@ -596,4 +598,151 @@ function formatPrComments(state: SessionState): string {
 
   sections.push("*Output from a [deepPairing](https://github.com/deeppairing) session — paste into a PR comment.*");
   return sections.join("\n");
+}
+
+// --- Learnings format (R3) ---
+//
+// A teaching artifact: what the pair *learned* during this session, not what
+// they built. Three sections:
+//   - Concepts named via log_reasoning (with count per concept)
+//   - Predictions captured on high-stakes decisions, cross-referenced with
+//     any retrospectives (verdict + note) so the calibration loop is visible
+//   - Rejected approaches with reasons — the "you won't re-propose this"
+//     moat, made legible for sharing
+//
+// Distinct from `full` (everything) and `replay` (chronological). This is
+// what you paste into a weekly learning channel or a hiring doc.
+
+function formatLearnings(state: SessionState): string {
+  const sections: string[] = [];
+  const title = getSessionTitle(state);
+  sections.push(`# Learnings — ${title}`);
+  sections.push("");
+  sections.push(
+    "*Teaching artifact: concepts named, predictions made, and approaches you won't re-propose.*",
+  );
+  sections.push("");
+
+  // --- Concepts named via log_reasoning ---
+  const reasoningArtifacts = state.artifacts.filter(
+    (a) => a.type === "reasoning" && a.status !== "superseded" && a.status !== "retracted",
+  );
+  const conceptCounts = new Map<string, { name: string; explanation?: string; count: number; actions: string[] }>();
+  for (const a of reasoningArtifacts) {
+    const concept = (a.content as any)?.concept;
+    if (!concept?.name) continue;
+    const key = String(concept.name).trim().toLowerCase();
+    if (!key) continue;
+    const existing = conceptCounts.get(key);
+    const action = (a.content as any)?.action ? String((a.content as any).action) : null;
+    if (existing) {
+      existing.count += 1;
+      if (action && !existing.actions.includes(action)) existing.actions.push(action);
+    } else {
+      conceptCounts.set(key, {
+        name: String(concept.name).trim(),
+        explanation: concept.oneLineExplanation ? String(concept.oneLineExplanation) : undefined,
+        count: 1,
+        actions: action ? [action] : [],
+      });
+    }
+  }
+
+  if (conceptCounts.size > 0) {
+    sections.push("## Concepts the pair named");
+    sections.push("");
+    // Sort by count desc, then name asc so recurring patterns lead.
+    const sorted = Array.from(conceptCounts.values()).sort(
+      (a, b) => (b.count - a.count) || a.name.localeCompare(b.name),
+    );
+    for (const c of sorted) {
+      const countLabel = c.count > 1 ? ` _(×${c.count})_` : "";
+      sections.push(`- **${c.name}**${countLabel}`);
+      if (c.explanation) sections.push(`  > ${c.explanation}`);
+      if (c.actions.length > 0) {
+        const shown = c.actions.slice(0, 3);
+        for (const act of shown) sections.push(`  - applied to: ${act}`);
+      }
+    }
+    sections.push("");
+  }
+
+  // --- Predictions + retrospectives ---
+  const decisionsWithPredictions = state.decisions.filter(
+    (d) => (d.response as any)?.predictedOutcome,
+  );
+  if (decisionsWithPredictions.length > 0) {
+    sections.push("## Predictions captured");
+    sections.push("");
+    for (const d of decisionsWithPredictions) {
+      const chosen = d.options.find((o: any) => o.id === d.response?.optionId);
+      const confidence = (d.response as any)?.confidence;
+      sections.push(
+        `- **${d.context}**: chose _${chosen?.title ?? d.response?.optionId}_${
+          confidence ? ` (${confidence} confidence)` : ""
+        }`,
+      );
+      sections.push(`  - Predicted: "${(d.response as any).predictedOutcome}"`);
+      const retro = findRetrospective(state, d.decisionId);
+      if (retro) {
+        const mark = retro.verdict === "right" ? "✓" : retro.verdict === "wrong" ? "✗" : "◐";
+        sections.push(`  - Looking back: ${mark} ${retro.verdict}${retro.note ? ` — "${retro.note}"` : ""}`);
+      }
+    }
+    sections.push("");
+  }
+
+  // --- Rejected approaches ---
+  // We pull these from the state's session metadata when available; otherwise
+  // we reconstruct from rejected-status artifacts with a reason.
+  const rejectedFromStatus = state.artifacts.filter(
+    (a) => a.status === "rejected" && a.type !== "reasoning",
+  );
+  const rejectedApproaches = (state as any).sessionMemory?.rejectedApproaches as
+    | Array<{ description: string; reason?: string; concept?: string }>
+    | undefined;
+
+  const seenReasons = new Set<string>();
+  const rows: string[] = [];
+  if (rejectedApproaches) {
+    for (const r of rejectedApproaches) {
+      const key = r.description;
+      if (seenReasons.has(key)) continue;
+      seenReasons.add(key);
+      rows.push(
+        `- **${r.description}**${r.concept ? ` _(concept: ${r.concept})_` : ""}${
+          r.reason ? ` — "${r.reason}"` : ""
+        }`,
+      );
+    }
+  } else {
+    for (const a of rejectedFromStatus) {
+      if (seenReasons.has(a.title)) continue;
+      seenReasons.add(a.title);
+      rows.push(`- **${a.title}**`);
+    }
+  }
+  if (rows.length > 0) {
+    sections.push("## Approaches you won't re-propose");
+    sections.push("");
+    rows.forEach((r) => sections.push(r));
+    sections.push("");
+  }
+
+  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0) {
+    sections.push("_Nothing crystallized yet. Keep pairing — the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
+    sections.push("");
+  }
+
+  sections.push(`*Generated from session ${state.sessionId} — [deepPairing](https://github.com/deeppairing).*`);
+  return sections.join("\n");
+}
+
+function findRetrospective(state: SessionState, decisionId: string):
+  | { verdict: "right" | "wrong" | "mixed"; note?: string }
+  | undefined {
+  const retros = (state as any).retrospectives as
+    | Array<{ decisionId: string; verdict: "right" | "wrong" | "mixed"; note?: string }>
+    | undefined;
+  return retros?.find((r) => r.decisionId === decisionId);
 }

@@ -3,6 +3,7 @@ import { useState } from "react";
 const API_BASE = `http://${window.location.host}`;
 
 const formats = [
+  { id: "learnings", label: "Learnings", description: "Concepts named, predictions made, approaches rejected" },
   { id: "pr-description", label: "PR Description", description: "Concise summary for pull requests" },
   { id: "pr-comments", label: "PR Comments (from pairing)", description: "Pairing findings as file:line anchored PR comments" },
   { id: "adr", label: "ADR", description: "Architecture Decision Record" },

@@ -1,0 +1,3 @@
+# R6 — bundled mcp-server copied here by packages/mcp-server/scripts/bundle-plugin.mjs
+# on every build. Generated artifact; source lives in packages/mcp-server/src/.
+server/
