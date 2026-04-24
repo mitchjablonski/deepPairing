@@ -47,16 +47,20 @@ describe("plugin launcher wiring", () => {
     expect(launcherSrc).toMatch(/require\.resolve\("@deeppairing\/mcp-server"\)/);
   });
 
-  it("monorepo-sibling candidate exists after build", () => {
-    // Skip this assertion when running pre-build (e.g., a fresh clone).
-    // CI runs build before tests so this normally passes; locally it nudges
-    // contributors to keep the build artifact in sync.
-    const sibling = path.join(pluginDir, "..", "packages", "mcp-server", "dist", "standalone.js");
-    if (!fs.existsSync(sibling)) {
+  it("bundled candidate exists after build (R6)", () => {
+    // packages/mcp-server's postbuild script now copies dist into
+    // claude-plugin/server/ so the launcher's FIRST candidate resolves.
+    // Skip silently when running pre-build (e.g., a fresh clone).
+    const bundled = path.join(pluginDir, "server", "standalone.js");
+    if (!fs.existsSync(bundled)) {
       // eslint-disable-next-line no-console
-      console.warn(`[plugin-launcher.test] dist/standalone.js missing — run \`pnpm --filter @deeppairing/mcp-server build\``);
+      console.warn(`[plugin-launcher.test] bundled standalone.js missing — run \`pnpm --filter @deeppairing/mcp-server build\``);
       return;
     }
+    expect(fs.existsSync(bundled)).toBe(true);
+    // The sibling path is still a valid fallback.
+    const sibling = path.join(pluginDir, "..", "packages", "mcp-server", "dist", "standalone.js");
+    if (!fs.existsSync(sibling)) return;
     expect(fs.existsSync(sibling)).toBe(true);
   });
 });

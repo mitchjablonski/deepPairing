@@ -1,8 +1,38 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
+
+/** R1: cumulative metrics from /api/metrics — proves the moat is compounding. */
+interface MetricsSnapshot {
+  firstSeenAt: string;
+  sessions: number;
+  counts: {
+    preflightBlocks: { total: number; bySource: { session: number; team: number } };
+    ledgerWrites: { total: number; rejected: number; approved: number };
+    retrospectives: { total: number; right: number; wrong: number; mixed: number };
+    horizonChecksRequested: number;
+    questions: { asked: number; answered: number };
+  };
+}
 
 export function SessionMetrics() {
   const { artifacts, comments } = useArtifactStore();
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+
+  // R1: cumulative counts across every session in this project (the moat).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`http://${window.location.host}/api/metrics`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setMetrics(data);
+      } catch {
+        // Silent — section just hides if the endpoint isn't reachable
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const stats = useMemo(() => {
     const byType = {
@@ -41,7 +71,7 @@ export function SessionMetrics() {
   }, [artifacts, comments]);
 
   return (
-    <div className="flex items-center gap-3 px-3 py-1 border-t border-border-default bg-surface-secondary text-2xs text-text-muted">
+    <div className="flex flex-wrap items-center gap-3 px-3 py-1 border-t border-border-default bg-surface-secondary text-2xs text-text-muted">
       <div className="flex items-center gap-2">
         {stats.byType.research > 0 && (
           <span>Findings: <strong className="text-text-secondary">{stats.byType.research}</strong></span>
@@ -84,6 +114,69 @@ export function SessionMetrics() {
           <span>{stats.duration}</span>
         </>
       )}
+
+      {/* R1: cumulative across every session in this project. Hidden
+          until metrics.json has accumulated signal — a blank grid on
+          day one sells nothing. */}
+      {metrics && metrics.sessions > 0 && (
+        <div className="w-full pt-2 mt-2 border-t border-border-default space-y-2">
+          <div className="text-2xs font-semibold text-text-secondary uppercase tracking-wide">
+            Across all sessions in this project
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-2xs">
+            <MetricRow label="Sessions" value={metrics.sessions} />
+            <MetricRow
+              label="🛡 Pre-flight blocks"
+              value={metrics.counts.preflightBlocks.total}
+              detail={
+                metrics.counts.preflightBlocks.total > 0
+                  ? `${metrics.counts.preflightBlocks.bySource.session} you · ${metrics.counts.preflightBlocks.bySource.team} team`
+                  : undefined
+              }
+            />
+            <MetricRow
+              label="🧭 Ledger writes"
+              value={metrics.counts.ledgerWrites.total}
+              detail={
+                metrics.counts.ledgerWrites.total > 0
+                  ? `${metrics.counts.ledgerWrites.rejected} avoid · ${metrics.counts.ledgerWrites.approved} prefer`
+                  : undefined
+              }
+            />
+            <MetricRow
+              label="Retrospectives"
+              value={metrics.counts.retrospectives.total}
+              detail={
+                metrics.counts.retrospectives.total > 0
+                  ? `${metrics.counts.retrospectives.right} right · ${metrics.counts.retrospectives.wrong} wrong · ${metrics.counts.retrospectives.mixed} mixed`
+                  : undefined
+              }
+            />
+            <MetricRow label="Horizon checks" value={metrics.counts.horizonChecksRequested} />
+            <MetricRow
+              label="❓ Questions"
+              value={metrics.counts.questions.asked}
+              detail={
+                metrics.counts.questions.asked > 0
+                  ? `${metrics.counts.questions.answered} answered`
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetricRow({ label, value, detail }: { label: string; value: number; detail?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <span className="text-text-muted">{label}</span>
+      <span className="flex items-baseline gap-1.5">
+        <strong className="text-text-primary font-mono">{value}</strong>
+        {detail && <span className="text-[10px] text-text-muted">{detail}</span>}
+      </span>
     </div>
   );
 }

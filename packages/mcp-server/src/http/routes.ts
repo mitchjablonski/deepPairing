@@ -8,6 +8,7 @@ import { FileStore } from "../store/file-store.js";
 import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore } from "../store/global-store.js";
+import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 
 type StoreGetter = (sessionId?: string) => IStore;
 type BroadcastFn = (event: any, sessionId?: string) => void;
@@ -89,6 +90,16 @@ export function createHttpRoutes(
       artifactId,
       intent: intent ?? "comment",
     }, sid);
+    // R1: Q3's horizon-check trigger fires as a question-intent comment
+    // with sectionId "horizon_check:request:<horizon>". The broadcast
+    // interceptor doesn't see sectionId (feedback_received is trimmed),
+    // so we count it inline here.
+    if (projectRoot) {
+      const sectionId = (target as any)?.sectionId;
+      if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
+        try { recordMetricEvent(projectRoot, { kind: "horizon_check_requested" }); } catch {}
+      }
+    }
     return c.json({ comment });
   });
 
@@ -309,6 +320,15 @@ export function createHttpRoutes(
     return c.json({ predictions });
   });
 
+  // R1: local telemetry surface. Read-only snapshot of the counts the
+  // daemon has been writing to `.deeppairing/metrics.json` as events
+  // flow through broadcast. The UI renders this in Settings → Session
+  // metrics so the user can see that the moat is quantifiably building.
+  app.get("/api/metrics", (c) => {
+    if (!projectRoot) return c.json({ error: "projectRoot not configured" }, 400);
+    return c.json(readMetrics(projectRoot));
+  });
+
   // P3: project-scoped team preferences for the companion UI. Reads
   // .deeppairing/team.json via any active session's FileStore (all
   // sessions in a project share the same team.json). Returns both the
@@ -356,7 +376,7 @@ export function createHttpRoutes(
   // Export session as markdown
   app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
-    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay";
+    const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay" | "learnings";
     const state = await store.getFullState();
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });

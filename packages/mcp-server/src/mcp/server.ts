@@ -471,11 +471,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "export_session",
-        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough).",
+        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact — concepts named, predictions made, approaches rejected).",
         inputSchema: {
           type: "object" as const,
           properties: {
-            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay"], description: "Export format" },
+            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings"], description: "Export format" },
           },
         },
       },
@@ -805,6 +805,50 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
       } catch {
         // Ledger read failure is non-fatal — we still have session-scoped memory.
+      }
+
+      // R2: "moat made measurable" welcome-back line. Once the user has
+      // accumulated enough signal (≥5 concepts), quantify the compounding
+      // so the agent has a concrete number to reference ("your ledger has
+      // blocked 12 repeat proposals across 4 projects") and the user feels
+      // the investment is paying off. Silent below threshold — an empty
+      // stat block sells nothing.
+      try {
+        const ledgerEntries = getGlobalStore().query({ limit: 10000 });
+        if (ledgerEntries.length >= 5) {
+          const projects = new Set<string>();
+          for (const e of ledgerEntries) {
+            for (const inst of e.instances) projects.add(inst.project);
+          }
+          const avoidCount = ledgerEntries.filter((e) => e.stance === "avoid").length;
+          const preferCount = ledgerEntries.filter((e) => e.stance === "prefer").length;
+
+          let localBlocks = 0;
+          let localSessions = 0;
+          try {
+            const fsMod = await import("node:fs");
+            const pathMod = await import("node:path");
+            const metricsPath = pathMod.join(process.cwd(), ".deeppairing", "metrics.json");
+            if (fsMod.existsSync(metricsPath)) {
+              const m = JSON.parse(fsMod.readFileSync(metricsPath, "utf-8"));
+              if (m?.version === 1) {
+                localBlocks = m.counts?.preflightBlocks?.total ?? 0;
+                localSessions = m.sessions ?? 0;
+              }
+            }
+          } catch {}
+
+          const parts = [
+            `${ledgerEntries.length} concept${ledgerEntries.length === 1 ? "" : "s"}`,
+            `${avoidCount} avoid / ${preferCount} prefer`,
+            `${projects.size} project${projects.size === 1 ? "" : "s"}`,
+          ];
+          if (localBlocks > 0) parts.push(`${localBlocks} block${localBlocks === 1 ? "" : "s"} fired here`);
+          if (localSessions > 0) parts.push(`session #${localSessions + 1} in this project`);
+          hintParts.push(`\n🌱 Your deepPairing ledger: ${parts.join(" · ")}.`);
+        }
+      } catch {
+        // Non-fatal — welcome-back line is cosmetic; real memory lives in the ledger + preflight regardless.
       }
 
       // Q4: surface unanswered questions from the human at first-call so the
@@ -1925,14 +1969,24 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "export_session": {
-        const format = (args?.format ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay";
-        const state = await store.getFullState();
+        const format = (args?.format ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay" | "learnings";
+        const state: any = await store.getFullState();
         // Include learner annotations when exporting as replay.
-        const enriched =
-          format === "replay" && typeof (store as any).getAnnotations === "function"
-            ? { ...state, annotations: await (store as any).getAnnotations() }
-            : state;
-        const markdown = formatSessionMarkdown(enriched, format);
+        if (format === "replay" && typeof (store as any).getAnnotations === "function") {
+          state.annotations = await (store as any).getAnnotations();
+        }
+        // R3: the learnings format cross-references retrospectives. Attach
+        // the session memory (rejected approaches) and retrospectives when
+        // the store exposes them.
+        if (format === "learnings") {
+          if (typeof (store as any).getSessionMemory === "function") {
+            state.sessionMemory = await (store as any).getSessionMemory();
+          }
+          if (typeof (store as any).getRetrospectives === "function") {
+            state.retrospectives = await (store as any).getRetrospectives();
+          }
+        }
+        const markdown = formatSessionMarkdown(state, format);
         return {
           content: [{ type: "text", text: markdown }],
         };

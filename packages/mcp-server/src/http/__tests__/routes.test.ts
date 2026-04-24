@@ -440,6 +440,29 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("GET /api/metrics (R1)", () => {
+    it("returns a zeroed snapshot when metrics.json is absent", async () => {
+      const res = await app.request("/api/metrics");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.version).toBe(1);
+      expect(body.counts.preflightBlocks.total).toBe(0);
+      expect(body.counts.ledgerWrites.total).toBe(0);
+      expect(body.sessions).toBe(0);
+    });
+
+    it("returns actual counts once metrics.json has been written", async () => {
+      const { recordMetricEvent } = await import("../../store/metrics-store.js");
+      recordMetricEvent(tmpDir, { kind: "preflight_block", source: "team" });
+      recordMetricEvent(tmpDir, { kind: "session_started" });
+      const res = await app.request("/api/metrics");
+      const body = await res.json();
+      expect(body.counts.preflightBlocks.total).toBe(1);
+      expect(body.counts.preflightBlocks.bySource.team).toBe(1);
+      expect(body.sessions).toBe(1);
+    });
+  });
+
   describe("GET /api/team-preferences (P3)", () => {
     it("returns { exists: false, preferences: [] } when team.json is absent", async () => {
       const res = await app.request("/api/team-preferences");
