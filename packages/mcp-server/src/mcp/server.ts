@@ -223,7 +223,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     tools: [
       {
         name: "present_findings",
-        description: `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence (code snippets with explanations), category, significance, and severity. Use instead of dumping findings as plain chat text.`,
+        description: `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence (code snippets with explanations), category, significance, and severity. Use instead of dumping findings as plain chat text. SINGLE REVIEW SURFACE: the companion UI is the only review surface for this artifact — do NOT also paste the findings as chat, prompt the user in-terminal, or call ExitPlanMode. After this returns, call check_feedback to wait for the human's verdict.`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -259,7 +259,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_options",
         description:
-          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Set `stakes: \"high\"` for architecturally significant / hard-to-reverse decisions (schema, auth, billing, infra); the UI then prompts the human for a prediction (calibration material).",
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Set `stakes: \"high\"` for architecturally significant / hard-to-reverse decisions (schema, auth, billing, infra); the UI then prompts the human for a prediction (calibration material). SINGLE REVIEW SURFACE: the human selects in the companion UI — do NOT also list the options in chat or ask in-terminal. After this returns, call check_feedback to wait for their selection.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -295,7 +295,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_spec",
         description:
-          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial features, cross-cutting changes, or anything that'd otherwise skip straight to code without agreement on what's being built.",
+          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial features, cross-cutting changes, or anything that'd otherwise skip straight to code without agreement on what's being built. SINGLE REVIEW SURFACE: the companion UI is where the human reviews requirements and acceptance criteria — do NOT re-paste the spec in chat or ask for terminal-side approval. After this returns, call check_feedback to wait for their verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -341,7 +341,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_plan",
-        description: "Present an implementation plan as steps with file changes and before/after previews.",
+        description: "Present an implementation plan as steps with file changes and before/after previews. SINGLE REVIEW SURFACE: this REPLACES Claude Code's native plan-approval flow for this work — do NOT call ExitPlanMode or otherwise request a terminal-side plan confirmation after present_plan. The human approves / revises / rejects in the companion UI; call check_feedback to wait for their verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -459,7 +459,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_code_change",
-        description: "Present a code change as a before/after diff with reasoning and confidence.",
+        description: "Present a code change as a before/after diff with reasoning and confidence. SINGLE REVIEW SURFACE: the human reviews the diff in the companion UI (small, confident edits may also surface a one-shot terminal accept via elicitation, but never both as parallel approvals). Do NOT also paste the diff into chat for confirmation. After this returns, call check_feedback to wait for their verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
