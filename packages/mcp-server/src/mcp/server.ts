@@ -15,6 +15,54 @@ import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-r
 import { maybeEmitTaskHandle } from "./tasks-probe.js";
 
 /**
+ * U0.2 — schema for the quick-approve elicitation form.
+ *
+ * Field bug it closes: an empty `properties: {}` schema let the elicitation
+ * render as a bare "OK" prompt. Some Claude Code surfaces auto-accept that
+ * on plain Enter, even when the user was typing a comment intended for the
+ * companion UI. The artifact silently flipped to `approved` mid-conversation.
+ *
+ * Requiring a real `approve: boolean` field forces the user to deliberately
+ * tick "approve" before we treat the result as an approval. Anything else —
+ * Enter-through, decline, cancel, malformed payload — falls through to the
+ * companion-UI review path.
+ */
+export const ELICIT_APPROVE_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    approve: {
+      type: "boolean" as const,
+      description: "Set true to approve here. Leave unset / false to review in the companion UI.",
+      default: false,
+    },
+  },
+  required: [],
+};
+
+/**
+ * Pure decision-from-elicit-result helper. Exported so unit tests can pin
+ * the contract without spinning up an SDK transport.
+ *
+ * Truth table:
+ *   action=accept,  content.approve === true  → "approve"
+ *   action=accept,  content.approve absent/false → "review"
+ *   action=decline                              → "review"
+ *   action=cancel                               → "review"
+ *   anything else                               → null
+ */
+export function decideElicitResponse(
+  result: { action?: string; content?: unknown } | null | undefined,
+): "approve" | "review" | null {
+  if (!result) return null;
+  if (result.action === "accept") {
+    const approved = (result.content as any)?.approve === true;
+    return approved ? "approve" : "review";
+  }
+  if (result.action === "decline" || result.action === "cancel") return "review";
+  return null;
+}
+
+/**
  * Check a set of proposal strings against previously rejected approaches.
  * Returns the first match found, or null if none.
  *
@@ -897,29 +945,22 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     /**
      * Try to elicit a quick response from the user via MCP elicitation.
      * Falls back gracefully if the client doesn't support it.
-     * Returns "approve" | "review" | "reject" | null (not supported).
-     */
-    /**
-     * Try to elicit a quick response from the user via MCP elicitation.
-     * Accept = approve, Decline = open companion UI for review.
-     * Falls back gracefully if the client doesn't support it.
+     * Returns "approve" | "review" | null (not supported / declined).
+     *
+     * Behavior is pinned by `decideElicitResponse` (exported below), so
+     * the response-handling logic can be unit-tested without an SDK round trip.
      */
     const tryElicit = async (message: string): Promise<"approve" | "review" | null> => {
       try {
         const result = await server.elicitInput({
           message,
-          requestedSchema: {
-            type: "object" as const,
-            properties: {},
-          },
+          requestedSchema: ELICIT_APPROVE_SCHEMA,
         });
-        // Accept = approve the artifact, Decline = review in companion UI
-        if (result.action === "accept") return "approve";
-        if (result.action === "decline" || result.action === "cancel") return "review";
+        return decideElicitResponse(result);
       } catch {
         // Client doesn't support elicitation — fall back to polling
+        return null;
       }
-      return null;
     };
 
     /**
