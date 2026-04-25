@@ -42,6 +42,21 @@ After presenting artifacts, call check_feedback in a loop. Each call waits up
 to 30 seconds. If it returns WAITING, call it again immediately — do NOT stop
 to ask the user in the terminal. The human responds in the companion UI browser.
 
+## Single Review Surface
+
+The companion UI is the ONLY review surface for any artifact you present. After
+calling present_findings / present_options / present_spec / present_plan /
+present_code_change, do NOT also:
+- Paste the artifact contents into chat for the user to read.
+- Ask the user "approve?" or "shall I proceed?" in the terminal.
+- Call ExitPlanMode after present_plan — present_plan REPLACES Claude Code's
+  native plan-approval flow for this work.
+
+Layering a terminal prompt on top of a deepPairing artifact creates two
+parallel approval surfaces. The user accepts in one, you proceed, but the
+artifact stays \`draft\` in the other — and the Stop hook will trap the agent
+in a poll loop. One artifact, one surface. Then check_feedback.
+
 ## Workflow
 
 1. GATHER: Research the codebase
