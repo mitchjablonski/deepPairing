@@ -777,6 +777,177 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) 
   }
 }
 
+/**
+ * U0.6 — `deeppairing sessions {list|prune}` — surface and clean up the
+ * orphan sessions a user accumulated under the old non-deterministic
+ * sessionId scheme. After the deterministic-id fix in standalone.ts, every
+ * fresh wrapper for a project lands on the same session — but old session
+ * dirs from before the fix linger and confuse the UI when it auto-selects
+ * the most recent one.
+ */
+async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<void> {
+  const { FileStore } = await import("../store/file-store.js");
+  const sessions = FileStore.listSessions(cwd);
+
+  if (sub === "list" || sub === undefined) {
+    if (sessions.length === 0) {
+      console.log(`  ${dim("·")} No sessions found in ${path.join(cwd, ".deeppairing", "sessions")}`);
+      return;
+    }
+    console.log(bold("\n  deepPairing sessions"));
+    console.log(`  ${dim("Found")} ${sessions.length} ${dim("session(s) in this project:")}\n`);
+    for (const s of sessions) {
+      const age = s.lastActivity ? humanAge(s.lastActivity) : "(no activity)";
+      console.log(`    ${dim("·")} ${s.id} ${dim(`— ${s.artifactCount} artifacts, last activity ${age}`)}`);
+    }
+    console.log();
+    console.log(`  ${dim("To remove empty/stale sessions:")} ${bold("npx deeppairing sessions prune")} ${dim("[--yes]")}`);
+    console.log();
+    return;
+  }
+
+  if (sub === "merge") {
+    // U0.6 — rescue data from sessions split by the pre-fix non-deterministic
+    // sessionId scheme. Common case: the UI wrote comments into one session
+    // while the agent's wrapper recorded the artifact in another, both for
+    // the same project. Merge collapses them by appending source records
+    // into the target's JSON files (no FileStore lifecycle dance).
+    const fromId = rest.find((a) => !a.startsWith("-") && rest.indexOf(a) === 0);
+    const intoId = rest.filter((a) => !a.startsWith("-"))[1];
+    if (!fromId || !intoId) {
+      console.error(`  ${red("✗")} Usage: npx deeppairing sessions merge <from-id> <into-id>`);
+      console.error(`  ${dim("   Example: sessions merge session_1777131724008 session_1777131802548_951295")}`);
+      process.exit(1);
+    }
+    if (fromId === intoId) {
+      console.error(`  ${red("✗")} from and into must differ.`);
+      process.exit(1);
+    }
+    const sessionsDir = path.join(cwd, ".deeppairing", "sessions");
+    const fromDir = path.join(sessionsDir, fromId);
+    const intoDir = path.join(sessionsDir, intoId);
+    if (!fs.existsSync(fromDir)) {
+      console.error(`  ${red("✗")} Source session directory not found: ${fromDir}`);
+      process.exit(1);
+    }
+    if (!fs.existsSync(intoDir)) {
+      console.error(`  ${red("✗")} Target session directory not found: ${intoDir}`);
+      process.exit(1);
+    }
+
+    // The merge is shape-aware per file. Each session JSON is an array of
+    // records; we concat + dedupe on `id` (target wins on collisions because
+    // the user explicitly chose it as the canonical store).
+    const filesToMerge = ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "retrospectives.json"];
+    const summary: Record<string, { from: number; into: number; merged: number }> = {};
+
+    for (const file of filesToMerge) {
+      const fromPath = path.join(fromDir, file);
+      const intoPath = path.join(intoDir, file);
+      if (!fs.existsSync(fromPath)) continue;
+
+      let fromArr: any[] = [];
+      let intoArr: any[] = [];
+      try { fromArr = JSON.parse(fs.readFileSync(fromPath, "utf-8")); } catch { continue; }
+      try { if (fs.existsSync(intoPath)) intoArr = JSON.parse(fs.readFileSync(intoPath, "utf-8")); } catch {}
+      if (!Array.isArray(fromArr) || !Array.isArray(intoArr)) continue;
+
+      const seen = new Set(intoArr.map((r) => r.id ?? r.decisionId ?? r.artifactId).filter(Boolean));
+      const additions = fromArr.filter((r) => {
+        const key = r.id ?? r.decisionId ?? r.artifactId;
+        return key && !seen.has(key);
+      });
+      // Rewrite the sessionId field so artifacts/comments report the new home.
+      for (const a of additions) {
+        if (a.sessionId) a.sessionId = intoId;
+      }
+      const merged = [...intoArr, ...additions];
+      const tmp = intoPath + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(merged, null, 2));
+      fs.renameSync(tmp, intoPath);
+
+      summary[file] = { from: fromArr.length, into: intoArr.length, merged: additions.length };
+    }
+
+    console.log(bold("\n  deepPairing sessions merge"));
+    console.log(`  ${green("✓")} Merged ${fromId} → ${intoId}`);
+    for (const [file, s] of Object.entries(summary)) {
+      console.log(`    ${dim("·")} ${file.padEnd(22)} +${s.merged} record(s) ${dim(`(from=${s.from}, into=${s.into})`)}`);
+    }
+    const yes = rest.includes("--yes") || rest.includes("-y");
+    const removeSrc = yes || (process.stdin.isTTY ? await confirmPrompt(`\n  Remove source ${fromId}? [y/N] `) : false);
+    if (removeSrc) {
+      fs.rmSync(fromDir, { recursive: true, force: true });
+      console.log(`  ${green("✓")} Removed ${fromDir}`);
+    } else {
+      console.log(`  ${dim("Source kept. Re-run with the same args to retry, or `rm -rf` it manually.")}`);
+    }
+    console.log();
+    console.log(`  ${dim("Restart Claude Code so the agent's wrapper picks up the merged session state.")}`);
+    console.log();
+    return;
+  }
+
+  if (sub === "prune") {
+    const yes = rest.includes("--yes") || rest.includes("-y");
+    // Prune criteria: empty (zero artifacts) AND older than 1h, OR explicitly
+    // empty for >24h regardless of activity. We keep recently-empty sessions
+    // because the wrapper just registered and the user hasn't done anything
+    // yet; deleting it would be confusing.
+    const now = Date.now();
+    const HOUR = 60 * 60 * 1000;
+    const candidates = sessions.filter((s) => {
+      if (s.artifactCount > 0) return false;
+      const last = s.lastActivity ? new Date(s.lastActivity).getTime() : 0;
+      const ageMs = now - last;
+      return ageMs > HOUR;
+    });
+
+    if (candidates.length === 0) {
+      console.log(`  ${green("✓")} Nothing to prune. ${sessions.length} active session(s) remain.`);
+      return;
+    }
+
+    console.log(bold(`\n  Will remove ${candidates.length} empty/stale session(s):`));
+    for (const c of candidates) {
+      console.log(`    ${dim("·")} ${c.id}`);
+    }
+    console.log();
+    const confirmed = yes || (process.stdin.isTTY ? await confirmPrompt(`  Proceed? [y/N] `) : false);
+    if (!confirmed) {
+      console.log(`  ${dim("Cancelled.")}`);
+      return;
+    }
+    let removed = 0;
+    for (const c of candidates) {
+      const dir = path.join(cwd, ".deeppairing", "sessions", c.id);
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed++;
+      } catch (err: any) {
+        console.log(`    ${red("✗")} ${c.id}: ${err?.message ?? err}`);
+      }
+    }
+    console.log(`  ${green("✓")} Removed ${removed} session(s).`);
+    return;
+  }
+
+  console.error(`  ${red("✗")} Unknown sessions subcommand: ${sub}. Try: sessions list | sessions prune [--yes]`);
+  process.exit(1);
+}
+
+function humanAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "(unknown)";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
 // --- CLI entry point with argument parsing ---
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -799,6 +970,9 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     npx deeppairing philosophy import <f> --merge
                                            Merge an exported ledger into your current one (idempotent)
     npx deeppairing doctor [--fix] [--yes] Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
+    npx deeppairing sessions [list|prune]  List sessions for this project; prune removes empty stale ones
+    npx deeppairing sessions merge <from> <into> [-y]
+                                           Merge two sessions (rescues data split by old non-deterministic ids)
     npx deeppairing export <format>        Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
     npx deeppairing post-pr-review <pr>    Post the pairing session's findings as inline comments
@@ -859,6 +1033,12 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     console.error(`  ${red("✗")} Unknown team subcommand: ${sub ?? "(none)"}. Try: team init [--force]`);
     process.exit(1);
   }
+} else if (cmd === "sessions") {
+  const sub = args[1];
+  sessionsCmd(sub, args.slice(2)).catch((err) => {
+    console.error(`  ${red("✗")} sessions ${sub ?? ""} failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
 } else if (cmd === "post-pr-review") {
   const ref = args[1];
   if (!ref) {

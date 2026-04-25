@@ -195,6 +195,26 @@ describe("Stop hook command — executable behavior (Part C)", () => {
     expect(exitCode).toBe(2);
   });
 
+  it("exits 0 when a draft artifact is older than 30 minutes (abandoned, U0.4 age guard)", () => {
+    const oldIso = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    writeArtifacts("s1", [{ id: "a1", type: "plan", status: "draft", createdAt: oldIso }]);
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 2 when a draft artifact is recent (≤30 minutes, U0.4 age guard)", () => {
+    const recentIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    writeArtifacts("s1", [{ id: "a1", type: "plan", status: "draft", createdAt: recentIso }]);
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(2);
+  });
+
+  it("exits 2 on draft with no createdAt (backward-compat: pre-U0.4 fixtures still block)", () => {
+    writeArtifacts("s1", [{ id: "a1", type: "plan", status: "draft" }]);
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(2);
+  });
+
   it("exits 0 when artifacts.json is malformed (degrade gracefully, do not block forever)", () => {
     const sessionDir = path.join(tmpDir, ".deeppairing", "sessions", "s1");
     fs.mkdirSync(sessionDir, { recursive: true });

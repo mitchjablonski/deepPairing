@@ -10,24 +10,47 @@ import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 
-type StoreGetter = (sessionId?: string) => IStore;
+// U0.6 — getter may return null when no session matches AND none exist.
+// Routes treat null as "no active session" rather than spawning a placeholder.
+type StoreGetter = (sessionId?: string) => IStore | null;
 type BroadcastFn = (event: any, sessionId?: string) => void;
+type LogFn = (msg: string) => void;
 
 /** Extract sessionId from X-Session-Id header */
 function getSessionId(c: any): string | undefined {
   return c.req.header("X-Session-Id") ?? undefined;
 }
 
+/** U0.6 — empty session state used when no MCP wrapper has registered yet.
+ *  Lets the UI render a "waiting for Claude Code" surface without the daemon
+ *  spawning a throwaway session just to hand back data. */
+const EMPTY_STATE = {
+  sessionId: null,
+  status: "no_active_session",
+  artifacts: [],
+  comments: [],
+  decisions: [],
+  planReviews: [],
+  autonomyLevel: "supervised",
+  rejectedApproaches: [],
+  approvedPatterns: [],
+} as const;
+
 export function createHttpRoutes(
   storeOrGetter: IStore | StoreGetter,
   projectRoot?: string,
   broadcastFn?: BroadcastFn,
+  logFn?: LogFn,
 ) {
   const getStore: StoreGetter = typeof storeOrGetter === "function"
     ? storeOrGetter as StoreGetter
     : () => storeOrGetter;
 
   const broadcast: BroadcastFn = broadcastFn ?? ((event) => defaultBroadcast(event));
+  // U0.6 — diagnostic log; routes call this on every status mutation so we
+  // can correlate UI approval clicks with what actually lands on disk.
+  // No-op when running in standalone (no daemon log file).
+  const log: LogFn = logFn ?? (() => {});
 
   const app = new Hono();
 
@@ -51,9 +74,21 @@ export function createHttpRoutes(
     return c.json({ error: "Internal server error" }, 500);
   });
 
-  // Full state for initial web UI hydration
+  // U0.6 — small helper for mutation routes. If no session is active yet,
+  // return 409 with a structured error instead of silently spawning a
+  // placeholder. The frontend uses `error.code === "no_active_session"` to
+  // surface a "start Claude Code with deepPairing" banner.
+  const NO_SESSION_RESPONSE = {
+    error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
+    code: "no_active_session",
+  };
+
+  // Full state for initial web UI hydration. Read route — gracefully returns
+  // an empty/no-session state instead of 409 so the UI can render its
+  // "waiting for Claude Code" surface on first paint.
   app.get("/api/state", async (c) => {
     const store = getStore(getSessionId(c));
+    if (!store) return c.json(EMPTY_STATE);
     return c.json(await store.getFullState());
   });
 
@@ -61,6 +96,7 @@ export function createHttpRoutes(
   app.post("/api/comments", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const body = await c.req.json();
     const { artifactId, content, target, intent, parentCommentId } = body;
 
@@ -107,6 +143,7 @@ export function createHttpRoutes(
   app.post("/api/decisions/:decisionId", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const decisionId = c.req.param("decisionId");
     const body = await c.req.json();
     const { optionId, reasoning, confidence, predictedOutcome } = body;
@@ -140,16 +177,40 @@ export function createHttpRoutes(
   app.post("/api/artifacts/:artifactId/status", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const storeSid = (store as any).getSessionId?.() ?? "(unknown)";
     const artifactId = c.req.param("artifactId");
     const body = await c.req.json();
     const { status, feedback } = body;
 
     if (!["approved", "revised", "rejected"].includes(status)) {
+      log(`[status] REJECTED — invalid status "${status}" for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid})`);
       return c.json({ error: "status must be approved, revised, or rejected" }, 400);
     }
 
+    // U0.6 diagnostic — log the routing decision so we can confirm whether
+    // the UI's X-Session-Id matches the store the artifact actually lives
+    // in. If they differ (hypothesis A), the mutation lands in the wrong
+    // store and the agent's wrapper polling a different session never sees
+    // the approval.
+    const artsBefore = await store.getArtifacts();
+    const target = artsBefore.find((a) => a.id === artifactId);
+    log(
+      `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} ` +
+      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status}`,
+    );
+
     await store.updateArtifactStatus(artifactId, status);
     await store.resolvePlanReview(artifactId, status, feedback);
+
+    // U0.6 — force the debounced flush so the Stop hook (which reads
+    // .deeppairing/sessions/*/artifacts.json directly from disk) sees the
+    // new status before its next tick. Without this, a 100ms debounce window
+    // can mean the hook reads stale `draft` and traps the agent in a poll
+    // loop even though the user just approved.
+    if (typeof (store as any).forceFlush === "function") {
+      (store as any).forceFlush();
+    }
 
     if (feedback) {
       const comment = await store.addComment({
@@ -192,6 +253,7 @@ export function createHttpRoutes(
   app.post("/api/artifacts/:artifactId/rename", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifactId = c.req.param("artifactId");
     const body = await c.req.json();
     const { title } = body;
@@ -206,6 +268,7 @@ export function createHttpRoutes(
   // Get comments for an artifact
   app.get("/api/artifacts/:artifactId/comments", async (c) => {
     const store = getStore(getSessionId(c));
+    if (!store) return c.json({ comments: [] });
     const artifactId = c.req.param("artifactId");
     return c.json({ comments: await store.getCommentsForArtifact(artifactId) });
   });
@@ -336,6 +399,7 @@ export function createHttpRoutes(
   // when no file has been created yet.
   app.get("/api/team-preferences", (c) => {
     const store = getStore(getSessionId(c));
+    if (!store) return c.json({ preferences: [], exists: false });
     const preferences = typeof (store as any).getTeamPreferences === "function"
       ? (store as any).getTeamPreferences()
       : [];
@@ -376,6 +440,7 @@ export function createHttpRoutes(
   // Export session as markdown
   app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const format = (c.req.query("format") ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay" | "learnings";
     const state = await store.getFullState();
     const markdown = formatSessionMarkdown(state, format);
@@ -386,6 +451,7 @@ export function createHttpRoutes(
   app.post("/api/preferences", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const body = await c.req.json();
     if (body.autonomyLevel) {
       await store.setAutonomyLevel(body.autonomyLevel);
@@ -417,6 +483,7 @@ export function createHttpRoutes(
   // Get session memory (rejected approaches, approved patterns)
   app.get("/api/memory", async (c) => {
     const store = getStore(getSessionId(c));
+    if (!store) return c.json({ rejectedApproaches: [], approvedPatterns: [] });
     return c.json(await store.getSessionMemory());
   });
 

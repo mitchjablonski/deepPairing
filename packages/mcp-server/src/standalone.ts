@@ -37,11 +37,19 @@ async function main() {
   const port = await ensureDaemon(projectRoot);
   log(`Daemon ready on port ${port}`);
 
-  // Create a session ID and register with the daemon.
-  // Include a random suffix so two wrappers spawned in the same millisecond
-  // don't collide into one FileStore.
-  const sessionId = `session_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+  // U0.6 — deterministic sessionId per projectRoot. Previously every wrapper
+  // spawn minted a fresh `session_<timestamp>_<random>`, which meant a
+  // restart of Claude Code or a second `npx deeppairing init` produced a
+  // duplicate session for the same project. The companion UI bound to one;
+  // the agent's current wrapper polled another; approvals never landed
+  // where the agent was looking. Hashing projectRoot collapses all wrappers
+  // for a project into one shared session — which is the right semantic
+  // model for pairing (the "session" is the workspace, not the process).
+  // Project name kept in the id as a human-readable hint for `ls`.
   const projectName = path.basename(projectRoot);
+  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  const sessionId = `session_${safeProjectName}_${projectHash}`;
   const client = new DaemonClient(port, sessionId);
   await client.register({ title: projectName, project: projectName });
   log(`Session registered: ${sessionId} (${projectName})`);

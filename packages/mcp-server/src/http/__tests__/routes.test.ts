@@ -601,6 +601,85 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("No-active-session handling (U0.6 prevention)", () => {
+    // The orphan-session field bug: when the daemon's getter returns null,
+    // routes must NOT spawn a placeholder session. Reads degrade to empty
+    // payloads; mutations 409 with a structured error code so the UI can
+    // surface a "start Claude Code" banner instead of silently doing nothing.
+
+    function makeApp() {
+      const broadcasts: any[] = [];
+      const app = createHttpRoutes(
+        () => null,
+        tmpDir,
+        (event) => broadcasts.push(event),
+      );
+      return { app, broadcasts };
+    }
+
+    it("GET /api/state returns EMPTY_STATE with status no_active_session", async () => {
+      const { app } = makeApp();
+      const res = await app.request("/api/state");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.sessionId).toBeNull();
+      expect(body.status).toBe("no_active_session");
+      expect(body.artifacts).toEqual([]);
+    });
+
+    it("POST /api/comments returns 409 no_active_session and does NOT broadcast", async () => {
+      const { app, broadcasts } = makeApp();
+      const res = await app.request("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifactId: "a", content: "hi" }),
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe("no_active_session");
+      expect(broadcasts).toHaveLength(0);
+    });
+
+    it("POST /api/artifacts/:id/status returns 409 no_active_session", async () => {
+      const { app } = makeApp();
+      const res = await app.request("/api/artifacts/x/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "approved" }),
+      });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe("no_active_session");
+    });
+
+    it("POST /api/decisions/:id returns 409 no_active_session", async () => {
+      const { app } = makeApp();
+      const res = await app.request("/api/decisions/d", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optionId: "o" }),
+      });
+      expect(res.status).toBe(409);
+    });
+
+    it("GET /api/artifacts/:id/comments returns empty list (read degrades, doesn't 409)", async () => {
+      const { app } = makeApp();
+      const res = await app.request("/api/artifacts/x/comments");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.comments).toEqual([]);
+    });
+
+    it("GET /api/team-preferences returns empty preferences with exists=false", async () => {
+      const { app } = makeApp();
+      const res = await app.request("/api/team-preferences");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.preferences).toEqual([]);
+      expect(body.exists).toBe(false);
+    });
+  });
+
   describe("X-Session-Id routing (daemon multi-session)", () => {
     // Regression for the daemon-routing bug: when the daemon hosts multiple
     // FileStores, every public-route mutation must hit the store named by
