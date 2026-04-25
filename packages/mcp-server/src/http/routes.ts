@@ -104,8 +104,9 @@ export function createHttpRoutes(
       return c.json({ error: "artifactId and content required" }, 400);
     }
 
+    const newId = `cmt_${nanoid(10)}`;
     const comment = await store.addComment({
-      id: `cmt_${nanoid(10)}`,
+      id: newId,
       artifactId,
       content,
       author: "human",
@@ -114,18 +115,27 @@ export function createHttpRoutes(
       parentCommentId: parentCommentId ?? null,
     });
 
-    broadcast({ type: "comment_added", comment }, sid);
-    // Q5: a synthetic "I see you" — the server acknowledges the human's
-    // comment immediately so the UI can show a pair-tempo pip. The agent
-    // won't SEE it until its next check_feedback poll (≤30s), but server-
-    // receipt is a useful signal on its own: the message left the human's
-    // hand, entered the pair session, and will be surfaced to the agent.
-    broadcast({
-      type: "feedback_received",
-      commentId: comment.id,
-      artifactId,
-      intent: intent ?? "comment",
-    }, sid);
+    // U0.1 — when addComment dedupes, it returns the existing comment whose
+    // id != newId. Skip the broadcast in that case (the original comment
+    // already broadcast 5s ago) so the UI doesn't see redundant
+    // comment_added/feedback_received events for the same content.
+    const isNew = comment.id === newId;
+    if (isNew) {
+      broadcast({ type: "comment_added", comment }, sid);
+      // Q5: a synthetic "I see you" — the server acknowledges the human's
+      // comment immediately so the UI can show a pair-tempo pip. The agent
+      // won't SEE it until its next check_feedback poll (≤30s), but server-
+      // receipt is a useful signal on its own: the message left the human's
+      // hand, entered the pair session, and will be surfaced to the agent.
+      broadcast({
+        type: "feedback_received",
+        commentId: comment.id,
+        artifactId,
+        intent: intent ?? "comment",
+      }, sid);
+    } else {
+      log(`[comment] DEDUPED — sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} content="${content.slice(0, 40)}"`);
+    }
     // R1: Q3's horizon-check trigger fires as a question-intent comment
     // with sectionId "horizon_check:request:<horizon>". The broadcast
     // interceptor doesn't see sectionId (feedback_received is trimmed),

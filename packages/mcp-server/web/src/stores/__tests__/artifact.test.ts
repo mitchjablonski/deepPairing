@@ -68,6 +68,21 @@ describe("artifact store — addArtifact", () => {
     s.addArtifact(artifact("a3"));
     expect(useArtifactStore.getState().unreadIds).toEqual(["a2", "a3"]);
   });
+
+  it("dedupes by id — repeated artifact_created events don't multiply (U0.1)", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1"));
+    s.addArtifact(artifact("a1"));
+    s.addArtifact(artifact("a1"));
+    expect(useArtifactStore.getState().artifacts).toHaveLength(1);
+  });
+
+  it("merges fields on re-add so a status-bearing rebroadcast can update in place", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "v1", status: "draft" }));
+    s.addArtifact(artifact("a1", { title: "v1", status: "approved" }));
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+  });
 });
 
 describe("artifact store — selectArtifact", () => {
@@ -131,6 +146,20 @@ describe("artifact store — addComment", () => {
     const s = useArtifactStore.getState();
     s.addComment(comment("c1", "__session__"));
     expect(useArtifactStore.getState().comments["__session__"]).toHaveLength(1);
+  });
+
+  it("dedupes by id — repeated WS broadcasts for the same comment don't multiply (U0.1)", () => {
+    // Field bug: a single posted comment visibly multiplied while the user
+    // sat on the page because the WebSocket replayed `comment_added` (or
+    // re-hydrated initial state) and the store blindly appended each time.
+    const s = useArtifactStore.getState();
+    const c = comment("c_dup", "a1");
+    s.addComment(c);
+    s.addComment(c);
+    s.addComment({ ...c, content: "ignored — same id wins" });
+    const { comments } = useArtifactStore.getState();
+    expect(comments["a1"]).toHaveLength(1);
+    expect(comments["a1"][0].id).toBe("c_dup");
   });
 });
 
