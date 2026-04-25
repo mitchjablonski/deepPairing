@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -109,6 +110,97 @@ describe("ensureStopHook", () => {
     expect(result.ok).toBe(false);
     // Original (malformed) file is intact
     expect(fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8")).toBe("{ not json");
+  });
+});
+
+describe("Stop hook command — executable behavior (Part C)", () => {
+  // The Stop hook is an inline `node -e "..."` blob baked into
+  // .claude/settings.local.json. The other tests verify that we INSTALL it
+  // correctly; these execute the SAME command against fixture session data
+  // and assert exit codes — which is what Claude Code actually keys off of.
+  //
+  // Exit 0 → agent is allowed to stop.
+  // Exit 2 → "deepPairing: pending artifacts need review" → agent must continue.
+  //
+  // If the artifact JSON schema, status names, or trigger types ever shift,
+  // these tests catch it before the hook silently no-ops in production.
+
+  function getHookCommand(): string {
+    ensureStopHook(tmpDir);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    return settings.hooks.Stop[0].command as string;
+  }
+
+  function runHook(): { exitCode: number; stdout: string } {
+    const cmd = getHookCommand();
+    try {
+      const stdout = execSync(cmd, { cwd: tmpDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      return { exitCode: 0, stdout };
+    } catch (err: any) {
+      return { exitCode: err.status ?? 1, stdout: err.stdout?.toString() ?? "" };
+    }
+  }
+
+  function writeArtifacts(sessionId: string, artifacts: any[]) {
+    const sessionDir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify(artifacts));
+  }
+
+  it("exits 0 when there are no sessions at all", () => {
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 0 when sessions exist but no artifacts are draft", () => {
+    writeArtifacts("s1", [
+      { id: "a1", type: "research", status: "approved" },
+      { id: "a2", type: "plan", status: "rejected" },
+    ]);
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 2 when a draft research artifact exists", () => {
+    writeArtifacts("s1", [{ id: "a1", type: "research", status: "draft" }]);
+    const { exitCode, stdout } = runHook();
+    expect(exitCode).toBe(2);
+    expect(stdout).toContain("deepPairing");
+    expect(stdout).toContain("check_feedback");
+  });
+
+  it("exits 2 for any of: research, spec, plan, decision, code_change in draft", () => {
+    for (const type of ["research", "spec", "plan", "decision", "code_change"]) {
+      // Clean slate per type
+      const sessionsDir = path.join(tmpDir, ".deeppairing", "sessions");
+      if (fs.existsSync(sessionsDir)) fs.rmSync(sessionsDir, { recursive: true, force: true });
+      writeArtifacts("s1", [{ id: "a1", type, status: "draft" }]);
+      const { exitCode } = runHook();
+      expect(exitCode, `type=${type} should block stop`).toBe(2);
+    }
+  });
+
+  it("exits 0 when only a draft reasoning artifact exists (reasoning has no review cycle)", () => {
+    writeArtifacts("s1", [{ id: "a1", type: "reasoning", status: "draft" }]);
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(0);
+  });
+
+  it("exits 2 if ANY session has a draft artifact (multi-session)", () => {
+    writeArtifacts("s1", [{ id: "a1", type: "research", status: "approved" }]);
+    writeArtifacts("s2", [{ id: "a2", type: "plan", status: "draft" }]);
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(2);
+  });
+
+  it("exits 0 when artifacts.json is malformed (degrade gracefully, do not block forever)", () => {
+    const sessionDir = path.join(tmpDir, ".deeppairing", "sessions", "s1");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), "{ not json");
+    const { exitCode } = runHook();
+    expect(exitCode).toBe(0);
   });
 });
 

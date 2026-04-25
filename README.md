@@ -1,84 +1,111 @@
 # deepPairing
 
-**Structured human-AI collaboration for software development.**
+> The agent proposes "let's add a global mutable ConfigStore singleton."
+> You reject it: *"we tried global state for config last project — broke testability."*
+> Three minutes later it tries again, paraphrased: *"add a global config cache for hot lookups."*
+> deepPairing catches the concept match and refuses on the agent's behalf.
+>
+> 🛡 **Blocked by your taste — "global mutable state for config"**
+> *You rejected this 3 days ago: "broke testability in 3 places."*
 
-deepPairing is an MCP server that runs inside Claude Code, turning AI-assisted coding from "AI does everything, you review after" into a structured collaboration where you understand, decide, and steer at every step.
+That refusal — and the cross-project taste it's drawing from — is what deepPairing exists to do.
 
-## Quick Start
-
-```bash
-# Initialize in your project
-npx @deeppairing/mcp-server init
-
-# Restart Claude Code to activate the MCP server
-# Open the companion UI
-open http://localhost:3847
-```
-
-Or add manually to `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "deeppairing": {
-      "command": "npx",
-      "args": ["@deeppairing/mcp-server"]
-    }
-  }
-}
-```
-
-## What It Does
-
-When you work with Claude Code, deepPairing provides structured collaboration tools:
-
-- **Research Findings** -- The agent presents what it discovered with actual code snippets, explanations, and impact analysis. You review and comment inline.
-- **Decision Gates** -- At architectural decision points, the agent presents 2-4 options with pros/cons/effort/risk. You choose.
-- **Implementation Plans** -- Before multi-file changes, the agent presents a step-by-step plan with before/after previews. You approve, modify, or reject.
-- **Code Changes** -- Every change comes with reasoning, unified diffs, and inline commenting.
-- **Session Memory** -- Rejected approaches are never proposed again. Approved patterns are preferred in future sessions.
-
-## Companion UI
-
-The companion web UI at `localhost:3847` provides:
-
-- Sidebar layout with artifacts grouped by type (findings, decisions, plans, code changes)
-- Inline code commenting with syntax highlighting
-- Semantic line-level diffs (unified/split/result views)
-- Decision cards with keyboard navigation
-- Command palette (Cmd+K)
-- Autonomy slider (supervised / balanced / autonomous)
-- Auto-approve countdown for high-confidence items
-- Partial plan acceptance (check/uncheck individual steps)
-- Inline code suggestions
-- Session metrics and engagement tracking
-- Desktop notifications when it's your turn
-- Editor deep links (VS Code, Cursor, JetBrains, Zed)
-
-Also available as a **VS Code sidebar extension**.
-
-## How It Works
-
-```
-Claude Code <--stdio--> deepPairing MCP Server <--WebSocket--> Companion UI
-                              |
-                        .deeppairing/
-                        (session persistence)
-```
-
-The agent calls MCP tools (`present_findings`, `present_options`, `present_plan`, etc.) which record artifacts and push them to the companion UI via WebSocket. You review, comment, and decide in the UI. The agent picks up your feedback via `check_feedback`.
-
-## Development
+## Try it in two minutes (no Claude Code yet)
 
 ```bash
-pnpm install
-pnpm build                                              # Build all packages
-pnpm test                                               # Run tests
-cd packages/mcp-server/web && npx vite build            # Build companion UI
-pnpm --filter @deeppairing/mcp-server start             # Start MCP server
+git clone https://github.com/deeppairing/deeppairing.git
+cd deeppairing && pnpm install && pnpm build
+node packages/mcp-server/dist/cli/init.js demo
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
+> Requires Node 20+ and pnpm 10+. The full build takes ~6 seconds on a fresh clone.
+
+The companion UI auto-opens at `http://localhost:3847`. The hero rejection-block toast fires within ~5 seconds. That's the demo — the rest of the project is whether you'd want this in your daily Claude Code loop.
+
+## Use it in Claude Code
+
+```bash
+# from the cloned repo
+claude --plugin-dir ./claude-plugin
+```
+
+Then in any project:
+
+```
+You: Let's analyze the auth module.
+```
+
+Claude calls deepPairing's MCP tools instead of dumping findings as plain text. Findings, decisions, plans, and code changes land in the companion UI with structured evidence. You comment, approve, reject, ask "why" — and every rejection becomes part of your **cross-project Philosophy Ledger** that future sessions remember.
+
+## What makes this different
+
+Most AI-coding tools optimize for the agent moving faster. deepPairing optimizes for the **decision quality** of the human-AI pair, on important work.
+
+- **Concept-aware pre-flight blocking.** The agent can't re-propose an approach you've rejected — by surface name *or* by the underlying concept. Reject "global state for config" once and a later "global config cache" gets caught.
+- **Cross-project Philosophy Ledger.** Stances accumulate at `~/.deeppairing/philosophy/v1.json` across every deepPairing project you touch. Portable via `npx deeppairing philosophy export | import --merge`.
+- **Three-layer memory model.** Filesystem-sensed guardrails (migrations, CI), team conventions (committable `.deeppairing/team.json`), personal philosophy. Surfaced separately to the agent. Never merged.
+- **Calibration loop.** High-stakes decisions capture your prediction + confidence. When a similar decision comes up later, the breadcrumb shows what you predicted before. ✓ / ✗ / ◐ retrospective affordance closes the loop.
+- **Concept-naming as the teaching lever.** Every `log_reasoning` call surfaces the pattern at play ("dependency inversion", "optimistic UI") so you learn the vocabulary, not just the fix.
+- **Pair-tempo signals.** "I see you" toast on every comment, ❓ N questions waiting badge, ledger-write toast on every stance added. The compounding is *felt*, not just stored.
+
+## What it isn't
+
+- **Not a code review bot** like CodeRabbit or Greptile. It pairs *with* you on the diff; the PR is a surface to share what you paired on.
+- **Not an autonomous agent.** The Ceremony dial goes Full / Light / Minimal — even Minimal stops at architectural decisions.
+- **Not for junior education.** It assumes you already have taste; it makes that taste compound across projects and sessions.
+
+## Working with deepPairing
+
+```bash
+npx deeppairing demo                  # 5-second hook validator
+npx deeppairing init                  # Set up in this project (interactive)
+npx deeppairing doctor [--fix]        # Diagnose / heal install issues
+npx deeppairing team init             # Scaffold .deeppairing/team.json
+npx deeppairing philosophy export     # Dump cross-project ledger
+npx deeppairing philosophy import f --merge
+npx deeppairing post-pr-review <pr>   # Post pair findings as PR comments (gh CLI)
+npx deeppairing export <format>       # full | pr-comments | adr | replay | learnings
+```
+
+> **Why `npx deeppairing` works without an npm publish:** the package isn't on
+> npm yet. To get the short `deeppairing` command in your PATH, link the cloned
+> package globally one time:
+>
+> ```bash
+> # one-time setup (creates ~/.local/share/pnpm and adds it to your PATH)
+> pnpm setup
+> # then, from the deepPairing repo
+> cd packages/mcp-server && pnpm link --global
+> ```
+>
+> Now `deeppairing demo` and friends resolve to your local checkout. If you'd
+> rather not globally link, just call the CLI by path:
+> `node /path/to/deepPairing/packages/mcp-server/dist/cli/init.js demo`.
+
+## How it fits together
+
+```
+Claude Code  ←stdio→  deepPairing MCP Server  ←WebSocket→  Companion UI
+                          ↓
+                   .deeppairing/        (session artifacts, team prefs, metrics)
+                   ~/.deeppairing/      (cross-project Philosophy Ledger)
+```
+
+The MCP server runs inside Claude Code (it IS the agent — no separate orchestrator). The companion UI is read + steer; the terminal stays the primary chat surface. Sessions persist as JSON in `.deeppairing/`; the ledger persists at `~/.deeppairing/philosophy/v1.json`.
+
+For details: see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## What's in the box
+
+- **`packages/mcp-server/`** — the MCP server, CLI subcommands, companion UI (React + Vite + Zustand).
+- **`packages/shared/`** — Zod schemas + fixtures that both server and UI import.
+- **`claude-plugin/`** — Claude Code plugin: `.mcp.json`, slash commands (`/deeppairing:start`, `/deeppairing:review`, `/deeppairing:stance`, `/deeppairing:review-pr`, `/deeppairing:post-pr`), `pairing-protocol` skill.
+
+13 MCP tools: `present_findings`, `present_options`, `present_spec`, `present_plan`, `present_code_change`, `log_reasoning`, `recall` (mode: philosophy | sessions | any), `revise_artifact` (mode: supersede | retract), `request_horizon_check`, `answer_question`, `post_pr_review`, `export_session`, `check_feedback`.
+
+## Status
+
+Pre-1.0. Installable from this repo only — no npm publish, no marketplace listing yet. The hook is proven (the `demo` command exists for that reason); the next step is earning a handful of delighted real users before broader distribution.
 
 ## License
 

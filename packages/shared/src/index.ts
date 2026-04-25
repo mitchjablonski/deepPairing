@@ -96,6 +96,15 @@ export {
 } from "./schemas/annotation.js";
 
 export {
+  TaskStatusSchema,
+  TaskKindSchema,
+  TaskHandleSchema,
+  type TaskStatus,
+  type TaskKind,
+  type TaskHandle,
+} from "./schemas/task-handle.js";
+
+export {
   RetrospectiveVerdictSchema,
   RetrospectiveSchema,
   CreateRetrospectiveRequestSchema,

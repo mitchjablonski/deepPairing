@@ -39,9 +39,12 @@ describe("plugin launcher wiring", () => {
     // the array braces via a regex that requires `resolve(here,` before it.
     const resolveCall = /resolve\(here,\s*"([^"]+)"\)/g;
     const inOrder = [...launcherSrc.matchAll(resolveCall)].map((m) => m[1]);
+    // S2 reorder: monorepo-sibling first (resolves npm deps via the
+    // workspace's node_modules); bundled is the future-marketplace
+    // fallback. Until the bundled path inlines deps, sibling has to win.
     expect(inOrder).toEqual([
-      "server/standalone.js",
       "../packages/mcp-server/dist/standalone.js",
+      "server/standalone.js",
     ]);
     // npm fallback is reached via require.resolve only when both candidates miss.
     expect(launcherSrc).toMatch(/require\.resolve\("@deeppairing\/mcp-server"\)/);

@@ -601,6 +601,101 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("X-Session-Id routing (daemon multi-session)", () => {
+    // Regression for the daemon-routing bug: when the daemon hosts multiple
+    // FileStores, every public-route mutation must hit the store named by
+    // the X-Session-Id header (sent by the web UI), NOT a default store. The
+    // wiring is: routes.ts reads the header, calls a getter from daemon.ts
+    // that looks up the right FileStore. Pre-fix, getters were a Proxy that
+    // always delegated to getDefaultStore() — so a comment on "session B"
+    // appeared in "session A" instead. These tests pin the contract.
+
+    it("POST /api/comments routes to the store named by X-Session-Id", async () => {
+      const storeA = new FileStore(tmpDir, "session_a");
+      const storeB = new FileStore(tmpDir, "session_b");
+      const broadcasts: Array<{ event: any; sessionId?: string }> = [];
+      const multiApp = createHttpRoutes(
+        (sid?: string) => (sid === "session_b" ? storeB : storeA),
+        tmpDir,
+        (event, sessionId) => broadcasts.push({ event, sessionId }),
+      );
+
+      const res = await multiApp.request("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Session-Id": "session_b" },
+        body: JSON.stringify({ artifactId: "art_b1", content: "for session B" }),
+      });
+      expect(res.status).toBe(200);
+
+      // Comment landed in session B's store, NOT session A's.
+      expect(storeB.getCommentsForArtifact("art_b1")).toHaveLength(1);
+      expect(storeA.getCommentsForArtifact("art_b1")).toHaveLength(0);
+
+      // Broadcast carried the right sessionId so subscribers of A don't see B's traffic.
+      const commentBroadcast = broadcasts.find((b) => b.event.type === "comment_added");
+      expect(commentBroadcast?.sessionId).toBe("session_b");
+
+      storeA.forceFlush();
+      storeB.forceFlush();
+    });
+
+    it("POST /api/artifacts/:id/status routes to the right store and broadcasts with sessionId", async () => {
+      const storeA = new FileStore(tmpDir, "session_a2");
+      const storeB = new FileStore(tmpDir, "session_b2");
+      // Both stores get an artifact with the same id so the wrong-store path
+      // wouldn't fail loudly — only the "did the right store mutate?" check
+      // catches a regression.
+      storeA.createArtifact({ id: "art_x", type: "plan", title: "A", content: { steps: [] } });
+      storeB.createArtifact({ id: "art_x", type: "plan", title: "B", content: { steps: [] } });
+
+      const broadcasts: Array<{ event: any; sessionId?: string }> = [];
+      const multiApp = createHttpRoutes(
+        (sid?: string) => (sid === "session_b2" ? storeB : storeA),
+        tmpDir,
+        (event, sessionId) => broadcasts.push({ event, sessionId }),
+      );
+
+      const res = await multiApp.request("/api/artifacts/art_x/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Session-Id": "session_b2" },
+        body: JSON.stringify({ status: "approved" }),
+      });
+      expect(res.status).toBe(200);
+
+      const artA = storeA.getArtifacts().find((a) => a.id === "art_x");
+      const artB = storeB.getArtifacts().find((a) => a.id === "art_x");
+      expect(artB?.status).toBe("approved");
+      expect(artA?.status).toBe("draft");
+
+      const updated = broadcasts.find((b) => b.event.type === "artifact_updated");
+      expect(updated?.sessionId).toBe("session_b2");
+
+      storeA.forceFlush();
+      storeB.forceFlush();
+    });
+
+    it("falls back to default store when X-Session-Id is absent", async () => {
+      const storeDefault = new FileStore(tmpDir, "default_session");
+      const storeOther = new FileStore(tmpDir, "other_session");
+      const multiApp = createHttpRoutes(
+        (sid?: string) => (sid === "other_session" ? storeOther : storeDefault),
+        tmpDir,
+      );
+
+      const res = await multiApp.request("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifactId: "art_d", content: "no header" }),
+      });
+      expect(res.status).toBe(200);
+      expect(storeDefault.getCommentsForArtifact("art_d")).toHaveLength(1);
+      expect(storeOther.getCommentsForArtifact("art_d")).toHaveLength(0);
+
+      storeDefault.forceFlush();
+      storeOther.forceFlush();
+    });
+  });
+
   describe("CORS", () => {
     it("allows localhost origins", async () => {
       const res = await app.request("/api/state", {
