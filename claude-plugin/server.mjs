@@ -20,9 +20,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Order matters. The monorepo-sibling path resolves npm deps via the
+// workspace's node_modules — that works today. The bundled path
+// (./server/) is structured for a future marketplace tarball with deps
+// inlined; in dev it'd fail to find @modelcontextprotocol/sdk. Until
+// the marketplace bundle is real, prefer the sibling path when it exists.
 const candidates = [
-  resolve(here, "server/standalone.js"),
   resolve(here, "../packages/mcp-server/dist/standalone.js"),
+  resolve(here, "server/standalone.js"),
 ];
 
 let target = candidates.find(existsSync) ?? null;

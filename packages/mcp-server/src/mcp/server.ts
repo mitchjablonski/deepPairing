@@ -12,6 +12,7 @@ import type { TeamPreference } from "@deeppairing/shared";
 import { formatSessionMarkdown, buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
 import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
+import { maybeEmitTaskHandle } from "./tasks-probe.js";
 
 /**
  * Check a set of proposal strings against previously rejected approaches.
@@ -1068,6 +1069,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           },
         });
         broadcast({ type: "artifact_created", artifact });
+        await maybeEmitTaskHandle(server, artifact, store);
         await autoNameSession(artifact.title);
 
         // Try elicitation for quick approval
@@ -1116,6 +1118,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           stakes,
         } as any);
         broadcast({ type: "artifact_created", artifact });
+        await maybeEmitTaskHandle(server, artifact, store);
         broadcast({
           type: "decision_request",
           decisionId,
@@ -1163,6 +1166,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           },
         });
         broadcast({ type: "artifact_created", artifact });
+        await maybeEmitTaskHandle(server, artifact, store);
         await autoNameSession(artifact.title);
 
         // Quick-approve path via elicitation for simple specs
@@ -1211,6 +1215,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         });
         await store.recordPlanReview(id);
         broadcast({ type: "artifact_created", artifact });
+        await maybeEmitTaskHandle(server, artifact, store);
         broadcast({ type: "plan_review_request", artifactId: id, title: args?.title });
 
         // Try elicitation for quick approval
@@ -1253,6 +1258,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           relatedArtifactIds: relatedIds,
         });
         broadcast({ type: "artifact_created", artifact });
+        await maybeEmitTaskHandle(server, artifact, store);
         // Gentle nudge when the agent omits `concept` — the pairing value
         // hinges on the concept being surfaced, not the reasoning prose.
         const nudge = args?.concept?.name
@@ -1289,6 +1295,35 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           relatedArtifactIds: args?.relatedFindings,
         });
         broadcast({ type: "artifact_created", artifact });
+        await maybeEmitTaskHandle(server, artifact, store);
+
+        // S7 — quick-approve via elicitation for small, confident edits.
+        // Threshold: ≤ 20 changed lines AND no low-confidence flag. Bigger
+        // or hedged changes route straight to the companion UI where the
+        // diff + reasoning + linked findings render in full. Threshold is
+        // intentionally conservative — terminal accept is a great escape
+        // hatch for tiny edits, a footgun for sprawling ones.
+        const before = String(args?.before ?? "");
+        const after = String(args?.after ?? "");
+        const changedLines =
+          before.split("\n").length + after.split("\n").length;
+        const confidence = String(args?.confidence ?? "").toLowerCase();
+        const isSmallEdit = changedLines <= 20;
+        const isConfident = confidence !== "low";
+        if (isSmallEdit && isConfident) {
+          const elicitAction = await tryElicit(
+            `Apply ${args?.changeType ?? "modify"} to ${args?.filePath ?? "file"}?\n\n` +
+            `Accept to approve this change.\n` +
+            `Decline to review the diff at http://localhost:${port}`,
+          );
+          if (elicitAction === "approve") {
+            await store.updateArtifactStatus(id, "approved");
+            return {
+              content: [{ type: "text", text: `Code change approved (${id}): ${args?.changeType} ${args?.filePath}.${await getPassiveFeedback()}` }],
+            };
+          }
+        }
+
         return {
           content: [{ type: "text", text: `Code change presented for review (${id}): ${args?.changeType} ${args?.filePath}. Human can review at localhost:${port}.${await getPassiveFeedback()}` }],
         };
