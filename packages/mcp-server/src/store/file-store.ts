@@ -293,6 +293,21 @@ export class FileStore implements IStore {
 
   // --- Comments ---
 
+  /**
+   * U0.1 — server-side dedupe window. Field bug: a single comment posted
+   * ~13 times in a row because the client's `if (sending) return` guard read
+   * stale React state during rapid Enter presses, and there was no
+   * server-side gate. Two duplicates within DEDUPE_WINDOW_MS for the same
+   * (artifact, author, content, parent) tuple collapse to one — we return
+   * the original comment so the caller's optimistic UI still gets a record.
+   *
+   * 5 seconds is the sweet spot: catches every rapid-fire mode I've seen
+   * (double-Enter, retry-on-timeout, websocket loop), short enough that a
+   * user genuinely posting the same content twice on purpose isn't blocked
+   * (wait 6s and try again).
+   */
+  private static readonly DEDUPE_WINDOW_MS = 5000;
+
   addComment(params: {
     id: string;
     artifactId: string;
@@ -302,6 +317,24 @@ export class FileStore implements IStore {
     intent?: "comment" | "question" | "suggestion";
     parentCommentId?: string | null;
   }): Comment {
+    const now = Date.now();
+    const parentKey = params.parentCommentId ?? "";
+    const dupe = this.comments.find((c) => {
+      if (c.author !== params.author) return false;
+      if (c.target.artifactId !== params.artifactId) return false;
+      if (c.content !== params.content) return false;
+      if ((c.parentCommentId ?? "") !== parentKey) return false;
+      const t = new Date(c.createdAt).getTime();
+      return Number.isFinite(t) && now - t < FileStore.DEDUPE_WINDOW_MS;
+    });
+    if (dupe) {
+      // Return the existing comment so the caller's response/broadcast logic
+      // still wires the UI to a valid record. The duplicate POST silently
+      // resolves to the original — invisible to the user, gold for the field
+      // bug we're closing.
+      return dupe;
+    }
+
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -312,7 +345,7 @@ export class FileStore implements IStore {
       intent: params.intent,
       answeredByCommentId: null,
       acknowledged: params.author === "agent",
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(now).toISOString(),
     };
     this.comments.push(comment);
     this.scheduleFlush();

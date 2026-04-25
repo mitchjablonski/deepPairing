@@ -62,6 +62,43 @@ describe("FileStore", () => {
     expect(artifacts[0].title).toBe("Test Finding");
   });
 
+  it("dedupes a comment with identical content/artifact/author within 5s (U0.1)", () => {
+    // Field bug: a single comment got posted ~13 times because the client
+    // had no sync send-guard. The server-side window collapses any duplicate
+    // within 5s into one record and returns the original comment so the
+    // caller's response/broadcast wiring still has a valid reference.
+    const store = createStore("dedupe-window");
+    const c1 = store.addComment({
+      id: "cmt_1",
+      artifactId: "art_X",
+      content: "duplicate me",
+      author: "human",
+    });
+    const c2 = store.addComment({
+      id: "cmt_2_different_id",
+      artifactId: "art_X",
+      content: "duplicate me",
+      author: "human",
+    });
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(1);
+    // Returned comment is the ORIGINAL — id is cmt_1, not the new id we passed.
+    expect(c2.id).toBe(c1.id);
+    expect(c2.id).toBe("cmt_1");
+  });
+
+  it("does NOT dedupe across different authors / artifacts / parents", () => {
+    const store = createStore("dedupe-scope");
+    store.addComment({ id: "c1", artifactId: "art_X", content: "hi", author: "human" });
+    // Same content, different author → not a duplicate
+    store.addComment({ id: "c2", artifactId: "art_X", content: "hi", author: "agent" });
+    // Same content, different artifact → not a duplicate
+    store.addComment({ id: "c3", artifactId: "art_Y", content: "hi", author: "human" });
+    // Same content, different parentCommentId → not a duplicate (it's a reply)
+    store.addComment({ id: "c4", artifactId: "art_X", content: "hi", author: "human", parentCommentId: "c1" });
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(3);
+    expect(store.getCommentsForArtifact("art_Y")).toHaveLength(1);
+  });
+
   it("round-trips comments", () => {
     const store = createStore( "comments");
     store.addComment({

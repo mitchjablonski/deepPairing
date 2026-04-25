@@ -44,14 +44,29 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   selectedArtifactId: null,
   unreadIds: [],
 
+  // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
+  // visibly increased its count over time while the user just sat on the
+  // page. Root cause: addArtifact / addComment blindly appended to the
+  // store on every WS event, so any broadcast loop, replay scrub, or
+  // reconnect-driven re-hydration multiplied the local count even though
+  // the daemon's store had exactly one record. Idempotent upserts collapse
+  // any redelivery (planned or accidental) into a single visible record.
   addArtifact: (artifact) =>
-    set((state) => ({
-      artifacts: [...state.artifacts, artifact],
-      selectedArtifactId: state.selectedArtifactId ?? artifact.id,
-      unreadIds: state.selectedArtifactId && state.selectedArtifactId !== artifact.id
-        ? [...state.unreadIds, artifact.id]
-        : state.unreadIds,
-    })),
+    set((state) => {
+      const idx = state.artifacts.findIndex((a) => a.id === artifact.id);
+      if (idx >= 0) {
+        const next = state.artifacts.slice();
+        next[idx] = { ...state.artifacts[idx], ...artifact };
+        return { artifacts: next };
+      }
+      return {
+        artifacts: [...state.artifacts, artifact],
+        selectedArtifactId: state.selectedArtifactId ?? artifact.id,
+        unreadIds: state.selectedArtifactId && state.selectedArtifactId !== artifact.id
+          ? [...state.unreadIds, artifact.id]
+          : state.unreadIds,
+      };
+    }),
 
   updateArtifact: (id, status, version) =>
     set((state) => ({
@@ -64,6 +79,8 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     set((state) => {
       const key = comment.target.artifactId;
       const existing = state.comments[key] ?? [];
+      // U0.1 dedupe: skip if a comment with this id is already in the bucket.
+      if (existing.some((c) => c.id === comment.id)) return state;
       return {
         comments: { ...state.comments, [key]: [...existing, comment] },
       };

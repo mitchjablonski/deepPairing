@@ -114,11 +114,18 @@ export function createDaemonRoutes(
   // --- Comments ---
 
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
-    const store = getStore(c.req.param("sessionId"));
+    const sessionId = c.req.param("sessionId");
+    const store = getStore(sessionId);
     const params = await c.req.json();
     // params already has intent/parentCommentId when the MCP wrapper sends them
+    const requestedId = params.id;
     const comment = store.addComment(params);
-    broadcast(c.req.param("sessionId"), { type: "comment_added", comment });
+    // U0.1 — only broadcast when addComment created a new record. Dedupe
+    // returns the existing comment whose id differs from the one we asked
+    // for; the original already broadcast.
+    if (comment.id === requestedId) {
+      broadcast(sessionId, { type: "comment_added", comment });
+    }
     return c.json({ comment });
   });
 

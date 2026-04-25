@@ -87,8 +87,16 @@ export function MessageInput() {
     });
   };
 
+  // U0.1 — sync guard backed by a ref. The previous `if (sending) return`
+  // read React state, which doesn't flush until after the event handler;
+  // a rapid Cmd+Enter could fire handleSend several times before
+  // setSending(true) propagated, producing duplicate POSTs. The ref is
+  // synchronous, so the second tap short-circuits immediately.
+  const inFlightRef = useRef(false);
+
   const handleSend = async () => {
-    if (!message.trim() || sending) return;
+    if (!message.trim() || inFlightRef.current) return;
+    inFlightRef.current = true;
     setSending(true);
 
     try {
@@ -106,6 +114,7 @@ export function MessageInput() {
     } catch {
       // Failed to send
     } finally {
+      inFlightRef.current = false;
       setSending(false);
     }
   };
