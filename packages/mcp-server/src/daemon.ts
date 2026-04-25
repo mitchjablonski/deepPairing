@@ -78,11 +78,14 @@ function createSession(sessionId: string): FileStore {
   return store;
 }
 
-// Default session store for the public web UI routes (uses first active session or creates one)
-function getDefaultStore(): FileStore {
+// U0.6 — Default session resolver for the public web UI. Returns the first
+// active session if one exists; returns NULL otherwise. Crucially, this no
+// longer creates a session on demand — that was the source of orphan
+// `session_${Date.now()}` directories that appeared whenever the UI loaded
+// before any MCP wrapper had registered. Now: no wrapper, no session.
+function getDefaultStoreOrNull(): FileStore | null {
   const first = sessions.values().next().value;
-  if (first) return first;
-  return createSession(`session_${Date.now()}`);
+  return first ?? null;
 }
 
 // --- Session-scoped WebSocket broadcast ---
@@ -201,18 +204,22 @@ app.use("/*", cors({
 }));
 
 // Mount internal daemon routes (for MCP wrappers)
-const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast);
+const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log);
 app.route("/", daemonRoutes);
 
 // Mount public web UI routes (for browser)
-// Pass a session-lookup function so each request routes to the correct store
+// Pass a session-lookup function so each request routes to the correct store.
+// Returns null when no session matches AND none exist — routes treat null as
+// "no active session" rather than silently spawning one. This is the
+// U0.6 prevention layer: the UI can't accidentally create orphan sessions
+// just by loading localhost:3847 before Claude Code is up.
 const publicRoutes = createHttpRoutes(
   (sessionId?: string) => {
     if (sessionId) {
       const store = sessions.get(sessionId);
       if (store) return store;
     }
-    return getDefaultStore();
+    return getDefaultStoreOrNull();
   },
   projectRoot,
   (event, sessionId) => {
@@ -226,6 +233,7 @@ const publicRoutes = createHttpRoutes(
       }
     }
   },
+  log,
 );
 app.route("/", publicRoutes);
 

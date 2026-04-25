@@ -52,8 +52,16 @@ export function ensureGitignoreEntry(projectRoot: string): SetupResult {
  * Stop hook keeps the agent from declaring "done" while artifacts still need
  * human review. Without it, the agent can fire-and-forget present_findings
  * and exit before the user has a chance to triage in the companion UI.
+ *
+ * U0.4 / U0.6 — age guard: drafts older than DRAFT_MAX_AGE_MS are treated as
+ * abandoned (user moved on, agent shouldn't stay stuck forever). The default
+ * is 30 minutes — long enough that an actively-reviewing user won't trigger
+ * abandonment, short enough that a stale draft can't trap the agent in a poll
+ * loop indefinitely. The hook uses createdAt because that's the only
+ * universal timestamp on Artifact today (updatedAt arrived later and may be
+ * missing on older sessions).
  */
-const STOP_HOOK_COMMAND = `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>x.status==='draft'&&['research','spec','plan','decision','code_change'].includes(x.type))){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`;
+const STOP_HOOK_COMMAND = `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const MAX=30*60*1000;const now=Date.now();const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>{if(x.status!=='draft')return false;if(!['research','spec','plan','decision','code_change'].includes(x.type))return false;const t=x.createdAt?new Date(x.createdAt).getTime():0;if(t&&now-t>MAX)return false;return true})){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`;
 
 export function ensureStopHook(projectRoot: string): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");

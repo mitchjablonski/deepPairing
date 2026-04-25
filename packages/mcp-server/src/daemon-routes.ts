@@ -8,6 +8,7 @@ import type { Artifact, Comment } from "@deeppairing/shared";
 
 type SessionMap = Map<string, FileStore>;
 type BroadcastFn = (sessionId: string, event: any) => void;
+type LogFn = (msg: string) => void;
 
 export interface SessionMeta {
   title: string;
@@ -20,7 +21,11 @@ export function createDaemonRoutes(
   sessionMeta: Map<string, SessionMeta>,
   createSession: (sessionId: string) => FileStore,
   broadcast: BroadcastFn,
+  logFn?: LogFn,
 ) {
+  // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
+  // here; we want both UI clicks and agent-driven status updates in one log.
+  const log: LogFn = logFn ?? (() => {});
   const app = new Hono();
 
   /** Get or create the FileStore for a session */
@@ -83,10 +88,18 @@ export function createDaemonRoutes(
   });
 
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
-    const store = getStore(c.req.param("sessionId"));
+    const sessionId = c.req.param("sessionId");
+    const artifactId = c.req.param("artifactId");
+    const store = getStore(sessionId);
     const { status } = await c.req.json();
-    store.updateArtifactStatus(c.req.param("artifactId"), status);
-    broadcast(c.req.param("sessionId"), { type: "artifact_updated", artifactId: c.req.param("artifactId"), status });
+    const target = store.getArtifacts().find((a) => a.id === artifactId);
+    log(
+      `[status:internal] sid=${sessionId} artifactId=${artifactId} ` +
+      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status}`,
+    );
+    store.updateArtifactStatus(artifactId, status);
+    store.forceFlush();
+    broadcast(sessionId, { type: "artifact_updated", artifactId, status });
     return c.json({ status: "updated" });
   });
 
