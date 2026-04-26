@@ -271,7 +271,13 @@ function EvidenceItem({
   const [expanded, setExpanded] = useState(false);
   const [showFullFile, setShowFullFile] = useState(false);
 
-  // Build a map of comments by line number for this evidence
+  // Build a map of comments by line number for this evidence.
+  //
+  // Span comments (lineStart != lineEnd) bucket into EVERY line in the
+  // range. CommentableCode then renders the full comment chip on the
+  // start line and a compact "↳ continues from L{N}" marker on
+  // subsequent lines — so a comment spanning lines 5-8 is visible on all
+  // four lines, not just line 5 (which was the visibility bug).
   const commentsByLine = useMemo(() => {
     const map = new Map<number, Comment[]>();
     for (const c of allComments) {
@@ -280,9 +286,16 @@ function EvidenceItem({
         c.target.evidenceIndex === evidenceIndex &&
         c.target.lineStart != null
       ) {
-        const existing = map.get(c.target.lineStart) ?? [];
-        existing.push(c);
-        map.set(c.target.lineStart, existing);
+        const start: number = c.target.lineStart;
+        const end: number = (c.target.lineEnd as number) ?? start;
+        // Defensive: cap span at 200 lines to avoid pathological maps if a
+        // bad target slipped past validation.
+        const safeEnd = Math.min(end, start + 200);
+        for (let line = start; line <= safeEnd; line++) {
+          const existing = map.get(line) ?? [];
+          existing.push(c);
+          map.set(line, existing);
+        }
       }
     }
     return map;

@@ -96,6 +96,137 @@ describe("CommentableCode", () => {
     expect(textarea.value).toBe("  return bcrypt.hash(pw, 10);");
   });
 
+  it("R2 — span input is hidden in Suggest mode (suggestions stay single-line)", async () => {
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    await userEvent.click(commentBtns[0]);
+    // Visible in comment mode
+    expect(screen.getByLabelText(/comment end line/i)).toBeInTheDocument();
+    // Hidden in suggest mode
+    await userEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    expect(screen.queryByLabelText(/comment end line/i)).not.toBeInTheDocument();
+  });
+
+  it("R2 — submitting with extended end line sends a span comment", async () => {
+    render(<CommentableCode code={code} lineStart={10} artifactId="art_x" filePath="auth.ts" />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    await userEvent.click(commentBtns[0]); // line 10
+    // Extend the span end to line 12 (covers all 3 lines).
+    const endInput = screen.getByLabelText(/comment end line/i) as HTMLInputElement;
+    await userEvent.clear(endInput);
+    await userEvent.type(endInput, "12");
+    const input = screen.getByPlaceholderText(/add a comment on this line/i);
+    await userEvent.type(input, "the whole hash function");
+    const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
+    await userEvent.click(submitBtns[submitBtns.length - 1]);
+
+    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    expect(body.target.lineStart).toBe(10);
+    expect(body.target.lineEnd).toBe(12);
+    expect(body.content).toBe("the whole hash function");
+  });
+
+  it("R2 — caps lineEnd at the file's last line (no out-of-range spans)", async () => {
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    await userEvent.click(commentBtns[0]); // line 1, file has 3 lines
+    const endInput = screen.getByLabelText(/comment end line/i) as HTMLInputElement;
+    // Try to extend past EOF.
+    await userEvent.clear(endInput);
+    await userEvent.type(endInput, "99");
+    const input = screen.getByPlaceholderText(/add a comment on this line/i);
+    await userEvent.type(input, "spans the file");
+    const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
+    await userEvent.click(submitBtns[submitBtns.length - 1]);
+
+    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    expect(body.target.lineEnd).toBe(3); // clamped to total lines
+  });
+
+  it("R2 — backwards range (end < start) clamps to start, never produces a negative span", async () => {
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    await userEvent.click(commentBtns[1]); // line 2
+    const endInput = screen.getByLabelText(/comment end line/i) as HTMLInputElement;
+    // The input enforces min=lineStart at the HTML level, but the submit
+    // path also clamps defensively in case the user bypasses the input.
+    // Type a backwards value: HTML clamps it (or the user pastes), and
+    // even if it slips through state, handleSubmit floor-clamps to lineNum.
+    await userEvent.clear(endInput);
+    await userEvent.type(endInput, "1");
+    const input = screen.getByPlaceholderText(/add a comment on this line/i);
+    await userEvent.type(input, "test");
+    const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
+    await userEvent.click(submitBtns[submitBtns.length - 1]);
+
+    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    expect(body.target.lineEnd).toBeGreaterThanOrEqual(body.target.lineStart);
+  });
+
+  it("R1 — continuation lines render a compact ↳ marker, not a duplicate full chip", () => {
+    const spanComment = {
+      id: "c1",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 1, lineEnd: 3 },
+      parentCommentId: null,
+      author: "human" as const,
+      content: "spans the whole function",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:00:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    // Bucket the same comment into every line in its span (the
+    // ResearchArtifact builder does this; here we hand-build to test the
+    // render).
+    byLine.set(1, [spanComment]);
+    byLine.set(2, [spanComment]);
+    byLine.set(3, [spanComment]);
+
+    render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    // The full chip with the comment text appears exactly once.
+    expect(screen.getAllByText(/spans the whole function/i)).toHaveLength(1);
+    // The continuation marker shows on lines 2 and 3 with the L1 link.
+    const markers = screen.getAllByText((_, el) => {
+      const txt = el?.textContent ?? "";
+      return /comment from\s*L1/.test(txt);
+    });
+    expect(markers.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("R1 — single-line comment shows full chip with no continuation marker", () => {
+    const singleComment = {
+      id: "c2",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 2, lineEnd: 2 },
+      parentCommentId: null,
+      author: "human" as const,
+      content: "just this line",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:00:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    byLine.set(2, [singleComment]);
+    render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    expect(screen.getByText(/just this line/i)).toBeInTheDocument();
+    expect(screen.queryByText(/comment from L/i)).not.toBeInTheDocument();
+  });
+
   it("switching between Comment / Ask / Suggest modes changes the active input", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
