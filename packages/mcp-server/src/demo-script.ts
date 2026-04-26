@@ -55,7 +55,7 @@ export function runDemoScript({
 
   // t=2500ms — the user "rejects" it
   schedule(2500, async () => {
-    await store.updateArtifactStatus(findingsArtifactId, "rejected");
+    await store.updateArtifactStatus(findingsArtifactId, "rejected", "demo_script");
     await store.recordRejectedApproach(
       DEFAULT_REJECTION_DESCRIPTION,
       DEFAULT_REJECTION_REASON,

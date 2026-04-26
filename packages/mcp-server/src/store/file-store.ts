@@ -4,7 +4,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 
@@ -263,11 +263,16 @@ export class FileStore implements IStore {
     }
   }
 
-  updateArtifactStatus(artifactId: string, status: ArtifactStatus): void {
+  updateArtifactStatus(
+    artifactId: string,
+    status: ArtifactStatus,
+    reason: StatusTransitionReason = "unspecified",
+  ): void {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       const wasDraft = art.status === "draft";
       const now = new Date().toISOString();
+      const fromStatus = art.status;
       art.status = status;
       art.updatedAt = now;
       // Append to statusHistory so replay can reconstruct the trail faithfully.
@@ -277,8 +282,24 @@ export class FileStore implements IStore {
       if (history.length === 0 && art.createdAt) {
         history.push({ status: "draft", at: art.createdAt });
       }
-      history.push({ status, at: now });
+      // U7 — append `reason` so the audit trail records WHO/WHAT caused the
+      // transition. A future timeline view shows these tags inline; the
+      // daemon log already does, so silent transitions surface immediately.
+      history.push({ status, at: now, reason });
       (art as any).statusHistory = history;
+
+      // U7 — sentinel alarm. Comments must NEVER drive status. If a caller
+      // ever tags a transition `comment_side_effect`, scream loudly so the
+      // bug surfaces in dev/test instead of riding to prod.
+      if (reason === "comment_side_effect") {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[deepPairing] BUG: comment_side_effect transition fired for ` +
+          `artifact ${artifactId} (${fromStatus} → ${status}). ` +
+          `Comments must never change artifact status.`,
+        );
+      }
+
       if (wasDraft && status !== "draft") {
         this.recordArtifactReviewed(artifactId);
       }

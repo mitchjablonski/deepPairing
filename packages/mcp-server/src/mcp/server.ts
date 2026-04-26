@@ -1120,7 +1120,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           `Decline to review in detail at http://localhost:${port}`
         );
         if (elicitAction === "approve") {
-          await store.updateArtifactStatus(id, "approved");
+          await store.updateArtifactStatus(id, "approved", "elicit_accept");
           return {
             content: [{ type: "text", text: `Findings recorded and approved (${id}).${await getPassiveFeedback()}` }],
           };
@@ -1217,7 +1217,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           `Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${port}`,
         );
         if (elicitAction === "approve") {
-          await store.updateArtifactStatus(id, "approved");
+          await store.updateArtifactStatus(id, "approved", "elicit_accept");
           return {
             content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${await getPassiveFeedback()}` }],
           };
@@ -1266,7 +1266,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           `Decline to review steps in detail at http://localhost:${port}`
         );
         if (elicitAction === "approve") {
-          await store.updateArtifactStatus(id, "approved");
+          await store.updateArtifactStatus(id, "approved", "elicit_accept");
           await store.resolvePlanReview(id, "approved");
           return {
             content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${await getPassiveFeedback()}` }],
@@ -1811,7 +1811,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             parentId: old.id,
             version: old.version + 1,
           });
-          await store.updateArtifactStatus(old.id, "superseded");
+          await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
 
           await store.addComment({
             id: `cmt_${nanoid(10)}`,
@@ -1855,7 +1855,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             isError: true,
           };
         }
-        await store.updateArtifactStatus(artifactId, "retracted");
+        await store.updateArtifactStatus(artifactId, "retracted", "agent_retract");
         await store.addComment({
           id: `cmt_${nanoid(10)}`,
           artifactId,

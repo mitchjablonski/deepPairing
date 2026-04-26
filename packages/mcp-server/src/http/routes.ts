@@ -169,7 +169,7 @@ export function createHttpRoutes(
 
     const decision = await store.getDecision(decisionId);
     if (decision) {
-      await store.updateArtifactStatus(decision.artifactId, "approved");
+      await store.updateArtifactStatus(decision.artifactId, "approved", "ui_decision_resolve" as any);
     }
 
     broadcast({
@@ -205,12 +205,18 @@ export function createHttpRoutes(
     // the approval.
     const artsBefore = await store.getArtifacts();
     const target = artsBefore.find((a) => a.id === artifactId);
+    // U7 — tag the transition with WHO/WHAT triggered it. This route
+    // exclusively serves the companion UI, so we map status → ui_*_button.
+    const reason =
+      status === "approved" ? "ui_approve_button" :
+      status === "revised" ? "ui_revise_button" :
+      "ui_reject_button";
     log(
       `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} ` +
-      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status}`,
+      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason}`,
     );
 
-    await store.updateArtifactStatus(artifactId, status);
+    await store.updateArtifactStatus(artifactId, status, reason as any);
     await store.resolvePlanReview(artifactId, status, feedback);
 
     // U0.6 — force the debounced flush so the Stop hook (which reads

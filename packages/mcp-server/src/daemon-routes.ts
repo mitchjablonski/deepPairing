@@ -91,15 +91,16 @@ export function createDaemonRoutes(
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");
     const store = getStore(sessionId);
-    const { status } = await c.req.json();
+    const { status, reason } = await c.req.json();
     const target = store.getArtifacts().find((a) => a.id === artifactId);
     log(
       `[status:internal] sid=${sessionId} artifactId=${artifactId} ` +
-      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status}`,
+      `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} ` +
+      `toStatus=${status} reason=${reason ?? "unspecified"}`,
     );
-    store.updateArtifactStatus(artifactId, status);
+    store.updateArtifactStatus(artifactId, status, reason);
     store.forceFlush();
-    broadcast(sessionId, { type: "artifact_updated", artifactId, status });
+    broadcast(sessionId, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
     return c.json({ status: "updated" });
   });
 
