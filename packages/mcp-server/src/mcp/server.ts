@@ -62,153 +62,15 @@ export function decideElicitResponse(
   return null;
 }
 
-/**
- * Check a set of proposal strings against previously rejected approaches.
- * Returns the first match found, or null if none.
- *
- * Matching has two layers:
- *   1) Surface: case-insensitive substring against the rejection description
- *      (and its colon-delimited fragments, so "Deploy: Railway" catches bare
- *      "Railway" proposals).
- *   2) Concept: when a rejected approach carries a `concept`, match if the
- *      concept's keywords appear anywhere in the proposal. This catches
- *      paraphrased re-proposals — e.g. "Deploy to Fly.io" still blocks after
- *      rejecting Railway with concept "pay-per-request serverless hosting".
- */
-/**
- * Concept-token check used by both rejected-approach matching and team-pref
- * matching. Returns true when every meaningful (≥4 char) token from `concept`
- * appears in `proposal`. Substring-based and case-insensitive — good enough
- * to catch paraphrases without false positives on common words.
- */
-function conceptMatchesProposal(concept: string, proposal: string): boolean {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
-  if (tokens.length === 0) return false;
-  const p = proposal.toLowerCase();
-  return tokens.every((t) => p.includes(t));
-}
-
-/**
- * Minimal glob matcher for team-preference scope paths. Supports:
- *   - `**` matches any sequence (including path separators)
- *   - `*`  matches any run of non-separator chars
- * Everything else is literal. Good enough for scoping rules like
- * `packages/auth/**`, `src/*.ts`. We avoid adding minimatch as a dependency
- * just for this.
- */
-export function matchesGlob(pathStr: string, glob: string): boolean {
-  const escape = (s: string) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-  let re = "";
-  for (let i = 0; i < glob.length; i++) {
-    if (glob[i] === "*" && glob[i + 1] === "*") {
-      re += ".*";
-      i++; // consume second *
-    } else if (glob[i] === "*") {
-      re += "[^/]*";
-    } else {
-      re += escape(glob[i]);
-    }
-  }
-  return new RegExp(`^${re}$`).test(pathStr);
-}
-
-/**
- * Team-preference violation check. Two paths:
- *   - kind: "avoid"   → matches just like a rejected approach (concept tokens
- *     present in proposal). Returns the matched preference.
- *   - kind: "require" → only enforced when the concept is phrased as
- *     "<thing> for <domain>" (e.g. "argon2id for password hashing"). A
- *     proposal mentioning the domain ("password hashing") but lacking the
- *     required thing ("argon2id") is a violation. Concepts without a "for"
- *     clause stay advisory (firstCallHint surfaces them).
- *
- * Why advisory require: detecting "you should have done X but didn't" without
- * a domain ontology is too noisy. The "X for Y" convention is opt-in; teams
- * that want enforcement write their preferences that way.
- */
-function findTeamPreferenceViolation(
-  proposalStrings: string[],
-  prefs: TeamPreference[],
-  proposalPaths: string[] = [],
-): { proposal: string; pref: TeamPreference; via: "avoid" | "require" } | null {
-  for (const pref of prefs) {
-    if (pref.kind === "prefer") continue; // 'prefer' is taste, never blocks
-
-    // Scope check: if the pref is scoped AND the proposal carries path info,
-    // require at least one proposal path to match the scope. If the proposal
-    // has NO paths, skip this pref — we can't verify scope, so we bias toward
-    // NOT blocking (avoid false positives on unrelated work).
-    if (pref.scope?.paths?.length) {
-      if (proposalPaths.length === 0) continue;
-      const hit = proposalPaths.some((p) => pref.scope!.paths!.some((g) => matchesGlob(p, g)));
-      if (!hit) continue;
-    }
-
-    if (pref.kind === "avoid") {
-      for (const proposal of proposalStrings) {
-        if (!proposal.trim()) continue;
-        if (conceptMatchesProposal(pref.concept, proposal)) {
-          return { proposal, pref, via: "avoid" };
-        }
-      }
-    }
-
-    if (pref.kind === "require") {
-      const forIdx = pref.concept.toLowerCase().indexOf(" for ");
-      if (forIdx === -1) continue; // no "X for Y" → can't infer domain → advisory only
-      const required = pref.concept.slice(0, forIdx).trim();
-      const domain = pref.concept.slice(forIdx + 5).trim();
-      if (!required || !domain) continue;
-      for (const proposal of proposalStrings) {
-        if (!proposal.trim()) continue;
-        const mentionsDomain = conceptMatchesProposal(domain, proposal);
-        if (!mentionsDomain) continue;
-        const hasRequired = conceptMatchesProposal(required, proposal);
-        if (!hasRequired) {
-          return { proposal, pref, via: "require" };
-        }
-      }
-    }
-  }
-  return null;
-}
-
-function findRejectedApproachMatch(
-  proposalStrings: string[],
-  rejected: RejectedApproach[],
-): { proposal: string; rejected: RejectedApproach; via: "surface" | "concept" } | null {
-  const clean = (s: string) => s.trim().toLowerCase();
-  for (const rej of rejected) {
-    const rejNormalized = clean(rej.description);
-    if (!rejNormalized) continue;
-    // The portion AFTER the first colon is the specific rejection noun
-    // ("Deploy: Railway" → "railway"); the prefix is the category and
-    // recurs across unrelated rejections, so we don't match on it.
-    const specificNoun = rejNormalized.includes(":")
-      ? rejNormalized.split(":").slice(1).join(":").trim()
-      : rejNormalized;
-    const conceptTokens = rej.concept
-      ? clean(rej.concept).split(/\s+/).filter((t) => t.length >= 4)
-      : [];
-    for (const proposal of proposalStrings) {
-      const p = clean(proposal);
-      if (!p) continue;
-      // Direct substring in either direction (whole rejection description)
-      if (rejNormalized.includes(p) || p.includes(rejNormalized)) {
-        return { proposal, rejected: rej, via: "surface" };
-      }
-      // Specific noun fragment of the rejection (post-colon)
-      if (specificNoun.length >= 3 && p.includes(specificNoun)) {
-        return { proposal, rejected: rej, via: "surface" };
-      }
-      // Concept match: every non-stopword concept token present in the proposal
-      if (conceptTokens.length > 0 && conceptTokens.every((t) => p.includes(t))) {
-        return { proposal, rejected: rej, via: "concept" };
-      }
-    }
-  }
-  return null;
-}
+// U5 — pre-flight matching rules and orchestration moved to
+// preflight-validator.ts so they're testable without spinning up the
+// MCP harness. matchesGlob is re-exported from there for any caller
+// that imported it from this module historically.
+import {
+  runPreflight,
+  matchesGlob as _matchesGlob,
+} from "./preflight-validator.js";
+export const matchesGlob = _matchesGlob;
 
 type BroadcastFn = (event: any) => void;
 
@@ -969,8 +831,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
      * team-agreed avoid/require preference (committed to .deeppairing/team.json).
      * Returns a tool error response if either lane matches, or null otherwise.
      *
-     * Order: session-rejected first (it's the user's most recent stance, and
-     * it's what their brain expects to be enforced), then team prefs.
+     * U5 — the matching/orchestration logic lives in preflight-validator.ts.
+     * This wrapper only handles the side-effecty bits (reading the store,
+     * broadcasting the block event, shaping the MCP tool-error response).
      */
     const preflightRejectedApproaches = async (
       toolName: string,
@@ -978,96 +841,30 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       proposalPaths: string[] = [],
     ): Promise<{ content: Array<{ type: "text"; text: string }>; isError: true } | null> => {
       const memory = await store.getSessionMemory();
-      if (memory.rejectedApproaches.length > 0) {
-        const match = findRejectedApproachMatch(proposalStrings, memory.rejectedApproaches);
-        if (match) {
-          const reasonLine = match.rejected.reason
-            ? `\nPrior rejection reason: "${match.rejected.reason}"`
-            : "";
-          const conceptLine =
-            match.via === "concept" && match.rejected.concept
-              ? `\nMatched on underlying concept: "${match.rejected.concept}". ` +
-                `A paraphrased proposal still counts — the user has rejected this kind of approach.`
-              : "";
-          const message =
-            `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
-            `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
-            `Do NOT retry with this approach. Revise your proposal to exclude it, or — if you believe ` +
-            `conditions have changed — present_findings first to make the case for reconsidering, then ` +
-            `wait for the human's response via check_feedback. The artifact was NOT created.`;
-
-          // Make the invisible moat felt: broadcast the block so the companion UI
-          // can surface a toast. The MOST distinctive deepPairing mechanic — the
-          // agent being stopped from re-proposing something the human already
-          // rejected — used to happen silently. Now the human sees it.
-          broadcast({
-            type: "preflight_blocked",
-            toolName,
-            source: "session",
-            match: {
-              proposal: match.proposal,
-              description: match.rejected.description,
-              reason: match.rejected.reason,
-              concept: match.rejected.concept,
-              via: match.via,
-            },
-          });
-
-          return {
-            content: [{ type: "text", text: message }],
-            isError: true as const,
-          };
-        }
-      }
-
-      // N6.4 — team-preferences lane. Distinct authority from session memory:
-      // a team pref is something the team committed to a file in the repo, so
-      // the block message attributes to "team policy" not "the user".
       const teamPrefs: TeamPreference[] = typeof (store as any).getTeamPreferences === "function"
         ? (await (store as any).getTeamPreferences()) ?? []
         : [];
-      if (teamPrefs.length > 0) {
-        const teamMatch = findTeamPreferenceViolation(proposalStrings, teamPrefs, proposalPaths);
-        if (teamMatch) {
-          const { pref, proposal, via } = teamMatch;
-          const attribution = pref.addedBy ? ` (added by ${pref.addedBy})` : "";
-          const scope = pref.scope?.paths?.length
-            ? `\nScope: ${pref.scope.paths.join(", ")}`
-            : "";
-          const headline = via === "avoid"
-            ? `your proposal touches "${proposal}" which conflicts with the team's "avoid: ${pref.concept}" policy`
-            : `your proposal addresses "${proposal}" but is missing the team-required "${pref.concept}"`;
-          const message =
-            `REJECTED_APPROACH_BLOCKED: ${toolName} refused — ${headline}.\n` +
-            `Team rationale: "${pref.rationale}"${attribution}.${scope}\n\n` +
-            (via === "avoid"
-              ? `Do NOT propose this. Revise to use an alternative approach, or call present_findings to make a case for changing the team policy. The artifact was NOT created.`
-              : `Revise your proposal to use the required approach, or call present_findings to surface why this case warrants an exception. The artifact was NOT created.`);
 
-          broadcast({
-            type: "preflight_blocked",
-            toolName,
-            source: "team",
-            match: {
-              proposal,
-              description: pref.concept,
-              reason: pref.rationale,
-              concept: pref.concept,
-              via,
-              kind: pref.kind,
-              addedBy: pref.addedBy,
-              scope: pref.scope?.paths,
-            },
-          });
+      const result = runPreflight({
+        toolName,
+        proposalStrings,
+        proposalPaths,
+        rejectedApproaches: memory.rejectedApproaches,
+        teamPreferences: teamPrefs,
+      });
 
-          return {
-            content: [{ type: "text", text: message }],
-            isError: true as const,
-          };
-        }
-      }
+      if (!result.blocked) return null;
 
-      return null;
+      // Make the invisible moat felt: broadcast the block so the companion UI
+      // can surface a toast. The MOST distinctive deepPairing mechanic — the
+      // agent being stopped from re-proposing something the human already
+      // rejected — used to happen silently. Now the human sees it.
+      broadcast(result.block.broadcastEvent);
+
+      return {
+        content: [{ type: "text", text: result.block.message }],
+        isError: true as const,
+      };
     };
 
     /** Auto-name the session from the first meaningful artifact title */
