@@ -80,16 +80,52 @@ export function ensureStopHook(projectRoot: string): SetupResult {
 
     settings.hooks = settings.hooks ?? {};
     settings.hooks.Stop = settings.hooks.Stop ?? [];
-    const alreadyHasDp = Array.isArray(settings.hooks.Stop) &&
-      settings.hooks.Stop.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"));
+
+    // Field bug: Claude Code's hook schema uses
+    //   { matcher, hooks: [{ type: "command", command }] }
+    // not the legacy flat
+    //   { command }
+    // shape. The legacy shape produced an "Invalid settings / hooks:
+    // Expected array" warning in /doctor on every reconnect. We need to
+    // (a) install the correct nested shape going forward, and (b) heal
+    // any pre-existing flat-shape entry that this installer wrote on an
+    // earlier version — otherwise the bad shape regenerates on every
+    // fresh init.
+    const isDpStopEntry = (entry: any) => {
+      if (typeof entry?.command === "string" && entry.command.includes("deepPairing")) return true; // legacy flat
+      if (Array.isArray(entry?.hooks)) {
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"));
+      }
+      return false;
+    };
+    const isLegacyFlatDp = (entry: any) =>
+      typeof entry?.command === "string" && entry.command.includes("deepPairing") && !Array.isArray(entry?.hooks);
+
+    // Heal: drop any legacy flat-shape entries this installer previously
+    // wrote. Non-DP entries (anything not matching isDpStopEntry) are left
+    // alone — we only own deepPairing's row.
+    const hadLegacy = settings.hooks.Stop.some(isLegacyFlatDp);
+    if (hadLegacy) {
+      settings.hooks.Stop = settings.hooks.Stop.filter((entry: any) => !isLegacyFlatDp(entry));
+    }
+
+    const alreadyHasDp = Array.isArray(settings.hooks.Stop) && settings.hooks.Stop.some(isDpStopEntry);
     if (alreadyHasDp) {
       return { ok: true, changed: false, message: "Stop hook already configured" };
     }
 
-    settings.hooks.Stop.push({ command: STOP_HOOK_COMMAND });
+    // Correct nested shape (matches Claude Code's hook schema; same
+    // structure ensureCheckpointHook uses for PostToolUse).
+    settings.hooks.Stop.push({
+      matcher: "",
+      hooks: [{ type: "command", command: STOP_HOOK_COMMAND }],
+    });
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    return { ok: true, changed: true, message: "Added Stop hook to .claude/settings.local.json" };
+    const msg = hadLegacy
+      ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)"
+      : "Added Stop hook to .claude/settings.local.json";
+    return { ok: true, changed: true, message: msg };
   } catch (err: any) {
     return { ok: false, message: `Could not configure Stop hook: ${err?.message ?? err}` };
   }

@@ -453,13 +453,29 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
 
   const hooksPath = path.join(cwd, ".claude", "settings.local.json");
   let stopHookPresent = false;
+  let stopHookLegacyShape = false;
   let checkpointHookPresent = false;
   if (fs.existsSync(hooksPath)) {
     try {
       const settings = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
       const stopHooks = settings?.hooks?.Stop ?? [];
-      stopHookPresent = Array.isArray(stopHooks) && stopHooks.some(
-        (h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"),
+      // Stop entries can be either { command } directly (legacy flat shape
+      // — this installer wrote it on earlier versions; Claude Code now warns
+      // "Invalid settings / hooks: Expected array" for it) OR the correct
+      // { matcher, hooks: [{ type, command }] } shape.
+      const isDpStop = (entry: any) => {
+        if (typeof entry?.command === "string" && entry.command.includes("deepPairing")) return true;
+        if (Array.isArray(entry?.hooks)) {
+          return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"));
+        }
+        return false;
+      };
+      stopHookPresent = Array.isArray(stopHooks) && stopHooks.some(isDpStop);
+      stopHookLegacyShape = Array.isArray(stopHooks) && stopHooks.some(
+        (entry: any) =>
+          typeof entry?.command === "string" &&
+          entry.command.includes("deepPairing") &&
+          !Array.isArray(entry?.hooks),
       );
       const postToolUse = settings?.hooks?.PostToolUse ?? [];
       checkpointHookPresent = Array.isArray(postToolUse) && postToolUse.some(
@@ -474,8 +490,18 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
       );
     } catch {}
   }
-  if (stopHookPresent) {
+  if (stopHookPresent && !stopHookLegacyShape) {
     console.log(`  ${green("✓")} Claude Code Stop hook configured`);
+  } else if (stopHookPresent && stopHookLegacyShape) {
+    console.log(`  ${yellow("!")} Claude Code Stop hook uses the legacy flat shape (Claude Code warns "Invalid settings / hooks: Expected array")`);
+    fixes.push({
+      label: "Replace legacy Stop-hook entry with the correct nested shape",
+      apply: () => {
+        // ensureStopHook now heals legacy entries before re-installing.
+        const r = ensureStopHook(cwd);
+        return { ok: r.ok, message: r.message };
+      },
+    });
   } else {
     console.log(`  ${yellow("!")} Claude Code Stop hook NOT configured (agent can stop while artifacts are unreviewed)`);
     fixes.push({
