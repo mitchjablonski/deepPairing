@@ -59,6 +59,9 @@ function comment(opts: {
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
+  // W2 — clear the persisted "last opened" so each test starts fresh.
+  // sessionStorage may not exist in some envs; guard.
+  try { sessionStorage.removeItem("dp:rail-last-opened-at"); } catch {}
 });
 
 afterEach(() => {
@@ -193,5 +196,106 @@ describe("ConversationRail (W1)", () => {
     render(<ConversationRail onClose={() => {}} />);
     // 3 messages across 2 artifacts.
     expect(screen.getByText(/3 messages across 2 artifacts/i)).toBeInTheDocument();
+  });
+});
+
+describe("ConversationRail — W2 (filter, unread badges)", () => {
+  it("Unanswered filter pill collapses the list to just unanswered questions", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    s.addArtifact(artifact("a2", { title: "Plan" }));
+    // a1: question + answer (answered)
+    s.addComment(comment({ id: "q_done", artifactId: "a1", author: "human", intent: "question", content: "answered Q", createdAt: "2026-04-26T10:00:00.000Z" }));
+    s.addComment(comment({ id: "ans", artifactId: "a1", author: "agent", parentCommentId: "q_done", content: "the answer", createdAt: "2026-04-26T10:01:00.000Z" }));
+    // a1: regular comment (no question)
+    s.addComment(comment({ id: "c_regular", artifactId: "a1", author: "human", content: "just a comment", createdAt: "2026-04-26T10:02:00.000Z" }));
+    // a2: unanswered question
+    s.addComment(comment({ id: "q_open", artifactId: "a2", author: "human", intent: "question", content: "still waiting", createdAt: "2026-04-26T10:03:00.000Z" }));
+
+    render(<ConversationRail onClose={() => {}} />);
+    // All filter shows everything.
+    expect(screen.getByText("answered Q")).toBeInTheDocument();
+    expect(screen.getByText("just a comment")).toBeInTheDocument();
+    expect(screen.getByText("still waiting")).toBeInTheDocument();
+
+    // Switch to Unanswered.
+    await userEvent.click(screen.getByRole("button", { name: /unanswered/i }));
+    expect(screen.queryByText("answered Q")).not.toBeInTheDocument();
+    expect(screen.queryByText("just a comment")).not.toBeInTheDocument();
+    expect(screen.getByText("still waiting")).toBeInTheDocument();
+
+    // Group with no matches drops out: the "Findings" group is gone, only "Plan" remains.
+    expect(screen.queryByText("Findings")).not.toBeInTheDocument();
+    expect(screen.getByText("Plan")).toBeInTheDocument();
+  });
+
+  it("Unanswered filter empty-state when there are no open questions", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1"));
+    s.addComment(comment({ id: "c1", artifactId: "a1", author: "human", content: "regular", createdAt: "2026-04-26T10:00:00.000Z" }));
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /unanswered/i }));
+    expect(screen.getByText(/no unanswered questions/i)).toBeInTheDocument();
+  });
+
+  it("Filter pills show counts (All N · Unanswered K)", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1"));
+    s.addComment(comment({ id: "c1", artifactId: "a1", author: "human", content: "x", createdAt: "2026-04-26T10:00:00.000Z" }));
+    s.addComment(comment({ id: "c2", artifactId: "a1", author: "human", intent: "question", content: "y", createdAt: "2026-04-26T10:01:00.000Z" }));
+    render(<ConversationRail onClose={() => {}} />);
+    const allBtn = screen.getByRole("button", { name: /^All\b/i });
+    const unanBtn = screen.getByRole("button", { name: /^Unanswered\b/i });
+    expect(allBtn.textContent).toMatch(/2/);
+    expect(unanBtn.textContent).toMatch(/1/);
+  });
+
+  it("first-ever open: every comment counts as unread (last-opened defaults to 0)", () => {
+    sessionStorage.removeItem("dp:rail-last-opened-at");
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1"));
+    s.addComment(comment({ id: "c1", artifactId: "a1", author: "human", content: "first comment ever", createdAt: "2026-04-26T10:00:00.000Z" }));
+    render(<ConversationRail onClose={() => {}} />);
+    // Header total-unread badge = 1
+    expect(screen.getByLabelText(/1 new since last open/i)).toBeInTheDocument();
+    // Per-comment unread dot
+    expect(screen.getAllByLabelText(/new since last open/i).length).toBeGreaterThan(0);
+  });
+
+  it("re-opening after close: only comments newer than the last-open time are marked unread", () => {
+    // Simulate: rail was opened at t=10:30 (so anything before is read).
+    const lastOpened = new Date("2026-04-26T10:30:00.000Z").getTime();
+    sessionStorage.setItem("dp:rail-last-opened-at", String(lastOpened));
+
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1"));
+    s.addComment(comment({ id: "c_old", artifactId: "a1", author: "human", content: "before", createdAt: "2026-04-26T10:00:00.000Z" }));
+    s.addComment(comment({ id: "c_new", artifactId: "a1", author: "agent", content: "after", createdAt: "2026-04-26T11:00:00.000Z" }));
+    render(<ConversationRail onClose={() => {}} />);
+    // One unread: the agent comment from after the last-open time.
+    expect(screen.getByLabelText(/1 new since last open/i)).toBeInTheDocument();
+  });
+
+  it("opening the rail updates sessionStorage to now (so the next open's diff is fresh)", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1"));
+    s.addComment(comment({ id: "c1", artifactId: "a1", author: "human", content: "x", createdAt: "2026-04-26T10:00:00.000Z" }));
+    const before = Date.now();
+    render(<ConversationRail onClose={() => {}} />);
+    const persisted = Number(sessionStorage.getItem("dp:rail-last-opened-at") ?? "0");
+    expect(persisted).toBeGreaterThanOrEqual(before);
+  });
+
+  it("artifact group header shows a per-group unread count when fresh comments exist there", () => {
+    sessionStorage.removeItem("dp:rail-last-opened-at");
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Hot artifact" }));
+    s.addComment(comment({ id: "c1", artifactId: "a1", author: "human", content: "x", createdAt: "2026-04-26T10:00:00.000Z" }));
+    s.addComment(comment({ id: "c2", artifactId: "a1", author: "agent", content: "y", createdAt: "2026-04-26T10:01:00.000Z" }));
+    render(<ConversationRail onClose={() => {}} />);
+    // Per-group pip: aria-label is exactly "{n} new" (no "since last open").
+    expect(screen.getByLabelText(/^2 new$/)).toBeInTheDocument();
+    // Header total-unread badge has the longer label and shows up too.
+    expect(screen.getByLabelText(/2 new since last open/i)).toBeInTheDocument();
   });
 });
