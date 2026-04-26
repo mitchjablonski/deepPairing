@@ -251,7 +251,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "log_reasoning",
         description:
-          "Log the reasoning for an action before taking it. Name the underlying concept in `concept` (e.g. 'dependency inversion', 'optimistic UI') whenever one applies — the human learns the pattern, not just the fix. Attach `evidence` for reasoning grounded in the codebase, and `alternativeDetails` for structured rejected alternatives.",
+          "Log the reasoning for an action before taking it. REQUIRED BEFORE EACH SIGNIFICANT EDIT — this pairs with present_code_change to create a per-edit checkpoint cadence. log_reasoning explains WHY you're about to write what you're about to write; present_code_change shows WHAT. Together they give the human a chance to redirect BEFORE the diff is on disk, not after a batch of files has shipped. Name the underlying concept in `concept` (e.g. 'dependency inversion', 'optimistic UI') whenever one applies — the human learns the pattern, not just the fix. Attach `evidence` for reasoning grounded in the codebase, and `alternativeDetails` for structured rejected alternatives.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -321,7 +321,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_code_change",
-        description: "Present a code change as a before/after diff with reasoning and confidence. SINGLE REVIEW SURFACE: the human reviews the diff in the companion UI (small, confident edits may also surface a one-shot terminal accept via elicitation, but never both as parallel approvals). Do NOT also paste the diff into chat for confirmation. After this returns, call check_feedback to wait for their verdict.",
+        description:
+          "Present a code change as a before/after diff with reasoning and confidence. " +
+          "REQUIRED BEFORE EACH WRITE/EDIT: this is a per-edit checkpoint, not a one-shot for big diffs. " +
+          "Call this BEFORE every Write/Edit/MultiEdit on a file the user hasn't already approved this session. " +
+          "Batched implementation without per-file checkpoints is a protocol violation — the user should see and react to each change as you make it, not get a wall of commits at the end. " +
+          "Even small/confident edits get checkpointed (the elicitation gating just makes the approval a one-tap terminal accept). " +
+          "SINGLE REVIEW SURFACE: the human reviews the diff in the companion UI; do NOT also paste the diff into chat for confirmation. After this returns, call check_feedback to wait for their verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {

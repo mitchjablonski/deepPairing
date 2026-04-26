@@ -96,6 +96,145 @@ export function ensureStopHook(projectRoot: string): SetupResult {
 }
 
 /**
+ * V2 — PostToolUse "checkpoint" hook. Fires after every Write/Edit/MultiEdit
+ * and exits 2 to nag the agent into calling present_code_change BEFORE the
+ * next edit. The threshold is 1 (deliberately strict): the protocol says
+ * "before each Write/Edit", so the FIRST Write without a preceding
+ * code_change is already a violation.
+ *
+ * Why a real script file (not an inline `node -e "..."`):
+ * shell+JSON+JS triple-escaping made the inline version unmaintainable and
+ * silently broke. Writing to disk gives us:
+ *   - debuggable (the script is in .deeppairing/hooks/, run it directly)
+ *   - editable (a team can soften the rule by tweaking the file)
+ *   - tested via execSync without escape gymnastics
+ *
+ * Implementation:
+ *   - Read .deeppairing/sessions/&#x2A;/artifacts.json to find the most-recent
+ *     code_change artifact's createdAt as the "last checkpoint" timestamp.
+ *   - Read PostToolUse event payload from stdin (Claude Code's hook protocol).
+ *   - If the tool isn't Write/Edit/MultiEdit, exit 0 (the matcher should
+ *     have filtered, but we're belt-and-suspenders here).
+ *   - If no code_change artifact exists OR the most recent one predates
+ *     this PostToolUse event, exit 2 with a nag.
+ */
+const CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
+// deepPairing checkpoint hook (V2) — installed by ensureCheckpointHook.
+// ESM (.mjs): use import, not require.
+import fs from "node:fs";
+import path from "node:path";
+
+let stdin = "";
+process.stdin.setEncoding("utf-8");
+process.stdin.on("data", (c) => { stdin += c; });
+process.stdin.on("end", () => {
+  try {
+    const ev = stdin ? JSON.parse(stdin) : {};
+    const tool = ev.tool_name || ev.toolName || "";
+    if (!["Write", "Edit", "MultiEdit"].includes(tool)) process.exit(0);
+    const filePath =
+      (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
+      (ev.input && ev.input.file_path) ||
+      "(unknown)";
+
+    const sessionsDir = path.join(process.cwd(), ".deeppairing", "sessions");
+    if (!fs.existsSync(sessionsDir)) process.exit(0);
+
+    let mostRecentCheckpoint = 0;
+    for (const id of fs.readdirSync(sessionsDir)) {
+      const af = path.join(sessionsDir, id, "artifacts.json");
+      if (!fs.existsSync(af)) continue;
+      try {
+        const arr = JSON.parse(fs.readFileSync(af, "utf-8"));
+        for (const a of arr) {
+          if (a.type !== "code_change") continue;
+          const t = new Date(a.createdAt).getTime();
+          if (t > mostRecentCheckpoint) mostRecentCheckpoint = t;
+        }
+      } catch { /* skip malformed session */ }
+    }
+
+    // Threshold rule: every Write needs a code_change artifact created in
+    // the last FRESH_MS window. Phase 1 is intentionally simple — file-
+    // identity tracking ("did the user already approve THIS file?") is
+    // future work; right now we nag whenever the latest code_change is
+    // stale or absent.
+    const FRESH_MS = 60 * 1000;
+    const ageMs = Date.now() - mostRecentCheckpoint;
+    if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
+      process.stdout.write(
+        "deepPairing: " + tool + " on " + filePath +
+        " without an intervening present_code_change. " +
+        "Call present_code_change BEFORE the next edit so the human can react. " +
+        "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section.)\\n"
+      );
+      process.exit(2);
+    }
+    process.exit(0);
+  } catch {
+    // Never block the agent on a hook bug. Exit 0 on any unexpected error.
+    process.exit(0);
+  }
+});
+`;
+
+const CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
+
+export function ensureCheckpointHook(projectRoot: string): SetupResult {
+  const claudeDir = path.join(projectRoot, ".claude");
+  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const scriptPath = path.join(projectRoot, CHECKPOINT_SCRIPT_REL_PATH);
+  try {
+    // 1. Always write the latest hook script — idempotent overwrite is fine
+    //    because the script is generated, not user-edited.
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
+    fs.chmodSync(scriptPath, 0o755);
+
+    // 2. Wire the hook into .claude/settings.local.json (idempotent).
+    let settings: any = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+      }
+    }
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
+
+    const isDpCheckpointEntry = (entry: any) => {
+      if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
+      if (Array.isArray(entry?.hooks)) {
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
+      }
+      return false;
+    };
+
+    const alreadyHasDp =
+      Array.isArray(settings.hooks.PostToolUse) &&
+      settings.hooks.PostToolUse.some(isDpCheckpointEntry);
+
+    if (alreadyHasDp) {
+      return { ok: true, changed: false, message: "Checkpoint hook already configured" };
+    }
+
+    // V2 — matcher scopes the hook to file-mutating tools so we don't fire
+    // on every Read/Bash. The script also re-checks the tool name as a
+    // belt-and-suspenders guard.
+    settings.hooks.PostToolUse.push({
+      matcher: "Write|Edit|MultiEdit",
+      hooks: [{ type: "command", command: `node ${CHECKPOINT_SCRIPT_REL_PATH}` }],
+    });
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return { ok: true, changed: true, message: "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)" };
+  } catch (err: any) {
+    return { ok: false, message: `Could not configure checkpoint hook: ${err?.message ?? err}` };
+  }
+}
+
+/**
  * Run the subset of setup tasks the daemon should perform on first spawn.
  * NOTE: CLAUDE.md mutation is intentionally NOT here — silently rewriting
  * a user's CLAUDE.md from a background daemon spawned by an MCP install
@@ -106,5 +245,6 @@ export function runDaemonStartupSetup(projectRoot: string): SetupResult[] {
     ensureDeepPairingDir(projectRoot),
     ensureGitignoreEntry(projectRoot),
     ensureStopHook(projectRoot),
+    ensureCheckpointHook(projectRoot),
   ];
 }

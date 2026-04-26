@@ -7,6 +7,7 @@ import {
   ensureDeepPairingDir,
   ensureGitignoreEntry,
   ensureStopHook,
+  ensureCheckpointHook,
   runDaemonStartupSetup,
 } from "../setup-tasks.js";
 
@@ -224,11 +225,130 @@ describe("Stop hook command — executable behavior (Part C)", () => {
   });
 });
 
+describe("ensureCheckpointHook (V2)", () => {
+  it("installs a PostToolUse entry scoped to Write|Edit|MultiEdit", () => {
+    const r = ensureCheckpointHook(tmpDir);
+    expect(r.ok && r.changed).toBe(true);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    const entries = settings.hooks.PostToolUse;
+    expect(Array.isArray(entries)).toBe(true);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].matcher).toBe("Write|Edit|MultiEdit");
+    expect(entries[0].hooks[0].command).toContain("checkpoint.mjs");
+  });
+
+  it("writes the executable hook script to .deeppairing/hooks/checkpoint.mjs", () => {
+    ensureCheckpointHook(tmpDir);
+    const scriptPath = path.join(tmpDir, ".deeppairing", "hooks", "checkpoint.mjs");
+    expect(fs.existsSync(scriptPath)).toBe(true);
+    const stat = fs.statSync(scriptPath);
+    // executable bit set so the shell can run it (belt + suspenders; we
+    // invoke via `node ...` so the bit is informational only).
+    expect(stat.mode & 0o111).not.toBe(0);
+    const body = fs.readFileSync(scriptPath, "utf-8");
+    expect(body).toMatch(/deepPairing checkpoint hook/);
+  });
+
+  it("is idempotent — second call is a no-op", () => {
+    ensureCheckpointHook(tmpDir);
+    const r = ensureCheckpointHook(tmpDir);
+    expect(r.ok && !r.changed).toBe(true);
+  });
+
+  it("co-exists with the Stop hook in the same settings file", () => {
+    ensureStopHook(tmpDir);
+    ensureCheckpointHook(tmpDir);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    expect(settings.hooks.Stop).toHaveLength(1);
+    expect(settings.hooks.PostToolUse).toHaveLength(1);
+  });
+
+  it("refuses to clobber a malformed settings file", () => {
+    fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "{ not json");
+    const r = ensureCheckpointHook(tmpDir);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("Checkpoint hook script — executable behavior (V2)", () => {
+  // Run the installed .deeppairing/hooks/checkpoint.mjs directly, piping
+  // a PostToolUse-shaped event over stdin (Claude Code's hook protocol).
+
+  function runHookWith(input: object): { exitCode: number; stdout: string; stderr: string } {
+    ensureCheckpointHook(tmpDir);
+    const scriptPath = path.join(tmpDir, ".deeppairing", "hooks", "checkpoint.mjs");
+    try {
+      const stdout = execSync(`node ${scriptPath}`, {
+        cwd: tmpDir,
+        input: JSON.stringify(input),
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      return { exitCode: 0, stdout, stderr: "" };
+    } catch (err: any) {
+      return {
+        exitCode: err.status ?? 1,
+        stdout: err.stdout?.toString() ?? "",
+        stderr: err.stderr?.toString() ?? "",
+      };
+    }
+  }
+
+  function writeArtifacts(sessionId: string, artifacts: any[]) {
+    const sessionDir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify(artifacts));
+  }
+
+  it("exits 0 when the tool is not Write/Edit/MultiEdit (Read/Bash etc. are no-ops)", () => {
+    const r = runHookWith({ tool_name: "Read", tool_input: { file_path: "x.ts" } });
+    expect(r.exitCode).toBe(0);
+  });
+
+  it("exits 2 nagging the agent on a Write with NO code_change artifact at all", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "src/new.ts" } });
+    expect(r.exitCode).toBe(2);
+    expect(r.stdout).toContain("present_code_change");
+    expect(r.stdout).toContain("src/new.ts");
+  });
+
+  it("exits 0 when a code_change artifact was created in the last minute (fresh checkpoint)", () => {
+    writeArtifacts("s1", [
+      { id: "art_cc", type: "code_change", status: "approved", createdAt: new Date().toISOString() },
+    ]);
+    const r = runHookWith({ tool_name: "Edit", tool_input: { file_path: "src/x.ts" } });
+    expect(r.exitCode).toBe(0);
+  });
+
+  it("exits 2 when the most-recent code_change is older than the freshness window", () => {
+    const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    writeArtifacts("s1", [
+      { id: "art_cc", type: "code_change", status: "approved", createdAt: stale },
+    ]);
+    const r = runHookWith({ tool_name: "MultiEdit", tool_input: { file_path: "src/y.ts" } });
+    expect(r.exitCode).toBe(2);
+    expect(r.stdout).toMatch(/Per-Edit Checkpoint/i);
+  });
+
+  it("exits 0 when there are no sessions at all (fresh project, nothing to enforce yet)", () => {
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "src/x.ts" } });
+    expect(r.exitCode).toBe(0);
+  });
+});
+
 describe("runDaemonStartupSetup", () => {
-  it("runs all three idempotent setup tasks", () => {
+  it("runs all four idempotent setup tasks", () => {
     fs.writeFileSync(path.join(tmpDir, ".gitignore"), "node_modules/\n");
     const results = runDaemonStartupSetup(tmpDir);
-    expect(results).toHaveLength(3);
+    expect(results).toHaveLength(4);
     expect(results.every((r) => r.ok)).toBe(true);
     // Re-running is a no-op
     const second = runDaemonStartupSetup(tmpDir);

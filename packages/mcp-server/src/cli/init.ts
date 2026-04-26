@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity } from "../daemon-lifecycle.js";
-import { ensureDeepPairingDir, ensureGitignoreEntry, ensureStopHook } from "./setup-tasks.js";
+import { ensureDeepPairingDir, ensureGitignoreEntry, ensureStopHook, ensureCheckpointHook } from "./setup-tasks.js";
 import readline from "node:readline";
 
 const cwd = process.cwd();
@@ -56,6 +56,27 @@ Layering a terminal prompt on top of a deepPairing artifact creates two
 parallel approval surfaces. The user accepts in one, you proceed, but the
 artifact stays \`draft\` in the other — and the Stop hook will trap the agent
 in a poll loop. One artifact, one surface. Then check_feedback.
+
+## Per-Edit Checkpoint (Cadence Rule)
+
+A green-lit plan is NOT a green light to ship every edit silently. The whole
+point of pairing is that the human sees and reacts to each change AS you make
+it — not as a wall of commits at the end.
+
+For any plan with more than one file change:
+- Call \`log_reasoning\` BEFORE each Write/Edit/MultiEdit (WHY you're about to write).
+- Call \`present_code_change\` BEFORE each Write/Edit/MultiEdit on a file the user
+  hasn't already approved this session (WHAT you're about to write).
+- Then call \`check_feedback\`. Don't skip ahead to the next edit.
+
+If you find yourself thinking "I'll batch the small ones together" — that's the
+exact failure mode this rule exists to prevent. The user's "kick off the next
+item" or "looks good" was direction for the NEXT step, not approval for the
+five steps after that. When in doubt, checkpoint.
+
+The PostToolUse hook (installed by \`npx deeppairing init\`) enforces this: if
+you Write/Edit without an intervening present_code_change, the hook nags and
+forces you to checkpoint before continuing.
 
 ## Workflow
 
@@ -217,6 +238,18 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: 
     console.log(`  ${green("✓")} ${hookResult.message} (prevents stopping with pending reviews)`);
   } else {
     console.log(`  ${dim("✓")} ${hookResult.message}`);
+  }
+
+  // V2 — PostToolUse checkpoint hook. Forces present_code_change before
+  // each Write/Edit/MultiEdit so the agent can't ship a wall of edits
+  // silently after a green-lit plan.
+  const ckptResult = ensureCheckpointHook(cwd);
+  if (!ckptResult.ok) {
+    console.log(`  ${yellow("!")} ${ckptResult.message}`);
+  } else if (ckptResult.changed) {
+    console.log(`  ${green("✓")} ${ckptResult.message} (enforces per-edit checkpoint cadence)`);
+  } else {
+    console.log(`  ${dim("✓")} ${ckptResult.message}`);
   }
 
   // Done
@@ -398,12 +431,24 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
 
   const hooksPath = path.join(cwd, ".claude", "settings.local.json");
   let stopHookPresent = false;
+  let checkpointHookPresent = false;
   if (fs.existsSync(hooksPath)) {
     try {
       const settings = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
       const stopHooks = settings?.hooks?.Stop ?? [];
       stopHookPresent = Array.isArray(stopHooks) && stopHooks.some(
         (h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"),
+      );
+      const postToolUse = settings?.hooks?.PostToolUse ?? [];
+      checkpointHookPresent = Array.isArray(postToolUse) && postToolUse.some(
+        (entry: any) => {
+          // PostToolUse entries can be either { command } directly or { matcher, hooks: [{ command }] }.
+          if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
+          if (Array.isArray(entry?.hooks)) {
+            return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
+          }
+          return false;
+        },
       );
     } catch {}
   }
@@ -415,6 +460,18 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
       label: "Add Stop hook to .claude/settings.local.json",
       apply: () => {
         const r = ensureStopHook(cwd);
+        return { ok: r.ok, message: r.message };
+      },
+    });
+  }
+  if (checkpointHookPresent) {
+    console.log(`  ${green("✓")} Claude Code per-edit checkpoint hook configured`);
+  } else {
+    console.log(`  ${yellow("!")} Per-edit checkpoint hook NOT configured (agent can batch Write/Edit without present_code_change)`);
+    fixes.push({
+      label: "Add PostToolUse checkpoint hook to .claude/settings.local.json",
+      apply: () => {
+        const r = ensureCheckpointHook(cwd);
         return { ok: r.ok, message: r.message };
       },
     });
