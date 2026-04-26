@@ -3,6 +3,33 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment } from "@deeppairi
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
 
+/**
+ * U7 — closed enum of WHO / WHAT triggered a status transition. Carried in
+ * the daemon log on every status mutation and (later) in
+ * artifact.statusHistory entries so the timeline view can show "approved by
+ * UI button" vs "approved by elicit accept" vs "auto-superseded by revise".
+ *
+ * `comment_side_effect` is a SENTINEL: nothing in the codebase should ever
+ * pass it. Its presence in the log is a smoking gun for the U0.2 family of
+ * bugs (commenting silently changes status). Catch it in code review.
+ *
+ * `unspecified` is the default for legacy callers that haven't been updated
+ * yet — keeps the log audit-complete without a flag day.
+ */
+export type StatusTransitionReason =
+  | "ui_approve_button"
+  | "ui_revise_button"
+  | "ui_reject_button"
+  | "ui_decision_resolve"
+  | "ui_bulk_accept"
+  | "elicit_accept"
+  | "agent_revise"
+  | "agent_retract"
+  | "agent_supersede"
+  | "demo_script"
+  | "comment_side_effect"
+  | "unspecified";
+
 export interface DecisionRecord {
   decisionId: string;
   artifactId: string;
@@ -102,7 +129,19 @@ export interface IStore {
   // Artifacts
   createArtifact(params: CreateArtifactParams): MaybePromise<Artifact>;
   renameArtifact(artifactId: string, title: string): MaybePromise<void>;
-  updateArtifactStatus(artifactId: string, status: ArtifactStatus): MaybePromise<void>;
+  /**
+   * U7 — `reason` tag is OPTIONAL but recommended. It explains WHO/WHAT
+   * caused the transition so the daemon log can attribute every status
+   * change. If a transition would EVER carry the sentinel
+   * `comment_side_effect` reason, that's a bug — comments must never
+   * change artifact status. Older callers omitting `reason` get tagged
+   * `unspecified` so the audit trail still has a value.
+   */
+  updateArtifactStatus(
+    artifactId: string,
+    status: ArtifactStatus,
+    reason?: StatusTransitionReason,
+  ): MaybePromise<void>;
   getArtifacts(): MaybePromise<Artifact[]>;
 
   // Comments

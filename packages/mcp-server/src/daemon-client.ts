@@ -65,8 +65,12 @@ export class DaemonClient implements IStore {
     await this.post(`/artifacts/${artifactId}/rename`, { title });
   }
 
-  async updateArtifactStatus(artifactId: string, status: ArtifactStatus): Promise<void> {
-    await this.post(`/artifacts/${artifactId}/status`, { status });
+  async updateArtifactStatus(
+    artifactId: string,
+    status: ArtifactStatus,
+    reason?: import("./store/store-interface.js").StatusTransitionReason,
+  ): Promise<void> {
+    await this.post(`/artifacts/${artifactId}/status`, { status, reason });
   }
 
   async getArtifacts(): Promise<Artifact[]> {
