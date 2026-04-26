@@ -349,3 +349,122 @@ describe("connection store — lifecycle", () => {
     expect(connectSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("connection store — daemon-restart detection (U4)", () => {
+  // The architecture review's #2 finding: when the daemon shuts down (auto-
+  // shutdown after 60s idle, crash, manual kill) and a NEW daemon takes
+  // over the port, connected web UIs were silently talking to a different
+  // process. In-flight optimistic updates the prior daemon never flushed
+  // are now unreachable. With U4, the daemon's `daemonStartedAt` timestamp
+  // travels in every `connected` payload; a value change across reconnects
+  // triggers re-hydration plus a toast so the user knows to retry anything
+  // they thought they'd just sent.
+
+  it("captures daemonStartedAt on the first connected event", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/p",
+      daemonStartedAt: "2026-04-25T12:00:00.000Z",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    expect(useConnectionStore.getState().daemonStartedAt).toBe("2026-04-25T12:00:00.000Z");
+  });
+
+  it("does NOT toast on the FIRST connected event (no prior baseline = no restart)", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/p",
+      daemonStartedAt: "2026-04-25T12:00:00.000Z",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("toasts and re-hydrates when a reconnect carries a NEW daemonStartedAt", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    // First connect — daemon A.
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/p",
+      daemonStartedAt: "2026-04-25T12:00:00.000Z",
+      state: {
+        sessionId: "s1",
+        artifacts: [{ id: "a_old", sessionId: "s1", type: "research", version: 1,
+          parentId: null, title: "old", status: "draft", content: {}, agentReasoning: null,
+          createdAt: "2026-04-25T12:01:00.000Z", updatedAt: "2026-04-25T12:01:00.000Z" }],
+        comments: [],
+      },
+    });
+    await flush();
+    expect(useArtifactStore.getState().artifacts).toHaveLength(1);
+
+    // Reconnect — daemon B took over the port, sending a different start time
+    // and a fresh state with a different artifact.
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/p",
+      daemonStartedAt: "2026-04-25T13:00:00.000Z",
+      state: {
+        sessionId: "s1",
+        artifacts: [{ id: "a_new", sessionId: "s1", type: "plan", version: 1,
+          parentId: null, title: "new", status: "draft", content: { steps: [] }, agentReasoning: null,
+          createdAt: "2026-04-25T13:00:30.000Z", updatedAt: "2026-04-25T13:00:30.000Z" }],
+        comments: [],
+      },
+    });
+    await flush();
+
+    // State is fully replaced from the new daemon (the prior artifact is gone).
+    const arts = useArtifactStore.getState().artifacts;
+    expect(arts.map((a) => a.id)).toEqual(["a_new"]);
+    expect(useConnectionStore.getState().daemonStartedAt).toBe("2026-04-25T13:00:00.000Z");
+
+    // And the user is told.
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.some((t) => t.title.includes("Daemon restarted"))).toBe(true);
+  });
+
+  it("does NOT toast when reconnect carries the SAME daemonStartedAt (normal WS reconnect)", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    const startedAt = "2026-04-25T12:00:00.000Z";
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p", daemonStartedAt: startedAt,
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p", daemonStartedAt: startedAt,
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("does NOT toast when daemon omits daemonStartedAt (back-compat with older daemons)", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T12:00:00.000Z",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    // Reconnect to an older daemon with no daemonStartedAt field.
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+});

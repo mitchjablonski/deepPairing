@@ -27,6 +27,11 @@ interface ConnectionState {
   autonomyLevel: "supervised" | "balanced" | "autonomous";
   adapter: ConnectionAdapter | null;
   activeSessions: ActiveSession[];
+  /** U4 — daemon process identity. A different value across reconnects
+   *  means the daemon restarted; we re-hydrate from the new instance and
+   *  toast the user so they know any in-flight optimistic updates may
+   *  have been lost. */
+  daemonStartedAt: string | null;
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
@@ -51,12 +56,28 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       const store = useArtifactStore.getState();
 
       switch (data.type) {
-        case "connected":
+        case "connected": {
+          // U4 — daemon-restart detection. If we've connected before, compare
+          // the daemon's startedAt against what we stored. A different value
+          // means a NEW daemon process took over the port; in-flight UI state
+          // (optimistic mutations the prior daemon never flushed) is now
+          // unreachable, and we need to fully rehydrate from the new daemon's
+          // store. The toast tells the user so they know to retry anything
+          // they thought they'd done in the last few seconds.
+          const previousStartedAt = get().daemonStartedAt;
+          const newStartedAt: string | null = data.daemonStartedAt ?? null;
+          const daemonRestarted =
+            previousStartedAt != null &&
+            newStartedAt != null &&
+            previousStartedAt !== newStartedAt;
+
           set({
             sessionId: data.state?.sessionId ?? null,
             projectRoot: data.projectRoot ?? null,
             autonomyLevel: data.state?.autonomyLevel ?? "supervised",
+            daemonStartedAt: newStartedAt,
           });
+
           // Reset before hydration to prevent duplicates on reconnect
           if (data.state) {
             store.reset();
@@ -67,7 +88,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               store.addComment(comment);
             }
           }
+
+          if (daemonRestarted) {
+            import("./toast").then(({ useToastStore }) => {
+              useToastStore.getState().push({
+                kind: "info",
+                title: "Daemon restarted — session reloaded",
+                body: "The deepPairing daemon was restarted. Anything you submitted in the last few seconds may need to be retried.",
+                ttl: 8000,
+              });
+            });
+          }
           break;
+        }
 
         case "artifact_created":
           store.addArtifact(data.artifact);
@@ -242,6 +275,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     autonomyLevel: "supervised",
     adapter: null,
     activeSessions: [],
+    daemonStartedAt: null,
 
     connect: (sessionId?: string) => {
       if (get().adapter) return;
