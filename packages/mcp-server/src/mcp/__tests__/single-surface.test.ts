@@ -82,9 +82,24 @@ describe("present_* tool descriptions carry single-review-surface guidance (U0.3
     const d = await descFor("present_code_change");
     expect(d).toMatch(/SINGLE REVIEW SURFACE/i);
   });
+
+  // V1 — checkpoint cadence guidance, distinct from "single review surface".
+  it("present_code_change is described as a per-edit checkpoint, not a one-shot for big diffs", async () => {
+    const d = await descFor("present_code_change");
+    expect(d).toMatch(/REQUIRED BEFORE EACH WRITE/i);
+    expect(d).toMatch(/per-edit checkpoint/i);
+    expect(d).toMatch(/Batched implementation .*protocol violation/i);
+  });
+
+  it("log_reasoning is described as the WHY half of the per-edit checkpoint pair", async () => {
+    const d = await descFor("log_reasoning");
+    expect(d).toMatch(/REQUIRED BEFORE EACH SIGNIFICANT EDIT/i);
+    expect(d).toMatch(/per-edit checkpoint/i);
+    expect(d).toMatch(/present_code_change/);
+  });
 });
 
-describe("embedded CLAUDE.md protocol carries the same guidance (U0.5)", () => {
+describe("embedded CLAUDE.md protocol carries the same guidance (U0.5 + V3)", () => {
   // The init flow seeds CLAUDE.md with the deepPairing protocol so the agent
   // follows it on every session. The tool descriptions pin the LLM-visible
   // surface; this pins the human-readable / system-prompt-equivalent surface.
@@ -96,5 +111,17 @@ describe("embedded CLAUDE.md protocol carries the same guidance (U0.5)", () => {
     expect(initSrc).toMatch(/## Single Review Surface/);
     expect(initSrc).toMatch(/ExitPlanMode/);
     expect(initSrc).toMatch(/Stop hook/);
+  });
+
+  // V3 — per-edit checkpoint cadence rule pinned in the embedded protocol.
+  it("init.ts EMBEDDED_PROTOCOL contains the Per-Edit Checkpoint section", async () => {
+    const initSrc = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../cli/init.ts"),
+      "utf-8",
+    );
+    expect(initSrc).toMatch(/## Per-Edit Checkpoint/);
+    expect(initSrc).toMatch(/PostToolUse hook/);
+    expect(initSrc).toMatch(/log_reasoning/);
+    expect(initSrc).toMatch(/present_code_change/);
   });
 });
