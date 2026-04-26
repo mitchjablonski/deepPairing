@@ -601,6 +601,87 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("Request-body Zod validation (U2)", () => {
+    // Pre-U2 mutation routes ran ad-hoc `typeof` guards on raw JSON;
+    // a missing/wrong-typed field could crash deeper in the handler.
+    // Now every route safeParses against a shared schema and returns
+    // 400 with code="validation_error" on mismatch.
+    function bodyOf(res: Response): Promise<any> { return res.json(); }
+
+    it("POST /api/comments rejects missing artifactId with code=validation_error", async () => {
+      const res = await app.request("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "hi" }),
+      });
+      expect(res.status).toBe(400);
+      expect((await bodyOf(res)).code).toBe("validation_error");
+    });
+
+    it("POST /api/comments rejects an unknown intent enum value", async () => {
+      const res = await app.request("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifactId: "a", content: "hi", intent: "scream" }),
+      });
+      expect(res.status).toBe(400);
+      const body = await bodyOf(res);
+      expect(body.code).toBe("validation_error");
+      expect(body.error).toMatch(/intent/);
+    });
+
+    it("POST /api/decisions/:id rejects unknown confidence value", async () => {
+      const res = await app.request("/api/decisions/d", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optionId: "o", confidence: "absolute" }),
+      });
+      expect(res.status).toBe(400);
+      expect((await bodyOf(res)).code).toBe("validation_error");
+    });
+
+    it("POST /api/artifacts/:id/status rejects unknown status with structured payload", async () => {
+      const res = await app.request("/api/artifacts/x/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "yeet" }),
+      });
+      expect(res.status).toBe(400);
+      const body = await bodyOf(res);
+      expect(body.code).toBe("validation_error");
+      expect(body.issues[0].path).toBe("status");
+    });
+
+    it("POST /api/artifacts/:id/rename rejects an empty title", async () => {
+      const res = await app.request("/api/artifacts/x/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "" }),
+      });
+      expect(res.status).toBe(400);
+      expect((await bodyOf(res)).code).toBe("validation_error");
+    });
+
+    it("POST /api/preferences accepts an empty body (everything is optional)", async () => {
+      const res = await app.request("/api/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("POST /api/retrospectives rejects an unknown verdict enum value", async () => {
+      const res = await app.request("/api/retrospectives", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionId: "d", verdict: "ok" }),
+      });
+      expect(res.status).toBe(400);
+      expect((await bodyOf(res)).code).toBe("validation_error");
+    });
+  });
+
   describe("No-active-session handling (U0.6 prevention)", () => {
     // The orphan-session field bug: when the daemon's getter returns null,
     // routes must NOT spawn a placeholder session. Reads degrade to empty

@@ -58,6 +58,9 @@ export {
   ArtifactStatusSchema,
   ArtifactStatusHistoryEntrySchema,
   ArtifactSchema,
+  DecisionContentSchema,
+  DecisionOptionContentSchema,
+  CodeChangeContentSchema,
   type ArtifactType,
   type ArtifactStatus,
   type ArtifactStatusHistoryEntry,
@@ -65,7 +68,26 @@ export {
   type DecisionContent,
   type CodeChangeContent,
   getTypedContent,
+  parseArtifactContent,
 } from "./schemas/artifact.js";
+
+export {
+  CommentBodySchema,
+  DecisionResolveBodySchema,
+  StatusUpdateBodySchema,
+  RenameBodySchema,
+  PreferenceBodySchema,
+  RetrospectiveBodySchema,
+  PromptBodySchema,
+  formatZodIssues,
+  type CommentBody,
+  type DecisionResolveBody,
+  type StatusUpdateBody,
+  type RenameBody,
+  type PreferenceBody,
+  type RetrospectiveBody,
+  type PromptBody,
+} from "./schemas/request-bodies.js";
 
 export {
   CodeReferenceSchema,

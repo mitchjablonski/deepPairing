@@ -9,6 +9,15 @@ import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
+import {
+  CommentBodySchema,
+  DecisionResolveBodySchema,
+  StatusUpdateBodySchema,
+  RenameBodySchema,
+  PreferenceBodySchema,
+  RetrospectiveBodySchema,
+  formatZodIssues,
+} from "@deeppairing/shared";
 
 // U0.6 — getter may return null when no session matches AND none exist.
 // Routes treat null as "no active session" rather than spawning a placeholder.
@@ -97,12 +106,11 @@ export function createHttpRoutes(
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const body = await c.req.json();
-    const { artifactId, content, target, intent, parentCommentId } = body;
-
-    if (!artifactId || !content) {
-      return c.json({ error: "artifactId and content required" }, 400);
-    }
+    // U2 — validate at the boundary; replaces ad-hoc `if (!artifactId)` guards
+    // that left malformed bodies to crash deeper in the handler.
+    const parsed = CommentBodySchema.safeParse(await c.req.json());
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { artifactId, content, target, intent, parentCommentId } = parsed.data;
 
     const newId = `cmt_${nanoid(10)}`;
     const comment = await store.addComment({
@@ -155,12 +163,9 @@ export function createHttpRoutes(
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const decisionId = c.req.param("decisionId");
-    const body = await c.req.json();
-    const { optionId, reasoning, confidence, predictedOutcome } = body;
-
-    if (!optionId) {
-      return c.json({ error: "optionId required" }, 400);
-    }
+    const parsed = DecisionResolveBodySchema.safeParse(await c.req.json());
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
 
     const prediction = confidence || predictedOutcome
       ? { confidence, predictedOutcome }
@@ -190,13 +195,12 @@ export function createHttpRoutes(
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const storeSid = (store as any).getSessionId?.() ?? "(unknown)";
     const artifactId = c.req.param("artifactId");
-    const body = await c.req.json();
-    const { status, feedback } = body;
-
-    if (!["approved", "revised", "rejected"].includes(status)) {
-      log(`[status] REJECTED — invalid status "${status}" for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid})`);
-      return c.json({ error: "status must be approved, revised, or rejected" }, 400);
+    const parsed = StatusUpdateBodySchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      log(`[status] REJECTED — body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
+      return c.json(formatZodIssues(parsed.error), 400);
     }
+    const { status, feedback } = parsed.data;
 
     // U0.6 diagnostic — log the routing decision so we can confirm whether
     // the UI's X-Session-Id matches the store the artifact actually lives
@@ -271,13 +275,11 @@ export function createHttpRoutes(
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifactId = c.req.param("artifactId");
-    const body = await c.req.json();
-    const { title } = body;
-    if (!title || typeof title !== "string") {
-      return c.json({ error: "title required" }, 400);
-    }
-    await store.renameArtifact(artifactId, title.trim());
-    broadcast({ type: "artifact_renamed", artifactId, title: title.trim() }, sid);
+    const parsed = RenameBodySchema.safeParse(await c.req.json());
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const title = parsed.data.title.trim();
+    await store.renameArtifact(artifactId, title);
+    broadcast({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });
   });
 
@@ -433,13 +435,10 @@ export function createHttpRoutes(
   // for the same decisionId (verdict can change as evidence accumulates).
   app.post("/api/retrospectives", async (c) => {
     if (!projectRoot) return c.json({ error: "projectRoot not configured" }, 400);
-    const body = await c.req.json().catch(() => null);
-    const decisionId = String(body?.decisionId ?? "").trim();
-    const verdict = body?.verdict;
-    const note = typeof body?.note === "string" ? body.note.slice(0, 2000) : undefined;
-    if (!decisionId || !["right", "wrong", "mixed"].includes(verdict)) {
-      return c.json({ error: "decisionId and verdict ('right' | 'wrong' | 'mixed') are required" }, 400);
-    }
+    const raw = await c.req.json().catch(() => null);
+    const parsed = RetrospectiveBodySchema.safeParse(raw);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { decisionId, verdict, note } = parsed.data;
     const result = FileStore.addRetrospective(projectRoot, { decisionId, verdict, note });
     if (!result) {
       return c.json({ error: `no decision found with id "${decisionId}"` }, 404);
@@ -468,10 +467,11 @@ export function createHttpRoutes(
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const body = await c.req.json();
-    if (body.autonomyLevel) {
-      await store.setAutonomyLevel(body.autonomyLevel);
-      broadcast({ type: "preference_changed", autonomyLevel: body.autonomyLevel }, sid);
+    const parsed = PreferenceBodySchema.safeParse(await c.req.json());
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    if (parsed.data.autonomyLevel) {
+      await store.setAutonomyLevel(parsed.data.autonomyLevel);
+      broadcast({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
     }
     return c.json({ status: "updated" });
   });
