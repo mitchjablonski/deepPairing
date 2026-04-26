@@ -12,6 +12,7 @@ import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { YourTasteDrawer } from "./components/YourTasteDrawer";
+import { ConversationRail } from "./components/ConversationRail";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
@@ -23,6 +24,10 @@ function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTaste, setShowTaste] = useState(false);
+  // W1 — conversation rail visibility. Wired the same way as showTaste:
+  // header button toggles, dp:open-conversation event lets toasts open it,
+  // Esc closes via the drawer's own keydown.
+  const [showConversation, setShowConversation] = useState(false);
 
   // Fetch active sessions on mount, auto-connect to the first one (or to the
   // session named in ?session=... — used by `npx deeppairing demo` to land
@@ -77,6 +82,7 @@ function App() {
         setShowPalette(false);
         setShowSettings(false);
         setShowTaste(false);
+        setShowConversation(false);
       }
 
       const store = useArtifactStore.getState();
@@ -132,6 +138,14 @@ function App() {
     return () => window.removeEventListener("dp:open-your-taste", openTaste);
   }, []);
 
+  // W1: same decoupling for the conversation rail. Toasts (or future
+  // surfaces) can open it via window.dispatchEvent(new CustomEvent("dp:open-conversation")).
+  useEffect(() => {
+    const openConv = () => setShowConversation(true);
+    window.addEventListener("dp:open-conversation", openConv);
+    return () => window.removeEventListener("dp:open-conversation", openConv);
+  }, []);
+
   // O7: question-answered toast's "Jump to answer" action selects the
   // artifact the answer belongs to, scrolling it into view.
   useEffect(() => {
@@ -174,6 +188,18 @@ function App() {
               <path d="M6 1.5v2M1.5 6h2M10.5 6h-2" />
             </svg>
             <span className="hidden min-[700px]:inline">Your taste</span>
+          </button>
+          <span className="text-2xs text-text-muted mx-1">·</span>
+          <button
+            onClick={() => setShowConversation(true)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            title="Conversation — every comment + reply across artifacts"
+            aria-label="Open conversation rail"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
+            </svg>
+            <span className="hidden min-[700px]:inline">Conversation</span>
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
@@ -290,6 +316,7 @@ function App() {
 
       {/* Your taste drawer — cross-project Philosophy Ledger, read-only */}
       {showTaste && <YourTasteDrawer onClose={() => setShowTaste(false)} />}
+      {showConversation && <ConversationRail onClose={() => setShowConversation(false)} />}
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
       <ToastLayer />
