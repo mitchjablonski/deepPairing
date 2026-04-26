@@ -1,7 +1,26 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+
+// W2 — "last opened" timestamp persisted to sessionStorage so we know
+// which comments arrived since the user last looked at the rail. Stored
+// per session-tab; survives drawer open/close cycles but resets when the
+// tab is reloaded (which is when the artifact store rehydrates anyway).
+const RAIL_LAST_OPENED_KEY = "dp:rail-last-opened-at";
+
+function loadLastOpenedAt(): number {
+  try {
+    const raw = sessionStorage.getItem(RAIL_LAST_OPENED_KEY);
+    if (!raw) return 0;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  } catch { return 0; }
+}
+
+function saveLastOpenedAt(ms: number): void {
+  try { sessionStorage.setItem(RAIL_LAST_OPENED_KEY, String(ms)); } catch {}
+}
 
 /**
  * W1 — Conversation rail.
@@ -60,10 +79,25 @@ function targetLabel(c: Comment, artifact?: Artifact): string {
   return "comment";
 }
 
+type FilterMode = "all" | "unanswered";
+
 export function ConversationRail({ onClose }: ConversationRailProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const artifacts = useArtifactStore((s) => s.artifacts);
   const commentsByArtifact = useArtifactStore((s) => s.comments);
+  // W2 — filter state for the unanswered-only view. Default to "all" so a
+  // first-time opener sees the full feed; switching to "unanswered"
+  // collapses the list to just the human questions still waiting on a
+  // reply, which is the triage surface most users will reach for.
+  const [filter, setFilter] = useState<FilterMode>("all");
+
+  // W2 — capture the previous "last opened" once on mount; we use it to
+  // diff which comments arrived since. Then UPDATE the persisted value to
+  // now, so the next open's "since" clock starts here. Effectively: while
+  // the rail is open, every comment is "unread" relative to the moment we
+  // opened it; close + reopen = fresh diff.
+  const [previousLastOpenedAt] = useState<number>(() => loadLastOpenedAt());
+  useEffect(() => { saveLastOpenedAt(Date.now()); }, []);
 
   useFocusTrap(panelRef, true);
   useEffect(() => { panelRef.current?.focus(); }, []);
@@ -132,6 +166,25 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     () => grouped.reduce((sum, g) => sum + g.threads.length + g.threads.reduce((s, t) => s + t.replies.length, 0), 0),
     [grouped],
   );
+
+  // Apply the current filter to the threads inside each group, keeping
+  // group order intact. A group with zero threads after filtering drops
+  // out of the visible list entirely.
+  const visibleGrouped = useMemo(() => {
+    if (filter === "all") return grouped;
+    return grouped
+      .map((g) => ({
+        ...g,
+        threads: g.threads.filter(
+          (t) =>
+            t.comment.author === "human" &&
+            (t.comment as any).intent === "question" &&
+            t.replies.length === 0,
+        ),
+      }))
+      .filter((g) => g.threads.length > 0);
+  }, [grouped, filter]);
+
   const unansweredQuestions = useMemo(() => {
     let n = 0;
     for (const g of grouped) {
@@ -143,6 +196,27 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     }
     return n;
   }, [grouped]);
+
+  // W2 — count comments whose createdAt is newer than the previous open.
+  // Also bubble up per-group new-counts so each artifact header can show
+  // a small pip when it has fresh activity.
+  const isUnread = (c: Comment) => new Date(c.createdAt).getTime() > previousLastOpenedAt;
+  const unreadByGroup = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const g of grouped) {
+      let n = 0;
+      for (const t of g.threads) {
+        if (isUnread(t.comment)) n++;
+        for (const r of t.replies) if (isUnread(r)) n++;
+      }
+      if (n > 0) map.set(g.artifactId, n);
+    }
+    return map;
+  }, [grouped, previousLastOpenedAt]);
+  const totalUnread = useMemo(
+    () => Array.from(unreadByGroup.values()).reduce((a, b) => a + b, 0),
+    [unreadByGroup],
+  );
 
   const focusArtifact = (artifactId: string) => {
     // Re-uses the existing focus event the question_answered toast wires.
@@ -162,69 +236,114 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
                    bg-surface-elevated border-l border-border-default shadow-2xl
                    overflow-y-auto focus:outline-none"
       >
-        <div className="sticky top-0 flex items-center justify-between px-5 py-3 border-b border-border-default bg-surface-elevated z-10">
-          <div>
-            <h2 className="text-sm font-bold text-text-primary">Conversation</h2>
-            <div className="text-2xs text-text-muted mt-0.5">
-              {totalComments === 0
-                ? "No comments yet"
-                : `${totalComments} message${totalComments === 1 ? "" : "s"} across ${grouped.length} artifact${grouped.length === 1 ? "" : "s"}`}
-              {unansweredQuestions > 0 && (
-                <span className="ml-2 text-accent-violet">
-                  · {unansweredQuestions} unanswered question{unansweredQuestions === 1 ? "" : "s"}
-                </span>
-              )}
+        <div className="sticky top-0 flex flex-col gap-2 px-5 py-3 border-b border-border-default bg-surface-elevated z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-text-primary">
+                Conversation
+                {totalUnread > 0 && (
+                  <span
+                    className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1.5 rounded-full bg-accent-blue text-white text-[10px] font-semibold"
+                    aria-label={`${totalUnread} new since last open`}
+                    title={`${totalUnread} new since you last opened the rail`}
+                  >
+                    {totalUnread > 99 ? "99+" : totalUnread}
+                  </span>
+                )}
+              </h2>
+              <div className="text-2xs text-text-muted mt-0.5">
+                {totalComments === 0
+                  ? "No comments yet"
+                  : `${totalComments} message${totalComments === 1 ? "" : "s"} across ${grouped.length} artifact${grouped.length === 1 ? "" : "s"}`}
+                {unansweredQuestions > 0 && (
+                  <span className="ml-2 text-accent-violet">
+                    · {unansweredQuestions} unanswered question{unansweredQuestions === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
             </div>
+            <button
+              onClick={onClose}
+              className="text-text-muted hover:text-text-primary text-2xs"
+              title="Close (Esc)"
+            >
+              Esc
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="text-text-muted hover:text-text-primary text-2xs"
-            title="Close (Esc)"
-          >
-            Esc
-          </button>
+          {/* W2 filter pills */}
+          {totalComments > 0 && (
+            <div className="flex items-center gap-1">
+              <FilterPill
+                active={filter === "all"}
+                onClick={() => setFilter("all")}
+                label="All"
+                count={totalComments}
+              />
+              <FilterPill
+                active={filter === "unanswered"}
+                onClick={() => setFilter("unanswered")}
+                label="Unanswered"
+                count={unansweredQuestions}
+                accent
+              />
+            </div>
+          )}
         </div>
 
-        {grouped.length === 0 ? (
+        {visibleGrouped.length === 0 ? (
           <div className="p-8 text-center text-xs text-text-muted">
-            No comments in this session yet. Click <span className="font-mono">+</span> on any line of evidence to start a thread.
+            {filter === "unanswered"
+              ? "No unanswered questions. Switch to All to see the full feed."
+              : <>No comments in this session yet. Click <span className="font-mono">+</span> on any line of evidence to start a thread.</>}
           </div>
         ) : (
           <div className="px-3 py-3 space-y-4">
-            {grouped.map((g) => (
-              <div key={g.artifactId} className="rounded border border-border-default overflow-hidden">
-                {/* Artifact group header */}
-                <button
-                  onClick={() => focusArtifact(g.artifactId)}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-surface-secondary hover:bg-surface-hover transition-colors text-left"
-                  title="Open this artifact"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-2xs uppercase tracking-wide text-text-muted">
-                      {g.artifact?.type ?? "artifact"}
+            {visibleGrouped.map((g) => {
+              const groupUnread = unreadByGroup.get(g.artifactId) ?? 0;
+              return (
+                <div key={g.artifactId} className="rounded border border-border-default overflow-hidden">
+                  {/* Artifact group header */}
+                  <button
+                    onClick={() => focusArtifact(g.artifactId)}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-surface-secondary hover:bg-surface-hover transition-colors text-left"
+                    title="Open this artifact"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wide text-text-muted">
+                        {g.artifact?.type ?? "artifact"}
+                        {groupUnread > 0 && (
+                          <span
+                            className="inline-flex items-center justify-center min-w-[1rem] h-3.5 px-1 rounded-full bg-accent-blue text-white text-[9px] font-semibold normal-case tracking-normal"
+                            aria-label={`${groupUnread} new`}
+                          >
+                            {groupUnread > 99 ? "99+" : groupUnread}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-text-primary truncate">
+                        {g.artifact?.title ?? g.artifactId}
+                      </div>
                     </div>
-                    <div className="text-xs text-text-primary truncate">
-                      {g.artifact?.title ?? g.artifactId}
-                    </div>
-                  </div>
-                  <span className="text-[10px] text-text-muted shrink-0">
-                    {timeAgo(new Date(g.latestAt).toISOString())}
-                  </span>
-                </button>
+                    <span className="text-[10px] text-text-muted shrink-0">
+                      {timeAgo(new Date(g.latestAt).toISOString())}
+                    </span>
+                  </button>
 
-                {/* Threads in this group */}
-                <div className="divide-y divide-border-subtle">
-                  {g.threads.map((t) => (
-                    <ThreadEntry
-                      key={t.comment.id}
-                      thread={t}
-                      artifact={g.artifact}
-                      onFocus={() => focusArtifact(g.artifactId)}
-                    />
-                  ))}
+                  {/* Threads in this group */}
+                  <div className="divide-y divide-border-subtle">
+                    {g.threads.map((t) => (
+                      <ThreadEntry
+                        key={t.comment.id}
+                        thread={t}
+                        artifact={g.artifact}
+                        onFocus={() => focusArtifact(g.artifactId)}
+                        isUnread={isUnread}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -236,28 +355,42 @@ function ThreadEntry({
   thread,
   artifact,
   onFocus,
+  isUnread,
 }: {
   thread: ThreadedRow;
   artifact: Artifact | undefined;
   onFocus: () => void;
+  isUnread: (c: Comment) => boolean;
 }) {
   const { comment, replies } = thread;
   const isUnansweredQuestion =
     comment.author === "human" &&
     (comment as any).intent === "question" &&
     replies.length === 0;
+  // W2 — a thread is "fresh" if the parent OR any reply is unread. The
+  // parent gets the dot regardless of which row is fresh; per-reply dots
+  // make the diff readable when only the agent's answer is new.
+  const threadHasUnread = isUnread(comment) || replies.some(isUnread);
 
   return (
     <div
       onClick={onFocus}
-      className="px-3 py-2 cursor-pointer hover:bg-surface-hover transition-colors"
+      className={`px-3 py-2 cursor-pointer transition-colors ${
+        threadHasUnread ? "bg-accent-blue-dim/10 hover:bg-accent-blue-dim/20" : "hover:bg-surface-hover"
+      }`}
       title="Click to open this artifact"
     >
-      <CommentRow comment={comment} location={targetLabel(comment, artifact)} />
+      <CommentRow comment={comment} location={targetLabel(comment, artifact)} unread={isUnread(comment)} />
       {replies.length > 0 && (
         <div className="ml-4 mt-1.5 pl-3 border-l-2 border-border-default space-y-1.5">
           {replies.map((r) => (
-            <CommentRow key={r.id} comment={r} location={targetLabel(r, artifact)} reply />
+            <CommentRow
+              key={r.id}
+              comment={r}
+              location={targetLabel(r, artifact)}
+              reply
+              unread={isUnread(r)}
+            />
           ))}
         </div>
       )}
@@ -274,10 +407,12 @@ function CommentRow({
   comment,
   location,
   reply,
+  unread,
 }: {
   comment: Comment;
   location: string;
   reply?: boolean;
+  unread?: boolean;
 }) {
   const isAgent = comment.author === "agent";
   const isQuestion = (comment as any).intent === "question";
@@ -285,6 +420,13 @@ function CommentRow({
   return (
     <div>
       <div className="flex items-center gap-1.5 text-[10px] text-text-muted">
+        {unread && (
+          <span
+            className="w-1.5 h-1.5 rounded-full bg-accent-blue shrink-0"
+            aria-label="new since last open"
+            title="new since you last opened the rail"
+          />
+        )}
         <span className={`font-semibold ${isAgent ? "text-text-secondary" : "text-accent-blue"}`}>
           {reply && <span className="opacity-60 mr-1">↳</span>}
           {authorLabel}
@@ -303,5 +445,36 @@ function CommentRow({
         {comment.content}
       </div>
     </div>
+  );
+}
+
+function FilterPill({
+  active,
+  onClick,
+  label,
+  count,
+  accent,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count: number;
+  accent?: boolean;
+}) {
+  const accentColor = accent ? "text-accent-violet" : "text-accent-blue";
+  const activeBg = accent ? "bg-accent-violet-dim" : "bg-accent-blue-dim/40";
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1 px-2 py-0.5 rounded text-2xs transition-colors ${
+        active
+          ? `${activeBg} ${accentColor}`
+          : "text-text-muted hover:text-text-secondary hover:bg-surface-hover"
+      }`}
+      aria-pressed={active}
+    >
+      <span>{label}</span>
+      <span className={`text-[10px] ${active ? "opacity-90" : "opacity-60"}`}>{count}</span>
+    </button>
   );
 }
