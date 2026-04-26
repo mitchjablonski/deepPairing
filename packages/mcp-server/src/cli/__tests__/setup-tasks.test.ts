@@ -68,14 +68,21 @@ describe("ensureGitignoreEntry", () => {
 });
 
 describe("ensureStopHook", () => {
-  it("creates .claude/settings.local.json with the hook when missing", () => {
+  it("creates .claude/settings.local.json with the nested-shape hook when missing", () => {
     const result = ensureStopHook(tmpDir);
     expect(result.ok && result.changed).toBe(true);
     const settings = JSON.parse(
       fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
     );
+    // Field bug: legacy installer wrote { command } directly. Claude Code's
+    // hook schema actually expects { matcher, hooks: [{ type, command }] }
+    // and warns "Invalid settings / hooks: Expected array" otherwise.
     expect(settings.hooks.Stop).toHaveLength(1);
-    expect(settings.hooks.Stop[0].command).toContain("deepPairing");
+    const entry = settings.hooks.Stop[0];
+    expect(entry).toHaveProperty("matcher");
+    expect(Array.isArray(entry.hooks)).toBe(true);
+    expect(entry.hooks[0].type).toBe("command");
+    expect(entry.hooks[0].command).toContain("deepPairing");
   });
 
   it("appends to existing hooks without clobbering other settings", () => {
@@ -94,14 +101,59 @@ describe("ensureStopHook", () => {
     expect(settings.hooks.Stop).toHaveLength(1);
   });
 
-  it("is a no-op when a deepPairing Stop hook is already present", () => {
+  it("is a no-op when a deepPairing Stop hook is already present in nested shape", () => {
     fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, ".claude", "settings.local.json"),
-      JSON.stringify({ hooks: { Stop: [{ command: "node -e 'deepPairing: existing'" }] } }),
+      JSON.stringify({
+        hooks: {
+          Stop: [
+            { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing: existing'" }] },
+          ],
+        },
+      }),
     );
     const result = ensureStopHook(tmpDir);
     expect(result.ok && result.changed).toBe(false);
+  });
+
+  it("HEALS a legacy flat-shape Stop entry by dropping it and re-installing nested", () => {
+    // Field bug: this installer wrote { command } directly on earlier
+    // versions, producing the "Invalid settings / hooks: Expected array"
+    // warning. ensureStopHook must heal those on next run, not skip them.
+    fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".claude", "settings.local.json"),
+      JSON.stringify({
+        hooks: {
+          Stop: [
+            { command: "node -e 'deepPairing: legacy flat shape'" },
+            { command: "node -e 'unrelated user hook'" },
+          ],
+        },
+      }),
+    );
+    const result = ensureStopHook(tmpDir);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.changed).toBe(true);
+    expect(result.ok && result.message).toMatch(/replaced legacy flat-shape/i);
+
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    // Stop now has: the user's unrelated hook (untouched) + our new nested
+    // entry. The legacy DP flat entry is gone.
+    expect(settings.hooks.Stop).toHaveLength(2);
+    const userHook = settings.hooks.Stop.find((e: any) => e.command?.includes("unrelated"));
+    expect(userHook).toBeDefined();
+    const dpHook = settings.hooks.Stop.find((e: any) => Array.isArray(e.hooks));
+    expect(dpHook).toBeDefined();
+    expect(dpHook.hooks[0].command).toContain("deepPairing");
+    // No legacy flat DP entry remains.
+    const stillFlat = settings.hooks.Stop.find(
+      (e: any) => typeof e.command === "string" && e.command.includes("deepPairing") && !Array.isArray(e.hooks),
+    );
+    expect(stillFlat).toBeUndefined();
   });
 
   it("refuses to clobber a malformed settings.local.json", () => {
@@ -131,7 +183,9 @@ describe("Stop hook command — executable behavior (Part C)", () => {
     const settings = JSON.parse(
       fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
     );
-    return settings.hooks.Stop[0].command as string;
+    // V2.x — entry is the nested Claude Code hook shape:
+    // { matcher, hooks: [{ type: "command", command }] }
+    return settings.hooks.Stop[0].hooks[0].command as string;
   }
 
   function runHook(): { exitCode: number; stdout: string } {
