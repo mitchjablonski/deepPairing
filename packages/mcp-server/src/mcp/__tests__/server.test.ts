@@ -436,6 +436,7 @@ describe("MCP Tool Handlers", () => {
         context: "Pick a deploy target",
         options: [
           { id: "a", title: "Railway", description: "Fast", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Render", description: "Boring", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
         ],
       });
 

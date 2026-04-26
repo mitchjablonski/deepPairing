@@ -8,7 +8,10 @@ export const FindingSchema = z.object({
   category: z.string(),
   title: z.string().optional(),
   detail: z.string(),
-  evidence: z.union([z.string(), z.array(EvidenceInputSchema)]),
+  /** Optional: high-level architectural findings sometimes have no code
+   *  evidence to attach, and that's fine. The structural validator just
+   *  needs to ensure findings is an array of objects, not a string. */
+  evidence: z.union([z.string(), z.array(EvidenceInputSchema)]).optional(),
   /** How interesting / note-worthy — signals whether this belongs in the session at all. */
   significance: z.enum(["low", "medium", "high"]),
   /**
@@ -43,7 +46,10 @@ export type FileChange = z.infer<typeof FileChangeSchema>;
 export const PlanStepSchema = z.object({
   description: z.string(),
   reasoning: z.string(),
-  files: z.union([z.array(z.string()), z.array(FileChangeSchema)]),
+  /** Optional: not every plan step touches files (e.g. "run tests",
+   *  "review the design"). The structural validator only needs files to
+   *  be an array of strings/FileChange when present. */
+  files: z.union([z.array(z.string()), z.array(FileChangeSchema)]).optional(),
   motivatedBy: z.array(z.string()).optional().describe("Finding titles that led to this step"),
   preview: z
     .object({
