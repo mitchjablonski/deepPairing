@@ -236,6 +236,8 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: 
 
   ${dim("Claude will present findings, decisions, and plans. You review")}
   ${dim("and steer in the companion UI. Try: \"Analyze the auth module.\"")}
+
+  ${dim("If anything goes sideways:")} ${bold("npx deeppairing doctor")} ${dim("diagnoses;")} ${bold("--fix")} ${dim("heals.")}
 `);
 
   // Q1: offer to launch the scripted demo so the user SEES the hook fire in

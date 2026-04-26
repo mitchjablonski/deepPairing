@@ -85,5 +85,13 @@ async function main() {
 
 main().catch((err) => {
   log(`Fatal: ${err}`);
+  // U6 — surface the doctor command in the most-visible failure path: when
+  // the wrapper itself can't start (couldn't reach/spawn the daemon, port
+  // conflict, broken install). This is what the user sees in Claude Code's
+  // MCP stderr panel before they ever open the companion UI.
+  process.stderr.write(
+    `deepPairing wrapper: ${err?.message ?? err}\n` +
+    `Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.\n`,
+  );
   process.exit(1);
 });

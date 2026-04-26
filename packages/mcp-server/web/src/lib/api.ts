@@ -84,7 +84,10 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
   // Specialize known codes for clearer toast copy. Other codes pass through
   // with the daemon-supplied message.
   if (code === "no_active_session") {
-    message = "No active deepPairing session. Start Claude Code with deepPairing configured to connect.";
+    // U6 — point users at the doctor command alongside the action they
+    // need to take. If "start Claude Code" doesn't work the next thing
+    // they should reach for is the diagnostic.
+    message = "No active deepPairing session. Start Claude Code with deepPairing configured, or run `npx deeppairing doctor --fix`.";
   }
 
   throw new ApiError(res.status, code, message);

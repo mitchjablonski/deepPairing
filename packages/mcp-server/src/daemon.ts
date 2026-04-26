@@ -450,7 +450,11 @@ async function main() {
       lastBindErr = result.err;
       if (result.err?.code !== "EADDRINUSE") {
         log(`FATAL bind error on port ${candidate}: ${result.err}`);
-        process.stderr.write(`deepPairing daemon: bind failed — ${result.err?.message ?? result.err}\n`);
+        // U6 — point users at the recovery command in every fatal stderr.
+        process.stderr.write(
+          `deepPairing daemon: bind failed — ${result.err?.message ?? result.err}\n` +
+          `Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.\n`,
+        );
         process.exit(3);
       }
       // Close the failed server before trying the next port.
@@ -458,7 +462,8 @@ async function main() {
     }
 
     if (!server) {
-      const msg = `No free port in range ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}. Last error: ${lastBindErr?.message ?? lastBindErr}. Run 'deeppairing doctor' to diagnose.`;
+      // U6 — `--fix` so the user gets the heal-it path, not just the diagnose-it one.
+      const msg = `No free port in range ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}. Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
       log(`FATAL: ${msg}`);
       process.stderr.write(`deepPairing daemon: ${msg}\n`);
       process.exit(2);
