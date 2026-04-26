@@ -32,6 +32,7 @@ export function CommentableCode({
   targetContext,
 }: CommentableCodeProps) {
   const [activeCommentLine, setActiveCommentLine] = useState<number | null>(null);
+  const [activeCommentLineEnd, setActiveCommentLineEnd] = useState<number | null>(null);
   const [mode, setMode] = useState<LineMode>("comment");
   const [commentText, setCommentText] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
@@ -47,6 +48,12 @@ export function CommentableCode({
 
   const handleSubmit = async (lineNum: number) => {
     if (submitting) return;
+    // R2: span comments. Default lineEnd to lineNum (single-line); the user
+    // can extend it via the form's "to L{x}" input. Clamp to the file
+    // length and never allow a backwards range.
+    const totalLines = lineStart + lines.length - 1;
+    const rawEnd = activeCommentLineEnd ?? lineNum;
+    const safeEnd = Math.max(lineNum, Math.min(rawEnd, totalLines));
 
     if (mode === "suggest") {
       if (!suggestionText.trim()) return;
@@ -57,7 +64,7 @@ export function CommentableCode({
         `Suggestion: replace line ${lineNum}\n\`\`\`\n${original}\n\`\`\`\nwith:\n\`\`\`\n${suggestionText}\n\`\`\``,
         {
           lineStart: lineNum,
-          lineEnd: lineNum,
+          lineEnd: lineNum,  // suggestions stay single-line — they replace one specific line
           filePath,
           suggestion: suggestionText,
           ...targetContext,
@@ -71,7 +78,7 @@ export function CommentableCode({
         commentText.trim(),
         {
           lineStart: lineNum,
-          lineEnd: lineNum,
+          lineEnd: safeEnd,
           filePath,
           ...targetContext,
         },
@@ -83,11 +90,13 @@ export function CommentableCode({
     setSuggestionText("");
     setMode("comment");
     setActiveCommentLine(null);
+    setActiveCommentLineEnd(null);
     setSubmitting(false);
   };
 
   const openCommentLine = (lineNum: number, initialMode: LineMode = "comment") => {
     setActiveCommentLine(lineNum);
+    setActiveCommentLineEnd(lineNum);
     setCommentText("");
     setSuggestionText("");
     setMode(initialMode);
@@ -95,6 +104,7 @@ export function CommentableCode({
 
   const closeCommentLine = () => {
     setActiveCommentLine(null);
+    setActiveCommentLineEnd(null);
     setCommentText("");
     setSuggestionText("");
     setMode("comment");
@@ -169,23 +179,49 @@ export function CommentableCode({
               )}
             </div>
 
-            {/* Existing comments on this line */}
+            {/* Existing comments on this line.
+                R1: span comments live in every line bucket from lineStart→lineEnd.
+                Render the full chip only on the START line; compact "↳ from L{n}"
+                marker on continuation lines so the user sees the comment exists
+                without four duplicate chips. */}
             {lineComments.length > 0 && !isCommentActive && (
               <div
                 className="ml-[5.5rem] mr-3 my-1 cursor-pointer"
                 onClick={() => openCommentLine(lineNum)}
               >
-                {lineComments.map((c) => (
-                  <div
-                    key={c.id}
-                    className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs mb-0.5"
-                  >
-                    <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
-                      {c.author === "human" ? "You" : "Agent"}:
-                    </span>
-                    <span className="text-text-secondary">{c.content}</span>
-                  </div>
-                ))}
+                {lineComments.map((c) => {
+                  const cStart = (c.target as any).lineStart as number | undefined;
+                  const cEnd = (c.target as any).lineEnd as number | undefined;
+                  const isContinuation = cStart != null && cStart !== lineNum;
+                  const spanLabel = cStart != null && cEnd != null && cStart !== cEnd
+                    ? ` (lines ${cStart}–${cEnd})`
+                    : "";
+                  if (isContinuation) {
+                    return (
+                      <div
+                        key={c.id}
+                        className="flex items-center gap-2 px-3 py-0.5 text-2xs text-text-muted"
+                      >
+                        <span aria-hidden>↳</span>
+                        <span>
+                          comment from <span className="font-mono">L{cStart}</span>
+                          {cEnd != null && cEnd !== cStart ? `–L${cEnd}` : ""}
+                        </span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div
+                      key={c.id}
+                      className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs mb-0.5"
+                    >
+                      <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
+                        {c.author === "human" ? "You" : "Agent"}{spanLabel}:
+                      </span>
+                      <span className="text-text-secondary">{c.content}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -209,7 +245,7 @@ export function CommentableCode({
                   </div>
                 )}
 
-                {/* Mode tabs */}
+                {/* Mode tabs + R2 span-end input */}
                 <div className="flex items-center gap-1 mb-1.5">
                   <button
                     onClick={() => setMode("comment")}
@@ -240,6 +276,34 @@ export function CommentableCode({
                   >
                     Suggest
                   </button>
+                  {/* R2: lineEnd selector for span comments. Hidden in
+                      'suggest' mode because suggestions replace one
+                      specific line; allowing a span there would change
+                      semantics. */}
+                  {mode !== "suggest" && (
+                    <div className="ml-auto flex items-center gap-1 text-2xs text-text-muted">
+                      <span>line {lineNum}</span>
+                      <span aria-hidden>→</span>
+                      <input
+                        type="number"
+                        min={lineNum}
+                        max={lineStart + lines.length - 1}
+                        value={activeCommentLineEnd ?? lineNum}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (Number.isFinite(n)) setActiveCommentLineEnd(n);
+                        }}
+                        title={`Comment spans lines ${lineNum} through this number`}
+                        aria-label="Comment end line"
+                        className="w-14 px-1.5 py-0.5 rounded text-2xs bg-surface-secondary border border-border-default text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                      />
+                      {(activeCommentLineEnd ?? lineNum) > lineNum && (
+                        <span className="text-accent-blue">
+                          ({(activeCommentLineEnd ?? lineNum) - lineNum + 1} lines)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {mode === "suggest" ? (
