@@ -1,6 +1,23 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
-import { API_BASE, sessionHeaders } from "../lib/api";
+import { API_BASE, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+
+/**
+ * U3 — surface a mutation failure as a toast. Pulled out of every catch
+ * block so the message wording stays consistent and the import isn't
+ * top-of-file (toast store is lazy-loaded to avoid Zustand circular-import
+ * pain — same pattern as connection.ts).
+ */
+async function toastApiError(action: string, err: unknown): Promise<void> {
+  const { useToastStore } = await import("./toast");
+  const apiErr = err instanceof ApiError ? err : null;
+  useToastStore.getState().push({
+    kind: "error",
+    title: `${action} failed`,
+    body: apiErr?.message ?? (err instanceof Error ? err.message : "Unknown error"),
+    ttl: 7000,
+  });
+}
 
 export interface ArtifactState {
   artifacts: Artifact[];
@@ -91,52 +108,87 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     unreadIds: state.unreadIds.filter((uid) => uid !== id),
   })),
 
+  // U3 — every mutation goes through safeFetch and toasts on failure.
+  // Pre-U3 these dropped the response on the floor: a 4xx or 5xx (or a
+  // network blip) was indistinguishable from success. The user clicked
+  // approve, the optimistic UI showed APPROVED, but the daemon's store
+  // never received the POST — the agent kept polling check_feedback
+  // forever. Now every silent failure surfaces as an error toast so the
+  // user can react (re-try, run doctor, restart Claude Code, etc).
+
   submitComment: async (artifactId, content, target, options) => {
-    await fetch(`${API_BASE}/api/comments`, {
-      method: "POST",
-      headers: sessionHeaders(),
-      body: JSON.stringify({
-        artifactId,
-        content,
-        target: { artifactId, ...target },
-        intent: options?.intent,
-        parentCommentId: options?.parentCommentId ?? null,
-      }),
-    });
+    try {
+      await safeFetch(`${API_BASE}/api/comments`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({
+          artifactId,
+          content,
+          target: { artifactId, ...target },
+          intent: options?.intent,
+          parentCommentId: options?.parentCommentId ?? null,
+        }),
+      });
+    } catch (err) {
+      await toastApiError("Send comment", err);
+      throw err;
+    }
   },
 
   updateArtifactStatus: async (artifactId, status, feedback) => {
-    await fetch(`${API_BASE}/api/artifacts/${artifactId}/status`, {
-      method: "POST",
-      headers: sessionHeaders(),
-      body: JSON.stringify({ status, feedback }),
-    });
+    try {
+      await safeFetch(`${API_BASE}/api/artifacts/${artifactId}/status`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ status, feedback }),
+      });
+    } catch (err) {
+      await toastApiError(
+        status === "approved" ? "Approve" : status === "rejected" ? "Reject" : "Revise",
+        err,
+      );
+      throw err;
+    }
   },
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
-    await fetch(`${API_BASE}/api/decisions/${decisionId}`, {
-      method: "POST",
-      headers: sessionHeaders(),
-      body: JSON.stringify({
-        optionId,
-        reasoning,
-        confidence: prediction?.confidence,
-        predictedOutcome: prediction?.predictedOutcome,
-      }),
-    });
+    try {
+      await safeFetch(`${API_BASE}/api/decisions/${decisionId}`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({
+          optionId,
+          reasoning,
+          confidence: prediction?.confidence,
+          predictedOutcome: prediction?.predictedOutcome,
+        }),
+      });
+    } catch (err) {
+      await toastApiError("Resolve decision", err);
+      throw err;
+    }
   },
 
   renameArtifact: async (artifactId, title) => {
-    await fetch(`${API_BASE}/api/artifacts/${artifactId}/rename`, {
-      method: "POST",
-      headers: sessionHeaders(),
-      body: JSON.stringify({ title }),
-    });
+    // Optimistic UI: apply the rename locally first; roll back on failure.
+    const prev = useArtifactStore.getState().artifacts;
     set((state) => ({
       artifacts: state.artifacts.map((a) =>
         a.id === artifactId ? { ...a, title } : a,
       ),
     }));
+    try {
+      await safeFetch(`${API_BASE}/api/artifacts/${artifactId}/rename`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ title }),
+      });
+    } catch (err) {
+      // Roll back the optimistic update so the UI reflects truth.
+      set({ artifacts: prev });
+      await toastApiError("Rename artifact", err);
+      throw err;
+    }
   },
 
   reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [] }),
