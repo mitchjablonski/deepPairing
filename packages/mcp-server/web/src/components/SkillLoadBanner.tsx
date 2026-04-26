@@ -71,6 +71,15 @@ export function SkillLoadBanner() {
         <span className="font-medium text-text-primary">Claude may not be using deepPairing tools yet.</span>{" "}
         Try <code className="text-[11px] bg-surface-elevated px-1 py-0.5 rounded">/deeppairing:start</code> in Claude Code, or run{" "}
         <code className="text-[11px] bg-surface-elevated px-1 py-0.5 rounded">npx deeppairing init</code> to add the protocol to CLAUDE.md.
+        {/* U6 — surface the doctor command. Pre-U6, users hit this banner with
+            no diagnostic command in sight; the council ease-of-use review
+            flagged it as the third highest friction point. Now the recovery
+            path is one copy-paste away. */}
+        <div className="mt-1 text-[10px] text-text-muted">
+          If those don't help, run{" "}
+          <code className="text-[11px] bg-surface-elevated px-1 py-0.5 rounded">npx deeppairing doctor --fix</code>
+          {" "}— it diagnoses the daemon, .gitignore, Stop hook, and orphan sessions, and offers to heal them.
+        </div>
         {status.evidence && (
           <div className="mt-0.5 text-[10px] text-text-muted">Why we think so: {status.evidence}</div>
         )}
