@@ -124,6 +124,48 @@ const CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
 
+// V2.1 — skip-list for files that are unambiguously NOT worth a per-edit
+// checkpoint. Scope is deliberately narrow: only generated/vendored paths
+// and auto-generated lockfiles. Config / policy files (.gitignore,
+// package.json, .npmrc, .prettierrc) DO get nagged — those represent real
+// decisions a paired human should react to.
+//
+// Categories:
+//   - Lockfiles: regenerated from a manifest, reviewing them is busy-work
+//     (the manifest change is the real decision; deps are mechanical).
+//   - Generated / vendored paths: outputs of a build, not human-authored.
+//   - IDE-only dirs: editor settings; not the project's code.
+//
+// If a team wants stricter checkpointing they can edit this file directly
+// (.deeppairing/hooks/checkpoint.mjs). To LOOSEN it (e.g. also auto-skip
+// .gitignore), add the basename / prefix here.
+const SKIP_BASENAMES = new Set([
+  // Lockfiles only — manifest files (package.json, Cargo.toml, etc.) are
+  // policy and should still nag.
+  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
+  "uv.lock", "poetry.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
+  "composer.lock",
+]);
+const SKIP_PATH_PREFIXES = [
+  // Generated / vendored output — not human-authored source.
+  "dist/", "build/", "node_modules/", ".deeppairing/", ".next/",
+  ".turbo/", ".cache/", "coverage/", ".nyc_output/",
+  // IDE-local config — workspace settings, not project decisions.
+  ".vscode/", ".idea/",
+];
+
+function isTrivialFile(filePath) {
+  if (!filePath || filePath === "(unknown)") return false;
+  const norm = filePath.replace(/\\\\/g, "/");
+  const base = norm.split("/").pop() || "";
+  if (SKIP_BASENAMES.has(base)) return true;
+  // Match prefixes either at the start of the path or after the project root.
+  for (const prefix of SKIP_PATH_PREFIXES) {
+    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 let stdin = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (c) => { stdin += c; });
@@ -136,6 +178,9 @@ process.stdin.on("end", () => {
       (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
       (ev.input && ev.input.file_path) ||
       "(unknown)";
+
+    // V2.1 — trivial files (gitignore, lockfiles, generated paths) auto-pass.
+    if (isTrivialFile(filePath)) process.exit(0);
 
     const sessionsDir = path.join(process.cwd(), ".deeppairing", "sessions");
     if (!fs.existsSync(sessionsDir)) process.exit(0);
@@ -166,7 +211,8 @@ process.stdin.on("end", () => {
         "deepPairing: " + tool + " on " + filePath +
         " without an intervening present_code_change. " +
         "Call present_code_change BEFORE the next edit so the human can react. " +
-        "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section.)\\n"
+        "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section. " +
+        "Config / generated files like .gitignore are auto-skipped.)\\n"
       );
       process.exit(2);
     }

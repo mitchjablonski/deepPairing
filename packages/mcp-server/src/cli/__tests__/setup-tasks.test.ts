@@ -342,6 +342,78 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "src/x.ts" } });
     expect(r.exitCode).toBe(0);
   });
+
+  // V2.1 (Option C — narrow skip-list). Generated/vendored output and
+  // auto-generated lockfiles auto-skip; config / policy files still nag
+  // because they represent real decisions a paired human should react to.
+  it("V2.1 — auto-skips lockfiles (regenerated from manifests, not human-authored)", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    for (const lockfile of ["pnpm-lock.yaml", "uv.lock", "Cargo.lock", "package-lock.json", "go.sum"]) {
+      const r = runHookWith({ tool_name: "Write", tool_input: { file_path: `/abs/${lockfile}` } });
+      expect(r.exitCode, `${lockfile} should auto-skip`).toBe(0);
+    }
+  });
+
+  it("V2.1 — auto-skips generated / vendored paths (dist/, build/, node_modules/, .deeppairing/)", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    for (const p of [
+      "/repo/dist/bundle.js",
+      "/repo/build/index.html",
+      "/repo/node_modules/x/index.js",
+      "/repo/.deeppairing/sessions/foo/x.json",
+      "/repo/.next/static/chunk.js",
+      "/repo/.vscode/settings.json",
+    ]) {
+      const r = runHookWith({ tool_name: "Write", tool_input: { file_path: p } });
+      expect(r.exitCode, `${p} should auto-skip`).toBe(0);
+    }
+  });
+
+  it("V2.1 (Option C) — DOES nag on .gitignore (config / policy is a real decision)", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/.gitignore" } });
+    expect(r.exitCode).toBe(2);
+    expect(r.stdout).toContain("present_code_change");
+  });
+
+  it("V2.1 (Option C) — DOES nag on .github/workflows/* (CI config is a real decision)", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/.github/workflows/ci.yml" } });
+    expect(r.exitCode).toBe(2);
+  });
+
+  it("V2.1 (Option C) — DOES nag on package.json (manifest IS the decision; lockfile is mechanical)", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/package.json" } });
+    expect(r.exitCode).toBe(2);
+  });
+
+  it("V2.1 — does NOT skip real source files", () => {
+    writeArtifacts("s1", [
+      { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
+    ]);
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/src/foo.ts" } });
+    expect(r.exitCode).toBe(2);
+    expect(r.stdout).toContain("present_code_change");
+  });
+
+  it("V2.1 — config files still pass when there's a fresh checkpoint (60s window covers incidentals)", () => {
+    writeArtifacts("s1", [
+      { id: "art_cc", type: "code_change", status: "approved", createdAt: new Date().toISOString() },
+    ]);
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/.gitignore" } });
+    expect(r.exitCode).toBe(0);
+  });
 });
 
 describe("runDaemonStartupSetup", () => {
