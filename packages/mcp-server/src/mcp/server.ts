@@ -13,6 +13,14 @@ import { formatSessionMarkdown, buildGitHubReviewPayload } from "../export/forma
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
 import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
 import { maybeEmitTaskHandle } from "./tasks-probe.js";
+import {
+  validatePresentFindingsInput,
+  validatePresentOptionsInput,
+  validatePresentSpecInput,
+  validatePresentPlanInput,
+  validatePresentCodeChangeInput,
+  validateLogReasoningInput,
+} from "./validate-tool-input.js";
 
 /**
  * U0.2 — schema for the quick-approve elicitation form.
@@ -85,7 +93,15 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     tools: [
       {
         name: "present_findings",
-        description: `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence (code snippets with explanations), category, significance, and severity. Use instead of dumping findings as plain chat text. SINGLE REVIEW SURFACE: the companion UI is the only review surface for this artifact — do NOT also paste the findings as chat, prompt the user in-terminal, or call ExitPlanMode. After this returns, call check_feedback to wait for the human's verdict.`,
+        description:
+          `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). ` +
+          `Each finding carries evidence (code snippets with explanations), category, significance, and severity. ` +
+          `Use instead of dumping findings as plain chat text. ` +
+          `\n\nINPUT SHAPE — the input is validated at the boundary; on mismatch you get INPUT_VALIDATION_FAILED with the bad path. ` +
+          `\`findings\` MUST be an array of objects, never a string. Common mistake: agents summarize their findings ` +
+          `as a single string. That gets rejected — split the summary into discrete finding objects, each with at least ` +
+          `\`category\`, \`detail\`, and \`significance\` ("low"|"medium"|"high"). ` +
+          `\n\nSINGLE REVIEW SURFACE: the companion UI is the only review surface for this artifact — do NOT also paste the findings as chat, prompt the user in-terminal, or call ExitPlanMode. After this returns, call check_feedback to wait for the human's verdict.`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -121,7 +137,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_options",
         description:
-          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Set `stakes: \"high\"` for architecturally significant / hard-to-reverse decisions (schema, auth, billing, infra); the UI then prompts the human for a prediction (calibration material). SINGLE REVIEW SURFACE: the human selects in the companion UI — do NOT also list the options in chat or ask in-terminal. After this returns, call check_feedback to wait for their selection.",
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Set `stakes: \"high\"` for architecturally significant / hard-to-reverse decisions (schema, auth, billing, infra); the UI then prompts the human for a prediction (calibration material). " +
+          "\n\nINPUT SHAPE — input is validated; on mismatch you get INPUT_VALIDATION_FAILED. `options` MUST be an array of 2–4 objects (one option isn't a decision). Each option needs id, title, description, pros[], cons[], effort, risk, recommendation. " +
+          "\n\nSINGLE REVIEW SURFACE: the human selects in the companion UI — do NOT also list the options in chat or ask in-terminal. After this returns, call check_feedback to wait for their selection.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -203,7 +221,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_plan",
-        description: "Present an implementation plan as steps with file changes and before/after previews. SINGLE REVIEW SURFACE: this REPLACES Claude Code's native plan-approval flow for this work — do NOT call ExitPlanMode or otherwise request a terminal-side plan confirmation after present_plan. The human approves / revises / rejects in the companion UI; call check_feedback to wait for their verdict.",
+        description:
+          "Present an implementation plan as steps with file changes and before/after previews. " +
+          "\n\nINPUT SHAPE — input is validated; on mismatch you get INPUT_VALIDATION_FAILED. `steps` MUST be an array of objects, never a string. Each step needs `description` and `reasoning` (files[] is optional — steps like 'run tests' don't touch files). " +
+          "\n\nSINGLE REVIEW SURFACE: this REPLACES Claude Code's native plan-approval flow for this work — do NOT call ExitPlanMode or otherwise request a terminal-side plan confirmation after present_plan. The human approves / revises / rejects in the companion UI; call check_feedback to wait for their verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -885,10 +906,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
     const result = await (async () => { switch (name) {
       case "present_findings": {
-        const findings: any[] = Array.isArray(args?.findings) ? args.findings : [];
+        // Validate at the boundary so a malformed `findings` (e.g. a string
+        // instead of an array) cannot land on disk and break the renderer.
+        const validated = validatePresentFindingsInput(args);
+        if (!validated.ok) return validated.error;
+        const findings = validated.data.findings;
         const proposals: string[] = [
           args?.title ?? "",
-          args?.summary ?? "",
+          validated.data.summary,
           ...findings.map((f) => f?.title ?? ""),
           ...findings.map((f) => f?.recommendation ?? ""),
         ].filter(Boolean);
@@ -907,9 +932,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           type: "research",
           title: args?.title ?? "Research Findings",
           content: {
-            summary: args?.summary,
-            findings: args?.findings,
-            openQuestions: args?.openQuestions ?? [],
+            summary: validated.data.summary,
+            findings: validated.data.findings,
+            openQuestions: validated.data.openQuestions ?? [],
           },
         });
         broadcast({ type: "artifact_created", artifact });
@@ -935,30 +960,31 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "present_options": {
-        const proposedOptions: any[] = Array.isArray(args?.options) ? args.options : [];
+        const validated = validatePresentOptionsInput(args);
+        if (!validated.ok) return validated.error;
+        const { context, options: proposedOptions, stakes } = validated.data;
         const proposals: string[] = [
-          args?.context ?? "",
-          ...proposedOptions.map((o) => o?.title ?? ""),
-          ...proposedOptions.map((o) => o?.description ?? ""),
+          context,
+          ...proposedOptions.map((o) => o.title),
+          ...proposedOptions.map((o) => o.description),
         ].filter(Boolean);
         const blocked = await preflightRejectedApproaches("present_options", proposals);
         if (blocked) return blocked;
 
         const id = `art_${nanoid(10)}`;
         const decisionId = `dec_${nanoid(10)}`;
-        const stakes = ["low", "medium", "high"].includes(args?.stakes) ? args.stakes : undefined;
         const artifact = await store.createArtifact({
           id,
           type: "decision",
-          title: args?.context ?? "Decision",
-          content: { context: args?.context, options: args?.options, decisionId, stakes },
+          title: context,
+          content: { context, options: proposedOptions, decisionId, stakes },
           relatedArtifactIds: args?.relatedFindings,
         });
         await store.recordDecisionRequest({
           decisionId,
           artifactId: id,
-          context: args?.context,
-          options: args?.options,
+          context,
+          options: proposedOptions,
           stakes,
         } as any);
         broadcast({ type: "artifact_created", artifact });
@@ -983,14 +1009,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "present_spec": {
-        const requirementsArr: any[] = Array.isArray(args?.requirements) ? args.requirements : [];
-        const tasksArr: any[] = Array.isArray(args?.tasks) ? args.tasks : [];
+        const validated = validatePresentSpecInput(args);
+        if (!validated.ok) return validated.error;
+        const { title, objective, context, requirements, design, tasks, openQuestions } = validated.data;
+        const requirementsArr = requirements;
+        const tasksArr = tasks ?? [];
         const proposals: string[] = [
-          args?.title ?? "",
-          args?.objective ?? "",
-          ...requirementsArr.map((r) => r?.statement ?? ""),
-          ...requirementsArr.map((r) => r?.rationale ?? ""),
-          ...tasksArr.map((t) => t?.description ?? ""),
+          title,
+          objective,
+          ...requirementsArr.map((r) => r.statement),
+          ...requirementsArr.map((r) => r.rationale),
+          ...tasksArr.map((t) => t.description),
         ].filter(Boolean);
         const blocked = await preflightRejectedApproaches("present_spec", proposals);
         if (blocked) return blocked;
@@ -999,14 +1028,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const artifact = await store.createArtifact({
           id,
           type: "spec",
-          title: String(args?.title ?? "Specification"),
+          title,
           content: {
-            objective: args?.objective,
-            context: args?.context,
+            objective,
+            context,
             requirements: requirementsArr,
-            design: args?.design,
+            design,
             tasks: tasksArr,
-            openQuestions: args?.openQuestions ?? [],
+            openQuestions: openQuestions ?? [],
           },
         });
         broadcast({ type: "artifact_created", artifact });
@@ -1032,18 +1061,20 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "present_plan": {
-        const planSteps: any[] = Array.isArray(args?.steps) ? args.steps : [];
+        const validated = validatePresentPlanInput(args);
+        if (!validated.ok) return validated.error;
+        const { title, steps: planSteps, estimatedChanges } = validated.data;
         const proposals: string[] = [
-          args?.title ?? "",
-          ...planSteps.map((s) => s?.description ?? ""),
-          ...planSteps.map((s) => s?.reasoning ?? ""),
+          title,
+          ...planSteps.map((s) => s.description),
+          ...planSteps.map((s) => s.reasoning),
           ...planSteps.flatMap((s) =>
-            Array.isArray(s?.files) ? s.files.map((f: any) => String(f)) : [],
+            Array.isArray((s as any).files) ? (s as any).files.map((f: any) => String(typeof f === "string" ? f : f?.filePath ?? "")) : [],
           ),
         ].filter(Boolean);
         const proposalPaths: string[] = planSteps.flatMap((s) =>
-          Array.isArray(s?.files)
-            ? s.files.map((f: any) => (typeof f === "string" ? f : f?.filePath)).filter(Boolean)
+          Array.isArray((s as any).files)
+            ? (s as any).files.map((f: any) => (typeof f === "string" ? f : f?.filePath)).filter(Boolean)
             : [],
         );
         const blocked = await preflightRejectedApproaches("present_plan", proposals, proposalPaths);
@@ -1053,14 +1084,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const artifact = await store.createArtifact({
           id,
           type: "plan",
-          title: args?.title ?? "Implementation Plan",
-          content: { steps: args?.steps, estimatedChanges: args?.estimatedChanges },
+          title,
+          content: { steps: planSteps, estimatedChanges },
           relatedArtifactIds: args?.relatedFindings,
         });
         await store.recordPlanReview(id);
         broadcast({ type: "artifact_created", artifact });
         await maybeEmitTaskHandle(server, artifact, store);
-        broadcast({ type: "plan_review_request", artifactId: id, title: args?.title });
+        broadcast({ type: "plan_review_request", artifactId: id, title });
 
         // Try elicitation for quick approval
         const elicitAction = await tryElicit(
@@ -1082,6 +1113,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "log_reasoning": {
+        const validated = validateLogReasoningInput(args);
+        if (!validated.ok) return validated.error;
         const id = `art_${nanoid(10)}`;
         const relatedIds = args?.relatesTo?.artifactId ? [args.relatesTo.artifactId] : undefined;
         const artifact = await store.createArtifact({
@@ -1114,11 +1147,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
 
       case "present_code_change": {
-        const proposals: string[] = [
-          args?.filePath ?? "",
-          args?.reasoning ?? "",
-        ].filter(Boolean);
-        const proposalPaths: string[] = args?.filePath ? [String(args.filePath)] : [];
+        const validated = validatePresentCodeChangeInput(args);
+        if (!validated.ok) return validated.error;
+        const { filePath, changeType, before, after, reasoning, confidence } = validated.data;
+        const proposals: string[] = [filePath, reasoning].filter(Boolean);
+        const proposalPaths: string[] = [filePath];
         const blocked = await preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
         if (blocked) return blocked;
 
@@ -1126,16 +1159,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const artifact = await store.createArtifact({
           id,
           type: "code_change",
-          title: `${args?.changeType ?? "modify"} ${args?.filePath ?? "file"}`,
-          content: {
-            filePath: args?.filePath,
-            changeType: args?.changeType ?? "modify",
-            before: args?.before ?? "",
-            after: args?.after ?? "",
-            reasoning: args?.reasoning,
-            confidence: args?.confidence,
-          },
-          agentReasoning: args?.reasoning,
+          title: `${changeType} ${filePath}`,
+          content: { filePath, changeType, before, after, reasoning, confidence },
+          agentReasoning: reasoning,
           relatedArtifactIds: args?.relatedFindings,
         });
         broadcast({ type: "artifact_created", artifact });
@@ -1147,16 +1173,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // diff + reasoning + linked findings render in full. Threshold is
         // intentionally conservative — terminal accept is a great escape
         // hatch for tiny edits, a footgun for sprawling ones.
-        const before = String(args?.before ?? "");
-        const after = String(args?.after ?? "");
-        const changedLines =
-          before.split("\n").length + after.split("\n").length;
-        const confidence = String(args?.confidence ?? "").toLowerCase();
+        const changedLines = before.split("\n").length + after.split("\n").length;
         const isSmallEdit = changedLines <= 20;
-        const isConfident = confidence !== "low";
+        const isConfident = (confidence ?? "").toLowerCase() !== "low";
         if (isSmallEdit && isConfident) {
           const elicitAction = await tryElicit(
-            `Apply ${args?.changeType ?? "modify"} to ${args?.filePath ?? "file"}?\n\n` +
+            `Apply ${changeType} to ${filePath}?\n\n` +
             `Accept to approve this change.\n` +
             `Decline to review the diff at http://localhost:${port}`,
           );
