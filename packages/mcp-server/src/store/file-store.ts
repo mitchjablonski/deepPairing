@@ -121,6 +121,28 @@ export class FileStore implements IStore {
   private sessionId: string;
   private autonomyLevel: "supervised" | "balanced" | "autonomous" = "supervised";
 
+  /**
+   * U1 — per-file change watermarks tracked since last load. Before each
+   * flush we re-stat each session JSON; if EITHER mtime has advanced OR
+   * size has changed beyond what we last saw, another writer (CLI command,
+   * second daemon during a race, external editor) has touched the file
+   * and our in-memory copy is no longer the full truth. We re-read the
+   * disk version and merge by id before writing — in-memory wins on key
+   * collisions because those are the user's latest actions, but records
+   * added by the other writer survive instead of being clobbered.
+   *
+   * Why two signals: mtime granularity is FS-dependent (WSL2 and some
+   * older Linux/Windows give second-only resolution), so two writes in
+   * the same second produce identical mtimeMs even though content
+   * differs. Falling back to size catches that — it's not a perfect
+   * checksum, but two distinct sets of artifacts almost always serialize
+   * to different lengths. Together they give good-enough defense in depth
+   * on top of the U0.6 deterministic-sessionId fix that already
+   * collapses intra-daemon races to zero.
+   */
+  private fileMtimeMs: Record<string, number> = {};
+  private fileSizes: Record<string, number> = {};
+
   constructor(projectRoot: string, sessionId?: string) {
     this.basePath = path.join(projectRoot, ".deeppairing");
     // Project hint for the global philosophy ledger — basename only so the
@@ -170,19 +192,57 @@ export class FileStore implements IStore {
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
   }
 
-  /** Load a JSON file with graceful error handling */
+  /** Load a JSON file with graceful error handling. Records mtime + size so a
+   *  later flush can detect external writes and merge instead of clobber. */
   private loadJsonFile<T>(filePath: string, fallback: T): T {
     try {
-      if (!fs.existsSync(filePath)) return fallback;
+      if (!fs.existsSync(filePath)) {
+        delete this.fileMtimeMs[filePath];
+        delete this.fileSizes[filePath];
+        return fallback;
+      }
+      const stat = fs.statSync(filePath);
+      this.fileMtimeMs[filePath] = stat.mtimeMs;
+      this.fileSizes[filePath] = stat.size;
       return JSON.parse(fs.readFileSync(filePath, "utf-8"));
     } catch (err: any) {
-      if (err?.code === "ENOENT") return fallback;
-      // Corrupted JSON — log warning and back up the corrupt file
+      if (err?.code === "ENOENT") {
+        delete this.fileMtimeMs[filePath];
+        delete this.fileSizes[filePath];
+        return fallback;
+      }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${err.message}`);
       try {
         fs.copyFileSync(filePath, filePath + ".corrupt");
       } catch { /* best-effort backup */ }
       return fallback;
+    }
+  }
+
+  /**
+   * U1 — return the on-disk version of `filePath` IFF the file was modified
+   * by another writer since we last loaded it; otherwise null. Caller uses
+   * the result to merge external changes into in-memory state before flush.
+   *
+   * Change detection is OR(mtimeMs > lastSeen, size != lastSeen). Either
+   * signal alone is unreliable (WSL2 mtime is second-resolution; size
+   * could match by coincidence on a same-length swap), but together they
+   * catch the realistic external-write cases we care about.
+   */
+  private readIfChanged<T>(filePath: string): T | null {
+    try {
+      if (!fs.existsSync(filePath)) return null;
+      const stat = fs.statSync(filePath);
+      const lastMtime = this.fileMtimeMs[filePath] ?? 0;
+      const lastSize = this.fileSizes[filePath];
+      const mtimeAdvanced = stat.mtimeMs > lastMtime;
+      const sizeChanged = lastSize !== undefined && stat.size !== lastSize;
+      const sizeFirstSeen = lastSize === undefined;
+      if (!mtimeAdvanced && !sizeChanged && !sizeFirstSeen) return null;
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      return parsed as T;
+    } catch {
+      return null;
     }
   }
 
@@ -194,19 +254,78 @@ export class FileStore implements IStore {
     }, 100);
   }
 
-  /** Atomic write: write to .tmp then rename */
+  /** Atomic write: write to .tmp then rename. Refreshes mtime+size watermark
+   *  after rename so the next external-change check uses the new baseline. */
   private atomicWrite(filePath: string, data: unknown): void {
     const tmp = filePath + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
     fs.renameSync(tmp, filePath);
+    try {
+      const stat = fs.statSync(filePath);
+      this.fileMtimeMs[filePath] = stat.mtimeMs;
+      this.fileSizes[filePath] = stat.size;
+    } catch { /* swallow — watermark refresh is best-effort */ }
+  }
+
+  /**
+   * U1 — merge-by-id helper. If another writer touched the file, union the
+   * on-disk records with our in-memory ones; in-memory wins on key
+   * collisions because those are the user's most recent actions. Records
+   * the other writer added that we never saw still survive instead of
+   * being overwritten.
+   */
+  private mergeArrayById<T extends Record<string, any>>(
+    inMemory: T[],
+    onDisk: T[] | null,
+    keyField: string,
+  ): T[] {
+    if (!onDisk || !Array.isArray(onDisk)) return inMemory;
+    const seen = new Set(inMemory.map((r) => r[keyField]).filter(Boolean));
+    const additions = onDisk.filter((r) => r[keyField] && !seen.has(r[keyField]));
+    if (additions.length === 0) return inMemory;
+    return [...additions, ...inMemory];
   }
 
   private flush(): void {
     const dir = this.sessionDir();
-    this.atomicWrite(path.join(dir, "artifacts.json"), this.artifacts);
-    this.atomicWrite(path.join(dir, "comments.json"), this.comments);
-    this.atomicWrite(path.join(dir, "decisions.json"), Array.from(this.decisions.values()));
-    this.atomicWrite(path.join(dir, "plan-reviews.json"), Array.from(this.planReviews.values()));
+    const artifactsPath = path.join(dir, "artifacts.json");
+    const commentsPath = path.join(dir, "comments.json");
+    const decisionsPath = path.join(dir, "decisions.json");
+    const plansPath = path.join(dir, "plan-reviews.json");
+
+    // U1 — merge any external changes since our last load before clobbering
+    // each file. The deterministic-sessionId fix from U0.6 already makes
+    // intra-daemon races vanishingly rare, but CLI commands and a daemon
+    // restart race could still touch the same files.
+    const diskArtifacts = this.readIfChanged<Artifact[]>(artifactsPath);
+    if (diskArtifacts) {
+      this.artifacts = this.mergeArrayById(this.artifacts, diskArtifacts, "id");
+    }
+    const diskComments = this.readIfChanged<Comment[]>(commentsPath);
+    if (diskComments) {
+      this.comments = this.mergeArrayById(this.comments, diskComments, "id");
+    }
+    const diskDecisions = this.readIfChanged<DecisionRecord[]>(decisionsPath);
+    if (diskDecisions && Array.isArray(diskDecisions)) {
+      for (const d of diskDecisions) {
+        if (d.decisionId && !this.decisions.has(d.decisionId)) {
+          this.decisions.set(d.decisionId, d);
+        }
+      }
+    }
+    const diskPlans = this.readIfChanged<PlanReviewRecord[]>(plansPath);
+    if (diskPlans && Array.isArray(diskPlans)) {
+      for (const p of diskPlans) {
+        if (p.artifactId && !this.planReviews.has(p.artifactId)) {
+          this.planReviews.set(p.artifactId, p);
+        }
+      }
+    }
+
+    this.atomicWrite(artifactsPath, this.artifacts);
+    this.atomicWrite(commentsPath, this.comments);
+    this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
+    this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
   }
 
   /** Force an immediate flush — call before process exit */
