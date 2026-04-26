@@ -493,10 +493,12 @@ async function main() {
         if (!clients) { clients = new Set(); wsClients.set(sessionId, clients); }
         clients.add(ws as any);
 
-        // Send session state on connect
+        // Send session state on connect. U4 — include `daemonStartedAt` so
+        // the client can detect a daemon-restart on reconnect (a different
+        // daemon process means stale in-memory state, force re-hydrate).
         const store = sessions.get(sessionId);
         if (store) {
-          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot }));
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, daemonStartedAt: startedAt }));
         }
 
         ws.on("close", () => {
@@ -513,7 +515,9 @@ async function main() {
           sessionId: id,
           artifactCount: store.getArtifacts().length,
         }));
-        ws.send(JSON.stringify({ type: "connected", sessions: sessionList }));
+        // U4 — include `daemonStartedAt` so global clients also detect a
+        // daemon restart and re-hydrate session listings on reconnect.
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, daemonStartedAt: startedAt }));
 
         ws.on("close", () => {
           globalClients.delete(ws as any);
