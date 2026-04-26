@@ -74,9 +74,31 @@ exact failure mode this rule exists to prevent. The user's "kick off the next
 item" or "looks good" was direction for the NEXT step, not approval for the
 five steps after that. When in doubt, checkpoint.
 
+### What does NOT need a checkpoint
+
+A narrow set of files auto-skip the checkpoint rule — only things that are
+unambiguously NOT human-authored decisions. The PostToolUse hook lets these
+through silently:
+- Lockfiles: \`package-lock.json\`, \`pnpm-lock.yaml\`, \`uv.lock\`,
+  \`Cargo.lock\`, \`Gemfile.lock\`, \`go.sum\`, \`composer.lock\`, etc.
+  (Lockfiles are regenerated from manifests; the manifest is the decision.)
+- Generated / vendored paths: \`dist/\`, \`build/\`, \`node_modules/\`,
+  \`.deeppairing/\`, \`.next/\`, \`.turbo/\`, \`coverage/\`.
+- IDE-local config dirs: \`.vscode/\`, \`.idea/\` (workspace settings, not
+  project policy).
+
+Config / policy files DO need a checkpoint. \`.gitignore\`, \`package.json\`,
+\`.npmrc\`, \`.prettierrc\`, \`.github/\` workflows — these are real decisions
+a paired human should react to. Don't batch them silently with other work.
+
+If you're touching a config file as part of a larger arc, the 60-second
+freshness window means a recent \`present_code_change\` covers incidental
+edits — call the checkpoint for the main change, then the trailing config
+tweaks pass through.
+
 The PostToolUse hook (installed by \`npx deeppairing init\`) enforces this: if
-you Write/Edit without an intervening present_code_change, the hook nags and
-forces you to checkpoint before continuing.
+you Write/Edit a non-skip file without an intervening present_code_change,
+the hook nags and forces you to checkpoint before continuing.
 
 ## Workflow
 
