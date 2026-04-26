@@ -278,24 +278,36 @@ function EvidenceItem({
   // start line and a compact "↳ continues from L{N}" marker on
   // subsequent lines — so a comment spanning lines 5-8 is visible on all
   // four lines, not just line 5 (which was the visibility bug).
+  //
+  // Defensive: a single malformed comment target (string lineStart,
+  // negative range, undefined fields, etc.) must not blow up the entire
+  // artifact render. Coerce-and-validate per comment, skip the bad one,
+  // keep going.
   const commentsByLine = useMemo(() => {
     const map = new Map<number, Comment[]>();
     for (const c of allComments) {
-      if (
-        c.target.findingIndex === findingIndex &&
-        c.target.evidenceIndex === evidenceIndex &&
-        c.target.lineStart != null
-      ) {
-        const start: number = c.target.lineStart;
-        const end: number = (c.target.lineEnd as number) ?? start;
-        // Defensive: cap span at 200 lines to avoid pathological maps if a
-        // bad target slipped past validation.
+      try {
+        if (
+          c.target?.findingIndex !== findingIndex ||
+          c.target?.evidenceIndex !== evidenceIndex ||
+          c.target?.lineStart == null
+        ) continue;
+        const startN = Number(c.target.lineStart);
+        const endRaw = (c.target as any).lineEnd;
+        const endN = endRaw == null ? startN : Number(endRaw);
+        // Skip bad numerics rather than crashing the render.
+        if (!Number.isFinite(startN) || !Number.isFinite(endN)) continue;
+        const start = Math.max(0, Math.floor(startN));
+        const end = Math.max(start, Math.floor(endN));
+        // Cap span at 200 lines so a runaway lineEnd can't blow the Map up.
         const safeEnd = Math.min(end, start + 200);
         for (let line = start; line <= safeEnd; line++) {
           const existing = map.get(line) ?? [];
           existing.push(c);
           map.set(line, existing);
         }
+      } catch {
+        // Ignore one bad comment; keep rendering the rest of the artifact.
       }
     }
     return map;
@@ -439,16 +451,27 @@ function renderEvidence(
 }
 
 export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
-  const content = artifact.content as {
-    summary?: string;
-    findings?: RichFinding[];
-    openQuestions?: string[];
+  // Defensive: artifact.content can drift in the wild (older sessions,
+  // partial writes, malformed agent output). Coerce to an object and
+  // skip non-object findings so one bad entry can't ErrorBoundary the
+  // whole artifact.
+  const rawContent = (artifact.content && typeof artifact.content === "object")
+    ? (artifact.content as Record<string, unknown>)
+    : {};
+  const content = {
+    summary: typeof rawContent.summary === "string" ? rawContent.summary : undefined,
+    findings: Array.isArray(rawContent.findings)
+      ? (rawContent.findings as any[]).filter((f) => f && typeof f === "object") as RichFinding[]
+      : [],
+    openQuestions: Array.isArray(rawContent.openQuestions)
+      ? (rawContent.openQuestions as any[]).filter((q) => typeof q === "string") as string[]
+      : undefined,
   };
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const [focusMode, setFocusMode] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("significance");
-  const findings = content.findings ?? [];
+  const findings = content.findings;
   const focusRef = useRef<HTMLDivElement>(null);
 
   // Arrow key navigation in focus mode
