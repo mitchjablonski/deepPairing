@@ -52,35 +52,91 @@ export const ArtifactSchema = z.object({
 
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
-// --- Typed content interfaces for artifact types not covered by content-types.ts ---
+// --- Typed content schemas for artifact types not in content-types.ts ---
+// U2 — these are now real Zod schemas (previously TypeScript-only
+// interfaces), so the discriminated parseArtifactContent below can
+// validate at the boundary instead of trusting the upstream `as T`.
 
-export interface DecisionContent {
-  context: string;
-  options: Array<{
-    id: string;
-    title: string;
-    description: string;
-    pros: string[];
-    cons: string[];
-    effort: "low" | "medium" | "high";
-    risk: "low" | "medium" | "high";
-    recommendation: boolean;
-  }>;
-  decisionId: string;
+export const DecisionOptionContentSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  pros: z.array(z.string()),
+  cons: z.array(z.string()),
+  effort: z.enum(["low", "medium", "high"]),
+  risk: z.enum(["low", "medium", "high"]),
+  recommendation: z.boolean(),
+});
+
+export const DecisionContentSchema = z.object({
+  context: z.string(),
+  options: z.array(DecisionOptionContentSchema),
+  decisionId: z.string(),
   /** How consequential this decision is. Only "high" triggers prediction capture. */
-  stakes?: "low" | "medium" | "high";
-}
+  stakes: z.enum(["low", "medium", "high"]).optional(),
+});
 
-export interface CodeChangeContent {
-  filePath: string;
-  changeType: "create" | "modify" | "delete";
-  before: string;
-  after: string;
-  reasoning: string;
-  confidence?: "low" | "medium" | "high";
-}
+export type DecisionContent = z.infer<typeof DecisionContentSchema>;
 
-/** Helper to cast artifact content to a typed interface */
+export const CodeChangeContentSchema = z.object({
+  filePath: z.string(),
+  changeType: z.enum(["create", "modify", "delete"]),
+  before: z.string(),
+  after: z.string(),
+  reasoning: z.string(),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+});
+
+export type CodeChangeContent = z.infer<typeof CodeChangeContentSchema>;
+
+/**
+ * Helper to cast artifact content to a typed interface.
+ *
+ * @deprecated U2 — this is an unchecked `as T` cast and bypasses Zod's
+ * source-of-truth guarantee. Prefer `parseArtifactContent(artifact)` for
+ * a discriminated, validated payload. Kept here because dozens of web
+ * components still use it; migrate gradually.
+ */
 export function getTypedContent<T>(artifact: Artifact): T {
   return artifact.content as T;
+}
+
+/**
+ * U2 — discriminated, validated artifact-content parser. Switches on
+ * `artifact.type` and runs the matching Zod schema's `.safeParse` so the
+ * caller gets a typed payload OR a structured failure (instead of a
+ * silent type lie like `getTypedContent` produces). On failure the
+ * parser returns `{ ok: false, error }` rather than throwing — every
+ * call site already runs in render, where a throw would crash the UI.
+ *
+ * Falls back to ResearchContentSchema-style validation for `research`,
+ * PlanContentSchema for `plan`, etc., importing lazily so this module
+ * doesn't grow a circular dep on content-types.
+ */
+type ParseResult<T> = { ok: true; data: T } | { ok: false; error: z.ZodError };
+
+export async function parseArtifactContent(
+  artifact: Artifact,
+): Promise<
+  | ParseResult<DecisionContent>
+  | ParseResult<CodeChangeContent>
+  | ParseResult<import("./content-types.js").ResearchContent>
+  | ParseResult<import("./content-types.js").PlanContent>
+  | ParseResult<import("./content-types.js").SpecContent>
+  | ParseResult<import("./content-types.js").ReasoningContent>
+> {
+  const ct = await import("./content-types.js");
+  const schema = (() => {
+    switch (artifact.type) {
+      case "decision":     return DecisionContentSchema;
+      case "code_change":  return CodeChangeContentSchema;
+      case "research":     return ct.ResearchContentSchema;
+      case "plan":         return ct.PlanContentSchema;
+      case "spec":         return ct.SpecContentSchema;
+      case "reasoning":    return ct.ReasoningContentSchema;
+    }
+  })();
+  const result = schema.safeParse(artifact.content);
+  if (result.success) return { ok: true, data: result.data as any };
+  return { ok: false, error: result.error };
 }
