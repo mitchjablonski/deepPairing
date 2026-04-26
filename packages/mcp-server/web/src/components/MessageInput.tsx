@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
-import { API_BASE, sessionHeaders } from "../lib/api";
+import { API_BASE, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+import { useToastStore } from "../stores/toast";
 import { useSentFlash } from "../hooks/useSentFlash";
 
 // Stable empty-array reference so Zustand's store selector doesn't produce
@@ -100,7 +101,7 @@ export function MessageInput() {
     setSending(true);
 
     try {
-      await fetch(`${API_BASE}/api/comments`, {
+      await safeFetch(`${API_BASE}/api/comments`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({
@@ -111,8 +112,19 @@ export function MessageInput() {
       });
       setMessage("");
       flash();
-    } catch {
-      // Failed to send
+    } catch (err) {
+      // U3 — surface the failure as a toast and keep the message in the
+      // composer so the user can retry. Pre-U3 this swallowed the error
+      // entirely; the user thought their message went through and only
+      // realized minutes later (when the agent never responded) that it
+      // hadn't.
+      const apiErr = err instanceof ApiError ? err : null;
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Send failed",
+        body: apiErr?.message ?? (err instanceof Error ? err.message : "Unknown error"),
+        ttl: 7000,
+      });
     } finally {
       inFlightRef.current = false;
       setSending(false);

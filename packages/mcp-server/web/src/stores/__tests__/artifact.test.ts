@@ -177,3 +177,55 @@ describe("artifact store — reset", () => {
     expect(after.unreadIds).toEqual([]);
   });
 });
+
+describe("artifact store — mutation error surfacing (U3)", () => {
+  // Pre-U3 every mutator dropped fetch responses on the floor; a 4xx/5xx
+  // was indistinguishable from success. Now every failure throws and the
+  // store toasts so the user reacts instead of waiting on something that
+  // never landed.
+  it("submitComment toasts an error when the daemon returns 409 no_active_session", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: "x", code: "no_active_session" }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    )));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].title).toBe("Send comment failed");
+  });
+
+  it("updateArtifactStatus toasts a status-specific title on failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 500 })));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.updateArtifactStatus("a1", "approved")).rejects.toBeDefined();
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts[0].title).toBe("Approve failed");
+  });
+
+  it("renameArtifact rolls back the optimistic title change on failure", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Original" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 500 })));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    await expect(s.renameArtifact("a1", "New Name")).rejects.toBeDefined();
+    // After rollback the title should be back to the original.
+    expect(useArtifactStore.getState().artifacts[0].title).toBe("Original");
+    expect(useToastStore.getState().toasts[0].title).toBe("Rename artifact failed");
+  });
+
+  it("network-error rejection toasts the doctor hint", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "hi")).rejects.toBeDefined();
+    expect(useToastStore.getState().toasts[0].body).toMatch(/deeppairing doctor/i);
+  });
+});
