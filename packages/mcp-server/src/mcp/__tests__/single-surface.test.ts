@@ -124,4 +124,26 @@ describe("embedded CLAUDE.md protocol carries the same guidance (U0.5 + V3)", ()
     expect(initSrc).toMatch(/log_reasoning/);
     expect(initSrc).toMatch(/present_code_change/);
   });
+
+  // Fix A + B — comment-reply mirror + decision-revision sections.
+  it("init.ts EMBEDDED_PROTOCOL tells the agent to mirror comment replies via answer_question (Fix A)", async () => {
+    const initSrc = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../cli/init.ts"),
+      "utf-8",
+    );
+    expect(initSrc).toMatch(/## Replying to Human Comments/);
+    expect(initSrc).toMatch(/answer_question/);
+    expect(initSrc).toMatch(/invisible to the conversation rail/);
+  });
+
+  it("init.ts EMBEDDED_PROTOCOL has a Decision Revision Requests section (Fix B)", async () => {
+    const initSrc = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../cli/init.ts"),
+      "utf-8",
+    );
+    expect(initSrc).toMatch(/## Decision Revision Requests/);
+    expect(initSrc).toMatch(/sectionId.*decision_revision_requested/);
+    expect(initSrc).toMatch(/revise_artifact/);
+    expect(initSrc).toMatch(/mode="supersede"/);
+  });
 });

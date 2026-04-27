@@ -245,3 +245,81 @@ describe("DecisionCard — keyboard navigation", () => {
     expect(() => fireEvent.keyDown(container, { key: "ArrowUp" })).not.toThrow();
   });
 });
+
+describe("DecisionCard — Send back for revision (Fix B)", () => {
+  // Field bug: a human commented on the overall decision; the agent thought
+  // about it (visible in the chat) but didn't post back to the UI, AND the
+  // decision stayed pending with no clear "I want a revised option set"
+  // signal. This affordance + the firstCallHint surfacing close that loop.
+
+  it("does NOT show the Send-back button when artifactId is missing (no anchor)", () => {
+    // The button needs an artifactId to attach the comment to. Without
+    // one, no affordance.
+    render(<DecisionCard event={event} decisionId="dec_abc" />);
+    expect(screen.queryByRole("button", { name: /send decision back for revised options/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Send-back button when artifactId is present", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    expect(screen.getByRole("button", { name: /send decision back for revised options/i })).toBeInTheDocument();
+  });
+
+  it("opens an inline form on click and Cancel returns to the trigger", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    expect(screen.getByPlaceholderText(/all 4 are matchers/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    // Trigger button is back.
+    expect(screen.getByRole("button", { name: /send decision back for revised options/i })).toBeInTheDocument();
+  });
+
+  it("submits a question-intent comment tagged decision_revision_requested", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    await userEvent.type(
+      screen.getByPlaceholderText(/all 4 are matchers/i),
+      "all four are matchers — what about a hybrid?",
+    );
+    // Click the explicit submit button (the trigger button text starts the
+    // same way — disambiguate by exact name).
+    await userEvent.click(screen.getByRole("button", { name: /^↻ Send back for revision$/ }));
+
+    const calls = (fetch as any).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const body = JSON.parse(calls[0][1].body);
+    expect(body.artifactId).toBe("art_dec");
+    expect(body.content).toContain("hybrid");
+    expect(body.intent).toBe("question");
+    expect(body.target.sectionId).toBe("decision_revision_requested");
+  });
+
+  it("after submit, shows the awaiting-revision indicator and hides the form", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    await userEvent.type(screen.getByPlaceholderText(/all 4 are matchers/i), "redo this");
+    await userEvent.click(screen.getByRole("button", { name: /^↻ Send back for revision$/ }));
+
+    expect(screen.getByText(/Revision requested/)).toBeInTheDocument();
+    expect(screen.getByText(/revise_artifact/)).toBeInTheDocument();
+    // Form is gone.
+    expect(screen.queryByPlaceholderText(/all 4 are matchers/i)).not.toBeInTheDocument();
+  });
+
+  it("does NOT submit when the textarea is empty (button is disabled)", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    const submit = screen.getByRole("button", { name: /^↻ Send back for revision$/ });
+    expect(submit).toBeDisabled();
+  });
+
+  it("Esc inside the textarea cancels and clears the draft", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    const textarea = screen.getByPlaceholderText(/all 4 are matchers/i);
+    await userEvent.type(textarea, "draft text{Escape}");
+    // Form gone, trigger button is back, draft is not retained.
+    expect(screen.queryByPlaceholderText(/all 4 are matchers/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    expect((screen.getByPlaceholderText(/all 4 are matchers/i) as HTMLTextAreaElement).value).toBe("");
+  });
+});

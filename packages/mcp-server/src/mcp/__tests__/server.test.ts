@@ -601,6 +601,123 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("firstCallHint surfaces decision-revision-requested + plain artifact comments", () => {
+    // Field bug: a human comment on a decision artifact reached the agent
+    // via check_feedback, but the agent's protocol gave no clear
+    // instruction for non-question comments → reply went into chat only,
+    // never landed in the conversation rail. Two complementary surfacing
+    // additions in firstCallHint:
+    //   1. Comments tagged sectionId="decision_revision_requested" get
+    //      promoted to a HIGH-PRIORITY "🔁 REVISION REQUEST" section that
+    //      tells the agent to call revise_artifact, NOT answer_question.
+    //   2. Plain (non-question, non-answered) comments on artifacts
+    //      surface a "💬 N comments without an agent reply" line so the
+    //      agent knows to mirror substantive replies via answer_question.
+
+    // The firstCallHint only fires on the FIRST tool call per server
+    // instance. To exercise it, we seed the store directly (no callTool)
+    // and then make the FIRST tool call to see the hint.
+
+    it("surfaces decision_revision_requested as a HIGH-PRIORITY revise_artifact action", async () => {
+      // Seed a decision artifact directly (no first-call burnt).
+      const decisionArtifact = store.createArtifact({
+        id: "art_dec_seed",
+        type: "decision",
+        title: "Pick a matcher",
+        content: { context: "Pick a matcher", options: [], decisionId: "dec_seed" },
+      });
+      store.addComment({
+        id: "cmt_revision",
+        artifactId: decisionArtifact.id,
+        content: "all 4 options are matchers — what about a hybrid?",
+        author: "human",
+        intent: "question",
+        target: { sectionId: "decision_revision_requested" } as any,
+      });
+
+      // FIRST tool call — carries the firstCallHint.
+      const { text } = await callTool("present_findings", {
+        summary: "trigger first-call hint",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+
+      expect(text).toMatch(/REVISION REQUEST/);
+      expect(text).toMatch(/revise_artifact/);
+      expect(text).toMatch(/supersede/);
+      expect(text).toContain(decisionArtifact.id);
+      expect(text).toContain("cmt_revision");
+      expect(text).toMatch(/all 4 options are matchers/);
+      expect(text).toMatch(/Do NOT just call answer_question/);
+    });
+
+    it("does not double-count revision-requests in the plain unanswered-questions section", async () => {
+      const decision = store.createArtifact({
+        id: "art_dec_only",
+        type: "decision",
+        title: "x",
+        content: { context: "x", options: [], decisionId: "dec_only" },
+      });
+      store.addComment({
+        id: "cmt_rev_only",
+        artifactId: decision.id,
+        content: "redo the options",
+        author: "human",
+        intent: "question",
+        target: { sectionId: "decision_revision_requested" } as any,
+      });
+
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+
+      // With ONLY a revision-request comment (no plain question), the
+      // unanswered-questions counter must not appear.
+      const lines = text.split("\n");
+      const unansweredLine = lines.find((l) => /❓ \d+ unanswered question/.test(l));
+      expect(unansweredLine).toBeUndefined();
+      expect(text).toMatch(/🔁/);
+    });
+
+    it("surfaces plain (non-question) human comments as 'mirror via answer_question'", async () => {
+      const findings = store.createArtifact({
+        id: "art_research_seed",
+        type: "research",
+        title: "x",
+        content: { summary: "x", findings: [] },
+      });
+      store.addComment({
+        id: "cmt_plain_thought",
+        artifactId: findings.id,
+        content: "interesting trade-off here",
+        author: "human",
+        // intent omitted on purpose → plain comment
+      });
+
+      const { text } = await callTool("present_findings", {
+        summary: "y",
+        findings: [{ category: "y", detail: "y", significance: "low" }],
+      });
+
+      expect(text).toMatch(/💬 1 human comment.*without an agent reply/);
+      expect(text).toMatch(/Mirror substantive replies via answer_question/);
+    });
+
+    it("does NOT surface session-level chat (artifactId='__session__') as needing a mirror", async () => {
+      store.addComment({
+        id: "cmt_session_chat",
+        artifactId: "__session__",
+        content: "hey just thinking out loud",
+        author: "human",
+      });
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).not.toMatch(/💬 \d+ human comment.*without an agent reply/);
+    });
+  });
+
   describe("answer_question + question prioritization", () => {
     it("prioritizes question comments in check_feedback with an answer hint", async () => {
       await callTool("present_findings", {

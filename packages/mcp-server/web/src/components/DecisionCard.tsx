@@ -53,6 +53,18 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
   const [confidence, setConfidence] = useState<"low" | "medium" | "high" | "">(initialResolved?.confidence ?? "");
+  /**
+   * Decision-revision-request state. Lets the human say "none of these
+   * options work — revise the set" without picking. Submits a tagged
+   * question comment with sectionId: "decision_revision_requested" so
+   * the agent's firstCallHint surfaces it as HIGH-PRIORITY (call
+   * revise_artifact, NOT answer_question). Tracks local "sent" state so
+   * the UI can show "↻ awaiting revision" until the agent supersedes
+   * the artifact (at which point this whole component unmounts).
+   */
+  const [showSendBack, setShowSendBack] = useState(false);
+  const [sendBackText, setSendBackText] = useState("");
+  const [sendBackSent, setSendBackSent] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const submitSelection = async (
@@ -121,6 +133,26 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
   }, [focusedIndex, resolved, showReasoning, event.options]);
+
+  // Send-back-with-comment: posts a tagged question comment that the
+  // server's firstCallHint promotes to "REVISION REQUEST" priority. Agent
+  // is told (in the embedded protocol) to call revise_artifact mode=
+  // "supersede" rather than just answer_question. Decision artifact stays
+  // pending until the agent supersedes it (or the user picks an option
+  // anyway).
+  const submitSendBack = async () => {
+    const text = sendBackText.trim();
+    if (!artifactId || !text || sendBackSent) return;
+    await submitComment(
+      artifactId,
+      text,
+      { sectionId: "decision_revision_requested" } as any,
+      { intent: "question" },
+    );
+    setSendBackSent(true);
+    setShowSendBack(false);
+    setSendBackText("");
+  };
 
   // Q3: file a comment that nudges the agent to call request_horizon_check.
   // The comment carries intent:"question" and sectionId="horizon_check:request"
@@ -441,6 +473,78 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               Cancel
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Send-back-with-comment affordance. Visible whenever the decision
+          isn't resolved and we have an artifactId to anchor against. Once
+          submitted, shows a "↻ awaiting revision" indicator instead. The
+          option-pick buttons stay live — the user can change their mind
+          and pick anyway, in which case the revision comment becomes
+          stale context the agent can address in the next decision. */}
+      {artifactId && (
+        <div className="mt-3 pt-3 border-t border-accent-violet/15">
+          {sendBackSent ? (
+            <div className="flex items-center gap-2 text-2xs text-accent-amber">
+              <span aria-hidden>↻</span>
+              <span>
+                Revision requested — the agent will call{" "}
+                <code className="font-mono text-[10px] bg-surface-elevated px-1 py-px rounded">revise_artifact</code>
+                {" "}and post a v2 of this decision. You can still pick from these options if you change your mind.
+              </span>
+            </div>
+          ) : !showSendBack ? (
+            <button
+              onClick={() => setShowSendBack(true)}
+              className="text-xs text-accent-amber hover:underline transition-colors"
+              title="None of these options fit — send the decision back to the agent for a revised option set"
+              aria-label="Send decision back for revised options"
+            >
+              ↻ None of these fit — send back for revision
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <label className="block text-2xs text-text-muted">
+                What should change about the options? (the agent will revise the set, not just answer)
+              </label>
+              <textarea
+                rows={3}
+                autoFocus
+                value={sendBackText}
+                onChange={(e) => setSendBackText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    submitSendBack();
+                  }
+                  if (e.key === "Escape") {
+                    setShowSendBack(false);
+                    setSendBackText("");
+                  }
+                }}
+                placeholder="e.g. all 4 are matchers — what about a hybrid? Or: option B should use Y instead of X…"
+                className="w-full px-2.5 py-1.5 bg-surface-secondary border border-accent-amber/30 rounded text-xs text-text-primary
+                           placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber resize-none"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={submitSendBack}
+                  disabled={!sendBackText.trim()}
+                  className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
+                             hover:bg-accent-amber/80 disabled:opacity-50 transition-colors press-scale"
+                >
+                  ↻ Send back for revision
+                </button>
+                <button
+                  onClick={() => { setShowSendBack(false); setSendBackText(""); }}
+                  className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
+                >
+                  Cancel
+                </button>
+                <span className="ml-auto text-2xs text-text-muted italic">⌘⏎ to send</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
