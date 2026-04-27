@@ -101,20 +101,99 @@ describe("ensureStopHook", () => {
     expect(settings.hooks.Stop).toHaveLength(1);
   });
 
-  it("is a no-op when a deepPairing Stop hook is already present in nested shape", () => {
+  it("is a no-op when the canonical deepPairing Stop hook is already present", () => {
+    // Install once to establish the canonical entry, then re-run.
+    // (A fake/stale command would now be REPLACED rather than no-op'd —
+    // see "REPLACES a single stale DP entry" below for that case.)
+    ensureStopHook(tmpDir);
+    const result = ensureStopHook(tmpDir);
+    expect(result.ok && result.changed).toBe(false);
+  });
+
+  it("HEALS duplicate nested DP entries — collapses N stale entries to one canonical", () => {
+    // Field bug: an earlier ensureStopHook upgraded the command (added
+    // the 30-min age guard), but the OLD nested entry survived because
+    // the legacy heal only filtered flat-shape duplicates. Net: "Ran 2
+    // stop hooks" — one current, one stale — both running on every poll.
+    // The own-the-row policy collapses any DP-recognizable entries
+    // (regardless of command version) into one canonical row.
     fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, ".claude", "settings.local.json"),
       JSON.stringify({
         hooks: {
           Stop: [
-            { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing: existing'" }] },
+            // Stale nested DP entry from an older command version (no age guard).
+            {
+              matcher: "",
+              hooks: [{ type: "command", command: "node -e 'deepPairing OLD STALE COMMAND'" }],
+            },
+            // User's unrelated hook — must survive.
+            { matcher: "", hooks: [{ type: "command", command: "node /unrelated/hook.js" }] },
+            // Another stale DP entry (concurrent install / leftover).
+            {
+              matcher: "",
+              hooks: [{ type: "command", command: "node -e 'deepPairing ANOTHER STALE'" }],
+            },
           ],
         },
       }),
     );
     const result = ensureStopHook(tmpDir);
-    expect(result.ok && result.changed).toBe(false);
+    expect(result.ok && result.changed).toBe(true);
+    expect(result.ok && result.message).toMatch(/replaced 2 stale deepPairing entries/i);
+
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    // Exactly one DP entry remains; user's unrelated hook is intact.
+    expect(settings.hooks.Stop).toHaveLength(2);
+    const dpEntries = settings.hooks.Stop.filter(
+      (e: any) =>
+        Array.isArray(e?.hooks) &&
+        e.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing")),
+    );
+    expect(dpEntries).toHaveLength(1);
+    const userHook = settings.hooks.Stop.find(
+      (e: any) =>
+        Array.isArray(e?.hooks) &&
+        e.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("/unrelated/hook.js")),
+    );
+    expect(userHook).toBeDefined();
+  });
+
+  it("is a no-op only when EXACTLY one canonical DP entry is present (matches current command)", () => {
+    // First install establishes the canonical row.
+    ensureStopHook(tmpDir);
+    // Second call must not change anything.
+    const second = ensureStopHook(tmpDir);
+    expect(second.ok && !second.changed).toBe(true);
+    expect(second.ok && second.message).toMatch(/already configured/i);
+  });
+
+  it("REPLACES a single stale DP entry whose command differs from the canonical", () => {
+    fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".claude", "settings.local.json"),
+      JSON.stringify({
+        hooks: {
+          Stop: [
+            { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing OLD VERSION'" }] },
+          ],
+        },
+      }),
+    );
+    const result = ensureStopHook(tmpDir);
+    expect(result.ok && result.changed).toBe(true);
+    expect(result.ok && result.message).toMatch(/replaced stale stop hook entry/i);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    expect(settings.hooks.Stop).toHaveLength(1);
+    // The stale "OLD VERSION" string is gone; the canonical command
+    // (with MAX age guard) is in place.
+    expect(JSON.stringify(settings.hooks.Stop)).not.toContain("OLD VERSION");
+    expect(JSON.stringify(settings.hooks.Stop)).toContain("MAX=30*60*1000");
   });
 
   it("HEALS a legacy flat-shape Stop entry by dropping it and re-installing nested", () => {
@@ -326,6 +405,38 @@ describe("ensureCheckpointHook (V2)", () => {
     fs.writeFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "{ not json");
     const r = ensureCheckpointHook(tmpDir);
     expect(r.ok).toBe(false);
+  });
+
+  it("HEALS duplicate checkpoint entries — collapses N to one canonical", () => {
+    fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".claude", "settings.local.json"),
+      JSON.stringify({
+        hooks: {
+          PostToolUse: [
+            // Stale DP entry — matcher mismatch.
+            { matcher: "Write", hooks: [{ type: "command", command: "node old/checkpoint.mjs" }] },
+            // Another stale DP entry.
+            { matcher: "Write|Edit|MultiEdit", hooks: [{ type: "command", command: "node ancient/checkpoint.mjs" }] },
+            // User's unrelated hook.
+            { matcher: "Bash", hooks: [{ type: "command", command: "echo bash" }] },
+          ],
+        },
+      }),
+    );
+    const r = ensureCheckpointHook(tmpDir);
+    expect(r.ok && r.changed).toBe(true);
+    expect(r.ok && r.message).toMatch(/replaced 2 stale entries/i);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    // 2 entries: user's Bash hook + canonical DP entry.
+    expect(settings.hooks.PostToolUse).toHaveLength(2);
+    const dpEntries = settings.hooks.PostToolUse.filter(
+      (e: any) => Array.isArray(e?.hooks) && e.hooks.some((h: any) => h?.command?.includes?.("checkpoint.mjs")),
+    );
+    expect(dpEntries).toHaveLength(1);
+    expect(dpEntries[0].matcher).toBe("Write|Edit|MultiEdit");
   });
 });
 

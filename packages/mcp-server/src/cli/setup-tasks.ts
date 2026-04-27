@@ -81,16 +81,20 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     settings.hooks = settings.hooks ?? {};
     settings.hooks.Stop = settings.hooks.Stop ?? [];
 
-    // Field bug: Claude Code's hook schema uses
-    //   { matcher, hooks: [{ type: "command", command }] }
-    // not the legacy flat
-    //   { command }
-    // shape. The legacy shape produced an "Invalid settings / hooks:
-    // Expected array" warning in /doctor on every reconnect. We need to
-    // (a) install the correct nested shape going forward, and (b) heal
-    // any pre-existing flat-shape entry that this installer wrote on an
-    // earlier version — otherwise the bad shape regenerates on every
-    // fresh init.
+    // Field bug history:
+    //   1. Earlier installers wrote the legacy flat { command } shape,
+    //      which produced "Invalid settings / hooks: Expected array"
+    //      warnings.
+    //   2. Successive command updates (e.g. adding the 30-min age guard)
+    //      produced new nested entries while leaving the OLD nested
+    //      entry in place — net: the user saw "Ran 2 stop hooks" with
+    //      one running stale logic.
+    //
+    // Defense: own the deepPairing row completely. On every install,
+    // drop ANY entry that looks like a deepPairing entry (flat or
+    // nested, current command or stale command), then write exactly
+    // ONE canonical entry. Non-DP entries (someone else's user hook)
+    // are left strictly alone.
     const isDpStopEntry = (entry: any) => {
       if (typeof entry?.command === "string" && entry.command.includes("deepPairing")) return true; // legacy flat
       if (Array.isArray(entry?.hooks)) {
@@ -100,22 +104,26 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     };
     const isLegacyFlatDp = (entry: any) =>
       typeof entry?.command === "string" && entry.command.includes("deepPairing") && !Array.isArray(entry?.hooks);
+    const isCurrentCanonicalDp = (entry: any) =>
+      Array.isArray(entry?.hooks) &&
+      entry.hooks.length === 1 &&
+      entry.hooks[0]?.type === "command" &&
+      entry.hooks[0]?.command === STOP_HOOK_COMMAND &&
+      entry?.matcher === "";
 
-    // Heal: drop any legacy flat-shape entries this installer previously
-    // wrote. Non-DP entries (anything not matching isDpStopEntry) are left
-    // alone — we only own deepPairing's row.
+    const beforeDpCount = settings.hooks.Stop.filter(isDpStopEntry).length;
     const hadLegacy = settings.hooks.Stop.some(isLegacyFlatDp);
-    if (hadLegacy) {
-      settings.hooks.Stop = settings.hooks.Stop.filter((entry: any) => !isLegacyFlatDp(entry));
-    }
+    const hasExactlyOneCanonical =
+      beforeDpCount === 1 && settings.hooks.Stop.some(isCurrentCanonicalDp);
 
-    const alreadyHasDp = Array.isArray(settings.hooks.Stop) && settings.hooks.Stop.some(isDpStopEntry);
-    if (alreadyHasDp) {
+    if (hasExactlyOneCanonical) {
       return { ok: true, changed: false, message: "Stop hook already configured" };
     }
 
-    // Correct nested shape (matches Claude Code's hook schema; same
-    // structure ensureCheckpointHook uses for PostToolUse).
+    // Replace ALL deepPairing entries with the single canonical one. This
+    // catches: legacy flat shape, stale nested entries from older code
+    // versions, AND accidental duplicates from concurrent installs.
+    settings.hooks.Stop = settings.hooks.Stop.filter((entry: any) => !isDpStopEntry(entry));
     settings.hooks.Stop.push({
       matcher: "",
       hooks: [{ type: "command", command: STOP_HOOK_COMMAND }],
@@ -124,7 +132,11 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     const msg = hadLegacy
       ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)"
-      : "Added Stop hook to .claude/settings.local.json";
+      : beforeDpCount > 1
+        ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)`
+        : beforeDpCount === 1
+          ? "Replaced stale Stop hook entry with the current canonical version"
+          : "Added Stop hook to .claude/settings.local.json";
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
     return { ok: false, message: `Could not configure Stop hook: ${err?.message ?? err}` };
@@ -285,6 +297,12 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     settings.hooks = settings.hooks ?? {};
     settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
 
+    // Same own-the-row policy as ensureStopHook: any entry that looks
+    // like a deepPairing checkpoint hook (any shape, any command
+    // version) gets dropped and replaced with the canonical current
+    // entry. Prevents accumulation of stale duplicates as the hook
+    // command evolves.
+    const CANONICAL_CMD = `node ${CHECKPOINT_SCRIPT_REL_PATH}`;
     const isDpCheckpointEntry = (entry: any) => {
       if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
       if (Array.isArray(entry?.hooks)) {
@@ -292,25 +310,34 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
       }
       return false;
     };
+    const isCurrentCanonicalDp = (entry: any) =>
+      Array.isArray(entry?.hooks) &&
+      entry.hooks.length === 1 &&
+      entry.hooks[0]?.type === "command" &&
+      entry.hooks[0]?.command === CANONICAL_CMD &&
+      entry?.matcher === "Write|Edit|MultiEdit";
 
-    const alreadyHasDp =
-      Array.isArray(settings.hooks.PostToolUse) &&
-      settings.hooks.PostToolUse.some(isDpCheckpointEntry);
+    const beforeDpCount = settings.hooks.PostToolUse.filter(isDpCheckpointEntry).length;
+    const hasExactlyOneCanonical =
+      beforeDpCount === 1 && settings.hooks.PostToolUse.some(isCurrentCanonicalDp);
 
-    if (alreadyHasDp) {
+    if (hasExactlyOneCanonical) {
       return { ok: true, changed: false, message: "Checkpoint hook already configured" };
     }
 
-    // V2 — matcher scopes the hook to file-mutating tools so we don't fire
-    // on every Read/Bash. The script also re-checks the tool name as a
-    // belt-and-suspenders guard.
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter((entry: any) => !isDpCheckpointEntry(entry));
     settings.hooks.PostToolUse.push({
       matcher: "Write|Edit|MultiEdit",
-      hooks: [{ type: "command", command: `node ${CHECKPOINT_SCRIPT_REL_PATH}` }],
+      hooks: [{ type: "command", command: CANONICAL_CMD }],
     });
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    return { ok: true, changed: true, message: "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)" };
+    const msg = beforeDpCount > 1
+      ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)`
+      : beforeDpCount === 1
+        ? "Replaced stale checkpoint hook entry with the current canonical version"
+        : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
+    return { ok: true, changed: true, message: msg };
   } catch (err: any) {
     return { ok: false, message: `Could not configure checkpoint hook: ${err?.message ?? err}` };
   }
