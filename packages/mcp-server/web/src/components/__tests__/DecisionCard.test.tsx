@@ -322,4 +322,19 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
     expect((screen.getByPlaceholderText(/all 4 are matchers/i) as HTMLTextAreaElement).value).toBe("");
   });
+
+  it("does NOT swallow j/k keystrokes typed into the send-back textarea (regression)", async () => {
+    // Field bug: the option-navigation handler was attached to the card
+    // container, and j/k keystrokes from nested inputs bubbled up and got
+    // preventDefault'd. The user couldn't type "k" or "j" in the
+    // composer. Pin that the editable-element guard now skips the
+    // navigation handler entirely when focus is on a textarea.
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    const textarea = screen.getByPlaceholderText(/all 4 are matchers/i) as HTMLTextAreaElement;
+    // Type a string that contains both j and k. Pre-fix the j/k characters
+    // would be eaten and the value would be a subset of the typed string.
+    await userEvent.type(textarea, "knock knock — just checking");
+    expect(textarea.value).toBe("knock knock — just checking");
+  });
 });
