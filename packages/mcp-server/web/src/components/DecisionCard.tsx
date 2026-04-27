@@ -117,6 +117,20 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     if (!el || resolved) return;
 
     const handler = (e: KeyboardEvent) => {
+      // Field bug: typing 'k' or 'j' inside an embedded textarea/input
+      // (the "Send back with comment" composer, the "Why this choice?"
+      // input) was getting eaten by the option-navigation shortcuts
+      // because keystrokes bubble up to the container element. Skip the
+      // navigation handler entirely when focus is on an editable.
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target?.isContentEditable === true
+      ) return;
+
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
         setFocusedIndex((i) => Math.min(i + 1, event.options.length - 1));

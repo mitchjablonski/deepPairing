@@ -60,8 +60,17 @@ function App() {
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // Skip ALL shortcuts when the user is typing in an editable surface.
+      // Belt + suspenders: tag names cover <input>/<textarea>/<select>;
+      // contenteditable covers rich-text or CodeMirror-style editors.
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target?.isContentEditable === true
+      ) return;
 
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
