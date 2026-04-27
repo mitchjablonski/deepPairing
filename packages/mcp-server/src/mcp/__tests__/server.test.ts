@@ -703,6 +703,91 @@ describe("MCP Tool Handlers", () => {
       expect(text).toMatch(/Mirror substantive replies via answer_question/);
     });
 
+    it("surfaces follow-up replies in active threads (parentCommentId points at agent comment) as ↳ continue-the-thread", async () => {
+      // The user replied to the agent's previous answer_question reply
+      // via the new Reply button. firstCallHint must surface this as a
+      // distinct "continuing thread" signal so the agent calls
+      // answer_question AGAIN, not addComment top-level.
+      const findings = store.createArtifact({
+        id: "art_thread_seed",
+        type: "research",
+        title: "x",
+        content: { summary: "x", findings: [] },
+      });
+      // Original question.
+      store.addComment({
+        id: "h_q1",
+        artifactId: findings.id,
+        content: "why?",
+        author: "human",
+        intent: "question",
+      });
+      // Agent's prior reply (answer_question result).
+      store.addComment({
+        id: "agent_a1",
+        artifactId: findings.id,
+        content: "because Y",
+        author: "agent",
+        parentCommentId: "h_q1",
+      });
+      // Mark the original question as answered so it doesn't show in the
+      // unanswered-questions section (which would conflict with the
+      // follow-up surfacing).
+      store.markCommentAnswered("h_q1", "agent_a1");
+      // Human's follow-up reply — parentCommentId points at agent_a1.
+      store.addComment({
+        id: "h_followup",
+        artifactId: findings.id,
+        content: "but Y doesn't apply because Z",
+        author: "human",
+        parentCommentId: "agent_a1",
+      });
+
+      const { text } = await callTool("present_findings", {
+        summary: "trigger first-call",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+
+      expect(text).toMatch(/↳/);
+      expect(text).toMatch(/follow-up repl/);
+      expect(text).toContain("h_followup");
+      expect(text).toContain("agent_a1");
+      expect(text).toContain("but Y doesn't apply because Z");
+      expect(text).toMatch(/answer_question.*AGAIN/);
+      expect(text).toMatch(/Do NOT post a new top-level comment/);
+    });
+
+    it("does not double-count follow-up replies in the plain-comments mirror line", async () => {
+      // A follow-up reply has author=human and intent=undefined (i.e.
+      // matches the plain-comment filter too). It must appear in the
+      // ↳ follow-up section only, not also in the 💬 mirror section.
+      const findings = store.createArtifact({
+        id: "art_no_dup",
+        type: "research",
+        title: "x",
+        content: { summary: "x", findings: [] },
+      });
+      store.addComment({ id: "agent_a", artifactId: findings.id, content: "A", author: "agent" });
+      store.addComment({
+        id: "h_followup_only",
+        artifactId: findings.id,
+        content: "follow-up",
+        author: "human",
+        parentCommentId: "agent_a",
+      });
+
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+
+      // Follow-up section IS present.
+      expect(text).toMatch(/↳ 1 follow-up reply/);
+      // Plain-comments-needing-mirror line is NOT — that comment is
+      // already accounted for as a follow-up.
+      expect(text).not.toMatch(/💬 \d+ human comment.*without an agent reply/);
+    });
+
     it("does NOT surface session-level chat (artifactId='__session__') as needing a mirror", async () => {
       store.addComment({
         id: "cmt_session_chat",

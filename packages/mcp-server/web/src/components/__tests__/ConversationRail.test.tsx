@@ -120,8 +120,10 @@ describe("ConversationRail (W1)", () => {
     // Both visible. The reply is a separate row indented under the question.
     expect(screen.getByText("why bcrypt 4 rounds?")).toBeInTheDocument();
     expect(screen.getByText(/rounds=4 was a copy-paste error/)).toBeInTheDocument();
-    // The threaded reply has the ↳ indicator.
-    expect(screen.getByText(/↳/)).toBeInTheDocument();
+    // The threaded reply has the ↳ indicator. (W3 added a "↳ Reply"
+    // affordance which also matches /↳/, so be explicit: getAllByText
+    // and assert at least one ↳ exists in the rendered output.)
+    expect(screen.getAllByText(/↳/).length).toBeGreaterThan(0);
   });
 
   it("flags an unanswered human question with the awaiting-reply marker", () => {
@@ -284,6 +286,64 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     render(<ConversationRail onClose={() => {}} />);
     const persisted = Number(sessionStorage.getItem("dp:rail-last-opened-at") ?? "0");
     expect(persisted).toBeGreaterThanOrEqual(before);
+  });
+
+  it("Reply — every thread with an agent presence shows a Reply affordance", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    s.addComment(comment({
+      id: "q1", artifactId: "a1", author: "human", intent: "question",
+      content: "why bcrypt 4 rounds?", createdAt: "2026-04-26T10:00:00.000Z",
+    }));
+    s.addComment(comment({
+      id: "ans1", artifactId: "a1", author: "agent", parentCommentId: "q1",
+      content: "copy-paste error", createdAt: "2026-04-26T10:01:00.000Z",
+    }));
+    render(<ConversationRail onClose={() => {}} />);
+    expect(screen.getByRole("button", { name: /reply in this thread/i })).toBeInTheDocument();
+  });
+
+  it("Reply — threads with NO agent presence (human-only) don't show Reply (nothing to continue yet)", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    s.addComment(comment({
+      id: "h1", artifactId: "a1", author: "human", content: "just a thought", createdAt: "2026-04-26T10:00:00.000Z",
+    }));
+    render(<ConversationRail onClose={() => {}} />);
+    expect(screen.queryByRole("button", { name: /reply in this thread/i })).not.toBeInTheDocument();
+  });
+
+  it("Reply — submit posts a comment with parentCommentId pointing at the latest agent reply", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    s.addComment(comment({
+      id: "q1", artifactId: "a1", author: "human", intent: "question",
+      content: "Q", createdAt: "2026-04-26T10:00:00.000Z",
+      target: { lineStart: 5 },
+    }));
+    s.addComment(comment({
+      id: "ans1", artifactId: "a1", author: "agent", parentCommentId: "q1",
+      content: "A", createdAt: "2026-04-26T10:01:00.000Z",
+      target: { lineStart: 5 },
+    }));
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ comment: { id: "h_followup" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /reply in this thread/i }));
+    const textarea = screen.getByPlaceholderText(/continue the thread/i);
+    await userEvent.type(textarea, "follow-up question");
+    const submitBtns = screen.getAllByRole("button", { name: /^Reply$/ });
+    await userEvent.click(submitBtns[submitBtns.length - 1]);
+
+    expect(fetchMock).toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.content).toBe("follow-up question");
+    // Parent is the latest agent reply (ans1), not the original human Q.
+    expect(body.parentCommentId).toBe("ans1");
+    // Inherits the parent's line anchor.
+    expect(body.target.lineStart).toBe(5);
   });
 
   it("artifact group header shows a per-group unread count when fresh comments exist there", () => {

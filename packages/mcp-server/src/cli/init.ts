@@ -60,6 +60,27 @@ human pointed out a flaw in your plan), call answer_question to acknowledge
 AND then call revise_artifact to actually update the work — don't just
 describe the change in the answer.
 
+## Continuing Threads (Reply Follow-Ups)
+
+When you call \`answer_question\`, the human can reply back to your answer
+via the companion UI (Reply button on every agent chip + on every
+ConversationRail row). Their reply lands as a new comment whose
+\`parentCommentId\` points at one of your previous \`answer_question\`
+replies — that's a follow-up in an existing thread, not a new top-level
+question.
+
+Required response: call \`answer_question\` AGAIN with the new comment's
+id as the \`commentId\`. Keep the thread going. Do NOT start a new
+top-level comment via \`addComment\` — that fragments the conversation
+and the rail loses the parent/child link.
+
+Pattern:
+  - You posted answer A1 via \`answer_question(parent=Q1)\`
+  - Human replied → check_feedback returns comment R1 with parentCommentId=A1
+  - You call \`answer_question(parent=R1, answer=...)\` to continue
+  - Repeat as long as the human keeps replying. The conversation rail
+    shows the full thread nested under the original question.
+
 ## Decision Revision Requests
 
 If you see a comment on a decision artifact whose target carries
