@@ -796,12 +796,53 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       // check_feedback polls.
       try {
         const fullState = await store.getFullState();
-        const unanswered = (fullState.comments ?? []).filter(
+        const allComments = fullState.comments ?? [];
+        const unanswered = allComments.filter(
           (c: any) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId,
         );
-        if (unanswered.length > 0) {
+        // Decision-revision-requested comments are a special case: the human
+        // explicitly asked for a REVISED option set, not just an answer. Tag
+        // these as HIGH PRIORITY in the hint so the agent reaches for
+        // revise_artifact, not answer_question. Sourced from CommentTarget
+        // sectionId set by the DecisionCard "Send back" affordance.
+        const revisionRequested = unanswered.filter(
+          (c: any) => typeof c.target?.sectionId === "string" && c.target.sectionId.startsWith("decision_revision_requested"),
+        );
+        const plainUnanswered = unanswered.filter(
+          (c: any) => !revisionRequested.includes(c),
+        );
+        if (revisionRequested.length > 0) {
+          const lines = revisionRequested.map((c: any) => {
+            const aId = c.target?.artifactId ?? "(unknown)";
+            const excerpt = String(c.content ?? "").slice(0, 120);
+            return `  • Decision ${aId} — comment ${c.id}: "${excerpt}"`;
+          });
           hintParts.push(
-            `\n❓ ${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
+            `\n🔁 ${revisionRequested.length} REVISION REQUEST${revisionRequested.length === 1 ? "" : "S"} on decisions. The human wants the OPTIONS REVISED, not just an answer:\n${lines.join("\n")}\n` +
+            `Required response per request: call \`revise_artifact\` mode="supersede" on the decision artifact with a NEW option set incorporating the feedback. Then briefly call \`answer_question\` on the comment so the rail shows "↻ Revised". Do NOT just call answer_question and leave the original options on the table.`,
+          );
+        }
+        if (plainUnanswered.length > 0) {
+          hintParts.push(
+            `\n❓ ${plainUnanswered.length} unanswered question${plainUnanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
+          );
+        }
+        // Plain (non-question, non-answered) comments from the human that
+        // we haven't surfaced via answer_question either. The protocol now
+        // says "any substantive human comment deserves an answer_question
+        // mirror so the UI sees it" — this surfacing makes that visible.
+        const plainCommentsNeedingMirror = allComments.filter(
+          (c: any) =>
+            c.author === "human" &&
+            c.intent !== "question" &&
+            !c.answeredByCommentId &&
+            // Skip session-level chat (handled by the message composer).
+            c.target?.artifactId &&
+            c.target.artifactId !== "__session__",
+        );
+        if (plainCommentsNeedingMirror.length > 0) {
+          hintParts.push(
+            `\n💬 ${plainCommentsNeedingMirror.length} human comment${plainCommentsNeedingMirror.length === 1 ? "" : "s"} on artifacts without an agent reply. Mirror substantive replies via answer_question so the response shows under the comment in the UI; chat-only replies are invisible to the conversation rail.`,
           );
         }
       } catch {

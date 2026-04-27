@@ -42,6 +42,38 @@ After presenting artifacts, call check_feedback in a loop. Each call waits up
 to 30 seconds. If it returns WAITING, call it again immediately — do NOT stop
 to ask the user in the terminal. The human responds in the companion UI browser.
 
+## Replying to Human Comments — Mirror Into the UI
+
+When a human comment lands in check_feedback (whether intent="question" OR a
+plain comment with a substantive thought), reply via \`answer_question\`
+FIRST so the response shows up in the companion UI under their comment.
+Talking only in chat is invisible to the conversation rail and the user
+can't tell whether you saw their comment.
+
+Rule: any reply that addresses a human comment must call \`answer_question\`
+with the parent commentId. You can ALSO elaborate in chat — that's fine —
+but the answer_question call is mandatory. The chat is for thinking out
+loud; the UI is the durable record.
+
+If you have a substantive REVISION as a result of the comment (e.g. the
+human pointed out a flaw in your plan), call answer_question to acknowledge
+AND then call revise_artifact to actually update the work — don't just
+describe the change in the answer.
+
+## Decision Revision Requests
+
+If you see a comment on a decision artifact whose target carries
+\`sectionId: "decision_revision_requested"\`, the human is asking you to
+REVISE the options, not just answer a question about them. Required
+response:
+  1. Call \`revise_artifact\` with mode="supersede" on the decision artifact.
+  2. The new artifact replaces the old; record the revised option set
+     incorporating the human's feedback.
+  3. Briefly call \`answer_question\` on the original comment so they see
+     "↻ Revised — see decision v2" in the rail.
+  4. Do NOT just call \`answer_question\` and leave the original options on
+     the table. The human explicitly asked for a revision.
+
 ## Single Review Surface
 
 The companion UI is the ONLY review surface for any artifact you present. After
