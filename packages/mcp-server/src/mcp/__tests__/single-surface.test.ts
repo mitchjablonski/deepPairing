@@ -146,4 +146,15 @@ describe("embedded CLAUDE.md protocol carries the same guidance (U0.5 + V3)", ()
     expect(initSrc).toMatch(/revise_artifact/);
     expect(initSrc).toMatch(/mode="supersede"/);
   });
+
+  it("init.ts EMBEDDED_PROTOCOL has a Continuing Threads section (reply follow-ups)", async () => {
+    const initSrc = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../cli/init.ts"),
+      "utf-8",
+    );
+    expect(initSrc).toMatch(/## Continuing Threads/);
+    expect(initSrc).toMatch(/parentCommentId/);
+    expect(initSrc).toMatch(/answer_question.*AGAIN/);
+    expect(initSrc).toMatch(/Do NOT start a new\s+top-level comment/i);
+  });
 });

@@ -37,6 +37,13 @@ export function CommentableCode({
   const [commentText, setCommentText] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Threaded-reply state. When set to a comment id, a mini-composer
+  // renders directly under that chip; submit posts with parentCommentId
+  // pointing at it. Mutually exclusive with the line-level composer
+  // above so the user can't accidentally start two drafts at once.
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replySubmitting, setReplySubmitting] = useState(false);
   const { submitComment } = useArtifactStore();
   
 
@@ -108,6 +115,40 @@ export function CommentableCode({
     setCommentText("");
     setSuggestionText("");
     setMode("comment");
+  };
+
+  const startReply = (parent: Comment) => {
+    // Close the line-level composer so we don't render two drafts at
+    // once. Anchor the reply to the parent comment's target so the
+    // reply renders on the same line/finding/evidence.
+    closeCommentLine();
+    setReplyingTo(parent.id);
+    setReplyText("");
+  };
+
+  const cancelReply = () => {
+    setReplyingTo(null);
+    setReplyText("");
+  };
+
+  const submitReply = async (parent: Comment) => {
+    const text = replyText.trim();
+    if (!text || replySubmitting) return;
+    setReplySubmitting(true);
+    try {
+      await submitComment(
+        artifactId,
+        text,
+        // Reply inherits the parent's target so it lands on the same
+        // line/evidence/finding and renders threaded. Strip artifactId
+        // from target since submitComment re-applies it.
+        { ...(parent.target ?? {}), artifactId: undefined } as any,
+        { parentCommentId: parent.id },
+      );
+      cancelReply();
+    } finally {
+      setReplySubmitting(false);
+    }
   };
 
   return (
@@ -211,14 +252,77 @@ export function CommentableCode({
                     );
                   }
                   return (
-                    <div
-                      key={c.id}
-                      className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs mb-0.5"
-                    >
-                      <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
-                        {c.author === "human" ? "You" : "Agent"}{spanLabel}:
-                      </span>
-                      <span className="text-text-secondary">{c.content}</span>
+                    <div key={c.id} className="mb-0.5">
+                      <div
+                        className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs"
+                      >
+                        <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
+                          {c.author === "human" ? "You" : "Agent"}{spanLabel}:
+                        </span>
+                        <span className="text-text-secondary flex-1">{c.content}</span>
+                        {/* Reply affordance — only on agent comments
+                            (replying to your own comment is rare; we keep
+                            the chip minimal). Click → inline composer
+                            anchored to this comment. */}
+                        {c.author === "agent" && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startReply(c);
+                            }}
+                            className="shrink-0 text-2xs text-accent-blue hover:underline opacity-70 hover:opacity-100 transition-opacity"
+                            title="Reply to this comment (continues the thread)"
+                            aria-label="Reply to this comment"
+                          >
+                            Reply
+                          </button>
+                        )}
+                      </div>
+                      {replyingTo === c.id && (
+                        <div
+                          className="ml-4 mt-1 pl-3 border-l-2 border-accent-blue/30"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <textarea
+                            rows={2}
+                            autoFocus
+                            value={replyText}
+                            onChange={(e) => setReplyText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                submitReply(c);
+                              }
+                              if (e.key === "Escape") {
+                                cancelReply();
+                              }
+                            }}
+                            placeholder="Reply to the agent… (⌘⏎ to send, Esc to cancel)"
+                            disabled={replySubmitting}
+                            className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue resize-none"
+                          />
+                          <div className="flex gap-1.5 mt-1">
+                            <button
+                              type="button"
+                              onClick={() => submitReply(c)}
+                              disabled={!replyText.trim() || replySubmitting}
+                              className="px-2.5 py-1 bg-accent-blue text-white text-2xs rounded
+                                         hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+                            >
+                              Reply
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelReply}
+                              className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

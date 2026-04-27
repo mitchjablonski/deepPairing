@@ -201,6 +201,74 @@ describe("CommentableCode", () => {
     expect(markers.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("Reply — agent comments expose a Reply button; submit posts with parentCommentId", async () => {
+    // The user couldn't reply to the agent's answer in-thread; their only
+    // option was to comment on the line again, producing a sibling chip
+    // that broke the thread visually. The Reply button anchors a
+    // composer to the specific agent comment and posts with
+    // parentCommentId.
+    const agentComment = {
+      id: "ans1",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 2, lineEnd: 2 },
+      parentCommentId: "q1",
+      author: "agent" as const,
+      content: "I considered X but rejected because Y",
+      acknowledged: true,
+      createdAt: "2026-04-26T10:00:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    byLine.set(2, [agentComment]);
+    render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    const replyBtn = screen.getByRole("button", { name: /reply to this comment/i });
+    await userEvent.click(replyBtn);
+    const reply = screen.getByPlaceholderText(/reply to the agent/i);
+    await userEvent.type(reply, "but Y doesn't apply because Z");
+    // Submit via the Reply button next to the textarea (the trigger is
+    // the lowercased "Reply to this comment" label; submit is "Reply").
+    const submitBtn = screen.getAllByRole("button", { name: /^Reply$/ }).pop()!;
+    await userEvent.click(submitBtn);
+
+    const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body);
+    expect(body.content).toBe("but Y doesn't apply because Z");
+    expect(body.parentCommentId).toBe("ans1");
+    // Reply inherits the parent's anchor.
+    expect(body.target.lineStart).toBe(2);
+  });
+
+  it("Reply — does NOT show a Reply button on human comments (only on agent comments)", () => {
+    const humanComment = {
+      id: "h1",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 2, lineEnd: 2 },
+      parentCommentId: null,
+      author: "human" as const,
+      content: "looks fragile",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:00:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    byLine.set(2, [humanComment]);
+    render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /reply to this comment/i })).not.toBeInTheDocument();
+  });
+
   it("R1 — single-line comment shows full chip with no continuation marker", () => {
     const singleComment = {
       id: "c2",

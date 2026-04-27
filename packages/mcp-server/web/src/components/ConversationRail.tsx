@@ -363,6 +363,7 @@ function ThreadEntry({
   isUnread: (c: Comment) => boolean;
 }) {
   const { comment, replies } = thread;
+  const { submitComment } = useArtifactStore();
   const isUnansweredQuestion =
     comment.author === "human" &&
     (comment as any).intent === "question" &&
@@ -372,31 +373,124 @@ function ThreadEntry({
   // make the diff readable when only the agent's answer is new.
   const threadHasUnread = isUnread(comment) || replies.some(isUnread);
 
+  // Inline reply state. The newest agent reply (or the parent comment
+  // itself if no replies yet but it's an agent comment) is the natural
+  // reply target — that's how the user continues the thread.
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [replySubmitting, setReplySubmitting] = useState(false);
+
+  // Pick the comment to reply to: the latest reply if any, else the parent.
+  const replyTarget = replies.length > 0 ? replies[replies.length - 1] : comment;
+
+  const submitReply = async () => {
+    const text = replyText.trim();
+    if (!text || replySubmitting) return;
+    setReplySubmitting(true);
+    try {
+      await submitComment(
+        comment.target.artifactId,
+        text,
+        // Inherit the target so the reply lands at the same anchor as
+        // the conversation it's continuing. Strip artifactId from
+        // target since submitComment re-applies it.
+        { ...(replyTarget.target ?? {}), artifactId: undefined } as any,
+        { parentCommentId: replyTarget.id },
+      );
+      setReplyOpen(false);
+      setReplyText("");
+    } finally {
+      setReplySubmitting(false);
+    }
+  };
+
   return (
     <div
-      onClick={onFocus}
-      className={`px-3 py-2 cursor-pointer transition-colors ${
-        threadHasUnread ? "bg-accent-blue-dim/10 hover:bg-accent-blue-dim/20" : "hover:bg-surface-hover"
+      className={`px-3 py-2 transition-colors ${
+        threadHasUnread ? "bg-accent-blue-dim/10" : ""
       }`}
-      title="Click to open this artifact"
     >
-      <CommentRow comment={comment} location={targetLabel(comment, artifact)} unread={isUnread(comment)} />
-      {replies.length > 0 && (
-        <div className="ml-4 mt-1.5 pl-3 border-l-2 border-border-default space-y-1.5">
-          {replies.map((r) => (
-            <CommentRow
-              key={r.id}
-              comment={r}
-              location={targetLabel(r, artifact)}
-              reply
-              unread={isUnread(r)}
-            />
-          ))}
-        </div>
-      )}
-      {isUnansweredQuestion && (
-        <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
-          ⏳ awaiting agent answer (next check_feedback)
+      <div onClick={onFocus} className="cursor-pointer hover:bg-surface-hover -mx-3 -my-2 px-3 py-2" title="Click to open this artifact">
+        <CommentRow comment={comment} location={targetLabel(comment, artifact)} unread={isUnread(comment)} />
+        {replies.length > 0 && (
+          <div className="ml-4 mt-1.5 pl-3 border-l-2 border-border-default space-y-1.5">
+            {replies.map((r) => (
+              <CommentRow
+                key={r.id}
+                comment={r}
+                location={targetLabel(r, artifact)}
+                reply
+                unread={isUnread(r)}
+              />
+            ))}
+          </div>
+        )}
+        {isUnansweredQuestion && (
+          <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
+            ⏳ awaiting agent answer (next check_feedback)
+          </div>
+        )}
+      </div>
+
+      {/* Reply affordance — visible whenever there's an agent presence in
+          the thread (either parent or any reply). Clicking opens an
+          inline composer; submit posts a comment with parentCommentId
+          pointing at the latest agent reply (or the parent if it's the
+          agent), continuing the thread. */}
+      {(comment.author === "agent" || replies.some((r) => r.author === "agent")) && (
+        <div className="ml-4 mt-1.5">
+          {replyOpen ? (
+            <div className="pl-3 border-l-2 border-accent-blue/30 space-y-1.5">
+              <textarea
+                rows={2}
+                autoFocus
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    submitReply();
+                  }
+                  if (e.key === "Escape") {
+                    setReplyOpen(false);
+                    setReplyText("");
+                  }
+                }}
+                placeholder="Continue the thread… (⌘⏎ to send, Esc to cancel)"
+                disabled={replySubmitting}
+                className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-2xs text-text-primary
+                           placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue resize-none"
+              />
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={submitReply}
+                  disabled={!replyText.trim() || replySubmitting}
+                  className="px-2.5 py-1 bg-accent-blue text-white text-2xs rounded
+                             hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+                >
+                  Reply
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setReplyOpen(false); setReplyText(""); }}
+                  className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setReplyOpen(true)}
+              className="text-2xs text-accent-blue hover:underline opacity-70 hover:opacity-100 transition-opacity"
+              title="Reply — continues the thread, agent will see it as a follow-up"
+              aria-label="Reply in this thread"
+            >
+              ↳ Reply
+            </button>
+          )}
         </div>
       )}
     </div>

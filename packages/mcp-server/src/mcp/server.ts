@@ -827,15 +827,46 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             `\n❓ ${plainUnanswered.length} unanswered question${plainUnanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
           );
         }
-        // Plain (non-question, non-answered) comments from the human that
-        // we haven't surfaced via answer_question either. The protocol now
-        // says "any substantive human comment deserves an answer_question
-        // mirror so the UI sees it" — this surfacing makes that visible.
+        // Follow-up replies in active threads. A human comment whose
+        // parentCommentId points at one of OUR (agent) previous comments
+        // is a thread continuation, not a new top-level question. Surface
+        // these as a distinct, high-priority signal so the agent calls
+        // answer_question again to continue the thread instead of
+        // starting a new top-level comment via addComment.
+        const agentCommentIds = new Set(
+          allComments.filter((c: any) => c.author === "agent").map((c: any) => c.id),
+        );
+        const followUps = allComments.filter(
+          (c: any) =>
+            c.author === "human" &&
+            c.parentCommentId &&
+            agentCommentIds.has(c.parentCommentId) &&
+            !c.answeredByCommentId,
+        );
+        if (followUps.length > 0) {
+          const lines = followUps.map((c: any) => {
+            const aId = c.target?.artifactId ?? "(unknown)";
+            const excerpt = String(c.content ?? "").slice(0, 100);
+            return `  • Reply ${c.id} on artifact ${aId} (parent ${c.parentCommentId}): "${excerpt}"`;
+          });
+          hintParts.push(
+            `\n↳ ${followUps.length} follow-up repl${followUps.length === 1 ? "y" : "ies"} in active thread${followUps.length === 1 ? "" : "s"}:\n${lines.join("\n")}\n` +
+            `Each is a continuation of an existing thread (parentCommentId points at one of your previous replies). Call \`answer_question\` AGAIN with the reply's id as commentId to keep the thread going. Do NOT post a new top-level comment.`,
+          );
+        }
+
+        // Plain (non-question, non-answered, non-follow-up) comments from
+        // the human that we haven't surfaced via answer_question either.
+        // The protocol says "any substantive human comment deserves an
+        // answer_question mirror so the UI sees it" — this surfacing
+        // makes that visible.
+        const followUpIds = new Set(followUps.map((c: any) => c.id));
         const plainCommentsNeedingMirror = allComments.filter(
           (c: any) =>
             c.author === "human" &&
             c.intent !== "question" &&
             !c.answeredByCommentId &&
+            !followUpIds.has(c.id) &&
             // Skip session-level chat (handled by the message composer).
             c.target?.artifactId &&
             c.target.artifactId !== "__session__",
