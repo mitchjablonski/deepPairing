@@ -269,6 +269,139 @@ describe("CommentableCode", () => {
     expect(screen.queryByRole("button", { name: /reply to this comment/i })).not.toBeInTheDocument();
   });
 
+  it("X2.5 — threaded reply chips render nested under their parent (parentCommentId)", () => {
+    // Pre-X2.5: replies on a code line rendered as flat siblings of the
+    // parent — agent reply chip stacked next to user question chip with
+    // no visual link. The conversation rail already nested via
+    // parentCommentId; the inline view didn't. Now both surfaces tell
+    // the same story.
+    const userQuestion = {
+      id: "h_q",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 2, lineEnd: 2 },
+      parentCommentId: null,
+      author: "human" as const,
+      content: "why bcrypt 4 rounds?",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:00:00.000Z",
+      intent: "question" as const,
+    };
+    const agentAnswer = {
+      id: "a_ans",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 2, lineEnd: 2 },
+      parentCommentId: "h_q",
+      author: "agent" as const,
+      content: "copy-paste error from the test fixture",
+      acknowledged: true,
+      createdAt: "2026-04-26T10:01:00.000Z",
+    };
+    const userFollowup = {
+      id: "h_followup",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 2, lineEnd: 2 },
+      parentCommentId: "a_ans",
+      author: "human" as const,
+      content: "should we lock to 12+?",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:02:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    // The bucket holds all three records; the component must figure out
+    // which is parent and which are nested replies.
+    byLine.set(2, [userQuestion, agentAnswer, userFollowup]);
+
+    const { container } = render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    // All three chip contents are present.
+    expect(screen.getByText(/why bcrypt 4 rounds/)).toBeInTheDocument();
+    expect(screen.getByText(/copy-paste error/)).toBeInTheDocument();
+    expect(screen.getByText(/should we lock to 12/)).toBeInTheDocument();
+
+    // The agent reply has the ↳ continuation indicator; the parent
+    // question doesn't.
+    const arrows = screen.getAllByText("↳");
+    expect(arrows.length).toBeGreaterThanOrEqual(2);
+
+    // The reply DOM lives inside the threaded container with the
+    // accent-blue left border.
+    const threadedContainer = container.querySelector(".border-accent-blue\\/30");
+    expect(threadedContainer).toBeTruthy();
+    expect(threadedContainer?.textContent).toContain("copy-paste error");
+    expect(threadedContainer?.textContent).toContain("should we lock to 12");
+  });
+
+  it("X2.5 — human follow-up replies also expose a Reply button (chain stays continuable)", async () => {
+    const agentAnswer = {
+      id: "a1",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 1, lineEnd: 1 },
+      parentCommentId: null,
+      author: "agent" as const,
+      content: "agent reply",
+      acknowledged: true,
+      createdAt: "2026-04-26T10:00:00.000Z",
+    };
+    const userFollowup = {
+      id: "h1",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 1, lineEnd: 1 },
+      parentCommentId: "a1",
+      author: "human" as const,
+      content: "human follow-up",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:01:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    byLine.set(1, [agentAnswer, userFollowup]);
+    render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    // BOTH chips have a Reply button — the agent's (top-level agent
+    // chip) AND the human's (because it's a follow-up reply, the chain
+    // has to keep going).
+    const replyButtons = screen.getAllByRole("button", { name: /reply to this comment/i });
+    expect(replyButtons).toHaveLength(2);
+  });
+
+  it("X2.5 — top-level human comment still has NO Reply button (only agent chips and follow-ups)", () => {
+    const userTop = {
+      id: "h1",
+      sessionId: "s",
+      target: { artifactId: "art_x", lineStart: 1, lineEnd: 1 },
+      parentCommentId: null,
+      author: "human" as const,
+      content: "just a thought",
+      acknowledged: false,
+      createdAt: "2026-04-26T10:00:00.000Z",
+    };
+    const byLine = new Map<number, any[]>();
+    byLine.set(1, [userTop]);
+    render(
+      <CommentableCode
+        code={code}
+        lineStart={1}
+        artifactId="art_x"
+        filePath="a.ts"
+        commentsByLine={byLine}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /reply to this comment/i })).not.toBeInTheDocument();
+  });
+
   it("R1 — single-line comment shows full chip with no continuation marker", () => {
     const singleComment = {
       id: "c2",

@@ -224,20 +224,151 @@ export function CommentableCode({
                 R1: span comments live in every line bucket from lineStart→lineEnd.
                 Render the full chip only on the START line; compact "↳ from L{n}"
                 marker on continuation lines so the user sees the comment exists
-                without four duplicate chips. */}
-            {lineComments.length > 0 && !isCommentActive && (
-              <div
-                className="ml-[5.5rem] mr-3 my-1 cursor-pointer"
-                onClick={() => openCommentLine(lineNum)}
-              >
-                {lineComments.map((c) => {
-                  const cStart = (c.target as any).lineStart as number | undefined;
-                  const cEnd = (c.target as any).lineEnd as number | undefined;
-                  const isContinuation = cStart != null && cStart !== lineNum;
-                  const spanLabel = cStart != null && cEnd != null && cStart !== cEnd
-                    ? ` (lines ${cStart}–${cEnd})`
-                    : "";
-                  if (isContinuation) {
+                without four duplicate chips.
+                X2.5: replies thread visually under their parent. Three-deep
+                threads (Q → A → follow-up) render with the same nested
+                ↳ + left-border indent the ConversationRail uses, so the
+                inline view and the rail tell the same story. */}
+            {lineComments.length > 0 && !isCommentActive && (() => {
+              // Partition: continuations (span overflow from other start
+              // lines) vs primary chips that belong to THIS line.
+              const continuations: Comment[] = [];
+              const primary: Comment[] = [];
+              for (const c of lineComments) {
+                const cStart = (c.target as any).lineStart as number | undefined;
+                if (cStart != null && cStart !== lineNum) continuations.push(c);
+                else primary.push(c);
+              }
+              // Resolve each comment's ultimate top-level ancestor in the
+              // parent-chain: walk parentCommentId up until we hit either
+              // a comment without a parent, or a parent that isn't in this
+              // bucket (orphan defensive). Then group ALL replies — any
+              // depth — under the top they descend from. The rail does
+              // the same flattening; both surfaces tell one story.
+              const byId = new Map(primary.map((c) => [c.id, c]));
+              const ultimateTopOf = (c: Comment): Comment => {
+                const seen = new Set<string>();
+                let cur: Comment | undefined = c;
+                while (cur && cur.parentCommentId && byId.has(cur.parentCommentId)) {
+                  if (seen.has(cur.id)) break; // cycle defensive
+                  seen.add(cur.id);
+                  cur = byId.get(cur.parentCommentId);
+                }
+                return cur ?? c;
+              };
+              const repliesByTop = new Map<string, Comment[]>();
+              const tops: Comment[] = [];
+              const topIds = new Set<string>();
+              for (const c of primary) {
+                const top = ultimateTopOf(c);
+                if (top.id === c.id) {
+                  // c is itself a top-level
+                  if (!topIds.has(c.id)) {
+                    topIds.add(c.id);
+                    tops.push(c);
+                  }
+                } else {
+                  const arr = repliesByTop.get(top.id) ?? [];
+                  arr.push(c);
+                  repliesByTop.set(top.id, arr);
+                  // Make sure the top is registered even if iteration
+                  // hit the reply before the parent.
+                  if (!topIds.has(top.id)) {
+                    topIds.add(top.id);
+                    tops.push(top);
+                  }
+                }
+              }
+
+              const renderChip = (c: Comment, isReply: boolean) => {
+                const cStart = (c.target as any).lineStart as number | undefined;
+                const cEnd = (c.target as any).lineEnd as number | undefined;
+                const spanLabel = cStart != null && cEnd != null && cStart !== cEnd
+                  ? ` (lines ${cStart}–${cEnd})`
+                  : "";
+                return (
+                  <div key={c.id} className="mb-0.5">
+                    <div className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs">
+                      <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
+                        {isReply && <span className="opacity-60 mr-1" aria-hidden>↳</span>}
+                        {c.author === "human" ? "You" : "Agent"}{spanLabel}:
+                      </span>
+                      <span className="text-text-secondary flex-1">{c.content}</span>
+                      {/* Reply affordance — agent comments + any human follow-up
+                          a reply chain. Lets a 3+ deep thread keep going. */}
+                      {(c.author === "agent" || isReply) && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startReply(c);
+                          }}
+                          className="shrink-0 text-2xs text-accent-blue hover:underline opacity-70 hover:opacity-100 transition-opacity"
+                          title="Reply to this comment (continues the thread)"
+                          aria-label="Reply to this comment"
+                        >
+                          Reply
+                        </button>
+                      )}
+                    </div>
+                    {replyingTo === c.id && (
+                      <div
+                        className="ml-4 mt-1 pl-3 border-l-2 border-accent-blue/30"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <textarea
+                          rows={2}
+                          autoFocus
+                          value={replyText}
+                          onChange={(e) => setReplyText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                              e.preventDefault();
+                              submitReply(c);
+                            }
+                            if (e.key === "Escape") {
+                              cancelReply();
+                            }
+                          }}
+                          placeholder="Reply to the agent… (⌘⏎ to send, Esc to cancel)"
+                          disabled={replySubmitting}
+                          className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                                     placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue resize-none"
+                        />
+                        <div className="flex gap-1.5 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => submitReply(c)}
+                            disabled={!replyText.trim() || replySubmitting}
+                            className="px-2.5 py-1 bg-accent-blue text-white text-2xs rounded
+                                       hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+                          >
+                            Reply
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelReply}
+                            className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+
+              return (
+                <div
+                  className="ml-[5.5rem] mr-3 my-1 cursor-pointer"
+                  onClick={() => openCommentLine(lineNum)}
+                >
+                  {/* Continuation markers (span comments anchored to other
+                      lines) — render compact, no threading. */}
+                  {continuations.map((c) => {
+                    const cStart = (c.target as any).lineStart as number | undefined;
+                    const cEnd = (c.target as any).lineEnd as number | undefined;
                     return (
                       <div
                         key={c.id}
@@ -250,84 +381,29 @@ export function CommentableCode({
                         </span>
                       </div>
                     );
-                  }
-                  return (
-                    <div key={c.id} className="mb-0.5">
-                      <div
-                        className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs"
-                      >
-                        <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
-                          {c.author === "human" ? "You" : "Agent"}{spanLabel}:
-                        </span>
-                        <span className="text-text-secondary flex-1">{c.content}</span>
-                        {/* Reply affordance — only on agent comments
-                            (replying to your own comment is rare; we keep
-                            the chip minimal). Click → inline composer
-                            anchored to this comment. */}
-                        {c.author === "agent" && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              startReply(c);
-                            }}
-                            className="shrink-0 text-2xs text-accent-blue hover:underline opacity-70 hover:opacity-100 transition-opacity"
-                            title="Reply to this comment (continues the thread)"
-                            aria-label="Reply to this comment"
-                          >
-                            Reply
-                          </button>
+                  })}
+                  {/* Top-level comments + their replies, threaded.
+                      All replies flatten under the top-level ancestor;
+                      arbitrary depth (Q → A → follow-up → ...) renders
+                      as one parent chip + a stack of nested ↳ chips. */}
+                  {tops.map((parent) => {
+                    const replies = repliesByTop.get(parent.id) ?? [];
+                    return (
+                      <div key={parent.id}>
+                        {renderChip(parent, false)}
+                        {replies.length > 0 && (
+                          <div className="ml-4 pl-3 border-l-2 border-accent-blue/30 space-y-0.5">
+                            {[...replies]
+                              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+                              .map((r) => renderChip(r, true))}
+                          </div>
                         )}
                       </div>
-                      {replyingTo === c.id && (
-                        <div
-                          className="ml-4 mt-1 pl-3 border-l-2 border-accent-blue/30"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <textarea
-                            rows={2}
-                            autoFocus
-                            value={replyText}
-                            onChange={(e) => setReplyText(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                e.preventDefault();
-                                submitReply(c);
-                              }
-                              if (e.key === "Escape") {
-                                cancelReply();
-                              }
-                            }}
-                            placeholder="Reply to the agent… (⌘⏎ to send, Esc to cancel)"
-                            disabled={replySubmitting}
-                            className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
-                                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue resize-none"
-                          />
-                          <div className="flex gap-1.5 mt-1">
-                            <button
-                              type="button"
-                              onClick={() => submitReply(c)}
-                              disabled={!replyText.trim() || replySubmitting}
-                              className="px-2.5 py-1 bg-accent-blue text-white text-2xs rounded
-                                         hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
-                            >
-                              Reply
-                            </button>
-                            <button
-                              type="button"
-                              onClick={cancelReply}
-                              className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             {/* Inline comment input */}
             {isCommentActive && (
