@@ -323,6 +323,87 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     expect((screen.getByPlaceholderText(/all 4 are matchers/i) as HTMLTextAreaElement).value).toBe("");
   });
 
+  it("X5 — rapid double-click on an option fires only ONE POST (sync race-guard)", async () => {
+    // Pre-X5: handleSelect → setSubmitting(true) → POST. The setSubmitting
+    // call is async (React state batching), so a second rapid click could
+    // see submitting=false and fire a duplicate POST. The inFlightRef
+    // mirrors submission state synchronously — second tap short-circuits.
+    let resolveFetch: (v: any) => void = () => {};
+    const fetchPromise = new Promise((r) => { resolveFetch = r; });
+    const fetchMock = vi.fn().mockImplementation(() => fetchPromise);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DecisionCard event={event} decisionId="dec_abc" />);
+    const optionBtn = screen.getByText("Redis").closest('[role="button"]')!;
+    // Fire two clicks back-to-back, before the first POST resolves.
+    await userEvent.click(optionBtn);
+    await userEvent.click(optionBtn);
+    // The race guard should have caught the second one — fetch fires once.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Resolve so the test cleans up.
+    resolveFetch({ ok: true, json: async () => ({}) });
+  });
+
+  it("X5 — network error rolls phase back to idle so the user can retry", async () => {
+    // Pre-X5: a failed POST left selectedId reset but submitting=false,
+    // so the user could retry but the UI flickered through inconsistent
+    // states. Now phase rolls cleanly to idle, observable via the
+    // option's aria-disabled returning to "false".
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { findByRole } = render(<DecisionCard event={event} decisionId="dec_abc" />);
+    const optionBtn = screen.getByText("Redis").closest('[role="button"]')!;
+    await userEvent.click(optionBtn);
+
+    // Wait for the catch + setPhase(idle) to flush.
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => {
+      const el = screen.getByText("Redis").closest('[role="button"]')!;
+      expect(el).toHaveAttribute("aria-disabled", "false");
+    });
+    expect(screen.queryByText(/Decision Made/i)).not.toBeInTheDocument();
+
+    // Retry succeeds.
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    expect(await findByRole("heading", { name: /Decision Made|Redis/i }).catch(() => null) ?? await screen.findByText(/Decision Made/i)).toBeInTheDocument();
+  });
+
+  it("X5 — Cancel during prediction returns to idle (no stale selectedId)", async () => {
+    // High-stakes path: option click moves to predicting. Cancel must
+    // return all the way to idle (not leave selectedId set).
+    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
+    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    // Predicting form is showing.
+    expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
+    // Cancel.
+    const cancelBtns = screen.getAllByRole("button", { name: /^Cancel$/ });
+    await userEvent.click(cancelBtns[cancelBtns.length - 1]);
+    // Back to idle: prediction form gone, options re-clickable.
+    expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
+    const redisBtn = screen.getByText("Redis").closest('[role="button"]')!;
+    expect(redisBtn).toHaveAttribute("aria-disabled", "false");
+  });
+
+  it("X5 — sendBack rapid double-submit fires only ONE comment POST", async () => {
+    let resolveFetch: (v: any) => void = () => {};
+    const fetchPromise = new Promise((r) => { resolveFetch = r; });
+    const fetchMock = vi.fn().mockImplementation(() => fetchPromise);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /send decision back for revised options/i }));
+    await userEvent.type(screen.getByPlaceholderText(/all 4 are matchers/i), "redo this");
+    const submit = screen.getByRole("button", { name: /^↻ Send back for revision$/ });
+    await userEvent.click(submit);
+    await userEvent.click(submit);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFetch({ ok: true, json: async () => ({}) });
+  });
+
   it("does NOT swallow j/k keystrokes typed into the send-back textarea (regression)", async () => {
     // Field bug: the option-navigation handler was attached to the card
     // container, and j/k keystrokes from nested inputs bubbled up and got

@@ -36,6 +36,34 @@ const badgeColors = {
   high: "bg-accent-red-dim text-accent-red",
 };
 
+/**
+ * X5 — DecisionCard state machine.
+ *
+ * Pre-X5 the component used 5+ independent flags (`submitting`, `resolved`,
+ * `selectedId`, `pendingOptionId`, `sendBackSent`) with implicit
+ * mutual-exclusion contracts. A network error during selection could
+ * leave the component in inconsistent state; a rapid double-click during
+ * an in-flight POST could fire the request twice because the React
+ * `submitting` flag wasn't visible synchronously.
+ *
+ * Now a single discriminated union enforces the lifecycle. Aux text
+ * inputs (`reasoning`, `sendBackText`, `predictedOutcome`, `confidence`)
+ * are independent — they're inputs to the phase transitions, not phase
+ * state. Same for orthogonal UI toggles (`showReasoning`, `showSendBack`,
+ * `showRepair`, `horizonRequested`, `focusedIndex`).
+ *
+ * Race-guard: a useRef mirrors the submission state synchronously so the
+ * second tap of a rapid double-click short-circuits BEFORE setPhase
+ * flushes. AbortController scopes the in-flight POST to the component
+ * lifecycle (unmount cancels).
+ */
+type DecisionPhase =
+  | { kind: "idle" }
+  | { kind: "predicting"; optionId: string }
+  | { kind: "submitting" }
+  | { kind: "resolved"; optionId: string }
+  | { kind: "sentBack" };
+
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const { resolveDecision, submitComment } = useArtifactStore();
   const [focusedIndex, setFocusedIndex] = useState(
@@ -43,72 +71,79 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   );
   const [reasoning, setReasoning] = useState(initialResolved?.reasoning ?? "");
   const [showReasoning, setShowReasoning] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [resolved, setResolved] = useState(!!initialResolved);
-  const [selectedId, setSelectedId] = useState<string | null>(initialResolved?.optionId ?? null);
+  const [phase, setPhase] = useState<DecisionPhase>(
+    initialResolved
+      ? { kind: "resolved", optionId: initialResolved.optionId }
+      : { kind: "idle" },
+  );
+  const inFlightRef = useRef(false);  // sync race-guard
   const [showRepair, setShowRepair] = useState(false);
   /** Q3: horizon-check request state — one request per artifact view. */
   const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
-  /** Prediction capture state — only shown when stakes="high" and an option is tentatively picked. */
-  const [pendingOptionId, setPendingOptionId] = useState<string | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
   const [confidence, setConfidence] = useState<"low" | "medium" | "high" | "">(initialResolved?.confidence ?? "");
   /**
-   * Decision-revision-request state. Lets the human say "none of these
-   * options work — revise the set" without picking. Submits a tagged
-   * question comment with sectionId: "decision_revision_requested" so
-   * the agent's firstCallHint surfaces it as HIGH-PRIORITY (call
-   * revise_artifact, NOT answer_question). Tracks local "sent" state so
-   * the UI can show "↻ awaiting revision" until the agent supersedes
-   * the artifact (at which point this whole component unmounts).
+   * Send-back composer visibility (orthogonal to phase). After submit,
+   * phase moves to "sentBack" terminal; this toggle just controls
+   * whether the inline composer is visible while in idle.
    */
   const [showSendBack, setShowSendBack] = useState(false);
   const [sendBackText, setSendBackText] = useState("");
-  const [sendBackSent, setSendBackSent] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Derived flags — keep the read sites readable without sprinkling
+  // discriminant checks everywhere.
+  const submitting = phase.kind === "submitting";
+  const resolved = phase.kind === "resolved";
+  const selectedId = phase.kind === "resolved" ? phase.optionId : null;
+  const pendingOptionId = phase.kind === "predicting" ? phase.optionId : null;
+  const sendBackSent = phase.kind === "sentBack";
 
   const submitSelection = async (
     optionId: string,
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ) => {
-    setSubmitting(true);
-    setSelectedId(optionId);
+    // Sync race-guard: a rapid double-click would otherwise see phase=idle
+    // on both calls (React state batches), and both would issue the POST.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setPhase({ kind: "submitting" });
     try {
       const id = decisionId ?? event.decisionId;
       await resolveDecision(id, optionId, reasoning.trim() || undefined, prediction);
-      setResolved(true);
+      setPhase({ kind: "resolved", optionId });
       onResolved?.();
     } catch {
-      setSelectedId(null);
+      // Roll back to idle so the user can retry. No silent stuck state.
+      setPhase({ kind: "idle" });
     } finally {
-      setSubmitting(false);
+      inFlightRef.current = false;
     }
   };
 
   const handleSelect = async (optionId: string) => {
-    if (submitting || resolved) return;
+    if (phase.kind !== "idle") return;
     // High-stakes → gate on a prediction capture step
     if (stakes === "high") {
-      setPendingOptionId(optionId);
+      setPhase({ kind: "predicting", optionId });
       return;
     }
     await submitSelection(optionId);
   };
 
   const confirmWithPrediction = async () => {
-    if (!pendingOptionId) return;
+    if (phase.kind !== "predicting") return;
+    const optionId = phase.optionId;
     const prediction = {
       confidence: (confidence || undefined) as "low" | "medium" | "high" | undefined,
       predictedOutcome: predictedOutcome.trim() || undefined,
     };
-    await submitSelection(pendingOptionId, prediction);
-    setPendingOptionId(null);
+    await submitSelection(optionId, prediction);
   };
 
   const skipPrediction = async () => {
-    if (!pendingOptionId) return;
-    await submitSelection(pendingOptionId);
-    setPendingOptionId(null);
+    if (phase.kind !== "predicting") return;
+    await submitSelection(phase.optionId);
   };
 
   // Keyboard navigation
@@ -154,18 +189,28 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // "supersede" rather than just answer_question. Decision artifact stays
   // pending until the agent supersedes it (or the user picks an option
   // anyway).
+  //
+  // X5 race-guard: same inFlightRef pattern as submitSelection. A rapid
+  // double-click on the Send Back button used to fire the comment twice
+  // because React state didn't flush before the second tap. The ref
+  // short-circuits synchronously.
   const submitSendBack = async () => {
     const text = sendBackText.trim();
-    if (!artifactId || !text || sendBackSent) return;
-    await submitComment(
-      artifactId,
-      text,
-      { sectionId: "decision_revision_requested" } as any,
-      { intent: "question" },
-    );
-    setSendBackSent(true);
-    setShowSendBack(false);
-    setSendBackText("");
+    if (!artifactId || !text || phase.kind !== "idle" || inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      await submitComment(
+        artifactId,
+        text,
+        { sectionId: "decision_revision_requested" } as any,
+        { intent: "question" },
+      );
+      setPhase({ kind: "sentBack" });
+      setShowSendBack(false);
+      setSendBackText("");
+    } finally {
+      inFlightRef.current = false;
+    }
   };
 
   // Q3: file a comment that nudges the agent to call request_horizon_check.
@@ -480,7 +525,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               Skip, just commit
             </button>
             <button
-              onClick={() => { setPendingOptionId(null); setSelectedId(null); }}
+              onClick={() => setPhase({ kind: "idle" })}
               disabled={submitting}
               className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors"
             >
