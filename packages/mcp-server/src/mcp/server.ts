@@ -94,14 +94,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_findings",
         description:
-          `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). ` +
-          `Each finding carries evidence (code snippets with explanations), category, significance, and severity. ` +
-          `Use instead of dumping findings as plain chat text. ` +
-          `\n\nINPUT SHAPE — the input is validated at the boundary; on mismatch you get INPUT_VALIDATION_FAILED with the bad path. ` +
-          `\`findings\` MUST be an array of objects, never a string. Common mistake: agents summarize their findings ` +
-          `as a single string. That gets rejected — split the summary into discrete finding objects, each with at least ` +
-          `\`category\`, \`detail\`, and \`significance\` ("low"|"medium"|"high"). ` +
-          `\n\nSINGLE REVIEW SURFACE: the companion UI is the only review surface for this artifact — do NOT also paste the findings as chat, prompt the user in-terminal, or call ExitPlanMode. After this returns, call check_feedback to wait for the human's verdict.`,
+          `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity.` +
+          `\n\nSchema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Validation runs at the boundary; mismatch returns INPUT_VALIDATION_FAILED with the bad path + an example.` +
+          `\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is the only review surface. Don't paste findings in chat; call check_feedback for the verdict.`,
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -137,9 +132,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_options",
         description:
-          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Set `stakes: \"high\"` for architecturally significant / hard-to-reverse decisions (schema, auth, billing, infra); the UI then prompts the human for a prediction (calibration material). " +
-          "\n\nINPUT SHAPE — input is validated; on mismatch you get INPUT_VALIDATION_FAILED. `options` MUST be an array of 2–4 objects (one option isn't a decision). Each option needs id, title, description, pros[], cons[], effort, risk, recommendation. " +
-          "\n\nSINGLE REVIEW SURFACE: the human selects in the companion UI — do NOT also list the options in chat or ask in-terminal. After this returns, call check_feedback to wait for their selection.",
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. `stakes: \"high\"` triggers prediction capture in the UI (calibration material for hard-to-reverse decisions like schema, auth, billing, infra)." +
+          "\n\nSchema note: `options` is an array of 2–4 objects (one option isn't a decision). INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human selects in the companion UI. Don't list options in chat. Call check_feedback for their selection.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -175,7 +170,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_spec",
         description:
-          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial features, cross-cutting changes, or anything that'd otherwise skip straight to code without agreement on what's being built. SINGLE REVIEW SURFACE: the companion UI is where the human reviews requirements and acceptance criteria — do NOT re-paste the spec in chat or ask for terminal-side approval. After this returns, call check_feedback to wait for their verdict.",
+          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
+          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -222,9 +219,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_plan",
         description:
-          "Present an implementation plan as steps with file changes and before/after previews. " +
-          "\n\nINPUT SHAPE — input is validated; on mismatch you get INPUT_VALIDATION_FAILED. `steps` MUST be an array of objects, never a string. Each step needs `description` and `reasoning` (files[] is optional — steps like 'run tests' don't touch files). " +
-          "\n\nSINGLE REVIEW SURFACE: this REPLACES Claude Code's native plan-approval flow for this work — do NOT call ExitPlanMode or otherwise request a terminal-side plan confirmation after present_plan. The human approves / revises / rejects in the companion UI; call check_feedback to wait for their verdict.",
+          "Present an implementation plan as steps with file changes and before/after previews." +
+          "\n\nSchema note: `steps` is an array of objects (each needs `description` + `reasoning`; `files[]` optional for steps like \"run tests\"). INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — this REPLACES Claude Code's native plan-approval flow. Do NOT call ExitPlanMode after present_plan. The companion UI is the only approval surface; call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -272,7 +269,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "log_reasoning",
         description:
-          "Log the reasoning for an action before taking it. REQUIRED BEFORE EACH SIGNIFICANT EDIT — this pairs with present_code_change to create a per-edit checkpoint cadence. log_reasoning explains WHY you're about to write what you're about to write; present_code_change shows WHAT. Together they give the human a chance to redirect BEFORE the diff is on disk, not after a batch of files has shipped. Name the underlying concept in `concept` (e.g. 'dependency inversion', 'optimistic UI') whenever one applies — the human learns the pattern, not just the fix. Attach `evidence` for reasoning grounded in the codebase, and `alternativeDetails` for structured rejected alternatives.",
+          "Log the reasoning for an action before taking it. Pairs with present_code_change for the per-edit checkpoint cadence (WHY + WHAT — together they give the human a chance to redirect BEFORE the diff is on disk)." +
+          "\n\nSchema note: required: `action`, `reasoning`. Name the underlying concept in `concept` whenever one applies — that's the human's learning lever. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: REQUIRED BEFORE EACH SIGNIFICANT EDIT. Don't just chat-explain.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -343,12 +342,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_code_change",
         description:
-          "Present a code change as a before/after diff with reasoning and confidence. " +
-          "REQUIRED BEFORE EACH WRITE/EDIT: this is a per-edit checkpoint, not a one-shot for big diffs. " +
-          "Call this BEFORE every Write/Edit/MultiEdit on a file the user hasn't already approved this session. " +
-          "Batched implementation without per-file checkpoints is a protocol violation — the user should see and react to each change as you make it, not get a wall of commits at the end. " +
-          "Even small/confident edits get checkpointed (the elicitation gating just makes the approval a one-tap terminal accept). " +
-          "SINGLE REVIEW SURFACE: the human reviews the diff in the companion UI; do NOT also paste the diff into chat for confirmation. After this returns, call check_feedback to wait for their verdict.",
+          "Present a code change as a before/after diff with reasoning and confidence." +
+          "\n\nSchema note: required: `filePath`, `changeType` (\"create\"|\"modify\"|\"delete\"), `after`, `reasoning`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: REQUIRED BEFORE EACH WRITE/EDIT — this is a per-edit checkpoint, not a one-shot for big diffs. Call BEFORE every Write/Edit/MultiEdit on a file the user hasn't already approved this session. Batched implementation without per-file checkpoints is a protocol violation. SINGLE REVIEW SURFACE — companion UI only; don't paste the diff in chat. Call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
