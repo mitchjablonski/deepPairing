@@ -633,9 +633,27 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     let firstCallHint = "";
     if (firstToolCall) {
       firstToolCall = false;
-      const hintParts: string[] = [
-        `[First use this session] The companion UI is at http://localhost:${port} — the human can review artifacts, comment, and make decisions there.`,
-      ];
+      // X3 — two tiers, capped total length.
+      //
+      // BLOCKING tier surfaces unresolved obligations the agent MUST act on
+      // this turn (revision requests, unanswered questions, follow-up
+      // replies, plain artifact comments needing a mirror). These are
+      // always included, top of hint, never truncated.
+      //
+      // CONTEXTUAL tier surfaces accumulating signals (rejected approaches,
+      // approved patterns, project guardrails, team prefs, ledger stats,
+      // plugin tip). These are nice-to-have but not blocking, and they
+      // accreted over many phases — left unchecked, the hint becomes a
+      // wall of text the LLM tunes out. They're appended in priority
+      // order; once the total hint nears HINT_BUDGET_CHARS we stop
+      // adding more and emit a "more context: call recall" pointer
+      // instead.
+      const HINT_BUDGET_CHARS = 1500;
+      const blockingParts: string[] = [];
+      const contextualParts: string[] = [];
+      const headerLine =
+        `[First use this session] The companion UI is at http://localhost:${port} — the human can review artifacts, comment, and make decisions there.`;
+
       const memory = await store.getSessionMemory();
       const memoryParts: string[] = [];
       if (memory.rejectedApproaches.length > 0) {
@@ -651,7 +669,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         );
       }
       if (memoryParts.length > 0) {
-        hintParts.push(`\n📋 From previous sessions in this project:\n${memoryParts.join("\n")}`);
+        contextualParts.push(`\n📋 From previous sessions in this project:\n${memoryParts.join("\n")}`);
       }
 
       // J6 — codebase-sensed guardrails. Filesystem signals tell us which
@@ -666,7 +684,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             const lines = guardrails.map((g: any) =>
               `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`,
             );
-            hintParts.push(
+            contextualParts.push(
               `\n🛡 Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):\n${lines.join("\n")}`,
             );
           }
@@ -697,7 +715,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             if (avoided.length) sections.push(`Avoid:\n${avoided.join("\n")}`);
             if (preferred.length) sections.push(`Preferred:\n${preferred.join("\n")}`);
             if (sections.length > 0) {
-              hintParts.push(
+              contextualParts.push(
                 `\n🏢 Team conventions (from .deeppairing/team.json — treat 'require' as hard rules, 'avoid' as refusal triggers, 'prefer' as taste):\n${sections.join("\n")}`,
               );
             }
@@ -737,7 +755,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           );
         }
         if (philosophyParts.length > 0) {
-          hintParts.push(
+          contextualParts.push(
             `\n🧭 Cross-project philosophy ledger (use recall with mode='philosophy' for more):\n${philosophyParts.join("\n")}`,
           );
         }
@@ -783,7 +801,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           ];
           if (localBlocks > 0) parts.push(`${localBlocks} block${localBlocks === 1 ? "" : "s"} fired here`);
           if (localSessions > 0) parts.push(`session #${localSessions + 1} in this project`);
-          hintParts.push(`\n🌱 Your deepPairing ledger: ${parts.join(" · ")}.`);
+          contextualParts.push(`\n🌱 Your deepPairing ledger: ${parts.join(" · ")}.`);
         }
       } catch {
         // Non-fatal — welcome-back line is cosmetic; real memory lives in the ledger + preflight regardless.
@@ -817,13 +835,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             const excerpt = String(c.content ?? "").slice(0, 120);
             return `  • Decision ${aId} — comment ${c.id}: "${excerpt}"`;
           });
-          hintParts.push(
+          blockingParts.push(
             `\n🔁 ${revisionRequested.length} REVISION REQUEST${revisionRequested.length === 1 ? "" : "S"} on decisions. The human wants the OPTIONS REVISED, not just an answer:\n${lines.join("\n")}\n` +
             `Required response per request: call \`revise_artifact\` mode="supersede" on the decision artifact with a NEW option set incorporating the feedback. Then briefly call \`answer_question\` on the comment so the rail shows "↻ Revised". Do NOT just call answer_question and leave the original options on the table.`,
           );
         }
         if (plainUnanswered.length > 0) {
-          hintParts.push(
+          blockingParts.push(
             `\n❓ ${plainUnanswered.length} unanswered question${plainUnanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
           );
         }
@@ -849,7 +867,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             const excerpt = String(c.content ?? "").slice(0, 100);
             return `  • Reply ${c.id} on artifact ${aId} (parent ${c.parentCommentId}): "${excerpt}"`;
           });
-          hintParts.push(
+          blockingParts.push(
             `\n↳ ${followUps.length} follow-up repl${followUps.length === 1 ? "y" : "ies"} in active thread${followUps.length === 1 ? "" : "s"}:\n${lines.join("\n")}\n` +
             `Each is a continuation of an existing thread (parentCommentId points at one of your previous replies). Call \`answer_question\` AGAIN with the reply's id as commentId to keep the thread going. Do NOT post a new top-level comment.`,
           );
@@ -872,7 +890,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             c.target.artifactId !== "__session__",
         );
         if (plainCommentsNeedingMirror.length > 0) {
-          hintParts.push(
+          blockingParts.push(
             `\n💬 ${plainCommentsNeedingMirror.length} human comment${plainCommentsNeedingMirror.length === 1 ? "" : "s"} on artifacts without an agent reply. Mirror substantive replies via answer_question so the response shows under the comment in the UI; chat-only replies are invisible to the conversation rail.`,
           );
         }
@@ -891,7 +909,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         if (fs.existsSync(claudeMd)) {
           const content = fs.readFileSync(claudeMd, "utf-8");
           if (!content.includes("<!-- deepPairing -->")) {
-            hintParts.push(
+            contextualParts.push(
               "\n💡 Tip: run `npx deeppairing init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
             );
           }
@@ -900,7 +918,30 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // Non-fatal — skip the tip
       }
 
-      firstCallHint = `\n${hintParts.join("\n")}`;
+      // X3 — assemble: header + ALL blocking signals (never truncated) +
+      // contextual signals up to the budget. Contextual items appear in
+      // the order they were appended (rejected-approaches first, plugin
+      // tip last) — earlier items are higher-priority. If budget runs
+      // out, drop tail-first and emit a "more context: call recall"
+      // pointer so the agent knows what's missing and how to fetch it.
+      const assembled: string[] = [headerLine, ...blockingParts];
+      let droppedContextual = 0;
+      const baselineLen = assembled.join("\n").length;
+      let runningLen = baselineLen;
+      for (const part of contextualParts) {
+        if (runningLen + part.length + 1 <= HINT_BUDGET_CHARS) {
+          assembled.push(part);
+          runningLen += part.length + 1;
+        } else {
+          droppedContextual++;
+        }
+      }
+      if (droppedContextual > 0) {
+        assembled.push(
+          `\n📦 ${droppedContextual} additional context section${droppedContextual === 1 ? "" : "s"} omitted to keep this hint focused (rejected approaches, team prefs, ledger stats, etc). Call \`recall\` with mode='philosophy' or mode='sessions' to pull what you need.`,
+        );
+      }
+      firstCallHint = `\n${assembled.join("\n")}`;
     }
 
     /**
