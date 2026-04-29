@@ -37,15 +37,29 @@ You: Let's analyze the auth module.
 
 Claude calls deepPairing's MCP tools instead of dumping findings as plain text. Findings, decisions, plans, and code changes land in the companion UI with structured evidence. You comment, approve, reject, ask "why" — and every rejection becomes part of your **cross-project Philosophy Ledger** that future sessions remember.
 
+## Why other tools can't catch this
+
+Cursor 3 (April 2026) shipped *canvases* — durable artifacts with approve/reject diff review.
+Claude Code (Feb 2026, v2.1.59) shipped *auto-memory* — learns from your corrections, hierarchical project + global.
+Both look like deepPairing on the surface. **Neither catches the paraphrase.**
+
+Auto-memory is a text dump the model is *encouraged* to consult. Canvases are presentation, not constraint. Reject "Railway" in either, and an hour later "Fly.io for pay-per-request hosting" sails through — because nothing intercepts the call before it's made.
+
+deepPairing's `runPreflight` ([packages/mcp-server/src/mcp/preflight-validator.ts](packages/mcp-server/src/mcp/preflight-validator.ts)) is a hard pre-flight gate. Every `present_findings` / `present_options` / `present_plan` / `present_code_change` call gets matched against your Philosophy Ledger via concept-token + scope-glob rules. Match → tool returns `REJECTED_APPROACH_BLOCKED` and the artifact is never created. The agent has to revise or escalate; it can't paraphrase past you.
+
+That's the moat. Everything below is the surface that makes it usable.[^1]
+
+[^1]: Theoretical backing: [Multi-Round Human–AI Collaboration with User-Specified Requirements](https://arxiv.org/html/2602.17646v1) (arXiv 2602.17646) formalizes user-defined indicator functions of counterfactual harm + online calibration to provably enforce collaboration constraints. The Philosophy Ledger is one realization of that idea applied to long-lived pairing across projects.
+
 ## What makes this different
 
-Most AI-coding tools optimize for the agent moving faster. deepPairing optimizes for the **decision quality** of the human-AI pair, on important work.
+Concept-aware blocking is the moat. These are the affordances that compound on top of it:
 
-- **Concept-aware pre-flight blocking.** The agent can't re-propose an approach you've rejected — by surface name *or* by the underlying concept. Reject "global state for config" once and a later "global config cache" gets caught.
 - **Cross-project Philosophy Ledger.** Stances accumulate at `~/.deeppairing/philosophy/v1.json` across every deepPairing project you touch. Portable via `npx deeppairing philosophy export | import --merge`.
 - **Three-layer memory model.** Filesystem-sensed guardrails (migrations, CI), team conventions (committable `.deeppairing/team.json`), personal philosophy. Surfaced separately to the agent. Never merged.
 - **Calibration loop.** High-stakes decisions capture your prediction + confidence. When a similar decision comes up later, the breadcrumb shows what you predicted before. ✓ / ✗ / ◐ retrospective affordance closes the loop.
 - **Concept-naming as the teaching lever.** Every `log_reasoning` call surfaces the pattern at play ("dependency inversion", "optimistic UI") so you learn the vocabulary, not just the fix.
+- **Structured artifacts the human reviews, not skims.** Findings, decisions, plans, code changes land in the companion UI — but they're table stakes (Cursor canvases ship a similar surface). The reason they matter here is that they give the rejection ledger something to gate on. No artifacts → nothing for `runPreflight` to match against.
 - **Pair-tempo signals.** "I see you" toast on every comment, ❓ N questions waiting badge, ledger-write toast on every stance added. The compounding is *felt*, not just stored.
 
 ## What it isn't
