@@ -9,11 +9,128 @@
  * log them without crashing on read-only / sandboxed projects.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
   | { ok: false; message: string };
+
+/**
+ * X2 — cross-scope hook detection / dedup.
+ *
+ * Field bug: even after the own-the-row policy cleaned `.claude/settings.local.json`,
+ * the user still saw "Ran 2 stop hooks." Claude Code merges hooks from
+ * THREE scope files (user → project-shared → project-local) and runs every
+ * matching entry. A deepPairing entry in any non-local scope survives every
+ * project-level heal because the installer never touches those files.
+ *
+ * Policy:
+ *   - `.claude/settings.local.json` (project-local, gitignored) is the
+ *     CANONICAL home for deepPairing hooks. The installer owns the row
+ *     there.
+ *   - `.claude/settings.json` (project-shared, committable) and
+ *     `~/.claude/settings.json` (user-level) MAY contain deepPairing
+ *     entries left over from earlier installs OR (rarely) deliberate
+ *     team / user choices. The installer DETECTS but never auto-modifies
+ *     those — a confirm-then-clean path runs through `doctor --fix`.
+ */
+export interface ScopeFileInfo {
+  /** Logical name shown to the user. */
+  scope: "user" | "project-shared" | "project-local";
+  /** Absolute path to the settings file. */
+  path: string;
+  /** Number of deepPairing entries detected in this scope under the given hook key. */
+  count: number;
+}
+
+/** Map a hookKey ("Stop" | "PostToolUse") to a substring marker that
+ *  identifies a deepPairing entry without depending on the exact command. */
+type HookKey = "Stop" | "PostToolUse";
+
+function scopeFiles(projectRoot: string): Array<{ scope: ScopeFileInfo["scope"]; path: string }> {
+  return [
+    { scope: "user", path: path.join(os.homedir(), ".claude", "settings.json") },
+    { scope: "project-shared", path: path.join(projectRoot, ".claude", "settings.json") },
+    { scope: "project-local", path: path.join(projectRoot, ".claude", "settings.local.json") },
+  ];
+}
+
+/** Read JSON, return null on missing/malformed. */
+function readJsonOrNull(filePath: string): any | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Count DP entries under hookKey in a single settings object (any shape). */
+function countDpEntries(settings: any, hookKey: HookKey, marker: (cmd: string) => boolean): number {
+  const entries = settings?.hooks?.[hookKey];
+  if (!Array.isArray(entries)) return 0;
+  let n = 0;
+  for (const e of entries) {
+    if (typeof e?.command === "string" && marker(e.command)) { n++; continue; }
+    if (Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === "string" && marker(h.command))) { n++; continue; }
+  }
+  return n;
+}
+
+/** Scan all three Claude Code scopes for deepPairing entries under the
+ *  given hook key. Returns one ScopeFileInfo per scope file that exists,
+ *  whether or not it contains DP entries (count may be 0). */
+export function detectCrossScopeDpEntries(
+  projectRoot: string,
+  hookKey: HookKey,
+  marker: (cmd: string) => boolean,
+): ScopeFileInfo[] {
+  const out: ScopeFileInfo[] = [];
+  for (const { scope, path: p } of scopeFiles(projectRoot)) {
+    const settings = readJsonOrNull(p);
+    if (settings === null) continue;
+    out.push({ scope, path: p, count: countDpEntries(settings, hookKey, marker) });
+  }
+  return out;
+}
+
+/** Filter out every DP entry from `hookKey` in this single scope file.
+ *  Non-DP entries (the user's / team's other hooks) are left intact.
+ *  Returns the count removed. The caller is responsible for confirming
+ *  with the user before invoking — this writes to disk unconditionally. */
+export function cleanDpEntriesFromScope(
+  scopePath: string,
+  hookKey: HookKey,
+  marker: (cmd: string) => boolean,
+): { ok: boolean; removed: number; message: string } {
+  const settings = readJsonOrNull(scopePath);
+  if (settings === null) return { ok: true, removed: 0, message: `Skipped ${scopePath} (missing or malformed)` };
+  const entries = settings?.hooks?.[hookKey];
+  if (!Array.isArray(entries)) return { ok: true, removed: 0, message: `No ${hookKey} entries in ${scopePath}` };
+  const before = entries.length;
+  const kept = entries.filter((e: any) => {
+    if (typeof e?.command === "string" && marker(e.command)) return false;
+    if (Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === "string" && marker(h.command))) return false;
+    return true;
+  });
+  const removed = before - kept.length;
+  if (removed === 0) return { ok: true, removed: 0, message: `No deepPairing ${hookKey} entries to remove in ${scopePath}` };
+  try {
+    settings.hooks[hookKey] = kept;
+    fs.writeFileSync(scopePath, JSON.stringify(settings, null, 2));
+    return { ok: true, removed, message: `Removed ${removed} deepPairing ${hookKey} entr${removed === 1 ? "y" : "ies"} from ${scopePath}` };
+  } catch (err: any) {
+    return { ok: false, removed: 0, message: `Could not write ${scopePath}: ${err?.message ?? err}` };
+  }
+}
+
+/** Marker functions used both by the installer (own-the-row in .local) and
+ *  by the cross-scope detector. Centralized so a future installer
+ *  command-string change updates both paths together. */
+const STOP_HOOK_MARKER = (cmd: string) => cmd.includes("deepPairing");
+const CHECKPOINT_HOOK_MARKER = (cmd: string) => cmd.includes("checkpoint.mjs");
+export const HOOK_MARKERS = { Stop: STOP_HOOK_MARKER, PostToolUse: CHECKPOINT_HOOK_MARKER } as const;
 
 export function ensureDeepPairingDir(projectRoot: string): SetupResult {
   const dpDir = path.join(projectRoot, ".deeppairing");
@@ -130,13 +247,25 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     });
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    const msg = hadLegacy
+    let msg = hadLegacy
       ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)"
       : beforeDpCount > 1
         ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)`
         : beforeDpCount === 1
           ? "Replaced stale Stop hook entry with the current canonical version"
           : "Added Stop hook to .claude/settings.local.json";
+
+    // X2 — surface cross-scope DP entries (user-level + project-shared)
+    // so the user can heal them via `doctor --fix`. We never auto-modify
+    // those scopes from this code path — the team / user might have
+    // intentionally placed a hook there, and silently nuking files
+    // outside .local would be hostile.
+    const otherScopes = detectCrossScopeDpEntries(projectRoot, "Stop", STOP_HOOK_MARKER)
+      .filter((s) => s.scope !== "project-local" && s.count > 0);
+    if (otherScopes.length > 0) {
+      const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${otherScopes[0].count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+    }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
     return { ok: false, message: `Could not configure Stop hook: ${err?.message ?? err}` };
@@ -332,11 +461,19 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     });
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    const msg = beforeDpCount > 1
+    let msg = beforeDpCount > 1
       ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)`
       : beforeDpCount === 1
         ? "Replaced stale checkpoint hook entry with the current canonical version"
         : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
+
+    // X2 — same cross-scope detection as Stop hook.
+    const otherScopes = detectCrossScopeDpEntries(projectRoot, "PostToolUse", CHECKPOINT_HOOK_MARKER)
+      .filter((s) => s.scope !== "project-local" && s.count > 0);
+    if (otherScopes.length > 0) {
+      const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${otherScopes[0].count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+    }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
     return { ok: false, message: `Could not configure checkpoint hook: ${err?.message ?? err}` };

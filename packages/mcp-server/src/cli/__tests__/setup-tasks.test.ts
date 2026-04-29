@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,17 +8,27 @@ import {
   ensureGitignoreEntry,
   ensureStopHook,
   ensureCheckpointHook,
+  detectCrossScopeDpEntries,
+  cleanDpEntriesFromScope,
+  HOOK_MARKERS,
   runDaemonStartupSetup,
 } from "../setup-tasks.js";
 
 let tmpDir: string;
+let homeDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-setup-tasks-"));
+  // Cross-scope tests touch ~/.claude/settings.json — stub homedir so we
+  // never write into the real user's home from a test.
+  homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-fake-home-"));
+  vi.spyOn(os, "homedir").mockReturnValue(homeDir);
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(homeDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 describe("ensureDeepPairingDir", () => {
@@ -596,5 +606,133 @@ describe("runDaemonStartupSetup", () => {
     fs.writeFileSync(path.join(tmpDir, "CLAUDE.md"), "Original content\n");
     runDaemonStartupSetup(tmpDir);
     expect(fs.readFileSync(path.join(tmpDir, "CLAUDE.md"), "utf-8")).toBe("Original content\n");
+  });
+});
+
+describe("Cross-scope hook dedup (X2)", () => {
+  // Field bug: even after own-the-row policy cleaned .local, the user
+  // saw "Ran 2 stop hooks" because a stale DP entry lived in another
+  // Claude Code settings scope (~/.claude/settings.json or
+  // .claude/settings.json). Both fired on every poll. The installer
+  // never reached those scopes. X2 detects them and offers a doctor
+  // --fix path that removes them while preserving non-DP entries.
+
+  function writeSettings(filePath: string, settings: any) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(settings, null, 2));
+  }
+
+  it("detectCrossScopeDpEntries finds DP entries in user-level settings", () => {
+    writeSettings(path.join(homeDir, ".claude", "settings.json"), {
+      hooks: {
+        Stop: [
+          { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing user-level legacy'" }] },
+        ],
+      },
+    });
+    const found = detectCrossScopeDpEntries(tmpDir, "Stop", HOOK_MARKERS.Stop);
+    const userScope = found.find((s) => s.scope === "user");
+    expect(userScope?.count).toBe(1);
+  });
+
+  it("detectCrossScopeDpEntries finds DP entries in project-shared settings", () => {
+    writeSettings(path.join(tmpDir, ".claude", "settings.json"), {
+      hooks: {
+        Stop: [
+          { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing project-shared legacy'" }] },
+        ],
+      },
+    });
+    const found = detectCrossScopeDpEntries(tmpDir, "Stop", HOOK_MARKERS.Stop);
+    const sharedScope = found.find((s) => s.scope === "project-shared");
+    expect(sharedScope?.count).toBe(1);
+  });
+
+  it("detectCrossScopeDpEntries returns 0 count for scopes that exist but have no DP entries", () => {
+    writeSettings(path.join(homeDir, ".claude", "settings.json"), {
+      hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: "node /someone-elses-hook.js" }] }] },
+    });
+    const found = detectCrossScopeDpEntries(tmpDir, "Stop", HOOK_MARKERS.Stop);
+    expect(found.find((s) => s.scope === "user")?.count).toBe(0);
+  });
+
+  it("detectCrossScopeDpEntries skips scopes that don't exist (no false positives)", () => {
+    // homeDir is empty; tmpDir has no .claude/. Only project-local would
+    // be created later by ensureStopHook, but in this test no installs ran.
+    const found = detectCrossScopeDpEntries(tmpDir, "Stop", HOOK_MARKERS.Stop);
+    expect(found.length).toBe(0);
+  });
+
+  it("cleanDpEntriesFromScope removes DP entries while preserving the user's other hooks", () => {
+    const userSettings = path.join(homeDir, ".claude", "settings.json");
+    writeSettings(userSettings, {
+      hooks: {
+        Stop: [
+          { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing legacy'" }] },
+          { matcher: "", hooks: [{ type: "command", command: "node /my-other-hook.js" }] },
+        ],
+        PreToolUse: [{ command: "node /unrelated/pre.js" }], // entirely separate hook key
+      },
+      somethingElse: "preserve me",
+    });
+    const r = cleanDpEntriesFromScope(userSettings, "Stop", HOOK_MARKERS.Stop);
+    expect(r.ok).toBe(true);
+    expect(r.removed).toBe(1);
+    const after = JSON.parse(fs.readFileSync(userSettings, "utf-8"));
+    expect(after.hooks.Stop).toHaveLength(1);
+    expect(after.hooks.Stop[0].hooks[0].command).toContain("/my-other-hook.js");
+    // Untouched siblings.
+    expect(after.hooks.PreToolUse).toEqual([{ command: "node /unrelated/pre.js" }]);
+    expect(after.somethingElse).toBe("preserve me");
+  });
+
+  it("cleanDpEntriesFromScope is a no-op when the scope file doesn't exist", () => {
+    const r = cleanDpEntriesFromScope(
+      path.join(homeDir, ".claude", "settings.json"),
+      "Stop",
+      HOOK_MARKERS.Stop,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.removed).toBe(0);
+  });
+
+  it("ensureStopHook reports cross-scope entries in its result message but does NOT auto-modify them", () => {
+    // Plant a stale DP entry in user-level scope.
+    const userSettings = path.join(homeDir, ".claude", "settings.json");
+    writeSettings(userSettings, {
+      hooks: {
+        Stop: [
+          { matcher: "", hooks: [{ type: "command", command: "node -e 'deepPairing user-scope orphan'" }] },
+        ],
+      },
+    });
+
+    const r = ensureStopHook(tmpDir);
+    expect(r.ok).toBe(true);
+    // The local install happens normally; the cross-scope orphan is
+    // SURFACED in the message but NOT removed.
+    expect(r.ok && r.message).toMatch(/cross-scope.*entr/i);
+    expect(r.ok && r.message).toMatch(/doctor --fix/);
+    // User-scope file is unchanged — the orphan is still there.
+    const after = JSON.parse(fs.readFileSync(userSettings, "utf-8"));
+    expect(after.hooks.Stop).toHaveLength(1);
+    expect(after.hooks.Stop[0].hooks[0].command).toContain("user-scope orphan");
+  });
+
+  it("ensureCheckpointHook also surfaces cross-scope entries (PostToolUse)", () => {
+    const userSettings = path.join(homeDir, ".claude", "settings.json");
+    writeSettings(userSettings, {
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: "Write|Edit|MultiEdit",
+            hooks: [{ type: "command", command: "node /old/checkpoint.mjs" }],
+          },
+        ],
+      },
+    });
+    const r = ensureCheckpointHook(tmpDir);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.message).toMatch(/cross-scope.*checkpoint/i);
   });
 });

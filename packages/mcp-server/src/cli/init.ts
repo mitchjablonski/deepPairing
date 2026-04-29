@@ -578,6 +578,57 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     });
   }
 
+  // X2 — cross-scope hook detection. Even with the canonical entry in
+  // .local, deepPairing rows may linger in user-level (~/.claude/settings.json)
+  // or project-shared (.claude/settings.json) — leftover from earlier
+  // installs. Claude Code merges them in and runs both → "Ran 2 stop hooks."
+  // We only auto-clean when --fix is passed, since these scopes might
+  // contain other intentional hooks.
+  const { detectCrossScopeDpEntries, cleanDpEntriesFromScope, HOOK_MARKERS } =
+    await import("./setup-tasks.js");
+  const crossScopeStop = detectCrossScopeDpEntries(cwd, "Stop", HOOK_MARKERS.Stop)
+    .filter((s) => s.scope !== "project-local" && s.count > 0);
+  const crossScopeCheckpoint = detectCrossScopeDpEntries(cwd, "PostToolUse", HOOK_MARKERS.PostToolUse)
+    .filter((s) => s.scope !== "project-local" && s.count > 0);
+  if (crossScopeStop.length > 0) {
+    const total = crossScopeStop.reduce((a, s) => a + s.count, 0);
+    console.log(`  ${yellow("!")} ${total} cross-scope deepPairing Stop entr${total === 1 ? "y" : "ies"} detected outside .local (potential duplicate firings):`);
+    for (const s of crossScopeStop) {
+      console.log(`    ${dim("·")} ${s.scope}: ${s.path} (${s.count})`);
+    }
+    fixes.push({
+      label: `Remove ${total} cross-scope deepPairing Stop entr${total === 1 ? "y" : "ies"} (preserves non-DP hooks in those files)`,
+      apply: () => {
+        let removed = 0;
+        for (const s of crossScopeStop) {
+          const r = cleanDpEntriesFromScope(s.path, "Stop", HOOK_MARKERS.Stop);
+          if (!r.ok) return { ok: false, message: r.message };
+          removed += r.removed;
+        }
+        return { ok: true, message: `Removed ${removed} cross-scope Stop entries` };
+      },
+    });
+  }
+  if (crossScopeCheckpoint.length > 0) {
+    const total = crossScopeCheckpoint.reduce((a, s) => a + s.count, 0);
+    console.log(`  ${yellow("!")} ${total} cross-scope deepPairing checkpoint entr${total === 1 ? "y" : "ies"} detected outside .local:`);
+    for (const s of crossScopeCheckpoint) {
+      console.log(`    ${dim("·")} ${s.scope}: ${s.path} (${s.count})`);
+    }
+    fixes.push({
+      label: `Remove ${total} cross-scope deepPairing checkpoint entr${total === 1 ? "y" : "ies"}`,
+      apply: () => {
+        let removed = 0;
+        for (const s of crossScopeCheckpoint) {
+          const r = cleanDpEntriesFromScope(s.path, "PostToolUse", HOOK_MARKERS.PostToolUse);
+          if (!r.ok) return { ok: false, message: r.message };
+          removed += r.removed;
+        }
+        return { ok: true, message: `Removed ${removed} cross-scope checkpoint entries` };
+      },
+    });
+  }
+
   // 7. Overall verdict
   console.log();
   if (probeOk) {
