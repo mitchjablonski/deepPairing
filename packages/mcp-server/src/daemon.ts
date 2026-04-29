@@ -534,6 +534,58 @@ async function main() {
     const heartbeat = setInterval(() => writeDaemonInfo(port), 30000);
     heartbeat.unref?.();
 
+    // X7 — watch .deeppairing/hooks-state.json for new hook fires; broadcast
+    // each fire to every connected client so the HookStatus pill updates
+    // live. The hook scripts append to that file on every fire (pass or
+    // nag); we read the latest entry on each change.
+    let lastFireSeen = 0;
+    const hooksStatePath = path.join(projectRoot, ".deeppairing", "hooks-state.json");
+    const broadcastNewFires = () => {
+      try {
+        if (!fs.existsSync(hooksStatePath)) return;
+        const raw = JSON.parse(fs.readFileSync(hooksStatePath, "utf-8"));
+        const fires = Array.isArray(raw?.fires) ? raw.fires : [];
+        for (const f of fires) {
+          const t = new Date(f.at).getTime();
+          if (!Number.isFinite(t) || t <= lastFireSeen) continue;
+          lastFireSeen = t;
+          // Hook fires are global (not session-scoped); broadcast to every
+          // session so any open UI sees them.
+          for (const sid of sessions.keys()) {
+            broadcast(sid, { type: "hook_fired", fire: f });
+          }
+          // Also fan out to global clients (no session selected).
+          for (const ws of globalClients) {
+            try { (ws as any).send(JSON.stringify({ type: "hook_fired", fire: f })); } catch {}
+          }
+        }
+      } catch { /* swallow — observability isn't load-bearing */ }
+    };
+    // Seed lastFireSeen from current state so we don't replay every old fire.
+    try {
+      if (fs.existsSync(hooksStatePath)) {
+        const raw = JSON.parse(fs.readFileSync(hooksStatePath, "utf-8"));
+        const fires = Array.isArray(raw?.fires) ? raw.fires : [];
+        for (const f of fires) {
+          const t = new Date(f.at).getTime();
+          if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
+        }
+      }
+    } catch {}
+    try {
+      // Watch the directory rather than the file directly — file may not
+      // exist yet, and atomic-rename writes recreate the inode.
+      const hooksDir = path.dirname(hooksStatePath);
+      fs.mkdirSync(hooksDir, { recursive: true });
+      fs.watch(hooksDir, (_event, filename) => {
+        if (filename === "hooks-state.json" || filename === path.basename(hooksStatePath)) {
+          broadcastNewFires();
+        }
+      });
+    } catch (err) {
+      log(`Hook-state watcher failed to start: ${err}`);
+    }
+
     log(`Daemon running on http://localhost:${port}`);
 
     // H4: auto-open the companion UI on first daemon start. Skip if the user

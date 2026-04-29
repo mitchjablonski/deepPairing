@@ -92,7 +92,10 @@ describe("ensureStopHook", () => {
     expect(entry).toHaveProperty("matcher");
     expect(Array.isArray(entry.hooks)).toBe(true);
     expect(entry.hooks[0].type).toBe("command");
-    expect(entry.hooks[0].command).toContain("deepPairing");
+    // X7 — the Stop hook is now a real .mjs file at .deeppairing/hooks/stop.mjs
+    // so it can recordFire() into hooks-state.json. The settings entry just
+    // shells out to `node` against that file.
+    expect(entry.hooks[0].command).toContain("hooks/stop.mjs");
   });
 
   it("appends to existing hooks without clobbering other settings", () => {
@@ -161,7 +164,12 @@ describe("ensureStopHook", () => {
     const dpEntries = settings.hooks.Stop.filter(
       (e: any) =>
         Array.isArray(e?.hooks) &&
-        e.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing")),
+        // X7 — own-the-row recognition matches both the legacy inline
+        // "deepPairing" marker and the new "hooks/stop.mjs" path.
+        e.hooks.some((h: any) =>
+          typeof h?.command === "string" &&
+          (h.command.includes("deepPairing") || h.command.includes("hooks/stop.mjs")),
+        ),
     );
     expect(dpEntries).toHaveLength(1);
     const userHook = settings.hooks.Stop.find(
@@ -203,7 +211,10 @@ describe("ensureStopHook", () => {
     // The stale "OLD VERSION" string is gone; the canonical command
     // (with MAX age guard) is in place.
     expect(JSON.stringify(settings.hooks.Stop)).not.toContain("OLD VERSION");
-    expect(JSON.stringify(settings.hooks.Stop)).toContain("MAX=30*60*1000");
+    // X7 — the canonical command now shells out to the .mjs script file
+    // (which carries the staleness logic + recordFire). The settings entry
+    // just points at the script.
+    expect(JSON.stringify(settings.hooks.Stop)).toContain("hooks/stop.mjs");
   });
 
   it("HEALS a legacy flat-shape Stop entry by dropping it and re-installing nested", () => {
@@ -237,7 +248,8 @@ describe("ensureStopHook", () => {
     expect(userHook).toBeDefined();
     const dpHook = settings.hooks.Stop.find((e: any) => Array.isArray(e.hooks));
     expect(dpHook).toBeDefined();
-    expect(dpHook.hooks[0].command).toContain("deepPairing");
+    // X7 — see note in "creates ... nested-shape hook when missing".
+    expect(dpHook.hooks[0].command).toContain("hooks/stop.mjs");
     // No legacy flat DP entry remains.
     const stillFlat = settings.hooks.Stop.find(
       (e: any) => typeof e.command === "string" && e.command.includes("deepPairing") && !Array.isArray(e.hooks),

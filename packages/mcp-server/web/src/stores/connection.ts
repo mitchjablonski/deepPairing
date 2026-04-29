@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
+import { useHookStatusStore } from "./hookStatus";
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -248,6 +249,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           });
           break;
 
+        case "hook_fired":
+          // X7 — every Stop / Checkpoint hook fire (pass or nag) is broadcast
+          // by the daemon's file watcher. Push into the dedicated store so
+          // <HookStatus> can render without an HTTP roundtrip per fire.
+          if (data.fire) {
+            useHookStatusStore.getState().pushFire(data.fire);
+          }
+          break;
+
         case "decision_resolved_hero":
           // O7: captured prediction doesn't disappear into the decision
           // record — it's a calibration moment worth pinning for a few
@@ -289,6 +299,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           Notification.requestPermission();
         }
+        // X7: hydrate hook fire history once. Subsequent fires arrive via
+        // the `hook_fired` broadcast handler; load() is idempotent enough
+        // to call again on reconnect, so we don't gate it on `loaded`.
+        useHookStatusStore.getState().load();
       });
 
       adapter.onMessage(handleMessage);
