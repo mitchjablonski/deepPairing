@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { commentAnchorKey } from "../lib/comment-anchor";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
 // which comments arrived since the user last looked at the rail. Stored
@@ -223,6 +224,19 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId } }));
   };
 
+  // X10 — same as focusArtifact, but carries the comment's anchor through
+  // so App.tsx can scroll the artifact to the exact line/step/finding
+  // after it mounts. Falls back to a plain artifact-focus when the
+  // comment doesn't anchor to anything specific.
+  const focusComment = (artifactId: string, target: any) => {
+    const anchorKey = commentAnchorKey(target);
+    window.dispatchEvent(
+      new CustomEvent("dp:focus-artifact", {
+        detail: { artifactId, anchorKey: anchorKey ?? undefined },
+      }),
+    );
+  };
+
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={onClose} />
@@ -336,7 +350,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
                         key={t.comment.id}
                         thread={t}
                         artifact={g.artifact}
-                        onFocus={() => focusArtifact(g.artifactId)}
+                        onFocus={() => focusComment(g.artifactId, t.comment.target)}
                         isUnread={isUnread}
                       />
                     ))}

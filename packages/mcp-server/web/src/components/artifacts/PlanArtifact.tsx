@@ -181,6 +181,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             return (
               <div
                 key={i}
+                // X10 — landing target for `dp:focus-artifact` events that
+                // carry a step-level anchor. See lib/comment-anchor.ts.
+                data-comment-anchor={`step:${i}`}
                 className="p-3 bg-surface-secondary rounded-lg border border-white/[0.06] hover:border-white/[0.1] transition-all duration-[180ms] ease-out"
               >
                 <div className="flex items-start justify-between gap-2">

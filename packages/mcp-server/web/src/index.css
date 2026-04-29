@@ -114,6 +114,17 @@ html {
   animation: approved-flash 600ms ease-out forwards;
 }
 
+/* X10 — anchor highlight when the Conversation rail navigates the viewer
+   to a specific line / step / finding. Brief pulse, no layout shift. */
+@keyframes dp-anchor-pulse {
+  0%   { background-color: rgba(124, 92, 252, 0.18); box-shadow: inset 0 0 0 1px rgba(124, 92, 252, 0.35); }
+  100% { background-color: transparent; box-shadow: inset 0 0 0 1px transparent; }
+}
+.dp-anchor-highlight {
+  animation: dp-anchor-pulse 1.5s ease-out forwards;
+  border-radius: 4px;
+}
+
 /* Skeleton shimmer */
 @keyframes shimmer {
   0% { background-position: -200% 0; }

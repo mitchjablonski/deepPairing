@@ -17,6 +17,7 @@ import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
+import { scrollToAnchor } from "./lib/comment-anchor";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
@@ -158,11 +159,27 @@ function App() {
 
   // O7: question-answered toast's "Jump to answer" action selects the
   // artifact the answer belongs to, scrolling it into view.
+  // X10: when the dispatcher carries a comment anchor (filePath+line, step,
+  // or finding), follow up with a scroll-to-anchor on the next tick so the
+  // artifact has rendered before we query the DOM.
   useEffect(() => {
     const focus = (evt: Event) => {
-      const detail = (evt as CustomEvent).detail as { artifactId?: string } | undefined;
+      const detail = (evt as CustomEvent).detail as
+        | { artifactId?: string; anchorKey?: string }
+        | undefined;
       if (!detail?.artifactId) return;
       useArtifactStore.getState().selectArtifact(detail.artifactId);
+      if (detail.anchorKey) {
+        // requestAnimationFrame waits one paint — usually enough for the
+        // artifact panel to swap. If the element still isn't there, try
+        // a couple more times before giving up; the artifact may be
+        // mounting async (suspense, dynamic imports, etc.).
+        const tryScroll = (retries: number) => {
+          if (scrollToAnchor(detail.artifactId!, detail.anchorKey!)) return;
+          if (retries > 0) requestAnimationFrame(() => tryScroll(retries - 1));
+        };
+        requestAnimationFrame(() => tryScroll(2));
+      }
     };
     window.addEventListener("dp:focus-artifact", focus);
     return () => window.removeEventListener("dp:focus-artifact", focus);

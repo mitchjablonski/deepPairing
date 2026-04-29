@@ -158,8 +158,13 @@ export function CommentableCode({
         const lineComments = commentsByLine?.get(lineNum) ?? [];
         const isCommentActive = activeCommentLine === lineNum;
 
+        // X10 — anchor key matches commentAnchorKey() in lib/comment-anchor.ts.
+        // The Conversation rail dispatches `dp:focus-artifact` carrying this
+        // key; App.tsx scrolls the matching element into view + flashes it.
+        const anchorKey = `line:${filePath ?? ""}:${lineNum}`;
+
         return (
-          <div key={i}>
+          <div key={i} data-comment-anchor={anchorKey}>
             {/* Code line */}
             <div className="flex group">
               {/* Gutter with + (comment) and ? (ask) icons */}
