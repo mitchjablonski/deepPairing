@@ -8,18 +8,26 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
-import type { TeamPreference } from "@deeppairing/shared";
-import { formatSessionMarkdown, buildGitHubReviewPayload } from "../export/format-markdown.js";
+import { buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
 import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
 import { maybeEmitTaskHandle } from "./tasks-probe.js";
+import { buildFirstCallHint } from "./first-call-hint.js";
+import {
+  tryElicit as tryElicitHelper,
+  preflightRejectedApproaches as preflightHelper,
+  SessionNameLatch,
+  getPassiveFeedback as getPassiveFeedbackHelper,
+} from "./tool-helpers.js";
+import { handleLogReasoning } from "./tools/log-reasoning.js";
+import { handleExportSession } from "./tools/export-session.js";
+import type { ToolContext } from "./tools/types.js";
 import {
   validatePresentFindingsInput,
   validatePresentOptionsInput,
   validatePresentSpecInput,
   validatePresentPlanInput,
   validatePresentCodeChangeInput,
-  validateLogReasoningInput,
 } from "./validate-tool-input.js";
 
 /**
@@ -35,49 +43,17 @@ import {
  * Enter-through, decline, cancel, malformed payload — falls through to the
  * companion-UI review path.
  */
-export const ELICIT_APPROVE_SCHEMA = {
-  type: "object" as const,
-  properties: {
-    approve: {
-      type: "boolean" as const,
-      description: "Set true to approve here. Leave unset / false to review in the companion UI.",
-      default: false,
-    },
-  },
-  required: [],
-};
-
-/**
- * Pure decision-from-elicit-result helper. Exported so unit tests can pin
- * the contract without spinning up an SDK transport.
- *
- * Truth table:
- *   action=accept,  content.approve === true  → "approve"
- *   action=accept,  content.approve absent/false → "review"
- *   action=decline                              → "review"
- *   action=cancel                               → "review"
- *   anything else                               → null
- */
-export function decideElicitResponse(
-  result: { action?: string; content?: unknown } | null | undefined,
-): "approve" | "review" | null {
-  if (!result) return null;
-  if (result.action === "accept") {
-    const approved = (result.content as any)?.approve === true;
-    return approved ? "approve" : "review";
-  }
-  if (result.action === "decline" || result.action === "cancel") return "review";
-  return null;
-}
+// X4 — elicitation schema + decision helper extracted to mcp/elicit.ts so
+// tool-helpers and per-tool handlers can import them without circular deps
+// through this file. Re-exported for any external consumer that imported
+// from server.ts directly (preserves the public surface).
+export { ELICIT_APPROVE_SCHEMA, decideElicitResponse } from "./elicit.js";
 
 // U5 — pre-flight matching rules and orchestration moved to
 // preflight-validator.ts so they're testable without spinning up the
 // MCP harness. matchesGlob is re-exported from there for any caller
 // that imported it from this module historically.
-import {
-  runPreflight,
-  matchesGlob as _matchesGlob,
-} from "./preflight-validator.js";
+import { matchesGlob as _matchesGlob } from "./preflight-validator.js";
 export const matchesGlob = _matchesGlob;
 
 type BroadcastFn = (event: any) => void;
@@ -603,18 +579,15 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     throw new Error(`Unknown resource URI: ${uri}`);
   });
 
-  // --- Passive feedback helper ---
-  async function getPassiveFeedback(): Promise<string> {
-    const comments = await store.getUnacknowledgedComments();
-    if (comments.length === 0) return "";
-    await store.acknowledgeComments(comments.map((c) => c.id));
-    const formatted = comments.map((c) => `- ${c.content}`).join("\n");
-    return `\n\n[Human feedback]: ${formatted}`;
-  }
+  // X4 — passive-feedback drain lives in tool-helpers.ts. The wrapper
+  // closes over the per-server store so call sites stay terse.
+  const getPassiveFeedback = () => getPassiveFeedbackHelper(store);
 
   // --- Call Tool ---
   let firstToolCall = true;
-  let sessionNamed = false;
+  // X4 — session-name latch encapsulates the once-only "rename the session
+  // to the first artifact's title" behavior the closure used to handle.
+  const sessionNameLatch = new SessionNameLatch(store);
   let checkFeedbackPollCount = 0;
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -629,388 +602,42 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     let firstCallHint = "";
     if (firstToolCall) {
       firstToolCall = false;
-      // X3 — two tiers, capped total length.
-      //
-      // BLOCKING tier surfaces unresolved obligations the agent MUST act on
-      // this turn (revision requests, unanswered questions, follow-up
-      // replies, plain artifact comments needing a mirror). These are
-      // always included, top of hint, never truncated.
-      //
-      // CONTEXTUAL tier surfaces accumulating signals (rejected approaches,
-      // approved patterns, project guardrails, team prefs, ledger stats,
-      // plugin tip). These are nice-to-have but not blocking, and they
-      // accreted over many phases — left unchecked, the hint becomes a
-      // wall of text the LLM tunes out. They're appended in priority
-      // order; once the total hint nears HINT_BUDGET_CHARS we stop
-      // adding more and emit a "more context: call recall" pointer
-      // instead.
-      const HINT_BUDGET_CHARS = 1500;
-      const blockingParts: string[] = [];
-      const contextualParts: string[] = [];
-      const headerLine =
-        `[First use this session] The companion UI is at http://localhost:${port} — the human can review artifacts, comment, and make decisions there.`;
-
-      const memory = await store.getSessionMemory();
-      const memoryParts: string[] = [];
-      if (memory.rejectedApproaches.length > 0) {
-        memoryParts.push(
-          `Rejected approaches (NEVER propose these — present_* tools will refuse):\n${memory.rejectedApproaches
-            .map((a) => `  - ${a.description}${a.reason ? ` — reason: ${a.reason}` : ""}`)
-            .join("\n")}`,
-        );
-      }
-      if (memory.approvedPatterns.length > 0) {
-        memoryParts.push(
-          `Approved patterns (prefer these):\n${memory.approvedPatterns.map((a) => `  - ${a}`).join("\n")}`,
-        );
-      }
-      if (memoryParts.length > 0) {
-        contextualParts.push(`\n📋 From previous sessions in this project:\n${memoryParts.join("\n")}`);
-      }
-
-      // J6 — codebase-sensed guardrails. Filesystem signals tell us which
-      // paths are sensitive (migrations, CI workflows, infra). The agent
-      // gets this list on first call so it knows to stay supervised for
-      // changes in those paths even when autonomy is "autonomous". Zero
-      // user configuration — we just detected it.
-      try {
-        if (typeof (store as any).getProjectGuardrails === "function") {
-          const guardrails = await (store as any).getProjectGuardrails();
-          if (Array.isArray(guardrails) && guardrails.length > 0) {
-            const lines = guardrails.map((g: any) =>
-              `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`,
-            );
-            contextualParts.push(
-              `\n🛡 Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):\n${lines.join("\n")}`,
-            );
-          }
-        }
-      } catch {
-        // Non-fatal — we just won't surface guardrails
-      }
-
-      // N6.3 — team conventions from .deeppairing/team.json. Kept in a
-      // distinct section from personal philosophy and structural guardrails
-      // (NEVER merged — they're different kinds of authority). Groups by
-      // kind so the agent can act on require/avoid first, prefer as taste.
-      try {
-        if (typeof (store as any).getTeamPreferences === "function") {
-          const prefs = await (store as any).getTeamPreferences();
-          if (Array.isArray(prefs) && prefs.length > 0) {
-            const render = (p: any) => {
-              const scope = p.scope?.paths?.length
-                ? ` (scope: ${p.scope.paths.join(", ")})`
-                : "";
-              return `  - "${p.concept}"${scope} — ${p.rationale}`;
-            };
-            const required = prefs.filter((p: any) => p.kind === "require").map(render);
-            const avoided = prefs.filter((p: any) => p.kind === "avoid").map(render);
-            const preferred = prefs.filter((p: any) => p.kind === "prefer").map(render);
-            const sections: string[] = [];
-            if (required.length) sections.push(`Required:\n${required.join("\n")}`);
-            if (avoided.length) sections.push(`Avoid:\n${avoided.join("\n")}`);
-            if (preferred.length) sections.push(`Preferred:\n${preferred.join("\n")}`);
-            if (sections.length > 0) {
-              contextualParts.push(
-                `\n🏢 Team conventions (from .deeppairing/team.json — treat 'require' as hard rules, 'avoid' as refusal triggers, 'prefer' as taste):\n${sections.join("\n")}`,
-              );
-            }
-          }
-        }
-      } catch {
-        // Non-fatal — team prefs are advisory; keep polling shape intact.
-      }
-
-      // J4 — cross-project philosophy kickoff brief. Pull the top few
-      // strongly-held cross-project stances so the agent has the user's
-      // taste before it proposes anything. Keep it tight (3 avoid + 3 prefer
-      // max) — this is a primer, not a dump.
-      try {
-        const avoidList = getGlobalStore().query({ stance: "avoid", limit: 3 });
-        const preferList = getGlobalStore().query({ stance: "prefer", limit: 3 });
-        const philosophyParts: string[] = [];
-        if (avoidList.length > 0) {
-          philosophyParts.push(
-            `Strong 'avoid' stances (multi-project):\n${avoidList
-              .map((e) => {
-                const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-                const projects = new Set(e.instances.map((i) => i.project)).size;
-                return `  - "${e.concept}"${latestReason ? ` — "${latestReason}"` : ""}${projects > 1 ? ` (${projects} projects)` : ""}`;
-              })
-              .join("\n")}`,
-          );
-        }
-        if (preferList.length > 0) {
-          philosophyParts.push(
-            `Patterns the user prefers:\n${preferList
-              .map((e) => {
-                const projects = new Set(e.instances.map((i) => i.project)).size;
-                return `  - "${e.concept}"${projects > 1 ? ` (${projects} projects)` : ""}`;
-              })
-              .join("\n")}`,
-          );
-        }
-        if (philosophyParts.length > 0) {
-          contextualParts.push(
-            `\n🧭 Cross-project philosophy ledger (use recall with mode='philosophy' for more):\n${philosophyParts.join("\n")}`,
-          );
-        }
-      } catch {
-        // Ledger read failure is non-fatal — we still have session-scoped memory.
-      }
-
-      // R2: "moat made measurable" welcome-back line. Once the user has
-      // accumulated enough signal (≥5 concepts), quantify the compounding
-      // so the agent has a concrete number to reference ("your ledger has
-      // blocked 12 repeat proposals across 4 projects") and the user feels
-      // the investment is paying off. Silent below threshold — an empty
-      // stat block sells nothing.
-      try {
-        const ledgerEntries = getGlobalStore().query({ limit: 10000 });
-        if (ledgerEntries.length >= 5) {
-          const projects = new Set<string>();
-          for (const e of ledgerEntries) {
-            for (const inst of e.instances) projects.add(inst.project);
-          }
-          const avoidCount = ledgerEntries.filter((e) => e.stance === "avoid").length;
-          const preferCount = ledgerEntries.filter((e) => e.stance === "prefer").length;
-
-          let localBlocks = 0;
-          let localSessions = 0;
-          try {
-            const fsMod = await import("node:fs");
-            const pathMod = await import("node:path");
-            const metricsPath = pathMod.join(process.cwd(), ".deeppairing", "metrics.json");
-            if (fsMod.existsSync(metricsPath)) {
-              const m = JSON.parse(fsMod.readFileSync(metricsPath, "utf-8"));
-              if (m?.version === 1) {
-                localBlocks = m.counts?.preflightBlocks?.total ?? 0;
-                localSessions = m.sessions ?? 0;
-              }
-            }
-          } catch {}
-
-          const parts = [
-            `${ledgerEntries.length} concept${ledgerEntries.length === 1 ? "" : "s"}`,
-            `${avoidCount} avoid / ${preferCount} prefer`,
-            `${projects.size} project${projects.size === 1 ? "" : "s"}`,
-          ];
-          if (localBlocks > 0) parts.push(`${localBlocks} block${localBlocks === 1 ? "" : "s"} fired here`);
-          if (localSessions > 0) parts.push(`session #${localSessions + 1} in this project`);
-          contextualParts.push(`\n🌱 Your deepPairing ledger: ${parts.join(" · ")}.`);
-        }
-      } catch {
-        // Non-fatal — welcome-back line is cosmetic; real memory lives in the ledger + preflight regardless.
-      }
-
-      // Q4: surface unanswered questions from the human at first-call so the
-      // agent knows to reach for answer_question. Catches the case where a
-      // previous agent session left questions dangling — the new session's
-      // first call learns about them immediately, not after several
-      // check_feedback polls.
-      try {
-        const fullState = await store.getFullState();
-        const allComments = fullState.comments ?? [];
-        const unanswered = allComments.filter(
-          (c: any) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId,
-        );
-        // Decision-revision-requested comments are a special case: the human
-        // explicitly asked for a REVISED option set, not just an answer. Tag
-        // these as HIGH PRIORITY in the hint so the agent reaches for
-        // revise_artifact, not answer_question. Sourced from CommentTarget
-        // sectionId set by the DecisionCard "Send back" affordance.
-        const revisionRequested = unanswered.filter(
-          (c: any) => typeof c.target?.sectionId === "string" && c.target.sectionId.startsWith("decision_revision_requested"),
-        );
-        const plainUnanswered = unanswered.filter(
-          (c: any) => !revisionRequested.includes(c),
-        );
-        if (revisionRequested.length > 0) {
-          const lines = revisionRequested.map((c: any) => {
-            const aId = c.target?.artifactId ?? "(unknown)";
-            const excerpt = String(c.content ?? "").slice(0, 120);
-            return `  • Decision ${aId} — comment ${c.id}: "${excerpt}"`;
-          });
-          blockingParts.push(
-            `\n🔁 ${revisionRequested.length} REVISION REQUEST${revisionRequested.length === 1 ? "" : "S"} on decisions. The human wants the OPTIONS REVISED, not just an answer:\n${lines.join("\n")}\n` +
-            `Required response per request: call \`revise_artifact\` mode="supersede" on the decision artifact with a NEW option set incorporating the feedback. Then briefly call \`answer_question\` on the comment so the rail shows "↻ Revised". Do NOT just call answer_question and leave the original options on the table.`,
-          );
-        }
-        if (plainUnanswered.length > 0) {
-          blockingParts.push(
-            `\n❓ ${plainUnanswered.length} unanswered question${plainUnanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
-          );
-        }
-        // Follow-up replies in active threads. A human comment whose
-        // parentCommentId points at one of OUR (agent) previous comments
-        // is a thread continuation, not a new top-level question. Surface
-        // these as a distinct, high-priority signal so the agent calls
-        // answer_question again to continue the thread instead of
-        // starting a new top-level comment via addComment.
-        const agentCommentIds = new Set(
-          allComments.filter((c: any) => c.author === "agent").map((c: any) => c.id),
-        );
-        const followUps = allComments.filter(
-          (c: any) =>
-            c.author === "human" &&
-            c.parentCommentId &&
-            agentCommentIds.has(c.parentCommentId) &&
-            !c.answeredByCommentId,
-        );
-        if (followUps.length > 0) {
-          const lines = followUps.map((c: any) => {
-            const aId = c.target?.artifactId ?? "(unknown)";
-            const excerpt = String(c.content ?? "").slice(0, 100);
-            return `  • Reply ${c.id} on artifact ${aId} (parent ${c.parentCommentId}): "${excerpt}"`;
-          });
-          blockingParts.push(
-            `\n↳ ${followUps.length} follow-up repl${followUps.length === 1 ? "y" : "ies"} in active thread${followUps.length === 1 ? "" : "s"}:\n${lines.join("\n")}\n` +
-            `Each is a continuation of an existing thread (parentCommentId points at one of your previous replies). Call \`answer_question\` AGAIN with the reply's id as commentId to keep the thread going. Do NOT post a new top-level comment.`,
-          );
-        }
-
-        // Plain (non-question, non-answered, non-follow-up) comments from
-        // the human that we haven't surfaced via answer_question either.
-        // The protocol says "any substantive human comment deserves an
-        // answer_question mirror so the UI sees it" — this surfacing
-        // makes that visible.
-        const followUpIds = new Set(followUps.map((c: any) => c.id));
-        const plainCommentsNeedingMirror = allComments.filter(
-          (c: any) =>
-            c.author === "human" &&
-            c.intent !== "question" &&
-            !c.answeredByCommentId &&
-            !followUpIds.has(c.id) &&
-            // Skip session-level chat (handled by the message composer).
-            c.target?.artifactId &&
-            c.target.artifactId !== "__session__",
-        );
-        if (plainCommentsNeedingMirror.length > 0) {
-          blockingParts.push(
-            `\n💬 ${plainCommentsNeedingMirror.length} human comment${plainCommentsNeedingMirror.length === 1 ? "" : "s"} on artifacts without an agent reply. Mirror substantive replies via answer_question so the response shows under the comment in the UI; chat-only replies are invisible to the conversation rail.`,
-          );
-        }
-      } catch {
-        // Non-fatal — agent will catch them on the next check_feedback anyway
-      }
-
-      // N2.2: if the user installed via the plugin (which doesn't touch
-      // CLAUDE.md), surface a one-line tip pointing at `npx deeppairing init`.
-      // CLAUDE.md mutation is intentionally opt-in — the daemon won't do it
-      // silently. Detect by checking for the deepPairing marker in CLAUDE.md.
-      try {
-        const fs = await import("node:fs");
-        const path = await import("node:path");
-        const claudeMd = path.join(process.cwd(), "CLAUDE.md");
-        if (fs.existsSync(claudeMd)) {
-          const content = fs.readFileSync(claudeMd, "utf-8");
-          if (!content.includes("<!-- deepPairing -->")) {
-            contextualParts.push(
-              "\n💡 Tip: run `npx deeppairing init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
-            );
-          }
-        }
-      } catch {
-        // Non-fatal — skip the tip
-      }
-
-      // X3 — assemble: header + ALL blocking signals (never truncated) +
-      // contextual signals up to the budget. Contextual items appear in
-      // the order they were appended (rejected-approaches first, plugin
-      // tip last) — earlier items are higher-priority. If budget runs
-      // out, drop tail-first and emit a "more context: call recall"
-      // pointer so the agent knows what's missing and how to fetch it.
-      const assembled: string[] = [headerLine, ...blockingParts];
-      let droppedContextual = 0;
-      const baselineLen = assembled.join("\n").length;
-      let runningLen = baselineLen;
-      for (const part of contextualParts) {
-        if (runningLen + part.length + 1 <= HINT_BUDGET_CHARS) {
-          assembled.push(part);
-          runningLen += part.length + 1;
-        } else {
-          droppedContextual++;
-        }
-      }
-      if (droppedContextual > 0) {
-        assembled.push(
-          `\n📦 ${droppedContextual} additional context section${droppedContextual === 1 ? "" : "s"} omitted to keep this hint focused (rejected approaches, team prefs, ledger stats, etc). Call \`recall\` with mode='philosophy' or mode='sessions' to pull what you need.`,
-        );
-      }
-      firstCallHint = `\n${assembled.join("\n")}`;
+      // X4 — full assembly lives in mcp/first-call-hint.ts; the BLOCKING +
+      // CONTEXTUAL tiering, the HINT_BUDGET_CHARS cap, and the recall
+      // pointer all moved with it. The handler here just dispatches.
+      firstCallHint = await buildFirstCallHint(store, port);
     }
 
-    /**
-     * Try to elicit a quick response from the user via MCP elicitation.
-     * Falls back gracefully if the client doesn't support it.
-     * Returns "approve" | "review" | null (not supported / declined).
-     *
-     * Behavior is pinned by `decideElicitResponse` (exported below), so
-     * the response-handling logic can be unit-tested without an SDK round trip.
-     */
-    const tryElicit = async (message: string): Promise<"approve" | "review" | null> => {
-      try {
-        const result = await server.elicitInput({
-          message,
-          requestedSchema: ELICIT_APPROVE_SCHEMA,
-        });
-        return decideElicitResponse(result);
-      } catch {
-        // Client doesn't support elicitation — fall back to polling
-        return null;
-      }
-    };
-
-    /**
-     * Pre-flight: refuse to record an artifact whose content matches an
-     * approach the human previously rejected (session-scoped) OR violates a
-     * team-agreed avoid/require preference (committed to .deeppairing/team.json).
-     * Returns a tool error response if either lane matches, or null otherwise.
-     *
-     * U5 — the matching/orchestration logic lives in preflight-validator.ts.
-     * This wrapper only handles the side-effecty bits (reading the store,
-     * broadcasting the block event, shaping the MCP tool-error response).
-     */
-    const preflightRejectedApproaches = async (
+    // X4 — per-call helpers extracted to mcp/tool-helpers.ts. These thin
+    // wrappers preserve the call-site signatures the tool cases were
+    // written against, so the case bodies didn't have to change.
+    const tryElicit = (message: string) => tryElicitHelper(server, message);
+    const preflightRejectedApproaches = (
       toolName: string,
       proposalStrings: string[],
       proposalPaths: string[] = [],
-    ): Promise<{ content: Array<{ type: "text"; text: string }>; isError: true } | null> => {
-      const memory = await store.getSessionMemory();
-      const teamPrefs: TeamPreference[] = typeof (store as any).getTeamPreferences === "function"
-        ? (await (store as any).getTeamPreferences()) ?? []
-        : [];
+    ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths);
+    const autoNameSession = (title: string) => sessionNameLatch.maybeName(title);
 
-      const result = runPreflight({
-        toolName,
-        proposalStrings,
-        proposalPaths,
-        rejectedApproaches: memory.rejectedApproaches,
-        teamPreferences: teamPrefs,
-      });
-
-      if (!result.blocked) return null;
-
-      // Make the invisible moat felt: broadcast the block so the companion UI
-      // can surface a toast. The MOST distinctive deepPairing mechanic — the
-      // agent being stopped from re-proposing something the human already
-      // rejected — used to happen silently. Now the human sees it.
-      broadcast(result.block.broadcastEvent);
-
-      return {
-        content: [{ type: "text", text: result.block.message }],
-        isError: true as const,
-      };
-    };
-
-    /** Auto-name the session from the first meaningful artifact title */
-    const autoNameSession = async (title: string) => {
-      if (sessionNamed || !title || title === "Research Findings" || title === "Reasoning") return;
-      sessionNamed = true;
-      // If the store supports renaming sessions (DaemonClient does)
-      if ("renameSession" in store && typeof (store as any).renameSession === "function") {
-        await (store as any).renameSession(title);
-      }
+    // X4 — ToolContext for handlers extracted to tools/. Cases that still
+    // live in this switch can ignore it; new extractions just pull from ctx.
+    // The mutable poll counter lives in `state` so the check_feedback
+    // handler can write to it via reference once that case is extracted.
+    const ctx: ToolContext = {
+      server,
+      store,
+      broadcast,
+      port,
+      helpers: {
+        tryElicit,
+        preflightRejectedApproaches,
+        autoNameSession,
+        getPassiveFeedback,
+      },
+      state: {
+        get checkFeedbackPollCount() { return checkFeedbackPollCount; },
+        set checkFeedbackPollCount(v) { checkFeedbackPollCount = v; },
+      } as any,
     };
 
     const result = await (async () => { switch (name) {
@@ -1221,39 +848,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "log_reasoning": {
-        const validated = validateLogReasoningInput(args);
-        if (!validated.ok) return validated.error;
-        const id = `art_${nanoid(10)}`;
-        const relatedIds = args?.relatesTo?.artifactId ? [args.relatesTo.artifactId] : undefined;
-        const artifact = await store.createArtifact({
-          id,
-          type: "reasoning",
-          title: args?.action ?? "Reasoning",
-          content: {
-            action: args?.action,
-            reasoning: args?.reasoning,
-            concept: args?.concept,
-            evidence: args?.evidence,
-            relatesTo: args?.relatesTo,
-            alternativesConsidered: args?.alternativesConsidered ?? [],
-            alternativeDetails: args?.alternativeDetails,
-            confidence: args?.confidence,
-          },
-          agentReasoning: args?.reasoning,
-          relatedArtifactIds: relatedIds,
-        });
-        broadcast({ type: "artifact_created", artifact });
-        await maybeEmitTaskHandle(server, artifact, store);
-        // Gentle nudge when the agent omits `concept` — the pairing value
-        // hinges on the concept being surfaced, not the reasoning prose.
-        const nudge = args?.concept?.name
-          ? ""
-          : "\n(Pairing nudge: name the underlying concept via `concept` so the human learns the pattern, not just the fix.)";
-        return {
-          content: [{ type: "text", text: `Reasoning logged. Proceed with code changes.${nudge}${await getPassiveFeedback()}` }],
-        };
-      }
+      case "log_reasoning":
+        return handleLogReasoning(ctx, args);
 
       case "present_code_change": {
         const validated = validatePresentCodeChangeInput(args);
@@ -1978,29 +1574,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
       }
 
-      case "export_session": {
-        const format = (args?.format ?? "full") as "full" | "pr-description" | "pr-comments" | "adr" | "replay" | "learnings";
-        const state: any = await store.getFullState();
-        // Include learner annotations when exporting as replay.
-        if (format === "replay" && typeof (store as any).getAnnotations === "function") {
-          state.annotations = await (store as any).getAnnotations();
-        }
-        // R3: the learnings format cross-references retrospectives. Attach
-        // the session memory (rejected approaches) and retrospectives when
-        // the store exposes them.
-        if (format === "learnings") {
-          if (typeof (store as any).getSessionMemory === "function") {
-            state.sessionMemory = await (store as any).getSessionMemory();
-          }
-          if (typeof (store as any).getRetrospectives === "function") {
-            state.retrospectives = await (store as any).getRetrospectives();
-          }
-        }
-        const markdown = formatSessionMarkdown(state, format);
-        return {
-          content: [{ type: "text", text: markdown }],
-        };
-      }
+      case "export_session":
+        return handleExportSession(ctx, args);
 
       default:
         return {
