@@ -85,6 +85,67 @@ describe("DecisionCard — draft state", () => {
     const askButtons = screen.queryAllByRole("button", { name: /ask the agent/i });
     expect(askButtons).toHaveLength(0);
   });
+
+  // X11 — affordance hierarchy. The recommendation should be visually
+  // unmistakable (not just a star), and the escape hatches (reasoning,
+  // send-back) should sit in a single tertiary footer row instead of
+  // two stacked bordered blocks competing with the option grid.
+  it("X11: recommended option carries a 'Recommended' pill, not just a star", () => {
+    render(<DecisionCard event={event} />);
+    expect(screen.getByText(/Recommended/)).toBeInTheDocument();
+    // Star is still in the DOM (inside the pill) — keeps the keyboard
+    // affordance for users who learned it pre-X11.
+    expect(screen.getAllByText("★")).toHaveLength(1);
+  });
+
+  it("X11: escape hatches collapse into one tertiary row by default", () => {
+    render(<DecisionCard event={event} artifactId="art_x11" />);
+    // Both triggers exist as muted text links.
+    expect(
+      screen.getByRole("button", { name: /\+ Add reasoning/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /send decision back/i }),
+    ).toBeInTheDocument();
+    // Neither composer is open before the user reaches for them.
+    expect(screen.queryByPlaceholderText(/Why — becomes the/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText(/all 4 are matchers/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("X11: opening 'Add reasoning' closes 'Send back' (mutually exclusive)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} artifactId="art_x11" />);
+    await user.click(screen.getByRole("button", { name: /send decision back/i }));
+    expect(
+      screen.getByPlaceholderText(/all 4 are matchers/i),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /\+ Add reasoning/i }));
+    // Send-back composer is gone; reasoning input is up.
+    expect(
+      screen.queryByPlaceholderText(/all 4 are matchers/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/Why — becomes the/i),
+    ).toBeInTheDocument();
+  });
+
+  it("X11: opening 'Send back' closes 'Add reasoning' (mutually exclusive)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} artifactId="art_x11" />);
+    await user.click(screen.getByRole("button", { name: /\+ Add reasoning/i }));
+    expect(
+      screen.getByPlaceholderText(/Why — becomes the/i),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /send decision back/i }));
+    expect(
+      screen.queryByPlaceholderText(/Why — becomes the/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText(/all 4 are matchers/i),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("DecisionCard — resolved state (initialResolved)", () => {
