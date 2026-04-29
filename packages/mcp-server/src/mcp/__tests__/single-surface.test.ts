@@ -97,6 +97,44 @@ describe("present_* tool descriptions carry single-review-surface guidance (U0.3
     expect(d).toMatch(/per-edit checkpoint/i);
     expect(d).toMatch(/present_code_change/);
   });
+
+  // X8 — descriptions must use the Summary / Schema note / Workflow
+  // structure so the LLM can scan rather than read linearly. Round-2 MCP
+  // review flagged that wall-of-text descriptions risk being tuned out.
+  // These tests pin the section markers + a generous length cap so a
+  // future "let me add a paragraph" addition gets caught.
+  const STRUCTURED_TOOLS = [
+    "present_findings",
+    "present_options",
+    "present_spec",
+    "present_plan",
+    "present_code_change",
+    "log_reasoning",
+  ];
+
+  it("X8 — every present_* (and log_reasoning) carries Schema note + Workflow sections", async () => {
+    for (const name of STRUCTURED_TOOLS) {
+      const d = await descFor(name);
+      expect(d, `${name} should have a Schema note section`).toMatch(/Schema note:/i);
+      expect(d, `${name} should have a Workflow section`).toMatch(/Workflow:/i);
+    }
+  });
+
+  it("X8 — descriptions stay under a 700-char cap (was ~1100+ pre-X8)", async () => {
+    for (const name of STRUCTURED_TOOLS) {
+      const d = await descFor(name);
+      expect(d.length, `${name} description is ${d.length} chars; cap is 700`).toBeLessThanOrEqual(700);
+    }
+  });
+
+  it("X8 — Schema note references INPUT_VALIDATION_FAILED so the LLM knows the failure mode", async () => {
+    // INPUT_VALIDATION_FAILED is what gets returned by validate-tool-input.ts.
+    // Naming it in the description makes the contract explicit.
+    for (const name of ["present_findings", "present_options", "present_spec", "present_plan", "present_code_change", "log_reasoning"]) {
+      const d = await descFor(name);
+      expect(d, `${name} should mention INPUT_VALIDATION_FAILED`).toMatch(/INPUT_VALIDATION_FAILED/);
+    }
+  });
 });
 
 describe("embedded CLAUDE.md protocol carries the same guidance (U0.5 + V3)", () => {
