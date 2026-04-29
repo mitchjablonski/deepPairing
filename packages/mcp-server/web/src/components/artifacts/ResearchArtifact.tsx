@@ -499,6 +499,9 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
     return (
       <div
         key={i}
+        // X10 — landing target for `dp:focus-artifact` events that carry a
+        // finding-level anchor. See lib/comment-anchor.ts.
+        data-comment-anchor={`finding:${i}`}
         className={`bg-surface-secondary rounded-lg border border-white/[0.06] hover:border-white/[0.1] transition-all duration-[180ms] ease-out ${
           focusMode ? "p-5" : "p-3"
         }`}

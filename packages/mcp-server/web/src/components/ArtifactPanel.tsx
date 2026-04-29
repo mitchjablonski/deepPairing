@@ -155,6 +155,9 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
       transition={{ duration: 0.2, ease: [0.32, 0.72, 0, 1] }}
+      // X10 — scoping attribute used by scrollToAnchor() to disambiguate
+      // anchors when two artifacts are on the page during transitions.
+      data-artifact-id={artifact.id}
       className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full ${
         contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
       }`}

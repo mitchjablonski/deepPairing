@@ -167,6 +167,73 @@ describe("ConversationRail (W1)", () => {
     expect((focus as any).detail).toEqual({ artifactId: "a_focus" });
   });
 
+  // X10 — rail row click carries the comment's anchor key so App.tsx can
+  // scroll the artifact to the exact line / step / finding instead of just
+  // selecting the artifact card.
+  it("X10: clicking a line-anchored comment dispatches the line anchorKey", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a_x10", { title: "Findings" }));
+    s.addComment(comment({
+      id: "c_line", artifactId: "a_x10", author: "human",
+      content: "this line worries me",
+      createdAt: "2026-04-26T10:00:00.000Z",
+      target: { lineStart: 42, filePath: "src/auth.ts", findingIndex: 1, evidenceIndex: 0 },
+    }));
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByText("this line worries me"));
+    const focus = dispatchSpy.mock.calls
+      .map((c) => c[0] as CustomEvent)
+      .find((e) => e.type === "dp:focus-artifact");
+    expect((focus as any).detail).toEqual({
+      artifactId: "a_x10",
+      anchorKey: "line:src/auth.ts:42",
+    });
+  });
+
+  it("X10: clicking a step-anchored comment dispatches the step anchorKey", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a_step", { title: "Plan", type: "plan" }));
+    s.addComment(comment({
+      id: "c_step", artifactId: "a_step", author: "human",
+      content: "step 3 is risky",
+      createdAt: "2026-04-26T10:00:00.000Z",
+      target: { stepIndex: 2 },
+    }));
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByText("step 3 is risky"));
+    const focus = dispatchSpy.mock.calls
+      .map((c) => c[0] as CustomEvent)
+      .find((e) => e.type === "dp:focus-artifact");
+    expect((focus as any).detail).toEqual({
+      artifactId: "a_step",
+      anchorKey: "step:2",
+    });
+  });
+
+  it("X10: clicking an artifact-level comment dispatches with no anchorKey", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a_root", { title: "Notes" }));
+    s.addComment(comment({
+      id: "c_root", artifactId: "a_root", author: "human",
+      content: "general thought",
+      createdAt: "2026-04-26T10:00:00.000Z",
+      // No line / step / finding — just an artifact-root comment.
+    }));
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByText("general thought"));
+    const focus = dispatchSpy.mock.calls
+      .map((c) => c[0] as CustomEvent)
+      .find((e) => e.type === "dp:focus-artifact");
+    expect((focus as any).detail.artifactId).toBe("a_root");
+    expect((focus as any).detail.anchorKey).toBeUndefined();
+  });
+
   it("renders a target label using filename + line range when present", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { title: "Findings" }));
