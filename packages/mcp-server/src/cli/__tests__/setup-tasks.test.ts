@@ -257,6 +257,31 @@ describe("ensureStopHook", () => {
     expect(stillFlat).toBeUndefined();
   });
 
+  it("X9: HOOK_MARKERS.Stop recognizes whatever ensureStopHook just wrote (installer/doctor must agree)", () => {
+    // Regression for the X9 split-brain bug: doctor had its own inline
+    // matcher hard-coded to "deepPairing", so the X7 file-based command
+    // (`node .deeppairing/hooks/stop.mjs`) was invisible to it. After
+    // X9 the doctor calls HOOK_MARKERS.Stop directly. This test pins the
+    // contract: anything the installer writes MUST be a marker match.
+    ensureStopHook(tmpDir);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    const dpEntry = settings.hooks.Stop[0];
+    const cmd = dpEntry.hooks[0].command as string;
+    expect(HOOK_MARKERS.Stop(cmd)).toBe(true);
+  });
+
+  it("X9: HOOK_MARKERS.PostToolUse recognizes whatever ensureCheckpointHook just wrote", () => {
+    ensureCheckpointHook(tmpDir);
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "utf-8"),
+    );
+    const dpEntry = settings.hooks.PostToolUse[0];
+    const cmd = dpEntry.hooks[0].command as string;
+    expect(HOOK_MARKERS.PostToolUse(cmd)).toBe(true);
+  });
+
   it("refuses to clobber a malformed settings.local.json", () => {
     fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, ".claude", "settings.local.json"), "{ not json");

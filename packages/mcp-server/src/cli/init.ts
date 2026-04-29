@@ -14,7 +14,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity } from "../daemon-lifecycle.js";
-import { ensureDeepPairingDir, ensureGitignoreEntry, ensureStopHook, ensureCheckpointHook } from "./setup-tasks.js";
+import {
+  ensureDeepPairingDir,
+  ensureGitignoreEntry,
+  ensureStopHook,
+  ensureCheckpointHook,
+  HOOK_MARKERS,
+} from "./setup-tasks.js";
 import readline from "node:readline";
 
 const cwd = process.cwd();
@@ -511,36 +517,36 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   if (fs.existsSync(hooksPath)) {
     try {
       const settings = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
-      const stopHooks = settings?.hooks?.Stop ?? [];
-      // Stop entries can be either { command } directly (legacy flat shape
-      // — this installer wrote it on earlier versions; Claude Code now warns
-      // "Invalid settings / hooks: Expected array" for it) OR the correct
-      // { matcher, hooks: [{ type, command }] } shape.
-      const isDpStop = (entry: any) => {
-        if (typeof entry?.command === "string" && entry.command.includes("deepPairing")) return true;
+      // X9 — recognition routes through the same HOOK_MARKERS the installer
+      // and the cross-scope detector use. Without this, the doctor missed
+      // the file-based Stop hook (`node .deeppairing/hooks/stop.mjs`) because
+      // its substring is lowercase ".deeppairing", not "deepPairing".
+      const isDpEntry = (entry: any, marker: (cmd: string) => boolean): boolean => {
+        if (typeof entry?.command === "string" && marker(entry.command)) return true;
         if (Array.isArray(entry?.hooks)) {
-          return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"));
+          return entry.hooks.some(
+            (h: any) => typeof h?.command === "string" && marker(h.command),
+          );
         }
         return false;
       };
-      stopHookPresent = Array.isArray(stopHooks) && stopHooks.some(isDpStop);
+
+      const stopHooks = settings?.hooks?.Stop ?? [];
+      stopHookPresent =
+        Array.isArray(stopHooks) && stopHooks.some((e: any) => isDpEntry(e, HOOK_MARKERS.Stop));
+      // Legacy flat shape — { command } directly on the entry, no nested
+      // hooks array. Claude Code warns "Invalid settings / hooks: Expected
+      // array" for these; ensureStopHook heals them on next run.
       stopHookLegacyShape = Array.isArray(stopHooks) && stopHooks.some(
         (entry: any) =>
           typeof entry?.command === "string" &&
-          entry.command.includes("deepPairing") &&
+          HOOK_MARKERS.Stop(entry.command) &&
           !Array.isArray(entry?.hooks),
       );
       const postToolUse = settings?.hooks?.PostToolUse ?? [];
-      checkpointHookPresent = Array.isArray(postToolUse) && postToolUse.some(
-        (entry: any) => {
-          // PostToolUse entries can be either { command } directly or { matcher, hooks: [{ command }] }.
-          if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
-          if (Array.isArray(entry?.hooks)) {
-            return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
-          }
-          return false;
-        },
-      );
+      checkpointHookPresent =
+        Array.isArray(postToolUse) &&
+        postToolUse.some((e: any) => isDpEntry(e, HOOK_MARKERS.PostToolUse));
     } catch {}
   }
   if (stopHookPresent && !stopHookLegacyShape) {
@@ -584,7 +590,9 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   // installs. Claude Code merges them in and runs both → "Ran 2 stop hooks."
   // We only auto-clean when --fix is passed, since these scopes might
   // contain other intentional hooks.
-  const { detectCrossScopeDpEntries, cleanDpEntriesFromScope, HOOK_MARKERS } =
+  // HOOK_MARKERS already imported at top — keep the dynamic import only for
+  // helpers that are doctor-specific (avoids loading them in the install path).
+  const { detectCrossScopeDpEntries, cleanDpEntriesFromScope } =
     await import("./setup-tasks.js");
   const crossScopeStop = detectCrossScopeDpEntries(cwd, "Stop", HOOK_MARKERS.Stop)
     .filter((s) => s.scope !== "project-local" && s.count > 0);
