@@ -503,6 +503,25 @@ export function createHttpRoutes(
     return c.json(await store.getSessionMemory());
   });
 
+  // X7 — hook fire history. Hooks (.deeppairing/hooks/stop.mjs and
+  // checkpoint.mjs) append every fire to .deeppairing/hooks-state.json.
+  // The companion UI's HookStatus component polls/subscribes to this so
+  // the user can see the hook stack working — not just learn about it
+  // when something nags in the terminal.
+  app.get("/api/hook-state", (c) => {
+    if (!projectRoot) return c.json({ version: 1, fires: [] });
+    const statePath = path.join(projectRoot, ".deeppairing", "hooks-state.json");
+    if (!fs.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    try {
+      const raw = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+      // Cap response to last 25 fires — UI only shows ~5 at a time.
+      const fires = Array.isArray(raw?.fires) ? raw.fires.slice(-25) : [];
+      return c.json({ version: 1, fires });
+    } catch {
+      return c.json({ version: 1, fires: [] });
+    }
+  });
+
   // List past sessions
   app.get("/api/sessions", (c) => {
     if (!projectRoot) return c.json({ sessions: [] });

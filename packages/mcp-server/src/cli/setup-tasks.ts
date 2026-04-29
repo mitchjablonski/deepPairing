@@ -127,8 +127,11 @@ export function cleanDpEntriesFromScope(
 
 /** Marker functions used both by the installer (own-the-row in .local) and
  *  by the cross-scope detector. Centralized so a future installer
- *  command-string change updates both paths together. */
-const STOP_HOOK_MARKER = (cmd: string) => cmd.includes("deepPairing");
+ *  command-string change updates both paths together. The Stop marker
+ *  matches BOTH the legacy "deepPairing" inline command AND the X7-era
+ *  file-based `node .deeppairing/hooks/stop.mjs` command. */
+const STOP_HOOK_MARKER = (cmd: string) =>
+  cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
 const CHECKPOINT_HOOK_MARKER = (cmd: string) => cmd.includes("checkpoint.mjs");
 export const HOOK_MARKERS = { Stop: STOP_HOOK_MARKER, PostToolUse: CHECKPOINT_HOOK_MARKER } as const;
 
@@ -172,18 +175,91 @@ export function ensureGitignoreEntry(projectRoot: string): SetupResult {
  *
  * U0.4 / U0.6 — age guard: drafts older than DRAFT_MAX_AGE_MS are treated as
  * abandoned (user moved on, agent shouldn't stay stuck forever). The default
- * is 30 minutes — long enough that an actively-reviewing user won't trigger
- * abandonment, short enough that a stale draft can't trap the agent in a poll
- * loop indefinitely. The hook uses createdAt because that's the only
- * universal timestamp on Artifact today (updatedAt arrived later and may be
- * missing on older sessions).
+ * is 30 minutes.
+ *
+ * X7 — every fire (pass OR nag) appends an entry to
+ * .deeppairing/hooks-state.json. The companion UI's HookStatus component
+ * reads + listens to that file to surface "hook stack working" feedback.
+ *
+ * X9 (partial) — converted from inline `node -e "..."` to a real .mjs file
+ * (matches the checkpoint hook's pattern). Editable, debuggable, no
+ * shell+JSON+JS triple-escaping.
  */
-const STOP_HOOK_COMMAND = `node -e "const fs=require('fs'),p=require('path');try{const d=p.join(process.cwd(),'.deeppairing','sessions');if(!fs.existsSync(d))process.exit(0);const MAX=30*60*1000;const now=Date.now();const s=fs.readdirSync(d);for(const id of s){const f=p.join(d,id,'artifacts.json');if(!fs.existsSync(f))continue;const a=JSON.parse(fs.readFileSync(f,'utf-8'));if(a.some(x=>{if(x.status!=='draft')return false;if(!['research','spec','plan','decision','code_change'].includes(x.type))return false;const t=x.createdAt?new Date(x.createdAt).getTime():0;if(t&&now-t>MAX)return false;return true})){console.log('deepPairing: pending artifacts need review — call check_feedback');process.exit(2)}}}catch{process.exit(0)}"`;
+const STOP_HOOK_SCRIPT = `#!/usr/bin/env node
+// deepPairing Stop hook — installed by ensureStopHook (X7 / X9).
+// ESM (.mjs).
+import fs from "node:fs";
+import path from "node:path";
+
+const HOOK_NAME = "stop";
+const STATE_PATH = path.join(process.cwd(), ".deeppairing", "hooks-state.json");
+const STATE_CAP = 50;
+function recordFire(exitCode, reason) {
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
+    state.version = 1;
+    state.fires = Array.isArray(state.fires) ? state.fires : [];
+    state.fires.push({
+      at: new Date().toISOString(),
+      hook: HOOK_NAME,
+      exitCode,
+      reason,
+    });
+    if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+  } catch {
+    // Recording must never fail the hook itself.
+  }
+}
+function exit(code, reason) {
+  recordFire(code, reason);
+  process.exit(code);
+}
+
+try {
+  const sessionsDir = path.join(process.cwd(), ".deeppairing", "sessions");
+  if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
+
+  const MAX_AGE_MS = 30 * 60 * 1000;
+  const now = Date.now();
+  for (const id of fs.readdirSync(sessionsDir)) {
+    const af = path.join(sessionsDir, id, "artifacts.json");
+    if (!fs.existsSync(af)) continue;
+    let arr;
+    try { arr = JSON.parse(fs.readFileSync(af, "utf-8")); } catch { continue; }
+    const blocking = arr.some((x) => {
+      if (x.status !== "draft") return false;
+      if (!["research", "spec", "plan", "decision", "code_change"].includes(x.type)) return false;
+      const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
+      if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
+      return true;
+    });
+    if (blocking) {
+      process.stdout.write("deepPairing: pending artifacts need review — call check_feedback\\n");
+      exit(2, "pending artifacts in " + id);
+    }
+  }
+  exit(0, "pass: no blocking drafts");
+} catch (err) {
+  exit(0, "error: " + (err?.message ?? err));
+}
+`;
+const STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
+const STOP_HOOK_COMMAND = `node ${STOP_SCRIPT_REL_PATH}`;
 
 export function ensureStopHook(projectRoot: string): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");
   const settingsPath = path.join(claudeDir, "settings.local.json");
+  const scriptPath = path.join(projectRoot, STOP_SCRIPT_REL_PATH);
   try {
+    // X7 / X9 — write the real .mjs file (overwrite is safe; the script
+    // is generated, not user-edited). Same pattern as checkpoint.mjs.
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
+    fs.chmodSync(scriptPath, 0o755);
+
     let settings: any = {};
     if (fs.existsSync(settingsPath)) {
       try {
@@ -212,15 +288,22 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     // nested, current command or stale command), then write exactly
     // ONE canonical entry. Non-DP entries (someone else's user hook)
     // are left strictly alone.
+    //
+    // X7 — marker also catches the new file-based command (`node
+    // .deeppairing/hooks/stop.mjs`). Substring match against the script
+    // path catches both old "deepPairing" command strings AND the new
+    // path-based one in a single check.
+    const matchesDpStopCmd = (cmd: string) =>
+      cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
     const isDpStopEntry = (entry: any) => {
-      if (typeof entry?.command === "string" && entry.command.includes("deepPairing")) return true; // legacy flat
+      if (typeof entry?.command === "string" && matchesDpStopCmd(entry.command)) return true; // legacy flat
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("deepPairing"));
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && matchesDpStopCmd(h.command));
       }
       return false;
     };
     const isLegacyFlatDp = (entry: any) =>
-      typeof entry?.command === "string" && entry.command.includes("deepPairing") && !Array.isArray(entry?.hooks);
+      typeof entry?.command === "string" && matchesDpStopCmd(entry.command) && !Array.isArray(entry?.hooks);
     const isCurrentCanonicalDp = (entry: any) =>
       Array.isArray(entry?.hooks) &&
       entry.hooks.length === 1 &&
@@ -343,6 +426,26 @@ function isTrivialFile(filePath) {
   return false;
 }
 
+// X7 — record every fire to .deeppairing/hooks-state.json so the
+// companion UI's HookStatus can show "hook stack working" feedback.
+const STATE_PATH = path.join(process.cwd(), ".deeppairing", "hooks-state.json");
+function recordFire(exitCode, reason) {
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
+    state.version = 1;
+    state.fires = Array.isArray(state.fires) ? state.fires : [];
+    state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
+    if (state.fires.length > 50) state.fires = state.fires.slice(-50);
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+  } catch { /* recording must never fail the hook itself */ }
+}
+function exit(code, reason) {
+  recordFire(code, reason);
+  process.exit(code);
+}
+
 let stdin = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (c) => { stdin += c; });
@@ -350,17 +453,17 @@ process.stdin.on("end", () => {
   try {
     const ev = stdin ? JSON.parse(stdin) : {};
     const tool = ev.tool_name || ev.toolName || "";
-    if (!["Write", "Edit", "MultiEdit"].includes(tool)) process.exit(0);
+    if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
     const filePath =
       (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
       (ev.input && ev.input.file_path) ||
       "(unknown)";
 
     // V2.1 — trivial files (gitignore, lockfiles, generated paths) auto-pass.
-    if (isTrivialFile(filePath)) process.exit(0);
+    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
 
     const sessionsDir = path.join(process.cwd(), ".deeppairing", "sessions");
-    if (!fs.existsSync(sessionsDir)) process.exit(0);
+    if (!fs.existsSync(sessionsDir)) exit(0, "skip: no sessions dir");
 
     let mostRecentCheckpoint = 0;
     for (const id of fs.readdirSync(sessionsDir)) {
@@ -377,10 +480,7 @@ process.stdin.on("end", () => {
     }
 
     // Threshold rule: every Write needs a code_change artifact created in
-    // the last FRESH_MS window. Phase 1 is intentionally simple — file-
-    // identity tracking ("did the user already approve THIS file?") is
-    // future work; right now we nag whenever the latest code_change is
-    // stale or absent.
+    // the last FRESH_MS window.
     const FRESH_MS = 60 * 1000;
     const ageMs = Date.now() - mostRecentCheckpoint;
     if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
@@ -391,12 +491,12 @@ process.stdin.on("end", () => {
         "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section. " +
         "Config / generated files like .gitignore are auto-skipped.)\\n"
       );
-      process.exit(2);
+      exit(2, "nag: " + tool + " on " + filePath);
     }
-    process.exit(0);
-  } catch {
+    exit(0, "pass: fresh checkpoint covers " + filePath);
+  } catch (err) {
     // Never block the agent on a hook bug. Exit 0 on any unexpected error.
-    process.exit(0);
+    exit(0, "error: " + (err?.message ?? err));
   }
 });
 `;

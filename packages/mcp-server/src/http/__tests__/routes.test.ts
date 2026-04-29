@@ -856,6 +856,66 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("GET /api/hook-state (X7)", () => {
+    it("returns an empty fires list when hooks-state.json is absent", async () => {
+      const res = await app.request("/api/hook-state");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.version).toBe(1);
+      expect(body.fires).toEqual([]);
+    });
+
+    it("returns the parsed fires from hooks-state.json", async () => {
+      const dpDir = path.join(tmpDir, ".deeppairing");
+      fs.mkdirSync(dpDir, { recursive: true });
+      const fires = [
+        { at: "2026-04-25T10:00:00.000Z", hook: "stop", exitCode: 0, reason: "pass: nothing pending" },
+        { at: "2026-04-25T10:01:00.000Z", hook: "checkpoint", exitCode: 2, reason: "nag: Edit on src/foo.ts without checkpoint" },
+      ];
+      fs.writeFileSync(
+        path.join(dpDir, "hooks-state.json"),
+        JSON.stringify({ version: 1, fires }),
+      );
+      const res = await app.request("/api/hook-state");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.fires).toHaveLength(2);
+      expect(body.fires[0].hook).toBe("stop");
+      expect(body.fires[1].exitCode).toBe(2);
+    });
+
+    it("caps the response at the last 25 fires even if the on-disk log is longer", async () => {
+      const dpDir = path.join(tmpDir, ".deeppairing");
+      fs.mkdirSync(dpDir, { recursive: true });
+      const fires = Array.from({ length: 40 }, (_, i) => ({
+        at: new Date(Date.parse("2026-04-25T10:00:00.000Z") + i * 1000).toISOString(),
+        hook: "stop",
+        exitCode: 0,
+        reason: `fire ${i}`,
+      }));
+      fs.writeFileSync(
+        path.join(dpDir, "hooks-state.json"),
+        JSON.stringify({ version: 1, fires }),
+      );
+      const res = await app.request("/api/hook-state");
+      const body = await res.json();
+      expect(body.fires).toHaveLength(25);
+      // Slice keeps the LAST 25, so we keep the most recent ones.
+      expect(body.fires[0].reason).toBe("fire 15");
+      expect(body.fires[24].reason).toBe("fire 39");
+    });
+
+    it("degrades to empty fires on malformed JSON instead of throwing", async () => {
+      const dpDir = path.join(tmpDir, ".deeppairing");
+      fs.mkdirSync(dpDir, { recursive: true });
+      fs.writeFileSync(path.join(dpDir, "hooks-state.json"), "{ not json");
+      const res = await app.request("/api/hook-state");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.fires).toEqual([]);
+    });
+  });
+
   describe("CORS", () => {
     it("allows localhost origins", async () => {
       const res = await app.request("/api/state", {

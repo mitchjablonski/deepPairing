@@ -14,6 +14,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { YourTasteDrawer } from "./components/YourTasteDrawer";
 import { ConversationRail } from "./components/ConversationRail";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
+import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 
@@ -210,6 +211,8 @@ function App() {
             </svg>
             <span className="hidden min-[700px]:inline">Conversation</span>
           </button>
+          <span className="text-2xs text-text-muted mx-1">·</span>
+          <HookStatus />
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
             onClick={() => setShowPalette(true)}
