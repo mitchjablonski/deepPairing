@@ -390,24 +390,33 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   handleSelect(option.id);
                 }
               }}
-              className={`text-left p-3 border rounded-lg transition-all duration-[180ms] ease-out press-scale cursor-pointer ${
+              // X11 — affordance hierarchy. Recommended option gets a
+              // visible "Recommended" pill + a violet border that matches
+              // the card frame, so it reads as the primary path at a glance.
+              // Pre-X11 the recommendation was a faint border tint and a
+              // single star — ambiguous against a focused-state blue ring.
+              className={`text-left p-3 border-2 rounded-lg transition-all duration-[180ms] ease-out press-scale cursor-pointer relative ${
                 submitting ? "opacity-50 cursor-not-allowed" : ""
               } ${
                 idx === focusedIndex
                   ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
                   : option.recommendation
-                    ? "border-accent-blue/30 bg-surface-elevated hover:border-accent-blue/50"
+                    ? "border-accent-violet/50 bg-accent-violet-dim/15 hover:border-accent-violet/70 shadow-[0_0_0_1px_rgba(124,92,252,0.08)]"
                     : "border-white/[0.06] bg-surface-elevated hover:border-white/[0.1]"
               }`}
               onMouseEnter={() => setFocusedIndex(idx)}
             >
               {/* Title + badges */}
               <div className="flex items-start justify-between gap-2 mb-1.5">
-                <div className="flex items-center gap-1.5 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
                   <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
                   {option.recommendation && (
-                    <span className="px-1.5 py-0.5 text-2xs font-medium bg-accent-blue-dim text-accent-blue rounded">
-                      ★
+                    <span
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet text-white rounded"
+                      title="Agent recommends this option"
+                    >
+                      <span aria-hidden>★</span>
+                      Recommended
                     </span>
                   )}
                 </div>
@@ -535,92 +544,59 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         </div>
       )}
 
-      {/* Send-back-with-comment affordance. Visible whenever the decision
-          isn't resolved and we have an artifactId to anchor against. Once
-          submitted, shows a "↻ awaiting revision" indicator instead. The
-          option-pick buttons stay live — the user can change their mind
-          and pick anyway, in which case the revision comment becomes
-          stale context the agent can address in the next decision. */}
-      {artifactId && (
-        <div className="mt-3 pt-3 border-t border-accent-violet/15">
-          {sendBackSent ? (
-            <div className="flex items-center gap-2 text-2xs text-accent-amber">
-              <span aria-hidden>↻</span>
-              <span>
-                Revision requested — the agent will call{" "}
-                <code className="font-mono text-[10px] bg-surface-elevated px-1 py-px rounded">revise_artifact</code>
-                {" "}and post a v2 of this decision. You can still pick from these options if you change your mind.
-              </span>
+      {/* X11 — escape hatches grouped under one footer instead of two
+          stacked bordered blocks. Pre-X11 "Send back" and "Why this choice"
+          each rendered with their own border + spacing, competing with the
+          option grid for visual weight. Now they share a single muted
+          footer; only the active composer expands above the row. They're
+          mutually exclusive in practice — opening one closes the other. */}
+      <div className="mt-3 pt-3 border-t border-accent-violet/15">
+        {showSendBack && !sendBackSent && (
+          <div className="space-y-2 mb-2">
+            <label className="block text-2xs text-text-muted">
+              What should change about the options? (the agent will revise the set, not just answer)
+            </label>
+            <textarea
+              rows={3}
+              autoFocus
+              value={sendBackText}
+              onChange={(e) => setSendBackText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  submitSendBack();
+                }
+                if (e.key === "Escape") {
+                  setShowSendBack(false);
+                  setSendBackText("");
+                }
+              }}
+              placeholder="e.g. all 4 are matchers — what about a hybrid? Or: option B should use Y instead of X…"
+              className="w-full px-2.5 py-1.5 bg-surface-secondary border border-accent-amber/30 rounded text-xs text-text-primary
+                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber resize-none"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={submitSendBack}
+                disabled={!sendBackText.trim()}
+                className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
+                           hover:bg-accent-amber/80 disabled:opacity-50 transition-colors press-scale"
+              >
+                ↻ Send back for revision
+              </button>
+              <button
+                onClick={() => { setShowSendBack(false); setSendBackText(""); }}
+                className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
+              >
+                Cancel
+              </button>
+              <span className="ml-auto text-2xs text-text-muted italic">⌘⏎ to send</span>
             </div>
-          ) : !showSendBack ? (
-            <button
-              onClick={() => setShowSendBack(true)}
-              className="text-xs text-accent-amber hover:underline transition-colors"
-              title="None of these options fit — send the decision back to the agent for a revised option set"
-              aria-label="Send decision back for revised options"
-            >
-              ↻ None of these fit — send back for revision
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <label className="block text-2xs text-text-muted">
-                What should change about the options? (the agent will revise the set, not just answer)
-              </label>
-              <textarea
-                rows={3}
-                autoFocus
-                value={sendBackText}
-                onChange={(e) => setSendBackText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    submitSendBack();
-                  }
-                  if (e.key === "Escape") {
-                    setShowSendBack(false);
-                    setSendBackText("");
-                  }
-                }}
-                placeholder="e.g. all 4 are matchers — what about a hybrid? Or: option B should use Y instead of X…"
-                className="w-full px-2.5 py-1.5 bg-surface-secondary border border-accent-amber/30 rounded text-xs text-text-primary
-                           placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber resize-none"
-              />
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={submitSendBack}
-                  disabled={!sendBackText.trim()}
-                  className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
-                             hover:bg-accent-amber/80 disabled:opacity-50 transition-colors press-scale"
-                >
-                  ↻ Send back for revision
-                </button>
-                <button
-                  onClick={() => { setShowSendBack(false); setSendBackText(""); }}
-                  className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
-                >
-                  Cancel
-                </button>
-                <span className="ml-auto text-2xs text-text-muted italic">⌘⏎ to send</span>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Reasoning — nudged because it becomes the rejection reason for the
-          N-1 options you didn't pick. Without it, the agent only remembers
-          "don't propose these" without knowing why. */}
-      <div className="mt-3 flex items-center gap-2">
-        {!showReasoning ? (
-          <button
-            onClick={() => setShowReasoning(true)}
-            className="text-xs text-accent-blue hover:underline transition-colors"
-            title="The reason you pick gets recorded as the why for every rejected option"
-          >
-            + Why this choice? <span className="text-text-muted">(remembered across sessions)</span>
-          </button>
-        ) : (
-          <div className="flex gap-2 flex-1">
+        {showReasoning && (
+          <div className="flex gap-2 mb-2">
             <input
               type="text"
               placeholder="Why — becomes the 'don't propose these' reason for rejected options"
@@ -646,6 +622,42 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             >
               Cancel
             </button>
+          </div>
+        )}
+
+        {/* Tertiary affordance row — both triggers live here as muted
+            text links. The "decision sent back" indicator displaces them
+            once revision is requested (the user already escaped). */}
+        {sendBackSent ? (
+          <div className="flex items-center gap-2 text-2xs text-accent-amber">
+            <span aria-hidden>↻</span>
+            <span>
+              Revision requested — the agent will call{" "}
+              <code className="font-mono text-[10px] bg-surface-elevated px-1 py-px rounded">revise_artifact</code>
+              {" "}and post a v2 of this decision. You can still pick from these options if you change your mind.
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 flex-wrap text-2xs text-text-muted">
+            {!showReasoning && (
+              <button
+                onClick={() => { setShowReasoning(true); setShowSendBack(false); }}
+                className="hover:text-accent-blue transition-colors"
+                title="The reason you pick gets recorded as the why for every rejected option"
+              >
+                + Add reasoning <span className="opacity-60">(remembered across sessions)</span>
+              </button>
+            )}
+            {artifactId && !showSendBack && (
+              <button
+                onClick={() => { setShowSendBack(true); setShowReasoning(false); }}
+                className="hover:text-accent-amber transition-colors"
+                title="None of these options fit — send the decision back to the agent for a revised option set"
+                aria-label="Send decision back for revised options"
+              >
+                ↻ None of these fit
+              </button>
+            )}
           </div>
         )}
       </div>
