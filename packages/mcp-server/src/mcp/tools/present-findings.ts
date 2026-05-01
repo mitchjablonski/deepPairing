@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentFindingsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { persistPreflightTrace } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentFindings(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -21,8 +22,8 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
       ? f.evidence.map((e: any) => (typeof e === "object" && e?.filePath) || "").filter(Boolean)
       : [],
   );
-  const blocked = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
-  if (blocked) return blocked;
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
+  if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
@@ -36,6 +37,8 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
     },
   });
   ctx.broadcast({ type: "artifact_created", artifact });
+  // Y1' — persist + broadcast the preflight trace so the breadcrumb renders.
+  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

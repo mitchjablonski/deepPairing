@@ -242,4 +242,83 @@ describe("runPreflight orchestrator", () => {
       expect((r.block.broadcastEvent.match as any).via).toBe("concept");
     }
   });
+
+  // Y1' — trace data is now ALWAYS returned alongside the block decision
+  // so callers can persist + render it without re-running matchers.
+  describe("Y1' — preflight trace", () => {
+    it("admit: trace.decision is 'admitted' and consideredCount reflects rejected + non-prefer team prefs", () => {
+      const rej: RejectedApproach = {
+        id: "r1", description: "x", concept: "graphql", reason: "y", rejectedAt: "2026-04-01T00:00:00Z",
+      } as any;
+      const r = runPreflight({
+        toolName: "present_findings",
+        proposalStrings: ["something completely unrelated about caching"],
+        rejectedApproaches: [rej],
+        teamPreferences: [
+          { id: "t1", kind: "avoid", concept: "monorepos", rationale: "x", addedAt: "2026-04-01" } as any,
+          { id: "t2", kind: "prefer", concept: "small modules", rationale: "y", addedAt: "2026-04-01" } as any, // dropped
+        ],
+      });
+      expect(r.blocked).toBe(false);
+      expect(r.trace.decision).toBe("admitted");
+      // 1 session-rejected + 1 team avoid; the team-prefer is dropped.
+      expect(r.trace.consideredCount).toBe(2);
+      expect(r.trace.consideredConcepts.map((c) => c.source).sort()).toEqual(["session", "team"]);
+      expect(r.trace.block).toBeUndefined();
+    });
+
+    it("block: trace.decision is 'blocked' and trace.block carries source + concept + via", () => {
+      const rej: RejectedApproach = {
+        id: "r1", description: "Use Railway", concept: "pay-per-request hosting",
+        reason: "expensive at scale", rejectedAt: "2026-04-01T00:00:00Z",
+      } as any;
+      const r = runPreflight({
+        toolName: "present_options",
+        proposalStrings: ["Deploy on Fly.io — pay-per-request hosting"],
+        rejectedApproaches: [rej],
+        teamPreferences: [],
+      });
+      expect(r.blocked).toBe(true);
+      expect(r.trace.decision).toBe("blocked");
+      expect(r.trace.block?.source).toBe("session");
+      expect(r.trace.block?.via).toBe("concept");
+      expect(r.trace.block?.concept).toBe("pay-per-request hosting");
+    });
+
+    it("near-miss: partial token coverage is surfaced (admitted-but-watch-this)", () => {
+      // "monorepo turbo build cache" has 4 ≥4-char tokens; proposal
+      // mentions 3 of 4. 3/4 = 75% coverage → above NEAR_MISS_THRESHOLD
+      // (0.5), below 1.0 (which would be a full block).
+      const rej: RejectedApproach = {
+        id: "r1", description: "x", concept: "monorepo turbo build cache",
+        reason: "rough on CI", rejectedAt: "2026-04-01T00:00:00Z",
+      } as any;
+      const r = runPreflight({
+        toolName: "present_findings",
+        proposalStrings: ["proposing a monorepo with turbo build pipeline"],
+        rejectedApproaches: [rej],
+        teamPreferences: [],
+      });
+      expect(r.blocked).toBe(false);
+      expect(r.trace.nearMisses.length).toBeGreaterThanOrEqual(1);
+      expect(r.trace.nearMisses[0].concept).toBe("monorepo turbo build cache");
+      expect(r.trace.nearMisses[0].source).toBe("session");
+    });
+
+    it("considered list is capped at 20 even with many rejected approaches", () => {
+      const many: RejectedApproach[] = Array.from({ length: 30 }, (_, i) => ({
+        id: `r${i}`, description: `r${i}`, concept: `concept-${i}`,
+        rejectedAt: "2026-04-01T00:00:00Z",
+      }) as any);
+      const r = runPreflight({
+        toolName: "present_findings",
+        proposalStrings: ["unrelated"],
+        rejectedApproaches: many,
+        teamPreferences: [],
+      });
+      expect(r.blocked).toBe(false);
+      expect(r.trace.consideredConcepts.length).toBe(20);
+      expect(r.trace.consideredCount).toBe(20);
+    });
+  });
 });

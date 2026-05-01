@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
+import { persistPreflightTrace } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -12,8 +13,8 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     ...proposedOptions.map((o) => o.title),
     ...proposedOptions.map((o) => o.description),
   ].filter(Boolean);
-  const blocked = await ctx.helpers.preflightRejectedApproaches("present_options", proposals);
-  if (blocked) return blocked;
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals);
+  if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
   const decisionId = `dec_${nanoid(10)}`;
@@ -24,6 +25,8 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     content: { context, options: proposedOptions, decisionId, stakes },
     relatedArtifactIds: args?.relatedFindings,
   });
+  // Y1' — record the preflight trace alongside the artifact.
+  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
   await ctx.store.recordDecisionRequest({
     decisionId,
     artifactId: id,

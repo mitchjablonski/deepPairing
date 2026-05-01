@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { persistPreflightTrace } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -22,8 +23,8 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
       ? (s as any).files.map((f: any) => (typeof f === "string" ? f : f?.filePath)).filter(Boolean)
       : [],
   );
-  const blocked = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
-  if (blocked) return blocked;
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
+  if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
@@ -35,6 +36,8 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   });
   await ctx.store.recordPlanReview(id);
   ctx.broadcast({ type: "artifact_created", artifact });
+  // Y1' — record the preflight trace alongside the artifact.
+  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({ type: "plan_review_request", artifactId: id, title });
 
