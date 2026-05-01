@@ -11,7 +11,7 @@ import type { IStore, RejectedApproach } from "../store/store-interface.js";
 import { buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
 import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
-import { maybeEmitTaskHandle } from "./tasks-probe.js";
+import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "./tasks-probe.js";
 import { buildFirstCallHint } from "./first-call-hint.js";
 import {
   tryElicit as tryElicitHelper,
@@ -685,6 +685,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         );
         if (elicitAction === "approve") {
           await store.updateArtifactStatus(id, "approved", "elicit_accept");
+          await maybeUpdateTaskStatus(server, id, store);
           return {
             content: [{ type: "text", text: `Findings recorded and approved (${id}).${await getPassiveFeedback()}` }],
           };
@@ -786,6 +787,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         );
         if (elicitAction === "approve") {
           await store.updateArtifactStatus(id, "approved", "elicit_accept");
+          await maybeUpdateTaskStatus(server, id, store);
           return {
             content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${await getPassiveFeedback()}` }],
           };
@@ -837,6 +839,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         );
         if (elicitAction === "approve") {
           await store.updateArtifactStatus(id, "approved", "elicit_accept");
+          await maybeUpdateTaskStatus(server, id, store);
           await store.resolvePlanReview(id, "approved");
           return {
             content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${await getPassiveFeedback()}` }],
@@ -889,6 +892,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           );
           if (elicitAction === "approve") {
             await store.updateArtifactStatus(id, "approved");
+            await maybeUpdateTaskStatus(server, id, store);
             return {
               content: [{ type: "text", text: `Code change approved (${id}): ${args?.changeType} ${args?.filePath}.${await getPassiveFeedback()}` }],
             };
@@ -1342,6 +1346,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             version: old.version + 1,
           });
           await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
+          await maybeUpdateTaskStatus(server, old.id, store);
 
           await store.addComment({
             id: `cmt_${nanoid(10)}`,
@@ -1386,6 +1391,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           };
         }
         await store.updateArtifactStatus(artifactId, "retracted", "agent_retract");
+        await maybeUpdateTaskStatus(server, artifactId, store);
         await store.addComment({
           id: `cmt_${nanoid(10)}`,
           artifactId,

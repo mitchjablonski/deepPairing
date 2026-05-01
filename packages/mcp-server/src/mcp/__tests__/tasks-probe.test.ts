@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
-import { MCP_TASKS_ENABLED, maybeEmitTaskHandle } from "../tasks-probe.js";
+import { MCP_TASKS_ENABLED, maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 
 let tmpDir: string;
 let store: FileStore;
@@ -52,5 +52,40 @@ describe("MCP Tasks capability probe", () => {
     // for any methods on it while MCP_TASKS_ENABLED is false.
     const fakeServer = {} as any;
     await expect(maybeEmitTaskHandle(fakeServer, artifact, store)).resolves.toBeUndefined();
+  });
+
+  // X6 — status-update seam. Mirrors the creation-seam contract.
+  it("maybeUpdateTaskStatus is a no-op today (no SDK call, no throw)", async () => {
+    store.createArtifact({
+      id: "art_probe_status",
+      type: "research",
+      title: "noop",
+      content: { summary: "x", findings: [] },
+    });
+    const fakeServer = {} as any;
+    await expect(
+      maybeUpdateTaskStatus(fakeServer, "art_probe_status", store),
+    ).resolves.toBeUndefined();
+  });
+
+  it("maybeUpdateTaskStatus accepts null server for HTTP-side mutations", async () => {
+    // routes.ts passes null because the daemon process owns the MCP server,
+    // not the routes module. The seam must accept null without throwing so
+    // the future Tasks impl can route via the daemon broadcast channel.
+    store.createArtifact({
+      id: "art_http",
+      type: "plan",
+      title: "noop",
+      content: { steps: [] },
+    });
+    await expect(
+      maybeUpdateTaskStatus(null, "art_http", store),
+    ).resolves.toBeUndefined();
+  });
+
+  it("maybeUpdateTaskStatus tolerates a missing artifact id (caller may race deletion)", async () => {
+    await expect(
+      maybeUpdateTaskStatus(null, "art_does_not_exist", store),
+    ).resolves.toBeUndefined();
   });
 });
