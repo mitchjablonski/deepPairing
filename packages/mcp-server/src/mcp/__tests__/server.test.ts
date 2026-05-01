@@ -57,8 +57,12 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Findings recorded");
       expect(store.getArtifacts()).toHaveLength(1);
       expect(store.getArtifacts()[0].type).toBe("research");
-      expect(broadcasts).toHaveLength(1);
-      expect(broadcasts[0].type).toBe("artifact_created");
+      // Y1' — handler now broadcasts BOTH artifact_created and the
+      // preflight trace alongside it. The trace is the substrate for the
+      // ArtifactPanel breadcrumb.
+      const types = broadcasts.map((b) => b.type);
+      expect(types).toContain("artifact_created");
+      expect(types).toContain("preflight_trace_recorded");
     });
   });
 

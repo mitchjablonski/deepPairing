@@ -148,6 +148,16 @@ export {
 } from "./schemas/team-preferences.js";
 
 export {
+  PreflightConsideredConceptSchema,
+  PreflightNearMissSchema,
+  PreflightBlockSummarySchema,
+  PreflightTraceSchema,
+  type PreflightTrace,
+  type PreflightConsideredConcept,
+  type PreflightNearMiss,
+} from "./schemas/preflight-trace.js";
+
+export {
   FindingSchema,
   FindingSeveritySchema,
   ResearchContentSchema,

@@ -249,6 +249,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           });
           break;
 
+        case "preflight_trace_recorded":
+          // Y1' — bridge the WS event to a window CustomEvent so the
+          // PreflightBreadcrumb component (mounted per-artifact) can
+          // pick it up without subscribing to the whole connection store.
+          if (data.artifactId && data.trace) {
+            window.dispatchEvent(
+              new CustomEvent("dp:preflight-trace", {
+                detail: { artifactId: data.artifactId, trace: data.trace },
+              }),
+            );
+          }
+          break;
+
         case "hook_fired":
           // X7 — every Stop / Checkpoint hook fire (pass or nag) is broadcast
           // by the daemon's file watcher. Push into the dedicated store so

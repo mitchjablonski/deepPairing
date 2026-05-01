@@ -1,5 +1,6 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../../store/store-interface.js";
+import type { PreflightHelperResult } from "../tool-helpers.js";
 
 /**
  * X4 — shared per-call context for tool handlers.
@@ -26,12 +27,17 @@ export type ToolResult = {
 export interface ToolHelpers {
   /** MCP elicitation with graceful fallback. */
   tryElicit: (message: string) => Promise<"approve" | "review" | null>;
-  /** Pre-flight refusal for rejected approaches and team-pref violations. */
+  /**
+   * Pre-flight refusal for rejected approaches and team-pref violations.
+   * Y1' — always returns a trace so the caller can persist it via
+   * `store.recordPreflightTrace(artifactId, trace)` for the UI breadcrumb.
+   * `{ ok: true, trace }` admits; `{ ok: false, response, trace }` blocks.
+   */
   preflightRejectedApproaches: (
     toolName: string,
     proposalStrings: string[],
     proposalPaths?: string[],
-  ) => Promise<ToolResult | null>;
+  ) => Promise<PreflightHelperResult>;
   /** Idempotently rename the session from the first meaningful artifact title. */
   autoNameSession: (title: string) => Promise<void>;
   /** Drain unacknowledged human comments and format for the agent. */

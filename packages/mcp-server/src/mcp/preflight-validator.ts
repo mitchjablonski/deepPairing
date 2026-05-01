@@ -16,8 +16,31 @@
  * handles the broadcast + tool-error response itself; this file owns
  * the matching rules.
  */
-import type { TeamPreference } from "@deeppairing/shared";
+import type {
+  TeamPreference,
+  PreflightConsideredConcept,
+  PreflightNearMiss,
+} from "@deeppairing/shared";
 import type { RejectedApproach } from "../store/store-interface.js";
+
+/**
+ * Y1' — fraction of meaningful concept tokens that appear in the proposal.
+ * Returns 0..1. Used for near-miss detection: a stance is "almost flagged"
+ * when the partial coverage is high enough to be relevant but below the
+ * full-match threshold the blocking matchers use.
+ */
+function tokenCoverage(concept: string, proposal: string): number {
+  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  if (tokens.length === 0) return 0;
+  const p = proposal.toLowerCase();
+  const hits = tokens.filter((t) => p.includes(t)).length;
+  return hits / tokens.length;
+}
+
+/** Threshold above which a partial match is surfaced as "near miss". */
+const NEAR_MISS_THRESHOLD = 0.5;
+/** Cap on `consideredConcepts` so the JSON stays small. */
+const CONSIDERED_CAP = 20;
 
 // ---------------------------------------------------------------------
 // Matchers (pure utilities; exported for unit tests)
@@ -195,9 +218,32 @@ export interface PreflightBlock {
   };
 }
 
+/**
+ * Y1' — trace payload the validator computes alongside its block decision.
+ * The caller persists it to disk + broadcasts it; the UI renders the
+ * "Cross-checked your N prior stances" breadcrumb from these fields.
+ *
+ * Note: `at` and `artifactId` belong to the caller (the validator doesn't
+ * know which artifact it ran for; it gets called BEFORE createArtifact).
+ * The orchestrator returns the partial trace here; the caller stamps
+ * those two fields when persisting.
+ */
+export interface PreflightTracePartial {
+  decision: "admitted" | "blocked";
+  consideredCount: number;
+  consideredConcepts: PreflightConsideredConcept[];
+  nearMisses: PreflightNearMiss[];
+  block?: {
+    source: "session" | "team";
+    concept?: string;
+    reason?: string;
+    via?: "surface" | "concept" | "avoid" | "require";
+  };
+}
+
 export type PreflightResult =
-  | { blocked: false }
-  | { blocked: true; block: PreflightBlock };
+  | { blocked: false; trace: PreflightTracePartial }
+  | { blocked: true; block: PreflightBlock; trace: PreflightTracePartial };
 
 /**
  * Run both lanes of the pre-flight check (session-rejected first, then
@@ -210,6 +256,79 @@ export type PreflightResult =
  */
 export function runPreflight(input: PreflightInput): PreflightResult {
   const { toolName, proposalStrings, proposalPaths = [], rejectedApproaches, teamPreferences } = input;
+
+  // Y1' — build the trace's "considered" list FIRST. Includes every
+  // session-rejected approach + every team pref whose scope (if any) the
+  // proposal touches. This is the count the breadcrumb headlines —
+  // "Cross-checked your N prior stances" — and the detail the user sees
+  // on expand. Cap so the JSON stays small.
+  const considered: PreflightConsideredConcept[] = [];
+  for (const rej of rejectedApproaches) {
+    if (considered.length >= CONSIDERED_CAP) break;
+    considered.push({
+      source: "session",
+      concept: rej.concept ?? rej.description,
+      reason: rej.reason,
+    });
+  }
+  for (const pref of teamPreferences) {
+    if (considered.length >= CONSIDERED_CAP) break;
+    if (pref.kind === "prefer") continue; // never blocks; drop from "considered" too
+    // Scope filter: skip prefs whose scope doesn't touch any proposal path.
+    if (pref.scope?.paths?.length) {
+      const hit = proposalPaths.some((p) =>
+        pref.scope!.paths!.some((g) => matchesGlob(p, g)),
+      );
+      if (!hit) continue;
+    }
+    considered.push({
+      source: "team",
+      concept: pref.concept,
+      reason: pref.rationale,
+    });
+  }
+
+  // Y1' — near-misses: stances whose tokens partially appear in the
+  // proposal. Computed once, included in trace whether we block or not.
+  // The blocking matchers below take precedence (a full match isn't a
+  // near miss; it's a block).
+  const nearMisses: PreflightNearMiss[] = [];
+  for (const rej of rejectedApproaches) {
+    const conceptText = rej.concept ?? rej.description;
+    const cov = Math.max(
+      ...proposalStrings.map((p) => tokenCoverage(conceptText, p)),
+      0,
+    );
+    if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
+      nearMisses.push({
+        source: "session",
+        concept: conceptText,
+        reason: rej.reason,
+        why: `Partial token overlap (${Math.round(cov * 100)}%) with a past rejection.`,
+      });
+    }
+  }
+  for (const pref of teamPreferences) {
+    if (pref.kind === "prefer") continue;
+    if (pref.scope?.paths?.length) {
+      const hit = proposalPaths.some((p) =>
+        pref.scope!.paths!.some((g) => matchesGlob(p, g)),
+      );
+      if (!hit) continue;
+    }
+    const cov = Math.max(
+      ...proposalStrings.map((p) => tokenCoverage(pref.concept, p)),
+      0,
+    );
+    if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
+      nearMisses.push({
+        source: "team",
+        concept: pref.concept,
+        reason: pref.rationale,
+        why: `Partial token overlap (${Math.round(cov * 100)}%) with a team policy.`,
+      });
+    }
+  }
 
   // Lane 1 — session-scoped rejected approaches.
   if (rejectedApproaches.length > 0) {
@@ -245,6 +364,18 @@ export function runPreflight(input: PreflightInput): PreflightResult {
               concept: match.rejected.concept,
               via: match.via,
             },
+          },
+        },
+        trace: {
+          decision: "blocked",
+          consideredCount: considered.length,
+          consideredConcepts: considered,
+          nearMisses,
+          block: {
+            source: "session",
+            concept: match.rejected.concept ?? match.rejected.description,
+            reason: match.rejected.reason,
+            via: match.via,
           },
         },
       };
@@ -293,9 +424,29 @@ export function runPreflight(input: PreflightInput): PreflightResult {
             },
           },
         },
+        trace: {
+          decision: "blocked",
+          consideredCount: considered.length,
+          consideredConcepts: considered,
+          nearMisses,
+          block: {
+            source: "team",
+            concept: pref.concept,
+            reason: pref.rationale,
+            via,
+          },
+        },
       };
     }
   }
 
-  return { blocked: false };
+  return {
+    blocked: false,
+    trace: {
+      decision: "admitted",
+      consideredCount: considered.length,
+      consideredConcepts: considered,
+      nearMisses,
+    },
+  };
 }

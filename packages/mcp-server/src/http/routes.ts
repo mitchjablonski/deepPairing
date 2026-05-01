@@ -298,6 +298,21 @@ export function createHttpRoutes(
     return c.json({ comments: await store.getCommentsForArtifact(artifactId) });
   });
 
+  // Y1' — preflight trace for an artifact. Drives the "Cross-checked your N
+  // prior stances" breadcrumb in ArtifactPanel. 404 when no trace was
+  // recorded (older artifacts predate Y1', or the store doesn't expose
+  // the method — daemon-client doesn't yet).
+  app.get("/api/artifacts/:artifactId/preflight-trace", (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ trace: null });
+    const artifactId = c.req.param("artifactId");
+    if (typeof (store as any).getPreflightTrace !== "function") {
+      return c.json({ trace: null });
+    }
+    const trace = (store as any).getPreflightTrace(artifactId);
+    return c.json({ trace: trace ?? null });
+  });
+
   // N3.1: Philosophy ledger (cross-project, shared across all sessions).
   // Powers the "Your taste" drawer. Read-only — mutations happen via the
   // MCP tools during live sessions.

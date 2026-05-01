@@ -16,6 +16,7 @@ import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
 import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
+import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 
 const statusDots: Record<string, string> = {
   draft: "bg-text-muted",
@@ -250,6 +251,11 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         </h4>
         <CommentThread artifactId={artifact.id} comments={generalComments} />
       </div>
+
+      {/* Y1' — preflight breadcrumb makes the silent ledger guard felt on
+          every artifact, not just on a block. Self-hides when no trace
+          exists or when the ledger had zero stances to consult. */}
+      <PreflightBreadcrumb artifactId={artifact.id} />
     </motion.div>
   );
 }

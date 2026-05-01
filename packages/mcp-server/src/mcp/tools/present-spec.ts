@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { persistPreflightTrace } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -16,8 +17,8 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     ...requirementsArr.map((r) => r.rationale),
     ...tasksArr.map((t) => t.description),
   ].filter(Boolean);
-  const blocked = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
-  if (blocked) return blocked;
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
+  if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
@@ -34,6 +35,8 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     },
   });
   ctx.broadcast({ type: "artifact_created", artifact });
+  // Y1' — record the preflight trace alongside the artifact.
+  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

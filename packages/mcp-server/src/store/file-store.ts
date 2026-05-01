@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference, Retrospective, RetrospectiveVerdict } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference, Retrospective, RetrospectiveVerdict, PreflightTrace } from "@deeppairing/shared";
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
@@ -842,6 +842,30 @@ export class FileStore implements IStore {
     if (next.length === existing.length) return false;
     fs.writeFileSync(this.annotationsPath(), JSON.stringify(next, null, 2));
     return true;
+  }
+
+  // --- Preflight traces (Y1') ---
+
+  /**
+   * Y1' — sidecar storage for preflight consult traces. One JSON file per
+   * session, keyed by artifactId. Kept off the artifact body because
+   * traces describe a one-time consult event (council architecture
+   * round 2: Artifact stays the immutable creative payload, trace
+   * evolves separately if needed).
+   */
+  private preflightTracesPath(): string {
+    return path.join(this.sessionDir(), "preflight-traces.json");
+  }
+
+  recordPreflightTrace(artifactId: string, trace: PreflightTrace): void {
+    const map = this.loadJsonFile<Record<string, PreflightTrace>>(this.preflightTracesPath(), {});
+    map[artifactId] = trace;
+    fs.writeFileSync(this.preflightTracesPath(), JSON.stringify(map, null, 2));
+  }
+
+  getPreflightTrace(artifactId: string): PreflightTrace | null {
+    const map = this.loadJsonFile<Record<string, PreflightTrace>>(this.preflightTracesPath(), {});
+    return map[artifactId] ?? null;
   }
 
   // --- Autonomy Level ---
