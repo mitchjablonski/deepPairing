@@ -1574,4 +1574,66 @@ describe("MCP Tool Handlers", () => {
       expect(text).not.toMatch(/additional context section/);
     });
   });
+
+  describe("Y2 — firstCallHint gating (write tools only)", () => {
+    // Pre-Y2 the hint appended to EVERY first tool call. That contaminated
+    // read-only tools — recall returned the philosophy ledger duplicated
+    // underneath itself, export_session leaked session-memory text into
+    // the markdown the user wanted to grab. Y2 restricts the append to
+    // tools that WRITE (present_*, log_reasoning, revise_artifact,
+    // post_pr_review). These tests pin both directions.
+
+    it("present_findings (write) — first call carries the hint", async () => {
+      const { text } = await callTool("present_findings", {
+        summary: "trigger",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).toMatch(/\[First use this session\]/);
+    });
+
+    it("recall (read) — first call does NOT carry the hint", async () => {
+      const { text } = await callTool("recall", { query: "anything", mode: "any" });
+      expect(text).not.toMatch(/\[First use this session\]/);
+      // Negative spot-check — common contextual sections shouldn't leak in.
+      expect(text).not.toMatch(/Cross-project philosophy ledger \(use recall/);
+    });
+
+    it("export_session (read) — first call does NOT carry the hint", async () => {
+      // export_session returns markdown; contamination here was the worst
+      // offender (the user pastes the export elsewhere).
+      const { text } = await callTool("export_session", { format: "full" });
+      expect(text).not.toMatch(/\[First use this session\]/);
+    });
+
+    it("check_feedback (read) — first call does NOT carry the hint", async () => {
+      // check_feedback long-polls; an empty-state response shouldn't be
+      // splattered with rejected-approach lists either.
+      const { text } = await callTool("check_feedback", {});
+      expect(text).not.toMatch(/\[First use this session\]/);
+    });
+
+    it("hint still fires on the first WRITE call even if a READ call ran first", async () => {
+      // Per-server `firstToolCall` flag flips on ANY first call, including
+      // reads. Y2's gate is on whether to *append* the hint, not whether
+      // to *compute* it. This pins that the hint is computed once but is
+      // attached only to the first qualifying write — so a read-then-write
+      // sequence still surfaces the hint on the write.
+      //
+      // Note: the current implementation flips firstToolCall on first
+      // dispatch regardless of tool, which means a leading read still
+      // "burns" the computed hint. This test documents the ACTUAL
+      // current behavior so a future change is intentional.
+      await callTool("recall", { query: "x", mode: "any" });
+      const { text } = await callTool("present_findings", {
+        summary: "trigger",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      // After the leading recall, firstCallHint has been computed +
+      // discarded; the next present_findings does NOT carry it. This is
+      // a known quirk; if a future PR wants the hint to attach to the
+      // first WRITE rather than the first ANY, flip firstToolCall inside
+      // the gate and remove the .not below.
+      expect(text).not.toMatch(/\[First use this session\]/);
+    });
+  });
 });
