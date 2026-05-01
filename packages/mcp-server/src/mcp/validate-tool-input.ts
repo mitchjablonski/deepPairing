@@ -89,10 +89,14 @@ const EXAMPLE_OPTIONS = `{
   "options": [
     { "id": "a", "title": "Redis", "description": "...", "pros": ["fast"],
       "cons": ["another service"], "effort": "medium", "risk": "low",
-      "recommendation": true },
+      "recommendation": true,
+      "concept": { "name": "external cache service",
+        "oneLineExplanation": "in-process is faster but loses on multi-instance" } },
     { "id": "b", "title": "In-memory LRU", "description": "...", "pros": ["simple"],
       "cons": ["per-instance"], "effort": "low", "risk": "medium",
-      "recommendation": false }
+      "recommendation": false,
+      "concept": { "name": "in-process LRU",
+        "oneLineExplanation": "no network hop; each instance keeps its own copy" } }
   ]
 }`;
 
@@ -122,7 +126,9 @@ const EXAMPLE_CODE_CHANGE = `{
   "changeType": "modify",
   "before": "bcrypt.hash(pw, 4)",
   "after":  "bcrypt.hash(pw, 12)",
-  "reasoning": "Raise cost factor; rounds=4 is brute-forceable in <1 day"
+  "reasoning": "Raise cost factor; rounds=4 is brute-forceable in <1 day",
+  "concept": { "name": "password-hash work factor tuning",
+    "oneLineExplanation": "the cost should make brute-force impractical at today's hardware" }
 }`;
 
 const EXAMPLE_REASONING = `{
@@ -157,6 +163,13 @@ const PresentOptionsInputSchema = z.object({
     effort: z.enum(["low", "medium", "high"]),
     risk: z.enum(["low", "medium", "high"]),
     recommendation: z.boolean(),
+    // Y5 — name the underlying pattern so rejections compound across
+    // projects. Optional for back-compat, but the description in
+    // ListTools (server.ts) actively encourages it.
+    concept: z.object({
+      name: z.string().min(1),
+      oneLineExplanation: z.string().optional(),
+    }).optional(),
   })).min(2).max(4),
   stakes: z.enum(["low", "medium", "high"]).optional(),
 });
@@ -210,6 +223,8 @@ export function validatePresentCodeChangeInput(args: any): ValidationResult<z.in
     after: args?.after ?? "",
     reasoning: args?.reasoning,
     confidence: args?.confidence,
+    // Y5 — pass the agent-supplied concept through so the artifact carries it.
+    concept: args?.concept,
   });
   if (result.success) return { ok: true, data: result.data };
   return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };

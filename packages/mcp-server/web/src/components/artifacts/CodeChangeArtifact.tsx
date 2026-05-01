@@ -2,6 +2,7 @@ import type { Artifact } from "@deeppairing/shared";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
+import { ConceptBadge } from "../ConceptBadge";
 import { useState, useMemo } from "react";
 import { computeLineDiff, type DiffLine } from "../../lib/diff";
 
@@ -11,6 +12,9 @@ interface CodeChangeContent {
   before: string;
   after: string;
   reasoning: string;
+  // Y5 — named pattern this change embodies. Drives ConceptBadge rendering
+  // and (eventually) preflight matching against past project rejections.
+  concept?: { name: string; oneLineExplanation?: string };
 }
 
 function UnifiedDiffView({ diff, filePath, artifactId }: { diff: DiffLine[]; filePath: string; artifactId: string }) {
@@ -133,6 +137,17 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
           </div>
         )}
       </div>
+
+      {/* Y5 — concept badge above the "Why" so the pattern frames the
+          reasoning. When the agent named the concept, this is the
+          single most ledger-relevant element on the artifact. */}
+      {content.concept?.name && (
+        <ConceptBadge
+          name={content.concept.name}
+          explanation={content.concept.oneLineExplanation}
+          size="md"
+        />
+      )}
 
       {/* Reasoning */}
       {content.reasoning && (

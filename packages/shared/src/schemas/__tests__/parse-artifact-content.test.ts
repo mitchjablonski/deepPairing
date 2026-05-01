@@ -103,4 +103,56 @@ describe("parseArtifactContent (U2)", () => {
     }));
     expect(r.ok).toBe(true);
   });
+
+  // Y5 — concepts hoisted into decision options + code_change content.
+  it("Y5: validates a decision option carrying a concept", async () => {
+    const r = await parseArtifactContent(art("decision", {
+      context: "Pick a cache",
+      decisionId: "dec_y5",
+      options: [{
+        id: "a", title: "Redis", description: "fast", pros: ["a"], cons: ["b"],
+        effort: "low", risk: "low", recommendation: true,
+        concept: { name: "external cache service", oneLineExplanation: "network hop, but multi-instance safe" },
+      }],
+    }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const opt = (r.data as any).options[0];
+      expect(opt.concept.name).toBe("external cache service");
+    }
+  });
+
+  it("Y5: option concept is optional — old-shape options still validate", async () => {
+    const r = await parseArtifactContent(art("decision", {
+      context: "x", decisionId: "d",
+      options: [{
+        id: "a", title: "x", description: "y", pros: [], cons: [],
+        effort: "low", risk: "low", recommendation: true,
+      }],
+    }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("Y5: option concept rejects empty name (low-signal rows are worse than no row)", async () => {
+    const r = await parseArtifactContent(art("decision", {
+      context: "x", decisionId: "d",
+      options: [{
+        id: "a", title: "x", description: "y", pros: [], cons: [],
+        effort: "low", risk: "low", recommendation: true,
+        concept: { name: "" },
+      }],
+    }));
+    expect(r.ok).toBe(false);
+  });
+
+  it("Y5: validates a code_change carrying a concept", async () => {
+    const r = await parseArtifactContent(art("code_change", {
+      filePath: "x.ts", changeType: "modify", before: "a", after: "b", reasoning: "fix",
+      concept: { name: "password-hash work factor tuning" },
+    }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect((r.data as any).concept.name).toBe("password-hash work factor tuning");
+    }
+  });
 });
