@@ -2,7 +2,7 @@
  * DaemonClient — HTTP client that implements IStore by proxying
  * all operations to the shared deepPairing daemon.
  */
-import type { Artifact, ArtifactStatus, Comment, TeamPreference } from "@deeppairing/shared";
+import type { Artifact, ArtifactStatus, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import type {
   IStore,
   DecisionRecord,
@@ -16,6 +16,18 @@ import type {
 export class DaemonClient implements IStore {
   private baseUrl: string;
   private sessionId: string;
+  /**
+   * Z1 — remember the meta we last registered with so the auto-recover
+   * path (on a 404 session_not_registered) can replay register() with
+   * the same shape. Without this, a wrapper that survives a daemon
+   * restart would re-register without its expectedProjectRoot binding,
+   * losing the Y3' guarantee.
+   */
+  private lastRegisterMeta?: {
+    title?: string;
+    project?: string;
+    expectedProjectRoot?: string;
+  };
 
   constructor(port: number, sessionId: string) {
     this.baseUrl = `http://localhost:${port}/api/internal/sessions/${sessionId}`;
@@ -26,18 +38,57 @@ export class DaemonClient implements IStore {
     return this.sessionId;
   }
 
+  /**
+   * Z1 — common request path with auto-recover on session_not_registered.
+   *
+   * Pre-Z1 every call did `await fetch(...); return res.json()` with no
+   * status check. Y3' introduced 404s on unregistered sessions (the right
+   * fix for the orphan-session class) but the unguarded JSON read meant
+   * those 404s flowed back to callers as `data.artifacts === undefined`
+   * — silent failure for any wrapper that survived a daemon idle-shutdown.
+   *
+   * Now: on a 404 + code=session_not_registered, replay register() once
+   * with the stored meta and retry the original call. Other non-2xx
+   * statuses throw with a structured error so caller bugs surface.
+   */
+  private async request<T = any>(
+    path: string,
+    init: RequestInit,
+    isRetry = false,
+  ): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, init);
+    if (res.ok) return res.json();
+
+    // Try to parse the structured error body the daemon now returns.
+    let body: any = {};
+    try { body = await res.clone().json(); } catch {}
+
+    if (
+      res.status === 404 &&
+      body?.code === "session_not_registered" &&
+      !isRetry
+    ) {
+      // Daemon restarted (or the supervisor killed + respawned it on idle
+      // shutdown). The session map is empty server-side; re-register and
+      // retry exactly once. Guard against infinite recursion via isRetry.
+      await this.register(this.lastRegisterMeta);
+      return this.request<T>(path, init, true);
+    }
+
+    const msg = body?.error ?? `request failed (${res.status})`;
+    throw new Error(`[deepPairing] ${msg}`);
+  }
+
   private async post<T = any>(path: string, body?: any): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    return this.request<T>(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : undefined,
     });
-    return res.json();
   }
 
   private async get<T = any>(path: string): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`);
-    return res.json();
+    return this.request<T>(path, {});
   }
 
   // --- Session lifecycle ---
@@ -53,6 +104,8 @@ export class DaemonClient implements IStore {
     project?: string;
     expectedProjectRoot?: string;
   }): Promise<void> {
+    // Z1 — remember meta so the auto-recover path in request() can replay.
+    this.lastRegisterMeta = meta;
     const res = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -235,6 +288,20 @@ export class DaemonClient implements IStore {
   async getTeamPreferences(): Promise<TeamPreference[]> {
     const data = await this.get<{ preferences: TeamPreference[] }>("/team-preferences");
     return data.preferences ?? [];
+  }
+
+  // --- Preflight traces (Z1) ---
+  // Y1' shipped trace persistence on FileStore but not on DaemonClient,
+  // so the breadcrumb story silently broke in daemon mode. These two
+  // wire it through to the new internal /preflight-traces routes.
+
+  async recordPreflightTrace(artifactId: string, trace: PreflightTrace): Promise<void> {
+    await this.post(`/preflight-traces/${artifactId}`, { trace });
+  }
+
+  async getPreflightTrace(artifactId: string): Promise<PreflightTrace | null> {
+    const data = await this.get<{ trace: PreflightTrace | null }>(`/preflight-traces/${artifactId}`);
+    return data.trace ?? null;
   }
 
   // --- Autonomy ---

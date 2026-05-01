@@ -26,7 +26,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     relatedArtifactIds: args?.relatedFindings,
   });
   // Y1' — record the preflight trace alongside the artifact.
-  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
   await ctx.store.recordDecisionRequest({
     decisionId,
     artifactId: id,

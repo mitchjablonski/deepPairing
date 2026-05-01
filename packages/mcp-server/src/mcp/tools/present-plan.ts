@@ -37,7 +37,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   await ctx.store.recordPlanReview(id);
   ctx.broadcast({ type: "artifact_created", artifact });
   // Y1' — record the preflight trace alongside the artifact.
-  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({ type: "plan_review_request", artifactId: id, title });
 

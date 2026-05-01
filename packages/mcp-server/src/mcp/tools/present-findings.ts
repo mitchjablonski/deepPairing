@@ -38,7 +38,7 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   });
   ctx.broadcast({ type: "artifact_created", artifact });
   // Y1' — persist + broadcast the preflight trace so the breadcrumb renders.
-  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

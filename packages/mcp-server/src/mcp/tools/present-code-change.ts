@@ -24,7 +24,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   });
   ctx.broadcast({ type: "artifact_created", artifact });
   // Y1' — record the preflight trace alongside the artifact.
-  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
 
   // S7 — quick-approve via elicitation for small, confident edits.

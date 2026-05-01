@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, ArtifactStatus, Comment } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, PreflightTrace } from "@deeppairing/shared";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -211,6 +211,18 @@ export interface IStore {
     addedBy?: string;
     addedAt?: string;
   }>>;
+
+  /**
+   * Z1 — sidecar preflight trace persistence (Y1' substrate). Optional on
+   * the interface so DaemonClient + FileStore can both implement without
+   * forcing every consumer to know the difference. Pre-Z1 these existed
+   * only on FileStore and the call sites cast `(store as any)`, which
+   * meant DaemonClient (the production daemon-mode store) silently
+   * no-op'd trace persistence — every standalone-wrapper user got an
+   * invisible breadcrumb.
+   */
+  recordPreflightTrace?(artifactId: string, trace: PreflightTrace): MaybePromise<void>;
+  getPreflightTrace?(artifactId: string): MaybePromise<PreflightTrace | null>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;
