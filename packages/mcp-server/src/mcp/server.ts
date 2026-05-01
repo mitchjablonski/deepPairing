@@ -21,14 +21,12 @@ import {
 } from "./tool-helpers.js";
 import { handleLogReasoning } from "./tools/log-reasoning.js";
 import { handleExportSession } from "./tools/export-session.js";
+import { handlePresentFindings } from "./tools/present-findings.js";
+import { handlePresentOptions } from "./tools/present-options.js";
+import { handlePresentSpec } from "./tools/present-spec.js";
+import { handlePresentPlan } from "./tools/present-plan.js";
+import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import type { ToolContext } from "./tools/types.js";
-import {
-  validatePresentFindingsInput,
-  validatePresentOptionsInput,
-  validatePresentSpecInput,
-  validatePresentPlanInput,
-  validatePresentCodeChangeInput,
-} from "./validate-tool-input.js";
 
 /**
  * U0.2 — schema for the quick-approve elicitation form.
@@ -641,268 +639,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     };
 
     const result = await (async () => { switch (name) {
-      case "present_findings": {
-        // Validate at the boundary so a malformed `findings` (e.g. a string
-        // instead of an array) cannot land on disk and break the renderer.
-        const validated = validatePresentFindingsInput(args);
-        if (!validated.ok) return validated.error;
-        const findings = validated.data.findings;
-        const proposals: string[] = [
-          args?.title ?? "",
-          validated.data.summary,
-          ...findings.map((f) => f?.title ?? ""),
-          ...findings.map((f) => f?.recommendation ?? ""),
-        ].filter(Boolean);
-        // Paths from structured evidence feed scope-aware team-pref enforcement.
-        const proposalPaths: string[] = findings.flatMap((f) =>
-          Array.isArray(f?.evidence)
-            ? f.evidence.map((e: any) => (typeof e === "object" && e?.filePath) || "").filter(Boolean)
-            : [],
-        );
-        const blocked = await preflightRejectedApproaches("present_findings", proposals, proposalPaths);
-        if (blocked) return blocked;
+      case "present_findings":
+        return handlePresentFindings(ctx, args);
 
-        const id = `art_${nanoid(10)}`;
-        const artifact = await store.createArtifact({
-          id,
-          type: "research",
-          title: args?.title ?? "Research Findings",
-          content: {
-            summary: validated.data.summary,
-            findings: validated.data.findings,
-            openQuestions: validated.data.openQuestions ?? [],
-          },
-        });
-        broadcast({ type: "artifact_created", artifact });
-        await maybeEmitTaskHandle(server, artifact, store);
-        await autoNameSession(artifact.title);
+      case "present_options":
+        return handlePresentOptions(ctx, args);
 
-        // Try elicitation for quick approval
-        const elicitAction = await tryElicit(
-          `Findings: "${artifact.title}"\n\n` +
-          `Accept to approve these findings.\n` +
-          `Decline to review in detail at http://localhost:${port}`
-        );
-        if (elicitAction === "approve") {
-          await store.updateArtifactStatus(id, "approved", "elicit_accept");
-          await maybeUpdateTaskStatus(server, id, store);
-          return {
-            content: [{ type: "text", text: `Findings recorded and approved (${id}).${await getPassiveFeedback()}` }],
-          };
-        }
+      case "present_spec":
+        return handlePresentSpec(ctx, args);
 
-        return {
-          content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${port}. Call check_feedback for their response.${await getPassiveFeedback()}` }],
-        };
-      }
-
-      case "present_options": {
-        const validated = validatePresentOptionsInput(args);
-        if (!validated.ok) return validated.error;
-        const { context, options: proposedOptions, stakes } = validated.data;
-        const proposals: string[] = [
-          context,
-          ...proposedOptions.map((o) => o.title),
-          ...proposedOptions.map((o) => o.description),
-        ].filter(Boolean);
-        const blocked = await preflightRejectedApproaches("present_options", proposals);
-        if (blocked) return blocked;
-
-        const id = `art_${nanoid(10)}`;
-        const decisionId = `dec_${nanoid(10)}`;
-        const artifact = await store.createArtifact({
-          id,
-          type: "decision",
-          title: context,
-          content: { context, options: proposedOptions, decisionId, stakes },
-          relatedArtifactIds: args?.relatedFindings,
-        });
-        await store.recordDecisionRequest({
-          decisionId,
-          artifactId: id,
-          context,
-          options: proposedOptions,
-          stakes,
-        } as any);
-        broadcast({ type: "artifact_created", artifact });
-        await maybeEmitTaskHandle(server, artifact, store);
-        broadcast({
-          type: "decision_request",
-          decisionId,
-          artifactId: id,
-          context: args?.context,
-          options: args?.options,
-          stakes,
-        });
-
-        // Try elicitation for quick selection
-        const options = args?.options ?? [];
-        // Decisions with multiple options are best reviewed in the companion UI
-        // Skip elicitation — the option comparison UI is much richer than a terminal form
-
-        return {
-          content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${port}. Call check_feedback for their choice.${await getPassiveFeedback()}` }],
-        };
-      }
-
-      case "present_spec": {
-        const validated = validatePresentSpecInput(args);
-        if (!validated.ok) return validated.error;
-        const { title, objective, context, requirements, design, tasks, openQuestions } = validated.data;
-        const requirementsArr = requirements;
-        const tasksArr = tasks ?? [];
-        const proposals: string[] = [
-          title,
-          objective,
-          ...requirementsArr.map((r) => r.statement),
-          ...requirementsArr.map((r) => r.rationale),
-          ...tasksArr.map((t) => t.description),
-        ].filter(Boolean);
-        const blocked = await preflightRejectedApproaches("present_spec", proposals);
-        if (blocked) return blocked;
-
-        const id = `art_${nanoid(10)}`;
-        const artifact = await store.createArtifact({
-          id,
-          type: "spec",
-          title,
-          content: {
-            objective,
-            context,
-            requirements: requirementsArr,
-            design,
-            tasks: tasksArr,
-            openQuestions: openQuestions ?? [],
-          },
-        });
-        broadcast({ type: "artifact_created", artifact });
-        await maybeEmitTaskHandle(server, artifact, store);
-        await autoNameSession(artifact.title);
-
-        // Quick-approve path via elicitation for simple specs
-        const elicitAction = await tryElicit(
-          `Spec: "${artifact.title}"\n\n` +
-          `Accept to approve these requirements as-is.\n` +
-          `Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${port}`,
-        );
-        if (elicitAction === "approve") {
-          await store.updateArtifactStatus(id, "approved", "elicit_accept");
-          await maybeUpdateTaskStatus(server, id, store);
-          return {
-            content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${await getPassiveFeedback()}` }],
-          };
-        }
-
-        return {
-          content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${port}. Call check_feedback for their response.${await getPassiveFeedback()}` }],
-        };
-      }
-
-      case "present_plan": {
-        const validated = validatePresentPlanInput(args);
-        if (!validated.ok) return validated.error;
-        const { title, steps: planSteps, estimatedChanges } = validated.data;
-        const proposals: string[] = [
-          title,
-          ...planSteps.map((s) => s.description),
-          ...planSteps.map((s) => s.reasoning),
-          ...planSteps.flatMap((s) =>
-            Array.isArray((s as any).files) ? (s as any).files.map((f: any) => String(typeof f === "string" ? f : f?.filePath ?? "")) : [],
-          ),
-        ].filter(Boolean);
-        const proposalPaths: string[] = planSteps.flatMap((s) =>
-          Array.isArray((s as any).files)
-            ? (s as any).files.map((f: any) => (typeof f === "string" ? f : f?.filePath)).filter(Boolean)
-            : [],
-        );
-        const blocked = await preflightRejectedApproaches("present_plan", proposals, proposalPaths);
-        if (blocked) return blocked;
-
-        const id = `art_${nanoid(10)}`;
-        const artifact = await store.createArtifact({
-          id,
-          type: "plan",
-          title,
-          content: { steps: planSteps, estimatedChanges },
-          relatedArtifactIds: args?.relatedFindings,
-        });
-        await store.recordPlanReview(id);
-        broadcast({ type: "artifact_created", artifact });
-        await maybeEmitTaskHandle(server, artifact, store);
-        broadcast({ type: "plan_review_request", artifactId: id, title });
-
-        // Try elicitation for quick approval
-        const elicitAction = await tryElicit(
-          `Plan: "${args?.title}" (${args?.steps?.length ?? 0} steps)\n\n` +
-          `Accept to approve this plan.\n` +
-          `Decline to review steps in detail at http://localhost:${port}`
-        );
-        if (elicitAction === "approve") {
-          await store.updateArtifactStatus(id, "approved", "elicit_accept");
-          await maybeUpdateTaskStatus(server, id, store);
-          await store.resolvePlanReview(id, "approved");
-          return {
-            content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${await getPassiveFeedback()}` }],
-          };
-        }
-
-        return {
-          content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${port}. Call check_feedback for their verdict.${await getPassiveFeedback()}` }],
-        };
-      }
+      case "present_plan":
+        return handlePresentPlan(ctx, args);
 
       case "log_reasoning":
         return handleLogReasoning(ctx, args);
 
-      case "present_code_change": {
-        const validated = validatePresentCodeChangeInput(args);
-        if (!validated.ok) return validated.error;
-        const { filePath, changeType, before, after, reasoning, confidence } = validated.data;
-        const proposals: string[] = [filePath, reasoning].filter(Boolean);
-        const proposalPaths: string[] = [filePath];
-        const blocked = await preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
-        if (blocked) return blocked;
-
-        const id = `art_${nanoid(10)}`;
-        const artifact = await store.createArtifact({
-          id,
-          type: "code_change",
-          title: `${changeType} ${filePath}`,
-          content: { filePath, changeType, before, after, reasoning, confidence },
-          agentReasoning: reasoning,
-          relatedArtifactIds: args?.relatedFindings,
-        });
-        broadcast({ type: "artifact_created", artifact });
-        await maybeEmitTaskHandle(server, artifact, store);
-
-        // S7 — quick-approve via elicitation for small, confident edits.
-        // Threshold: ≤ 20 changed lines AND no low-confidence flag. Bigger
-        // or hedged changes route straight to the companion UI where the
-        // diff + reasoning + linked findings render in full. Threshold is
-        // intentionally conservative — terminal accept is a great escape
-        // hatch for tiny edits, a footgun for sprawling ones.
-        const changedLines = before.split("\n").length + after.split("\n").length;
-        const isSmallEdit = changedLines <= 20;
-        const isConfident = (confidence ?? "").toLowerCase() !== "low";
-        if (isSmallEdit && isConfident) {
-          const elicitAction = await tryElicit(
-            `Apply ${changeType} to ${filePath}?\n\n` +
-            `Accept to approve this change.\n` +
-            `Decline to review the diff at http://localhost:${port}`,
-          );
-          if (elicitAction === "approve") {
-            await store.updateArtifactStatus(id, "approved");
-            await maybeUpdateTaskStatus(server, id, store);
-            return {
-              content: [{ type: "text", text: `Code change approved (${id}): ${args?.changeType} ${args?.filePath}.${await getPassiveFeedback()}` }],
-            };
-          }
-        }
-
-        return {
-          content: [{ type: "text", text: `Code change presented for review (${id}): ${args?.changeType} ${args?.filePath}. Human can review at localhost:${port}.${await getPassiveFeedback()}` }],
-        };
-      }
+      case "present_code_change":
+        return handlePresentCodeChange(ctx, args);
 
       case "check_feedback": {
         // If no immediate feedback exists, long-poll for up to 30 seconds
