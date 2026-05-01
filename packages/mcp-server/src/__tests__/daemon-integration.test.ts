@@ -410,6 +410,60 @@ describe("Daemon Routes", () => {
       expect(res.status).toBe(200);
     });
   });
+
+  // Z1 — preflight trace round-trip through the internal API. Pre-Z1
+  // these routes didn't exist; persistPreflightTrace silently no-op'd
+  // against DaemonClient so users running via the daemon (production)
+  // got the broadcast but no sidecar persistence — the breadcrumb
+  // disappeared on refresh.
+  describe("Z1 — preflight trace round-trip", () => {
+    const TRACE = {
+      version: 1 as const,
+      at: "2026-04-30T12:00:00.000Z",
+      artifactId: "art_z1",
+      toolName: "present_findings",
+      decision: "admitted" as const,
+      consideredCount: 3,
+      consideredConcepts: [{ source: "session" as const, concept: "x" }],
+      nearMisses: [],
+    };
+
+    it("POST /preflight-traces/:artifactId persists; GET reads it back", async () => {
+      await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+      const postRes = await app.request(
+        `/api/internal/sessions/${SESSION}/preflight-traces/art_z1`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trace: TRACE }),
+        },
+      );
+      expect(postRes.status).toBe(200);
+      const getRes = await app.request(
+        `/api/internal/sessions/${SESSION}/preflight-traces/art_z1`,
+      );
+      expect(getRes.status).toBe(200);
+      const body = await getRes.json();
+      expect(body.trace.consideredCount).toBe(3);
+      expect(body.trace.consideredConcepts[0].concept).toBe("x");
+    });
+
+    it("GET returns null for an artifact with no recorded trace", async () => {
+      await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+      const res = await app.request(
+        `/api/internal/sessions/${SESSION}/preflight-traces/art_never`,
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).trace).toBeNull();
+    });
+
+    it("404s for an unregistered session (Y3' contract holds for Z1 routes)", async () => {
+      const res = await app.request(
+        `/api/internal/sessions/never/preflight-traces/art_x`,
+      );
+      expect(res.status).toBe(404);
+    });
+  });
 });
 
 // --- DaemonClient (via real HTTP server) ---
@@ -558,4 +612,51 @@ describe("DaemonClient", () => {
     const updated = artifacts.find((a) => a.id === "art_c1");
     expect(updated?.status).toBe("approved");
   });
+
+  // Z1 — preflight trace round-trip via DaemonClient (the production path).
+  it("Z1: recordPreflightTrace + getPreflightTrace roundtrip", async () => {
+    const trace = {
+      version: 1 as const,
+      at: "2026-04-30T12:00:00.000Z",
+      artifactId: "art_c1",
+      toolName: "present_findings",
+      decision: "admitted" as const,
+      consideredCount: 7,
+      consideredConcepts: [
+        { source: "session" as const, concept: "global mutable state", reason: "testability" },
+      ],
+      nearMisses: [],
+    };
+    await client.recordPreflightTrace("art_c1", trace);
+    const got = await client.getPreflightTrace("art_c1");
+    expect(got?.consideredCount).toBe(7);
+    expect(got?.consideredConcepts[0].concept).toBe("global mutable state");
+  });
+
+  it("Z1: getPreflightTrace returns null for an artifact with no trace", async () => {
+    const got = await client.getPreflightTrace("art_no_trace_yet");
+    expect(got).toBeNull();
+  });
+
+  // Z1 — auto-recover when the daemon's session map is wiped (e.g. daemon
+  // process restart while the wrapper's still alive). Pre-Z1 every
+  // subsequent call returned 404 silently — `data.artifacts === undefined`
+  // — and the wrapper had no idea it had gone stale.
+  //
+  // We can't simulate a daemon restart by mutating the outer `sessions`
+  // variable: createDaemonRoutes captures its sessions param by value at
+  // call time, so the running server has its own reference (the test's
+  // var reassignments in beforeEach are invisible to it). Instead, prove
+  // the retry path works by constructing a NEW client whose sessionId
+  // was never registered — first call must auto-register + retry, not
+  // throw or return undefined.
+  it("Z1: auto-re-registers and retries on 404 session_not_registered", async () => {
+    const freshClient = new DaemonClient(TEST_PORT, "z1_fresh_session");
+    // No register() call yet — first request hits the daemon with an
+    // unknown sessionId, gets 404 session_not_registered, and the
+    // request() helper replays register() before retrying.
+    const arts = await freshClient.getArtifacts();
+    expect(Array.isArray(arts)).toBe(true);
+  });
+
 });

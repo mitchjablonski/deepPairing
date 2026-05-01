@@ -36,7 +36,7 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
   });
   ctx.broadcast({ type: "artifact_created", artifact });
   // Y1' — record the preflight trace alongside the artifact.
-  persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

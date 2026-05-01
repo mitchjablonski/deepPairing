@@ -132,18 +132,24 @@ export class SessionNameLatch {
 /**
  * Y1' — persist the validator's trace against the freshly-created artifact
  * and broadcast it so the companion UI's PreflightBreadcrumb renders
- * without waiting for an HTTP roundtrip. Idempotent; no-ops gracefully on
- * stores that don't expose recordPreflightTrace (DaemonClient doesn't yet,
- * the file store does — that covers standalone today).
+ * without waiting for an HTTP roundtrip.
+ *
+ * Z1 — `recordPreflightTrace` is now properly optional on the IStore
+ * interface (was a `(store as any)` cast pre-Z1), and DaemonClient
+ * implements it. Pre-Z1 this silently no-op'd in daemon mode — the
+ * production install path — so every standalone-wrapper user got the
+ * Y1' broadcast but never the persisted trace, meaning a refresh
+ * lost the breadcrumb. Now the optional check is type-safe and the
+ * daemon path persists.
  */
-export function persistPreflightTrace(
+export async function persistPreflightTrace(
   store: IStore,
   broadcast: BroadcastFn,
   artifact: { id: string },
   toolName: string,
   partial: PreflightTracePartial,
-): void {
-  if (typeof (store as any).recordPreflightTrace !== "function") return;
+): Promise<void> {
+  if (!store.recordPreflightTrace) return;
   const trace = {
     version: 1 as const,
     at: new Date().toISOString(),
@@ -155,7 +161,7 @@ export function persistPreflightTrace(
     nearMisses: partial.nearMisses,
     block: partial.block,
   };
-  (store as any).recordPreflightTrace(artifact.id, trace);
+  await store.recordPreflightTrace(artifact.id, trace);
   broadcast({ type: "preflight_trace_recorded", artifactId: artifact.id, trace });
 }
 

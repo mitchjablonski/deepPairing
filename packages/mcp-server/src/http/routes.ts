@@ -299,17 +299,16 @@ export function createHttpRoutes(
   });
 
   // Y1' — preflight trace for an artifact. Drives the "Cross-checked your N
-  // prior stances" breadcrumb in ArtifactPanel. 404 when no trace was
-  // recorded (older artifacts predate Y1', or the store doesn't expose
-  // the method — daemon-client doesn't yet).
-  app.get("/api/artifacts/:artifactId/preflight-trace", (c) => {
+  // prior stances" breadcrumb in ArtifactPanel.
+  // Z1 — getPreflightTrace is now properly optional on IStore (was a cast
+  // pre-Z1). DaemonClient implements it; older artifacts that predate Y1'
+  // return null.
+  app.get("/api/artifacts/:artifactId/preflight-trace", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ trace: null });
     const artifactId = c.req.param("artifactId");
-    if (typeof (store as any).getPreflightTrace !== "function") {
-      return c.json({ trace: null });
-    }
-    const trace = (store as any).getPreflightTrace(artifactId);
+    if (!store.getPreflightTrace) return c.json({ trace: null });
+    const trace = await store.getPreflightTrace(artifactId);
     return c.json({ trace: trace ?? null });
   });
 

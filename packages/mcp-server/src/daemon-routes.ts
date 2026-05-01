@@ -380,6 +380,28 @@ export function createDaemonRoutes(
     return c.json({ status: "recorded" });
   });
 
+  // --- Preflight traces (Z1 — daemon-mode persistence for Y1') ---
+  // Pre-Z1, persistPreflightTrace silently no-op'd when called against
+  // DaemonClient because the method wasn't on the daemon's wire surface
+  // — every standalone-wrapper user got the broadcast but never the
+  // sidecar write, so a refresh lost the breadcrumb. These two routes
+  // close the production-mode silent failure.
+
+  app.post("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const { trace } = await c.req.json();
+    r.store.recordPreflightTrace?.(c.req.param("artifactId"), trace);
+    return c.json({ status: "recorded" });
+  });
+
+  app.get("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const trace = r.store.getPreflightTrace?.(c.req.param("artifactId")) ?? null;
+    return c.json({ trace });
+  });
+
   // --- Project context (guardrails + team preferences) ---
 
   app.get("/api/internal/sessions/:sessionId/guardrails", (c) => {
