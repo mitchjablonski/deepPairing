@@ -13,11 +13,18 @@
 import { createMcpServer } from "./mcp/server.js";
 import { ensureDaemon } from "./daemon-lifecycle.js";
 import { DaemonClient } from "./daemon-client.js";
+import { resolveProjectRoot } from "./project-root.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-const projectRoot = process.cwd();
+// Z2 — when Claude Code spawns us via the plugin install path, our cwd is
+// the plugin install dir (`~/.claude/plugins/...`), not the user's
+// workspace. resolveProjectRoot prefers CLAUDE_PROJECT_DIR (canonical
+// Claude Code signal for "the workspace") then DEEPPAIRING_PROJECT_ROOT
+// (escape hatch) before falling back to cwd. Pre-Z2 every plugin user's
+// projects collapsed to one shared session under the plugin dir.
+const { projectRoot, source: projectRootSource } = resolveProjectRoot();
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "server.log");
 
@@ -31,7 +38,7 @@ function log(msg: string): void {
 
 async function main() {
   log("MCP wrapper starting");
-  log(`Project root: ${projectRoot}`);
+  log(`Project root: ${projectRoot} (resolved via ${projectRootSource})`);
 
   // Ensure the shared daemon is running
   const port = await ensureDaemon(projectRoot);
