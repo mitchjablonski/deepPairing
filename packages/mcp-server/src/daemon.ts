@@ -204,7 +204,7 @@ app.use("/*", cors({
 }));
 
 // Mount internal daemon routes (for MCP wrappers)
-const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log);
+const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot);
 app.route("/", daemonRoutes);
 
 // Mount public web UI routes (for browser)

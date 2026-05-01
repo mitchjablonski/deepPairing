@@ -293,6 +293,123 @@ describe("Daemon Routes", () => {
     const unack2 = await unackRes2.json();
     expect(unack2.comments).toHaveLength(0);
   });
+
+  // Y3' — orphan-session prevention. Pre-Y3', any internal-API hit
+  // silently created an empty FileStore; this reopened the U0.6 orphan
+  // class. Now /register is the only legitimate creator; everything else
+  // 404s loud.
+  describe("Y3' — requireStore (404 on unregistered session)", () => {
+    it("returns 404 with code=session_not_registered for read on unknown session", async () => {
+      const res = await app.request(`/api/internal/sessions/never_registered/state`);
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.code).toBe("session_not_registered");
+      // No phantom store materialized.
+      expect(sessions.has("never_registered")).toBe(false);
+    });
+
+    it("returns 404 for write on unknown session (artifacts POST)", async () => {
+      const res = await app.request(`/api/internal/sessions/never_registered/artifacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "art_x", type: "research", title: "x", content: {} }),
+      });
+      expect(res.status).toBe(404);
+      expect(sessions.has("never_registered")).toBe(false);
+    });
+
+    it("/register IS the legitimate creator — succeeds + materializes the store", async () => {
+      expect(sessions.has("brand_new")).toBe(false);
+      const res = await app.request(`/api/internal/sessions/brand_new/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "x", project: "y" }),
+      });
+      expect(res.status).toBe(200);
+      expect(sessions.has("brand_new")).toBe(true);
+    });
+
+    it("re-register is idempotent — adopts the existing store, doesn't replace it", async () => {
+      await app.request(`/api/internal/sessions/${SESSION}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const storeBefore = sessions.get(SESSION);
+      // Seed an artifact so we'd notice if the store got replaced.
+      await app.request(`/api/internal/sessions/${SESSION}/artifacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: "art_r", type: "research", title: "r", content: {} }),
+      });
+      // Re-register.
+      await app.request(`/api/internal/sessions/${SESSION}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(sessions.get(SESSION)).toBe(storeBefore);
+      expect(storeBefore!.getArtifacts()).toHaveLength(1);
+    });
+  });
+
+  describe("Y3' — project binding (/register expectedProjectRoot)", () => {
+    it("403 with code=project_mismatch when wrapper expects a different project", async () => {
+      const localApp = createDaemonRoutes(
+        new Map(),
+        new Map(),
+        createTestSession,
+        () => {},
+        undefined,
+        "/projects/A",
+      );
+      const res = await localApp.request(`/api/internal/sessions/sess/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot: "/projects/B" }),
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("project_mismatch");
+      expect(body.projectRoot).toBe("/projects/A");
+    });
+
+    it("200 when expectedProjectRoot matches", async () => {
+      const localApp = createDaemonRoutes(
+        new Map(),
+        new Map(),
+        createTestSession,
+        () => {},
+        undefined,
+        "/projects/A",
+      );
+      const res = await localApp.request(`/api/internal/sessions/sess/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedProjectRoot: "/projects/A" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.projectRoot).toBe("/projects/A");
+    });
+
+    it("200 when expectedProjectRoot is omitted (back-compat with older wrappers)", async () => {
+      const localApp = createDaemonRoutes(
+        new Map(),
+        new Map(),
+        createTestSession,
+        () => {},
+        undefined,
+        "/projects/A",
+      );
+      const res = await localApp.request(`/api/internal/sessions/sess/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(200);
+    });
+  });
 });
 
 // --- DaemonClient (via real HTTP server) ---

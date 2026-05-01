@@ -51,7 +51,14 @@ async function main() {
   const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
   const sessionId = `session_${safeProjectName}_${projectHash}`;
   const client = new DaemonClient(port, sessionId);
-  await client.register({ title: projectName, project: projectName });
+  // Y3' — pass expectedProjectRoot so the daemon refuses (403) if we
+  // accidentally adopted a daemon serving a different project (port
+  // collision / failed spawn fallback).
+  await client.register({
+    title: projectName,
+    project: projectName,
+    expectedProjectRoot: projectRoot,
+  });
   log(`Session registered: ${sessionId} (${projectName})`);
 
   // Notify user

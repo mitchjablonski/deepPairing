@@ -42,8 +42,31 @@ export class DaemonClient implements IStore {
 
   // --- Session lifecycle ---
 
-  async register(meta?: { title?: string; project?: string }): Promise<void> {
-    await this.post("/register", meta ?? {});
+  /**
+   * Y3' — `expectedProjectRoot` is the directory the wrapper was spawned for.
+   * The daemon refuses to register (403 project_mismatch) if its own
+   * projectRoot doesn't match. Defends against the port-adoption footgun:
+   * wrapper for project A connects to a daemon serving project B.
+   */
+  async register(meta?: {
+    title?: string;
+    project?: string;
+    expectedProjectRoot?: string;
+  }): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(meta ?? {}),
+    });
+    if (res.status === 403) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(
+        `[deepPairing] Daemon project mismatch (${body.code ?? "project_mismatch"}). ${body.error ?? "Daemon serves a different project. Restart the wrapper."}`,
+      );
+    }
+    if (!res.ok) {
+      throw new Error(`[deepPairing] register failed (${res.status})`);
+    }
   }
 
   async renameSession(title: string): Promise<void> {
