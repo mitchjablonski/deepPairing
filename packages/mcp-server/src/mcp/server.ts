@@ -1361,10 +1361,35 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
     } })();
 
-    // Append firstCallHint to the outgoing text content of any tool result so
-    // the agent receives session memory (rejected approaches) on its very
-    // first tool call regardless of which tool it was.
-    if (firstCallHint && result?.content && Array.isArray(result.content)) {
+    // Y2 — gate firstCallHint to write tools only. Pre-Y2 the hint
+    // appended to EVERY tool's first response, including reads. That meant:
+    // - First call is `recall` (mode=philosophy) → result + duplicated
+    //   philosophy ledger spliced in underneath itself.
+    // - First call is `export_session` → markdown the user wants to grab,
+    //   contaminated with "[First use this session]" + rejected-approach
+    //   lists they don't want in the export.
+    // - First call is `check_feedback` → polling preamble buried under a
+    //   wall of context the agent already had on session start.
+    //
+    // The hint is meant for tools that WRITE (the agent is about to
+    // create artifacts; rejected approaches matter). Read-only and
+    // pull-style tools shouldn't carry it.
+    const HINT_TOOLS: ReadonlySet<string> = new Set([
+      "present_findings",
+      "present_options",
+      "present_spec",
+      "present_plan",
+      "present_code_change",
+      "log_reasoning",
+      "revise_artifact",
+      "post_pr_review",
+    ]);
+    if (
+      firstCallHint &&
+      HINT_TOOLS.has(name) &&
+      result?.content &&
+      Array.isArray(result.content)
+    ) {
       const first = result.content[0] as any;
       if (first?.type === "text" && typeof first.text === "string") {
         first.text = `${first.text}${firstCallHint}`;
