@@ -5,6 +5,7 @@ import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { AskTrigger } from "./CommentThread";
 import { RepairDecisionModal } from "./RepairDecisionModal";
+import { ConceptBadge } from "./ConceptBadge";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -435,6 +436,18 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
               {/* Description */}
               <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
+
+              {/* Y5 — concept badge. Names the underlying pattern so this
+                  option's rejection (or approval) compounds across projects
+                  via the philosophy ledger. Click to expand the explanation. */}
+              {(option as any).concept?.name && (
+                <div className="mb-2">
+                  <ConceptBadge
+                    name={(option as any).concept.name}
+                    explanation={(option as any).concept.oneLineExplanation}
+                  />
+                </div>
+              )}
 
               {/* Pros */}
               {option.pros.length > 0 && (

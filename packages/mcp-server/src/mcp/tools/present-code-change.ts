@@ -6,7 +6,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentCodeChangeInput(args);
   if (!validated.ok) return validated.error;
-  const { filePath, changeType, before, after, reasoning, confidence } = validated.data;
+  const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
   const proposals: string[] = [filePath, reasoning].filter(Boolean);
   const proposalPaths: string[] = [filePath];
   const blocked = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
@@ -17,7 +17,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     id,
     type: "code_change",
     title: `${changeType} ${filePath}`,
-    content: { filePath, changeType, before, after, reasoning, confidence },
+    content: { filePath, changeType, before, after, reasoning, confidence, concept },
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
   });

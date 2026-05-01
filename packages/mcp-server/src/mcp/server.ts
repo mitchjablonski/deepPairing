@@ -106,8 +106,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_options",
         description:
-          "Present 2–4 options with pros/cons/effort/risk for the human to choose. `stakes: \"high\"` triggers prediction capture in the UI (calibration material for hard-to-reverse decisions like schema, auth, billing, infra)." +
-          "\n\nSchema note: `options` is an array of 2–4 objects (one option isn't a decision). INPUT_VALIDATION_FAILED on mismatch." +
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. `stakes: \"high\"` triggers prediction capture for hard-to-reverse decisions. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects in the philosophy ledger." +
+          "\n\nSchema note: `options` is an array of 2–4 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the human selects in the companion UI. Don't list options in chat. Call check_feedback for their selection.",
         inputSchema: {
           type: "object" as const,
@@ -131,6 +131,15 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                   effort: { type: "string", enum: ["low", "medium", "high"] },
                   risk: { type: "string", enum: ["low", "medium", "high"] },
                   recommendation: { type: "boolean" },
+                  concept: {
+                    type: "object",
+                    description: "Y5 — the underlying pattern, named so rejections compound across projects",
+                    properties: {
+                      name: { type: "string", description: "Short concept name, e.g. 'argon2id for password hashing'" },
+                      oneLineExplanation: { type: "string", description: "Plain-English so the human learns the pattern, not just the option" },
+                    },
+                    required: ["name"],
+                  },
                 },
                 required: ["id", "title", "description", "pros", "cons", "effort", "risk", "recommendation"],
               },
@@ -316,9 +325,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_code_change",
         description:
-          "Present a code change as a before/after diff with reasoning and confidence." +
-          "\n\nSchema note: required: `filePath`, `changeType` (\"create\"|\"modify\"|\"delete\"), `after`, `reasoning`. INPUT_VALIDATION_FAILED on mismatch." +
-          "\n\nWorkflow: REQUIRED BEFORE EACH WRITE/EDIT — this is a per-edit checkpoint, not a one-shot for big diffs. Call BEFORE every Write/Edit/MultiEdit on a file the user hasn't already approved this session. Batched implementation without per-file checkpoints is a protocol violation. SINGLE REVIEW SURFACE — companion UI only; don't paste the diff in chat. Call check_feedback for the verdict.",
+          "Present a code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) — name the pattern (e.g. 'work factor tuning') so cross-project preflight matches it." +
+          "\n\nSchema note: required: `filePath`, `changeType`, `after`, `reasoning`. `concept` strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: REQUIRED BEFORE EACH Write/Edit/MultiEdit on a file not yet approved this session — per-edit checkpoint, not one-shot. Batched implementation skipping checkpoints is a protocol violation. SINGLE REVIEW SURFACE — companion UI only, don't paste in chat. Call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -329,6 +338,15 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             reasoning: { type: "string", description: "Why this change is being made" },
             confidence: { type: "string", enum: ["low", "medium", "high"], description: "How confident are you in this change?" },
             relatedFindings: { type: "array", items: { type: "string" }, description: "Artifact IDs of findings that motivated this" },
+            concept: {
+              type: "object",
+              description: "Y5 — the underlying pattern, named so cross-project preflight can match against past stances",
+              properties: {
+                name: { type: "string", description: "Short concept name, e.g. 'optimistic UI rollback'" },
+                oneLineExplanation: { type: "string", description: "Plain-English so the human learns the pattern" },
+              },
+              required: ["name"],
+            },
           },
           required: ["filePath", "changeType", "after", "reasoning"],
         },

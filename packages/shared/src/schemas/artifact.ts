@@ -57,6 +57,31 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
 // interfaces), so the discriminated parseArtifactContent below can
 // validate at the boundary instead of trusting the upstream `as T`.
 
+/**
+ * Y5 — named concept embedded directly on the option, hoisted from the
+ * log_reasoning surface. PMF council: without a named concept at proposal
+ * time, the ledger captures rejections as opaque strings ("considered:
+ * 'use Redux'"), and the Y1 breadcrumb has nothing to expand into. Naming
+ * the concept here makes EACH option a candidate ledger entry — when the
+ * human rejects an option, we record the rejection against `concept.name`
+ * (compact, comparable across projects) instead of the option's prose
+ * description (project-specific, doesn't compound).
+ *
+ * Same shape as ReasoningConceptSchema in content-types.ts so the UI can
+ * reuse the ConceptCallout component without translation. Optional —
+ * existing call sites that don't supply concepts keep working.
+ */
+const DecisionOptionConceptSchema = z.object({
+  // Min 1 so a present-but-empty `concept: { name: "" }` is rejected. An
+  // empty string is worse than no concept at all — it pollutes the ledger
+  // with a row that can never match anything, blocking nothing.
+  name: z.string().min(1).describe("The underlying pattern (e.g. 'argon2id for password hashing', 'optimistic UI')"),
+  oneLineExplanation: z
+    .string()
+    .optional()
+    .describe("Plain-English so the human learns the pattern, not just the option"),
+});
+
 export const DecisionOptionContentSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -66,6 +91,7 @@ export const DecisionOptionContentSchema = z.object({
   effort: z.enum(["low", "medium", "high"]),
   risk: z.enum(["low", "medium", "high"]),
   recommendation: z.boolean(),
+  concept: DecisionOptionConceptSchema.optional(),
 });
 
 export const DecisionContentSchema = z.object({
@@ -85,6 +111,15 @@ export const CodeChangeContentSchema = z.object({
   after: z.string(),
   reasoning: z.string(),
   confidence: z.enum(["low", "medium", "high"]).optional(),
+  /**
+   * Y5 — named concept. Same shape as the option-level concept and the
+   * reasoning-artifact concept, intentionally — UI reuses ConceptCallout
+   * across all three. When this code change matches a rejected concept
+   * across projects, the Y1 breadcrumb has something compact to compare
+   * against; without it, preflight has only filePath + reasoning prose
+   * to match against, which doesn't compound.
+   */
+  concept: DecisionOptionConceptSchema.optional(),
 });
 
 export type CodeChangeContent = z.infer<typeof CodeChangeContentSchema>;
