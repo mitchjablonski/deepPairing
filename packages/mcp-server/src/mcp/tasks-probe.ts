@@ -37,8 +37,7 @@ export const MCP_TASKS_ENABLED = false as const;
  *   1. Build the handle: `const handle = await taskHandleForArtifact(artifact, store);`
  *   2. Emit via the SDK call (name TBD — likely `server.emitTask(handle)` or
  *      a notification along the lines of `notifications/tasks/created`).
- *   3. Subsequent status changes (approve/reject/revise) should call
- *      `server.updateTask(...)` from the routes that mutate artifact status.
+ *   3. Status transitions are wired through `maybeUpdateTaskStatus` (below).
  *
  * Keeping this helper async so future Tasks emission doesn't change the
  * call sites' shape.
@@ -54,5 +53,38 @@ export async function maybeEmitTaskHandle(
   //   await _server.emitTask(handle);  // exact API TBD per SDK release
   // Reference taskHandleForArtifact so the import isn't pruned by the
   // `MCP_TASKS_ENABLED === false` dead-code branch above.
+  void taskHandleForArtifact;
+}
+
+/**
+ * X6 — counterpart seam for status transitions. Every site that mutates an
+ * artifact's lifecycle (approve, reject, revise, supersede, retract,
+ * decision-resolve, plan-review verdict) calls this so the future Tasks
+ * implementer can flip the flag and have every status change automatically
+ * become a `tasks/update` notification — no scavenger hunt for mutation
+ * sites required.
+ *
+ * `server` is the optional MCP Server instance: routes.ts calls this from
+ * HTTP-side mutations where there's no direct server reference (the MCP
+ * server lives in a different process via the daemon). Pass `null` from
+ * those call sites; the future Tasks implementer can either centralize
+ * status updates through the server (preferred) or use the daemon's
+ * existing broadcast channel as the transport.
+ *
+ * Today, this is a no-op. The signature is the API contract the future
+ * implementer is bound by.
+ */
+export async function maybeUpdateTaskStatus(
+  _server: Server | null,
+  _artifactId: string,
+  _store: IStore,
+): Promise<void> {
+  if (!MCP_TASKS_ENABLED) return;
+  // TODO(2026-Q3, MCP Tasks SDK ships): re-derive the handle from the
+  // current artifact + store state and emit a status update.
+  //   const artifact = (await _store.getArtifacts()).find((a) => a.id === _artifactId);
+  //   if (!artifact) return;
+  //   const handle = await taskHandleForArtifact(artifact, _store);
+  //   await _server?.updateTask(handle);  // exact API TBD per SDK release
   void taskHandleForArtifact;
 }

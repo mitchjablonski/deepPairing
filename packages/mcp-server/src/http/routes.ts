@@ -9,6 +9,7 @@ import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
+import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import {
   CommentBodySchema,
   DecisionResolveBodySchema,
@@ -175,6 +176,10 @@ export function createHttpRoutes(
     const decision = await store.getDecision(decisionId);
     if (decision) {
       await store.updateArtifactStatus(decision.artifactId, "approved", "ui_decision_resolve" as any);
+      // X6 — emission seam: HTTP-side mutations pass null for `server`
+      // (the MCP server lives in the daemon's separate process). Today
+      // a no-op; future Tasks impl can route via the daemon broadcast.
+      await maybeUpdateTaskStatus(null, decision.artifactId, store);
     }
 
     broadcast({
@@ -222,6 +227,8 @@ export function createHttpRoutes(
 
     await store.updateArtifactStatus(artifactId, status, reason as any);
     await store.resolvePlanReview(artifactId, status, feedback);
+    // X6 — see comment above; HTTP-side mutations pass null for `server`.
+    await maybeUpdateTaskStatus(null, artifactId, store);
 
     // U0.6 — force the debounced flush so the Stop hook (which reads
     // .deeppairing/sessions/*/artifacts.json directly from disk) sees the
