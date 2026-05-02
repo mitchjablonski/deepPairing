@@ -439,12 +439,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
               {/* Y5 — concept badge. Names the underlying pattern so this
                   option's rejection (or approval) compounds across projects
-                  via the philosophy ledger. Click to expand the explanation. */}
-              {(option as any).concept?.name && (
+                  via the philosophy ledger. Click to expand the explanation.
+                  Z5 — concept is now properly typed on DecisionOptionSchema
+                  (was a (as any) cast pre-Z5; the wire shape lacked the
+                  field that Y5 had hoisted only into the stored shape). */}
+              {option.concept?.name && (
                 <div className="mb-2">
                   <ConceptBadge
-                    name={(option as any).concept.name}
-                    explanation={(option as any).concept.oneLineExplanation}
+                    name={option.concept.name}
+                    explanation={option.concept.oneLineExplanation}
                   />
                 </div>
               )}

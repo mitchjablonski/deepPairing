@@ -157,6 +157,34 @@ describe("DecisionRequestSchema", () => {
       }),
     ).toThrow();
   });
+
+  // Z5a — wire-shape DecisionOption now carries `concept` so DecisionCard
+  // can read it without an (option as any) cast. Y5 hoisted the field
+  // into the stored-content shape (artifact.ts) but missed the wire
+  // shape — the regression code-quality council Y review flagged.
+  it("Z5a: DecisionOption accepts an optional concept", () => {
+    const result = DecisionRequestSchema.parse({
+      ...sampleDecisionRequest,
+      options: sampleDecisionRequest.options.map((o, i) =>
+        i === 0
+          ? { ...o, concept: { name: "service-oriented", oneLineExplanation: "wire boundary" } }
+          : o,
+      ),
+    });
+    expect(result.options[0].concept?.name).toBe("service-oriented");
+    expect(result.options[1].concept).toBeUndefined();
+  });
+
+  it("Z5a: rejects an empty concept name (low-signal rows are worse than no row)", () => {
+    expect(() =>
+      DecisionRequestSchema.parse({
+        ...sampleDecisionRequest,
+        options: sampleDecisionRequest.options.map((o, i) =>
+          i === 0 ? { ...o, concept: { name: "" } } : o,
+        ),
+      }),
+    ).toThrow();
+  });
 });
 
 describe("DecisionResponseSchema", () => {

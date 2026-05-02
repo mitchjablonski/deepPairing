@@ -3,6 +3,19 @@ import { z } from "zod";
 export const DecisionStakesSchema = z.enum(["low", "medium", "high"]);
 export type DecisionStakes = z.infer<typeof DecisionStakesSchema>;
 
+/**
+ * Z5 — option-level concept, mirroring Y5's hoist into
+ * DecisionOptionContentSchema (artifact.ts). Same field, two shapes
+ * because we have a wire/event schema (this file) and a stored-content
+ * schema (artifact.ts) that describe the same semantic object. Both
+ * must carry concept or DecisionCard has to (option as any) it back —
+ * which is exactly the regression the Z review flagged.
+ */
+const DecisionOptionConceptSchema = z.object({
+  name: z.string().min(1),
+  oneLineExplanation: z.string().optional(),
+});
+
 export const DecisionOptionSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -12,6 +25,7 @@ export const DecisionOptionSchema = z.object({
   effort: z.enum(["low", "medium", "high"]),
   risk: z.enum(["low", "medium", "high"]),
   recommendation: z.boolean(),
+  concept: DecisionOptionConceptSchema.optional(),
 });
 
 export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
