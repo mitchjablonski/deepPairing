@@ -256,15 +256,22 @@ export function createHttpRoutes(
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find((a) => a.id === artifactId);
       if (artifact && artifact.type !== "decision") {
-        await store.recordRejectedApproach(
-          artifact.title,
-          feedback?.trim() || undefined,
-          artifactId,
-        );
+        // AA1 — when the artifact's content carries a Y5-style concept
+        // (code_change does today; spec/plan can in the future), use its
+        // name as the cross-project ledger key. Otherwise fall back to
+        // the artifact title.
+        const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
+        await store.recordRejectedApproach({
+          description: artifact.title,
+          reason: feedback?.trim() || undefined,
+          sourceArtifactId: artifactId,
+          concept: artConcept,
+        });
         broadcast({
           type: "ledger_write",
           kind: "rejected",
           description: artifact.title,
+          concept: artConcept,
           reason: feedback?.trim() || undefined,
           sourceArtifactId: artifactId,
         }, sid);

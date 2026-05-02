@@ -244,7 +244,7 @@ describe("team-preferences pre-flight — source attribution ordering", () => {
     ]);
     const { client, store } = await makeServer();
     // Session rejection of the same concept, added mid-session.
-    await store.recordRejectedApproach("Global state singleton", "user: tried it last week", undefined, "global state");
+    await store.recordRejectedApproach({ description: "Global state singleton", reason: "user: tried it last week", concept: "global state" });
 
     const { text } = await callTool(client, "present_findings", {
       title: "Global state singleton",

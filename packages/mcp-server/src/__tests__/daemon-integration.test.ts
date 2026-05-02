@@ -574,8 +574,8 @@ describe("DaemonClient", () => {
   });
 
   it("manages session memory", async () => {
-    await client.recordApprovedPattern("Service layer");
-    await client.recordRejectedApproach("God object");
+    await client.recordApprovedPattern({ description: "Service layer" });
+    await client.recordRejectedApproach({ description: "God object" });
 
     const memory = await client.getSessionMemory();
     expect(memory.approvedPatterns).toContain("Service layer");

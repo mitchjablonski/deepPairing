@@ -21,7 +21,7 @@ function seed(sessionId: string, artifacts: any[], opts: { rejected?: any[] } = 
   }
   if (opts.rejected) {
     for (const r of opts.rejected) {
-      store.recordRejectedApproach(r.description, r.reason, r.sourceArtifactId, r.concept);
+      store.recordRejectedApproach({ description: r.description, reason: r.reason, sourceArtifactId: r.sourceArtifactId, concept: r.concept });
     }
   }
   store.forceFlush();

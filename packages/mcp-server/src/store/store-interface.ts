@@ -187,8 +187,33 @@ export interface IStore {
     decisionsWithPredictions?: number;
     highStakesDecisions?: number;
   }>;
-  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): MaybePromise<void>;
-  recordApprovedPattern(description: string): MaybePromise<void>;
+  /**
+   * AA1 — typed-object signature replaces the prior 4-arg positional shape
+   * (description, reason?, sourceArtifactId?, concept?). The positional
+   * form hid bugs at every call site: server.ts:824 was passing
+   * `option.description` as the concept arg, dropping the Y5-hoisted
+   * `option.concept.name`. The global ledger keyed on that prose
+   * description, so cross-project compounding was broken — every
+   * project minted unique long keys instead of bucketing under
+   * "pay-per-request hosting". Typed object surfaces every field
+   * explicitly so the next refactor can't regress the same way.
+   *
+   * `concept` is the SHORT, ledger-comparable form (e.g. "argon2id for
+   * password hashing"); `description` is the prose ("Use argon2id for
+   * password hashing — bcrypt rounds=4 is brute-forceable"). Pre-AA1
+   * the ledger fell back to description when concept was missing; that
+   * fallback stays so legacy callers keep working.
+   */
+  recordRejectedApproach(params: {
+    description: string;
+    reason?: string;
+    sourceArtifactId?: string;
+    concept?: string;
+  }): MaybePromise<void>;
+  recordApprovedPattern(params: {
+    description: string;
+    concept?: string;
+  }): MaybePromise<void>;
   getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
   /**
    * Filesystem-sensed guardrails for this project (migrations, workflows,

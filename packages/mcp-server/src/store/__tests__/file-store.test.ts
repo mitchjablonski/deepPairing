@@ -180,8 +180,8 @@ describe("FileStore", () => {
 
   it("records and retrieves session memory", () => {
     const store = createStore( "memory");
-    store.recordApprovedPattern("Service pattern");
-    store.recordRejectedApproach("Inline refactor");
+    store.recordApprovedPattern({ description: "Service pattern" });
+    store.recordRejectedApproach({ description: "Inline refactor" });
 
     const memory = store.getSessionMemory();
     expect(memory.approvedPatterns).toContain("Service pattern");
