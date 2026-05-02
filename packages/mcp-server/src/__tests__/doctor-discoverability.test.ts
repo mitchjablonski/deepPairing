@@ -48,6 +48,22 @@ describe("`deeppairing doctor --fix` surfaces (U6)", () => {
   });
 });
 
+describe("Z5b — doctor handles Y3' project_mismatch", () => {
+  // Y3' added a 403 project_mismatch when the wrapper hits a daemon
+  // serving a different projectRoot. The user sees the error in MCP
+  // stderr; their natural next move is `npx deeppairing doctor --fix`.
+  // Pre-Z5b doctor had no awareness of that case and the user was
+  // stranded. This pin defends the remediation against a future cleanup.
+  it("doctor surfaces a fix when the daemon on the candidate port serves a different projectRoot", () => {
+    const init = read("cli/init.ts");
+    // The diagnostic line and the actionable fix label both have to be present.
+    expect(init).toMatch(/Daemon on :\$\{port\} serves a different project/);
+    expect(init).toMatch(/Stop the squatting daemon/);
+    // Names the Y3' case explicitly so a reader connects the two surfaces.
+    expect(init).toMatch(/project_mismatch/);
+  });
+});
+
 describe("Companion UI surfaces mention doctor (U6)", () => {
   it("SkillLoadBanner.tsx points at doctor --fix as the fallback", () => {
     const banner = fs.readFileSync(

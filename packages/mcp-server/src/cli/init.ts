@@ -443,6 +443,52 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     }
     if (!port) port = DEFAULT_PORT; // fall through and report the failed probe
   }
+
+  // Z5b — project-mismatch remediation. When the wrapper hits Y3''s 403
+  // ("Daemon project mismatch"), the user sees the error in MCP stderr
+  // and runs doctor expecting a fix. Pre-Z5b doctor had no awareness of
+  // this case; the user was stranded with the error message and no
+  // remediation. Now: probe the candidate port; if a daemon answers but
+  // serves a DIFFERENT projectRoot than this cwd, surface a fix that
+  // either kills the squatting daemon (if its PID is reachable) or
+  // points at its daemon.json so the user can do it themselves.
+  try {
+    const squatter = await probeDaemonIdentity(port);
+    if (squatter && squatter.projectRoot && squatter.projectRoot !== cwd) {
+      console.log(
+        `  ${red("✗")} Daemon on :${port} serves a different project: ` +
+        `${squatter.projectRoot} (PID ${squatter.pid})`,
+      );
+      console.log(
+        `    ${dim("This is the Y3' project_mismatch case — your wrapper would 403 on register.")}`,
+      );
+      fixes.push({
+        label: `Stop the squatting daemon (PID ${squatter.pid}) so this project's daemon can claim port ${port}`,
+        apply: () => {
+          try {
+            // SIGTERM is gentler than SIGKILL — gives the squatter a
+            // chance to flush its in-memory state. The next wrapper
+            // start will probe + spawn a fresh daemon for cwd.
+            process.kill(squatter.pid, "SIGTERM");
+            return {
+              ok: true,
+              message: `Sent SIGTERM to PID ${squatter.pid}. Restart Claude Code to spawn a fresh daemon for this project.`,
+            };
+          } catch (err: any) {
+            return {
+              ok: false,
+              message:
+                `Could not signal PID ${squatter.pid}: ${err?.message ?? err}. ` +
+                `The other project's daemon may have died already; try restarting Claude Code.`,
+            };
+          }
+        },
+      });
+    }
+  } catch {
+    // probeDaemonIdentity already swallows network errors; nothing to do.
+  }
+
   let probeOk = false;
   let probeStatus: number | string = "no-response";
   try {
