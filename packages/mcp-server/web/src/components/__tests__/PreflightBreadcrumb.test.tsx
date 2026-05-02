@@ -26,7 +26,9 @@ function mockFetchTrace(t: PreflightTrace | null) {
 }
 
 beforeEach(() => {
-  // jsdom default — clean slate.
+  // Z3 — clear the bootstrap-dismissed flag between tests so each test
+  // starts from a clean "first-time user" state.
+  try { sessionStorage.removeItem("dp:preflight-bootstrap-dismissed"); } catch {}
 });
 
 afterEach(() => {
@@ -40,36 +42,58 @@ describe("PreflightBreadcrumb (Y1')", () => {
     await waitFor(() => expect(container.firstChild).toBeNull());
   });
 
-  it("renders nothing when consideredCount is zero (empty ledger reads as broken)", async () => {
+  // Z3 — Y1' originally hid the breadcrumb on empty ledger; PMF council
+  // amendment turned that into a bootstrap onboarding moment so first-
+  // time users learn the moat exists. Suppressed once the user dismisses
+  // (sessionStorage), or once they hit any non-empty trace.
+  it("Z3: renders bootstrap onboarding when consideredCount is zero (and not dismissed)", async () => {
     vi.stubGlobal("fetch", mockFetchTrace(trace({ consideredCount: 0 })));
-    const { container } = render(<PreflightBreadcrumb artifactId="art_test" />);
-    // Wait a tick for the loaded state to flip.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(container.firstChild).toBeNull();
+    render(<PreflightBreadcrumb artifactId="art_test" />);
+    await waitFor(() => expect(
+      screen.getByText(/Your philosophy ledger is empty/),
+    ).toBeInTheDocument());
+    expect(
+      screen.getByText(/Reject something — or add reasoning/),
+    ).toBeInTheDocument();
   });
 
-  it("renders the headline with the considered count and pluralization", async () => {
+  it("Z3: dismiss button persists via sessionStorage", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", mockFetchTrace(trace({ consideredCount: 0 })));
+    const first = render(<PreflightBreadcrumb artifactId="art_test" />);
+    await waitFor(() => screen.getByText(/Your philosophy ledger is empty/));
+    await user.click(screen.getByRole("button", { name: /dismiss bootstrap message/i }));
+    // Disappears from this instance.
+    expect(screen.queryByText(/Your philosophy ledger is empty/)).not.toBeInTheDocument();
+    first.unmount();
+
+    // Mount a NEW instance for a different artifact — should still be hidden.
+    render(<PreflightBreadcrumb artifactId="art_test_2" />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/Your philosophy ledger is empty/)).not.toBeInTheDocument();
+  });
+
+  it("Z3: renders the active-voice headline with considered count + pluralization", async () => {
     vi.stubGlobal("fetch", mockFetchTrace(trace({
       consideredCount: 14,
       consideredConcepts: [{ source: "session", concept: "graphql federation" }],
     })));
     render(<PreflightBreadcrumb artifactId="art_test" />);
     await waitFor(() => expect(
-      screen.getByText(/Cross-checked your 14 prior stances/),
+      screen.getByText(/14 prior stances shaped this proposal/),
     ).toBeInTheDocument());
   });
 
-  it("uses 'stance' (singular) for count of 1", async () => {
+  it("Z3: uses 'stance' (singular) for count of 1", async () => {
     vi.stubGlobal("fetch", mockFetchTrace(trace({
       consideredCount: 1,
       consideredConcepts: [{ source: "session", concept: "x" }],
     })));
     render(<PreflightBreadcrumb artifactId="art_test" />);
-    // Match the full singular-form line; assert the plural form is absent.
     await waitFor(() => expect(
-      screen.getByText(/Cross-checked your 1 prior stance before proposing this/),
+      screen.getByText(/1 prior stance shaped this proposal/),
     ).toBeInTheDocument());
-    expect(screen.queryByText(/1 prior stances/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 prior stances shaped/)).not.toBeInTheDocument();
   });
 
   it("renders the near-miss line above the expand toggle (always visible when present)", async () => {
@@ -99,7 +123,7 @@ describe("PreflightBreadcrumb (Y1')", () => {
       ],
     })));
     render(<PreflightBreadcrumb artifactId="art_test" />);
-    await waitFor(() => screen.getByText(/Cross-checked/));
+    await waitFor(() => screen.getByText(/shaped this proposal/));
     expect(screen.queryByText("Considered:")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText("Considered:")).toBeInTheDocument();
@@ -111,8 +135,8 @@ describe("PreflightBreadcrumb (Y1')", () => {
     vi.stubGlobal("fetch", mockFetchTrace(null)); // no trace at fetch time
     render(<PreflightBreadcrumb artifactId="art_live" />);
     await new Promise((r) => setTimeout(r, 20));
-    // Component is currently empty.
-    expect(screen.queryByText(/Cross-checked/)).not.toBeInTheDocument();
+    // Component is currently empty (no trace, no bootstrap).
+    expect(screen.queryByText(/shaped this proposal/)).not.toBeInTheDocument();
 
     // Simulate the daemon broadcasting a fresh trace.
     act(() => {
@@ -128,7 +152,7 @@ describe("PreflightBreadcrumb (Y1')", () => {
       }));
     });
     expect(
-      screen.getByText(/Cross-checked your 5 prior stances/),
+      screen.getByText(/5 prior stances shaped this proposal/),
     ).toBeInTheDocument();
   });
 

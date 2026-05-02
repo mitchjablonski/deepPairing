@@ -26,6 +26,23 @@ import { API_BASE, sessionHeaders } from "../lib/api";
  *   Near-miss line: "Almost flagged this — your past stance on `X` is adjacent."
  */
 
+/**
+ * Z3 — sessionStorage key for the empty-ledger bootstrap state. Once the
+ * user dismisses it (or hits an artifact with a non-empty trace, which
+ * means they have a ledger now), we don't show it again this session.
+ * Per-tab sessionStorage so a fresh tab can re-onboard cleanly without
+ * surviving across browser restarts.
+ */
+const BOOTSTRAP_DISMISSED_KEY = "dp:preflight-bootstrap-dismissed";
+
+function readBootstrapDismissed(): boolean {
+  try { return sessionStorage.getItem(BOOTSTRAP_DISMISSED_KEY) === "1"; } catch { return false; }
+}
+
+function writeBootstrapDismissed(): void {
+  try { sessionStorage.setItem(BOOTSTRAP_DISMISSED_KEY, "1"); } catch {}
+}
+
 interface PreflightBreadcrumbProps {
   artifactId: string;
 }
@@ -34,6 +51,9 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   const [trace, setTrace] = useState<PreflightTrace | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
+  // Z3 — local mirror of the sessionStorage flag so the dismiss click
+  // re-renders THIS instance (sessionStorage writes don't trigger re-render).
+  const [bootstrapDismissed, setBootstrapDismissed] = useState<boolean>(() => readBootstrapDismissed());
 
   useEffect(() => {
     let cancelled = false;
@@ -71,15 +91,56 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
 
   if (!loaded) return null;
   if (!trace) return null;
-  // Hide on empty ledger — a "Cross-checked 0 stances" line reads as broken.
-  if (trace.consideredCount === 0) return null;
+
+  // Z3 — bootstrap state on empty ledger (PMF council Y review). Pre-Z3
+  // we hid the breadcrumb entirely, which meant a first-time user paired
+  // for an entire session and never saw the differentiating mechanic
+  // exist. Now: render a one-time "your ledger will start filling in"
+  // line on the very first artifact only, then suppress thereafter via
+  // sessionStorage so the user sees it ONCE, never as ongoing chrome.
+  if (trace.consideredCount === 0) {
+    if (bootstrapDismissed) return null;
+    return (
+      <div
+        role="status"
+        aria-label="Empty philosophy ledger"
+        className="border border-accent-violet/20 bg-accent-violet-dim/15 rounded px-3 py-2 mb-2 text-2xs text-text-secondary"
+      >
+        <div className="flex items-start gap-2">
+          <span aria-hidden className="text-accent-violet shrink-0 mt-0.5">◆</span>
+          <div className="flex-1">
+            <div className="text-text-primary mb-0.5">
+              Your philosophy ledger is empty.
+            </div>
+            <div className="leading-relaxed">
+              Reject something — or add reasoning to a pick — and future
+              proposals will get cross-checked against it. The breadcrumb
+              shows up here when there's something to compare against.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              writeBootstrapDismissed();
+              setBootstrapDismissed(true);
+            }}
+            className="text-text-muted hover:text-text-primary text-2xs px-1.5 py-0.5 rounded hover:bg-surface-hover transition-colors shrink-0"
+            aria-label="Dismiss bootstrap message"
+            title="Don't show this again this session"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const n = trace.consideredCount;
   const hasDetails = trace.consideredConcepts.length > 0 || trace.nearMisses.length > 0;
   const nearMiss = trace.nearMisses[0];
 
   return (
-    <div className="border-t border-border-subtle pt-2 mt-2 text-2xs text-text-muted">
+    <div className="border border-accent-violet/15 bg-accent-violet-dim/10 rounded px-3 py-2 mb-2 text-2xs text-text-secondary">
       <button
         type="button"
         onClick={() => hasDetails && setOpen((v) => !v)}
@@ -89,9 +150,13 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
         aria-expanded={hasDetails ? open : undefined}
         title={hasDetails ? "Click to see what was weighed" : "Preflight trace"}
       >
-        <span aria-hidden className="text-accent-violet/70">◆</span>
-        <span>
-          Cross-checked your {n} prior {n === 1 ? "stance" : "stances"} before proposing this.
+        <span aria-hidden className="text-accent-violet">◆</span>
+        {/* Z3 — active voice (PMF amendment). "Cross-checked your N prior
+            stances BEFORE proposing this" was passive — it described what
+            happened. "Shaped this proposal" connects the moat to the
+            output the user is about to act on. */}
+        <span className="text-text-primary">
+          {n} prior {n === 1 ? "stance" : "stances"} shaped this proposal.
         </span>
         {hasDetails && (
           <span aria-hidden className="opacity-60">{open ? "▾" : "▸"}</span>
