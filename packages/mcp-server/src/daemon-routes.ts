@@ -142,6 +142,18 @@ export function createDaemonRoutes(
     return c.json({ status: "unregistered" });
   });
 
+  // AA2 — DaemonClient hits this after auto-recovering from a 404
+  // session_not_registered. Wrapper-side recovery is invisible to the
+  // browser otherwise — the WS keeps streaming on the same socket so the
+  // companion UI never knows its optimistic state may be stale. Broadcasting
+  // `daemon_resumed` lets the connected clients refetch full state.
+  app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    log(`[recovered] sid=${sessionId} — wrapper auto-re-registered after a 404`);
+    broadcast(sessionId, { type: "daemon_resumed", sessionId });
+    return c.json({ status: "broadcast" });
+  });
+
   // --- Artifacts ---
 
   app.post("/api/internal/sessions/:sessionId/artifacts", async (c) => {

@@ -72,6 +72,11 @@ export class DaemonClient implements IStore {
       // shutdown). The session map is empty server-side; re-register and
       // retry exactly once. Guard against infinite recursion via isRetry.
       await this.register(this.lastRegisterMeta);
+      // AA2 — notify the daemon (which broadcasts daemon_resumed to WS
+      // clients) so the companion UI knows to refetch state. Fire-and-
+      // forget — recovery shouldn't fail just because the broadcast
+      // didn't land.
+      void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {});
       return this.request<T>(path, init, true);
     }
 
@@ -104,14 +109,20 @@ export class DaemonClient implements IStore {
     project?: string;
     expectedProjectRoot?: string;
   }): Promise<void> {
-    // Z1 — remember meta so the auto-recover path in request() can replay.
-    this.lastRegisterMeta = meta;
     const res = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(meta ?? {}),
     });
     if (res.status === 403) {
+      // AA2 — clear cached meta on project mismatch. Pre-AA2 the meta
+      // was assigned BEFORE this throw, so a 403 cached the bad meta;
+      // the next 404 retry would replay register() with that same bad
+      // meta against the same wrong daemon and 403 again, in a loop.
+      // Now the cache is only set on success (below), and a mismatch
+      // explicitly clears any prior cached value so the wrapper can't
+      // unintentionally resurrect a stale binding.
+      this.lastRegisterMeta = undefined;
       const body = await res.json().catch(() => ({}));
       throw new Error(
         `[deepPairing] Daemon project mismatch (${body.code ?? "project_mismatch"}). ${body.error ?? "Daemon serves a different project. Restart the wrapper."}`,
@@ -120,6 +131,9 @@ export class DaemonClient implements IStore {
     if (!res.ok) {
       throw new Error(`[deepPairing] register failed (${res.status})`);
     }
+    // AA2 — cache meta ONLY after a successful register. The recover path
+    // in request() replays this on 404 session_not_registered.
+    this.lastRegisterMeta = meta;
   }
 
   async renameSession(title: string): Promise<void> {
@@ -324,10 +338,30 @@ export class DaemonClient implements IStore {
 
   // --- Feedback polling ---
 
+  /**
+   * AA2 — long-poll for human feedback. Pre-AA2 this hand-rolled `fetch`
+   * and ignored the response status entirely, which silently swallowed
+   * any failure (including the Z1-introduced 404 session_not_registered
+   * when a daemon idle-shutdown lands mid-poll). Now routed through
+   * `request()` so the auto-recover path fires; on AbortError (timeout)
+   * we resolve cleanly instead of throwing — the agent's polling loop
+   * will call check_feedback again.
+   */
   async waitForFeedback(timeoutMs = 30000): Promise<void> {
-    await fetch(`${this.baseUrl}/wait-feedback?timeout=${timeoutMs}`, {
-      signal: AbortSignal.timeout(timeoutMs + 5000), // Extra buffer for network
-    });
+    try {
+      await this.request<unknown>(
+        `/wait-feedback?timeout=${timeoutMs}`,
+        { signal: AbortSignal.timeout(timeoutMs + 5000) },
+      );
+    } catch (err: any) {
+      // Timeout or daemon-side cancellation is the EXPECTED end-of-poll
+      // shape — the long-poll either resolved or hit its budget. Don't
+      // throw at the caller; let them call check_feedback again.
+      if (err?.name === "AbortError" || err?.name === "TimeoutError") return;
+      // Anything else (network down, 5xx) bubbles up as a structured
+      // [deepPairing] error from request().
+      throw err;
+    }
   }
 
   // --- Full state ---
@@ -342,6 +376,23 @@ export class DaemonClient implements IStore {
 
   // --- Cross-session reads (past sessions in the same project) ---
 
+  /**
+   * AA2 — sibling of request() for the daemon's project-public routes
+   * (`/api/sessions`, `/api/search`). These aren't session-scoped so they
+   * don't need the session_not_registered retry — but they DO need the
+   * status check that the pre-AA2 hand-rolled fetches were missing. A
+   * 5xx from the daemon used to flow back as `data.results === undefined`
+   * and the caller fell back to `[]` silently. Now non-2xx throws.
+   */
+  private async requestPublic<T = any>(path: string): Promise<T> {
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path}`);
+    if (res.ok) return res.json();
+    let body: any = {};
+    try { body = await res.clone().json(); } catch {}
+    const msg = body?.error ?? `request failed (${res.status})`;
+    throw new Error(`[deepPairing] ${msg}`);
+  }
+
   /** List past sessions for this project. Uses the daemon's public /api/sessions. */
   async listPastSessions(): Promise<Array<{
     id: string;
@@ -351,16 +402,13 @@ export class DaemonClient implements IStore {
     artifactCount: number;
     hasDecisions: boolean;
   }>> {
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}/api/sessions`);
-    const data = await res.json();
+    const data = await this.requestPublic<{ sessions: any[] }>("/api/sessions");
     return data.sessions ?? [];
   }
 
   /** Load a specific past session's full state. */
   async loadPastSession(sessionId: string): Promise<any> {
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}/api/sessions/${encodeURIComponent(sessionId)}`);
-    if (!res.ok) throw new Error(`Session ${sessionId} not found`);
-    return res.json();
+    return this.requestPublic<any>(`/api/sessions/${encodeURIComponent(sessionId)}`);
   }
 
   /** Search across every session in the project. */
@@ -375,8 +423,7 @@ export class DaemonClient implements IStore {
     matchedVia: string[];
   }>> {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}/api/search?${params}`);
-    const data = await res.json();
+    const data = await this.requestPublic<{ results: any[] }>(`/api/search?${params}`);
     return data.results ?? [];
   }
 
