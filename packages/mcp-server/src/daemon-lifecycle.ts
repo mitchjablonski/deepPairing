@@ -75,6 +75,47 @@ export async function probeDaemonIdentity(port: number, timeoutMs = 1500): Promi
 }
 
 /**
+ * AA3 — cooperative-shutdown call to a squatter daemon.
+ *
+ * Doctor uses this to ask the squatting daemon to flush + exit cleanly
+ * BEFORE falling back to SIGTERM. Confirms the pid before sending the
+ * request (defends against PID reuse — the original daemon may have died
+ * and the OS recycled the pid into something unrelated).
+ *
+ * Returns:
+ *   "evicted"       — daemon flushed + exited; port should be free.
+ *   "pid_mismatch"  — the pid on the daemon's /api/daemon-info no longer
+ *                     matches expectedPid; refuse to evict (don't kill
+ *                     a recycled pid that isn't ours).
+ *   "no_daemon"     — port has no daemon listening.
+ *   "refused"       — daemon is running but rejected the evict (older
+ *                     daemon, missing the /api/evict route).
+ */
+export async function evictDaemon(
+  port: number,
+  expectedPid: number,
+  timeoutMs = 2000,
+): Promise<"evicted" | "pid_mismatch" | "no_daemon" | "refused"> {
+  const id = await probeDaemonIdentity(port, timeoutMs);
+  if (!id) return "no_daemon";
+  if (id.pid !== expectedPid) return "pid_mismatch";
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(`http://localhost:${port}/api/evict`, {
+      method: "POST",
+      headers: { "X-DeepPairing-Confirm-Pid": String(expectedPid) },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) return "evicted";
+    return "refused";
+  } catch {
+    return "refused";
+  }
+}
+
+/**
  * Check if the daemon is running. Unlike the old version, this probes the
  * actual HTTP port rather than relying solely on the info file — if the
  * daemon is healthy but daemon.json is missing/stale, we still adopt it.

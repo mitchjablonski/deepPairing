@@ -244,6 +244,44 @@ app.get("/api/daemon-info", (c) => {
   return c.json({ pid: process.pid, projectRoot, startedAt });
 });
 
+// AA3 — cooperative shutdown endpoint. The doctor's project-mismatch
+// remediation calls this BEFORE falling back to SIGTERM, so the squatter
+// daemon can:
+//   - flush its in-memory metrics (reviewLatencies → metrics.json)
+//   - broadcast `daemon_evicting` to its WS clients (the OTHER project's
+//     companion UI knows it's about to lose its socket)
+//   - exit cleanly so its process supervisor doesn't auto-respawn
+//     immediately, giving this project's daemon a window to claim the port
+//
+// Guards:
+//   - Localhost-only (the daemon already binds 127.0.0.1, but explicit).
+//   - X-DeepPairing-Confirm-Pid must match this process's pid. Defends
+//     against an attacker on the local machine probing the port and
+//     issuing the call against a stale PID — they'd need the actual
+//     current pid, which they get from /api/daemon-info.
+app.post("/api/evict", async (c) => {
+  const confirmPid = c.req.header("X-DeepPairing-Confirm-Pid");
+  if (confirmPid !== String(process.pid)) {
+    return c.json(
+      { error: `Confirm-pid ${confirmPid ?? "(none)"} does not match daemon pid ${process.pid}`, code: "evict_pid_mismatch" },
+      403,
+    );
+  }
+  log(`[evict] requested for pid=${process.pid} project=${projectRoot} — flushing + broadcasting + exiting`);
+  // Broadcast to every active session so the OTHER project's UI can
+  // surface a banner instead of just losing its WS connection.
+  for (const sid of sessions.keys()) {
+    broadcast(sid, { type: "daemon_evicting", reason: "evicted_by_doctor", projectRoot, pid: process.pid });
+  }
+  // Cleanup persists everything (forceFlush per session, including the
+  // AA3 reviewLatencies → metrics.json round-trip).
+  cleanup();
+  // 250ms grace so broadcasts make it onto the wire before the process
+  // dies. Fire the response first so the caller sees the success.
+  setTimeout(() => process.exit(0), 250);
+  return c.json({ status: "evicting", pid: process.pid });
+});
+
 // O1a: skill-load detection. Two signals inform whether the agent is likely
 // wired up to actually call deepPairing tools:
 //   (a) Config signal — CLAUDE.md has the deepPairing marker, which means

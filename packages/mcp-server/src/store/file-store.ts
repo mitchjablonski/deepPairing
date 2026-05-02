@@ -191,6 +191,14 @@ export class FileStore implements IStore {
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = this.loadJsonFile<PlanReviewRecord[]>(path.join(dir, "plan-reviews.json"), []);
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
+    // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
+    // dropped on every daemon idle-shutdown — review-latency metrics
+    // would silently reset to zero and the engagement view in YourTaste
+    // looked broken. Now they round-trip through metrics.json on flush.
+    this.reviewLatencies = this.loadJsonFile<{ type: string; latencyMs: number }[]>(
+      path.join(dir, "metrics.json"),
+      [],
+    );
   }
 
   /** Load a JSON file with graceful error handling. Records mtime + size so a
@@ -327,6 +335,13 @@ export class FileStore implements IStore {
     this.atomicWrite(commentsPath, this.comments);
     this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
     this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
+    // AA3 — persist reviewLatencies so a daemon idle-shutdown doesn't
+    // wipe them. Only write when we have data; an empty array is still
+    // useful (signals "no reviews yet"), but skipping the write keeps
+    // session dirs tidy on first use.
+    if (this.reviewLatencies.length > 0) {
+      this.atomicWrite(path.join(dir, "metrics.json"), this.reviewLatencies);
+    }
   }
 
   /** Force an immediate flush — call before process exit */

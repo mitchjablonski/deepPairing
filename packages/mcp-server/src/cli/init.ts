@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity } from "../daemon-lifecycle.js";
+import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon } from "../daemon-lifecycle.js";
 import {
   ensureDeepPairingDir,
   ensureGitignoreEntry,
@@ -387,7 +387,16 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
 
   /** Healing actions the user can opt into via --fix. Collected during
    *  diagnosis; applied at the end with confirmation. */
-  const fixes: Array<{ label: string; apply: () => { ok: boolean; message: string } }> = [];
+  // AA3 — fix descriptors gain `requiresExplicitConfirmation`. Some
+  // doctor fixes have cross-project blast radius (e.g. signaling another
+  // project's daemon to evict the port); --yes mode SKIPS them so an
+  // unattended run can't trigger friendly fire. The user has to re-run
+  // interactively to apply such fixes.
+  const fixes: Array<{
+    label: string;
+    apply: () => { ok: boolean; message: string } | Promise<{ ok: boolean; message: string }>;
+    requiresExplicitConfirmation?: boolean;
+  }> = [];
 
   // 1. daemon.json
   let info: { pid?: number; port?: number; startedAt?: string } | null = null;
@@ -444,14 +453,24 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     if (!port) port = DEFAULT_PORT; // fall through and report the failed probe
   }
 
-  // Z5b — project-mismatch remediation. When the wrapper hits Y3''s 403
-  // ("Daemon project mismatch"), the user sees the error in MCP stderr
-  // and runs doctor expecting a fix. Pre-Z5b doctor had no awareness of
-  // this case; the user was stranded with the error message and no
-  // remediation. Now: probe the candidate port; if a daemon answers but
-  // serves a DIFFERENT projectRoot than this cwd, surface a fix that
-  // either kills the squatting daemon (if its PID is reachable) or
-  // points at its daemon.json so the user can do it themselves.
+  // Z5b / AA3 — project-mismatch remediation. When the wrapper hits
+  // Y3''s 403 ("Daemon project mismatch"), the user sees the error in
+  // MCP stderr and runs doctor expecting a fix.
+  //
+  // AA3 hardens this against the cross-project foot-cannon Z5b's
+  // SIGTERM created. New apply path:
+  //   1. Re-probe the daemon to confirm pid + projectRoot are unchanged
+  //      from diagnosis time. PID may have been reused by an unrelated
+  //      OS process; abort the kill if anything drifted.
+  //   2. Try cooperative shutdown via /api/evict — daemon flushes
+  //      metrics, broadcasts daemon_evicting to the OTHER project's UI
+  //      (no silent disconnect), and exits cleanly.
+  //   3. SIGTERM only as a fallback when evict fails. Branch on Windows
+  //      where Node ignores the signal name and SIGTERM is silently
+  //      SIGKILL — surface the platform delta in the user-facing copy
+  //      instead of misleading "gentler than SIGKILL".
+  //   4. Mark requiresExplicitConfirmation so --yes mode skips it.
+  //      Cross-project actions never fire unattended.
   try {
     const squatter = await probeDaemonIdentity(port);
     if (squatter && squatter.projectRoot && squatter.projectRoot !== cwd) {
@@ -462,23 +481,75 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
       console.log(
         `    ${dim("This is the Y3' project_mismatch case — your wrapper would 403 on register.")}`,
       );
+      const expectedPid = squatter.pid;
+      const expectedProject = squatter.projectRoot;
       fixes.push({
-        label: `Stop the squatting daemon (PID ${squatter.pid}) so this project's daemon can claim port ${port}`,
-        apply: () => {
-          try {
-            // SIGTERM is gentler than SIGKILL — gives the squatter a
-            // chance to flush its in-memory state. The next wrapper
-            // start will probe + spawn a fresh daemon for cwd.
-            process.kill(squatter.pid, "SIGTERM");
+        label: `Ask daemon (PID ${expectedPid}, project ${expectedProject}) to release port ${port}`,
+        requiresExplicitConfirmation: true,
+        apply: async () => {
+          // AA3 — re-probe to confirm nothing drifted between diagnosis
+          // and apply. If the daemon died (and the OS recycled the pid)
+          // or another daemon claimed the port, abort.
+          const reprobe = await probeDaemonIdentity(port);
+          if (!reprobe) {
+            return { ok: true, message: `Port ${port} is now free; nothing to do.` };
+          }
+          if (reprobe.pid !== expectedPid || reprobe.projectRoot !== expectedProject) {
+            return {
+              ok: false,
+              message:
+                `Daemon on :${port} changed since diagnosis ` +
+                `(was PID ${expectedPid} for ${expectedProject}, now PID ${reprobe.pid} for ${reprobe.projectRoot}). ` +
+                `Refusing to act on stale info; re-run doctor.`,
+            };
+          }
+          // Cooperative shutdown first.
+          const result = await evictDaemon(port, expectedPid);
+          if (result === "evicted") {
             return {
               ok: true,
-              message: `Sent SIGTERM to PID ${squatter.pid}. Restart Claude Code to spawn a fresh daemon for this project.`,
+              message: `Daemon for ${expectedProject} evicted cleanly. Restart Claude Code in this project to bind.`,
+            };
+          }
+          if (result === "pid_mismatch" || result === "no_daemon") {
+            return {
+              ok: true,
+              message: `Port ${port} is no longer held by PID ${expectedPid}; nothing to do.`,
+            };
+          }
+          // Cooperative path failed — fall back to a signal. Cross-platform
+          // note: on Windows Node ignores the signal name and process.kill
+          // is unconditional termination (no graceful cleanup runs). Tell
+          // the user.
+          if (process.platform === "win32") {
+            try {
+              process.kill(expectedPid);
+              return {
+                ok: true,
+                message: `Force-killed PID ${expectedPid} (Windows has no SIGTERM equivalent — daemon couldn't flush). Restart Claude Code.`,
+              };
+            } catch (err: any) {
+              return {
+                ok: false,
+                message:
+                  `Could not signal PID ${expectedPid}: ${err?.message ?? err}. ` +
+                  `Try Task Manager / taskkill /PID ${expectedPid}.`,
+              };
+            }
+          }
+          try {
+            process.kill(expectedPid, "SIGTERM");
+            return {
+              ok: true,
+              message:
+                `Cooperative evict refused; sent SIGTERM to PID ${expectedPid}. ` +
+                `Restart Claude Code in this project to spawn a fresh daemon.`,
             };
           } catch (err: any) {
             return {
               ok: false,
               message:
-                `Could not signal PID ${squatter.pid}: ${err?.message ?? err}. ` +
+                `Could not signal PID ${expectedPid}: ${err?.message ?? err}. ` +
                 `The other project's daemon may have died already; try restarting Claude Code.`,
             };
           }
@@ -725,7 +796,16 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   }
 
   for (const f of fixes) {
-    const r = f.apply();
+    // AA3 — skip cross-project / cross-process fixes when running under
+    // --yes. Surface the skip explicitly so the user can re-run without
+    // --yes if they actually want it applied.
+    if (f.requiresExplicitConfirmation && opts.yes) {
+      console.log(
+        `  ${yellow("!")} SKIPPED ${f.label}${dim(" — requires interactive confirmation; re-run without --yes")}`,
+      );
+      continue;
+    }
+    const r = await f.apply();
     const mark = r.ok ? green("✓") : red("✗");
     console.log(`  ${mark} ${f.label}${r.message ? dim(` — ${r.message}`) : ""}`);
   }

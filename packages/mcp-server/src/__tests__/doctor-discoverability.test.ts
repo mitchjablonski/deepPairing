@@ -48,19 +48,46 @@ describe("`deeppairing doctor --fix` surfaces (U6)", () => {
   });
 });
 
-describe("Z5b — doctor handles Y3' project_mismatch", () => {
+describe("Z5b / AA3 — doctor handles Y3' project_mismatch", () => {
   // Y3' added a 403 project_mismatch when the wrapper hits a daemon
   // serving a different projectRoot. The user sees the error in MCP
   // stderr; their natural next move is `npx deeppairing doctor --fix`.
   // Pre-Z5b doctor had no awareness of that case and the user was
-  // stranded. This pin defends the remediation against a future cleanup.
+  // stranded. AA3 hardened the remediation: cooperative evict first,
+  // SIGTERM as fallback, --yes mode skips it. These pins defend the
+  // surface against a future cleanup.
   it("doctor surfaces a fix when the daemon on the candidate port serves a different projectRoot", () => {
     const init = read("cli/init.ts");
-    // The diagnostic line and the actionable fix label both have to be present.
     expect(init).toMatch(/Daemon on :\$\{port\} serves a different project/);
-    expect(init).toMatch(/Stop the squatting daemon/);
-    // Names the Y3' case explicitly so a reader connects the two surfaces.
     expect(init).toMatch(/project_mismatch/);
+  });
+
+  it("AA3: fix label mentions cooperative evict (not SIGTERM as the headline action)", () => {
+    const init = read("cli/init.ts");
+    // The Z5b "Stop the squatting daemon" copy was misleading because
+    // it implied SIGTERM was the primary path. AA3 reframes around
+    // "ask daemon to release port" so the user knows it's cooperative.
+    expect(init).toMatch(/Ask daemon \(PID/);
+    expect(init).toMatch(/release port/);
+  });
+
+  it("AA3: project-mismatch fix carries requiresExplicitConfirmation flag", () => {
+    const init = read("cli/init.ts");
+    // --yes mode must skip cross-project actions. Pin both the flag on
+    // the descriptor AND the loop's skip handling.
+    expect(init).toMatch(/requiresExplicitConfirmation: true/);
+    expect(init).toMatch(/requires interactive confirmation/);
+  });
+
+  it("AA3: SIGTERM fallback branches on Windows (Node has no real SIGTERM)", () => {
+    const init = read("cli/init.ts");
+    expect(init).toMatch(/process\.platform === "win32"/);
+    expect(init).toMatch(/no SIGTERM equivalent/);
+  });
+
+  it("AA3: re-probes the daemon before acting (defends against PID reuse)", () => {
+    const init = read("cli/init.ts");
+    expect(init).toMatch(/re-probe to confirm nothing drifted/i);
   });
 });
 
