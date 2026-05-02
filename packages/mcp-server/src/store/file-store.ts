@@ -4,6 +4,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
+import { writeJsonAtomic } from "./atomic-write.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -860,7 +861,13 @@ export class FileStore implements IStore {
   recordPreflightTrace(artifactId: string, trace: PreflightTrace): void {
     const map = this.loadJsonFile<Record<string, PreflightTrace>>(this.preflightTracesPath(), {});
     map[artifactId] = trace;
-    fs.writeFileSync(this.preflightTracesPath(), JSON.stringify(map, null, 2));
+    // Z4 — atomic write. Pre-Z4 a SIGKILL during this rewrite (which
+    // fires per `present_*` and twice for `revise_artifact`) could
+    // truncate the file mid-write — the next read fell back to {} and
+    // ALL prior trace history vanished silently. writeJsonAtomic uses
+    // the .tmp + renameSync pattern so readers see either the old map
+    // or the new map, never a half-written byte stream.
+    writeJsonAtomic(this.preflightTracesPath(), map);
   }
 
   getPreflightTrace(artifactId: string): PreflightTrace | null {
