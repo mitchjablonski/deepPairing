@@ -266,12 +266,19 @@ export class DaemonClient implements IStore {
     return this.get("/metrics");
   }
 
-  async recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): Promise<void> {
-    await this.post("/memory/rejected", { description, reason, sourceArtifactId, concept });
+  // AA1 — typed-object signatures matching IStore. Wire shape unchanged
+  // (the daemon's /memory/* routes already accepted this object).
+  async recordRejectedApproach(params: {
+    description: string;
+    reason?: string;
+    sourceArtifactId?: string;
+    concept?: string;
+  }): Promise<void> {
+    await this.post("/memory/rejected", params);
   }
 
-  async recordApprovedPattern(description: string): Promise<void> {
-    await this.post("/memory/approved", { description });
+  async recordApprovedPattern(params: { description: string; concept?: string }): Promise<void> {
+    await this.post("/memory/approved", params);
   }
 
   async getSessionMemory(): Promise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }> {

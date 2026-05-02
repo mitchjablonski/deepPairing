@@ -56,12 +56,12 @@ export function runDemoScript({
   // t=2500ms — the user "rejects" it
   schedule(2500, async () => {
     await store.updateArtifactStatus(findingsArtifactId, "rejected", "demo_script");
-    await store.recordRejectedApproach(
-      DEFAULT_REJECTION_DESCRIPTION,
-      DEFAULT_REJECTION_REASON,
-      findingsArtifactId,
-      DEFAULT_REJECTION_CONCEPT,
-    );
+    await store.recordRejectedApproach({
+      description: DEFAULT_REJECTION_DESCRIPTION,
+      reason: DEFAULT_REJECTION_REASON,
+      sourceArtifactId: findingsArtifactId,
+      concept: DEFAULT_REJECTION_CONCEPT,
+    });
     broadcast(sessionId, { type: "artifact_updated", artifactId: findingsArtifactId, status: "rejected" });
     broadcast(sessionId, {
       type: "ledger_write",

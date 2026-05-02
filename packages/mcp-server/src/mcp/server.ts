@@ -813,31 +813,45 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             const option = d.options.find((o: any) => o.id === d.response?.optionId);
             if (option) {
               const approvedDescription = `${d.context}: ${option.title}`;
-              await store.recordApprovedPattern(approvedDescription);
+              // AA1 — concept.name (from Y5) is the cross-project ledger key.
+              // Pre-AA1 we passed option.description here, which is prose
+              // and broke compounding (every project minted unique long
+              // keys instead of bucketing under e.g. "argon2id for password
+              // hashing"). Fall back to description for older agents that
+              // don't supply concept.
+              const approvedConcept: string | undefined =
+                (option as any)?.concept?.name ?? option?.description ?? undefined;
+              await store.recordApprovedPattern({
+                description: approvedDescription,
+                concept: approvedConcept,
+              });
               broadcast({
                 type: "ledger_write",
                 kind: "approved",
                 description: approvedDescription,
+                concept: approvedConcept,
                 sourceArtifactId: d.artifactId,
               });
               const rejected = d.options.filter((o: any) => o.id !== d.response?.optionId);
-              // The winning option's description often encodes the concept
-              // ("a managed queue — we pay per job, not per month"). Use it
-              // as the concept tag so future pre-flight catches paraphrases.
-              const concept = option?.description ?? undefined;
               for (const rej of rejected) {
                 const rejectedDescription = `${d.context}: ${rej.title}`;
-                await store.recordRejectedApproach(
-                  rejectedDescription,
-                  d.response?.reasoning,
-                  d.artifactId,
-                  concept,
-                );
+                // AA1 — read concept from the REJECTED option, not the
+                // winning one. Each option carries its own pattern; the
+                // rejection should compound under the rejected option's
+                // concept, not the winner's.
+                const rejectedConcept: string | undefined =
+                  (rej as any)?.concept?.name ?? rej?.description ?? undefined;
+                await store.recordRejectedApproach({
+                  description: rejectedDescription,
+                  reason: d.response?.reasoning,
+                  sourceArtifactId: d.artifactId,
+                  concept: rejectedConcept,
+                });
                 broadcast({
                   type: "ledger_write",
                   kind: "rejected",
                   description: rejectedDescription,
-                  concept,
+                  concept: rejectedConcept,
                   reason: d.response?.reasoning,
                   sourceArtifactId: d.artifactId,
                 });

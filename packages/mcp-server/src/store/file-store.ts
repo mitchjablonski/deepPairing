@@ -684,11 +684,22 @@ export class FileStore implements IStore {
    * Stored in .deeppairing/preferences.json under "rejectedApproaches".
    * Records are enriched objects; legacy string[] entries are migrated on next write.
    */
-  recordRejectedApproach(description: string, reason?: string, sourceArtifactId?: string, concept?: string): void {
+  recordRejectedApproach(params: {
+    description: string;
+    reason?: string;
+    sourceArtifactId?: string;
+    concept?: string;
+  }): void {
+    const { description, reason, sourceArtifactId, concept } = params;
     // Mirror into the user-global philosophy ledger. The session-scoped
     // preferences.json remains the source of truth for THIS project's
     // pre-flight; the global ledger is additive context for future sessions
     // across all projects.
+    // AA1 — concept (when present) is the cross-project ledger key, NOT
+    // description. Pre-AA1 server.ts:824 was passing `option.description`
+    // as the concept arg, so the global ledger keyed on prose strings
+    // and never compounded across projects. Typed-object signature here
+    // makes the next refactor's regression visible.
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey) {
       try {
@@ -752,11 +763,17 @@ export class FileStore implements IStore {
    * Record an approved pattern the human prefers.
    * Stored in .deeppairing/preferences.json under "approvedPatterns".
    */
-  recordApprovedPattern(description: string): void {
-    // Mirror into global philosophy ledger (same rationale as rejection path).
-    if (description.trim()) {
+  recordApprovedPattern(params: { description: string; concept?: string }): void {
+    const { description, concept } = params;
+    // AA1 — symmetric with recordRejectedApproach: concept (when present)
+    // is the cross-project ledger key. Pre-AA1 the approved path passed
+    // raw description strings into the global ledger, so an "argon2id for
+    // password hashing" approval in project A never bucketed with the
+    // same approval in project B.
+    const conceptKey = concept?.trim() || description.trim();
+    if (conceptKey) {
       try {
-        getGlobalStore().recordInstance(description, {
+        getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
           sessionId: this.sessionId,
           verdict: "approved",

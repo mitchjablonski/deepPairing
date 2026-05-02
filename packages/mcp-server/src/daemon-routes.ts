@@ -367,16 +367,27 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/memory/rejected", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { description, reason, sourceArtifactId, concept } = await c.req.json();
-    r.store.recordRejectedApproach(description, reason, sourceArtifactId, concept);
+    // AA1 — typed-object signature; pass body straight through. The route
+    // already accepted these fields from the wrapper, so the wire shape
+    // is unchanged.
+    const body = await c.req.json();
+    r.store.recordRejectedApproach({
+      description: body.description,
+      reason: body.reason,
+      sourceArtifactId: body.sourceArtifactId,
+      concept: body.concept,
+    });
     return c.json({ status: "recorded" });
   });
 
   app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { description } = await c.req.json();
-    r.store.recordApprovedPattern(description);
+    const body = await c.req.json();
+    r.store.recordApprovedPattern({
+      description: body.description,
+      concept: body.concept,
+    });
     return c.json({ status: "recorded" });
   });
 

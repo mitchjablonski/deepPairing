@@ -326,8 +326,8 @@ describe("MCP Tool Handlers", () => {
       // first-call-hint test below), never inside check_feedback — mixing
       // WAITING signals with past-violation warnings creates contradictory
       // imperatives for the agent.
-      store.recordApprovedPattern("Service pattern");
-      store.recordRejectedApproach("Inline refactor");
+      store.recordApprovedPattern({ description: "Service pattern" });
+      store.recordRejectedApproach({ description: "Inline refactor" });
 
       // Burn the first tool call on something other than check_feedback
       await callTool("log_reasoning", {
@@ -344,8 +344,8 @@ describe("MCP Tool Handlers", () => {
 
   describe("session memory on first tool call", () => {
     it("includes rejected approaches with reasons in the first tool call response", async () => {
-      store.recordRejectedApproach("Deploy to Railway", "too expensive for our scale");
-      store.recordApprovedPattern("Service pattern");
+      store.recordRejectedApproach({ description: "Deploy to Railway", reason: "too expensive for our scale" });
+      store.recordApprovedPattern({ description: "Service pattern" });
 
       const { text } = await callTool("log_reasoning", {
         action: "first call",
@@ -360,7 +360,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("does NOT repeat session memory on subsequent tool calls", async () => {
-      store.recordRejectedApproach("Inline refactor");
+      store.recordRejectedApproach({ description: "Inline refactor" });
 
       await callTool("log_reasoning", {
         action: "first", reasoning: "x", confidence: "low",
@@ -415,7 +415,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("pre-flight rejected-approach validation", () => {
     it("blocks present_options when an option matches a rejected approach", async () => {
-      store.recordRejectedApproach("Deploy: Railway", "too expensive for our scale");
+      store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive for our scale" });
 
       const result = await callTool("present_options", {
         context: "Choose a hosting provider",
@@ -434,7 +434,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("broadcasts a preflight_blocked event so the UI can toast (H1)", async () => {
-      store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request hosting");
+      store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive", concept: "pay-per-request hosting" });
 
       await callTool("present_options", {
         context: "Pick a deploy target",
@@ -454,7 +454,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("blocks present_plan when a step description matches a rejected approach", async () => {
-      store.recordRejectedApproach("Inline refactor");
+      store.recordRejectedApproach({ description: "Inline refactor" });
 
       const result = await callTool("present_plan", {
         title: "Cleanup",
@@ -468,7 +468,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("allows present_findings when nothing matches", async () => {
-      store.recordRejectedApproach("Deploy: Railway");
+      store.recordRejectedApproach({ description: "Deploy: Railway" });
 
       const { isError } = await callTool("present_findings", {
         summary: "Auth analysis",
@@ -481,12 +481,11 @@ describe("MCP Tool Handlers", () => {
 
     it("blocks via concept match even when surface names differ (U6)", async () => {
       // Past rejection: "Railway" with the underlying concept "pay-per-request serverless hosting"
-      store.recordRejectedApproach(
-        "Deploy: Railway",
-        "too expensive for low-traffic services",
-        undefined,
-        "pay-per-request serverless hosting platform",
-      );
+      store.recordRejectedApproach({
+        description: "Deploy: Railway",
+        reason: "too expensive for low-traffic services",
+        concept: "pay-per-request serverless hosting platform",
+      });
 
       // Agent now proposes Fly.io with language that matches the concept tokens
       const result = await callTool("present_options", {
@@ -525,17 +524,133 @@ describe("MCP Tool Handlers", () => {
       // We invoke the store directly since test fixtures don't use Hono.
       store.updateArtifactStatus(artifact.id, "rejected");
       // The HTTP handler also records the rejected approach — simulate that path
-      store.recordRejectedApproach(
-        artifact.title,
-        "we already have a CDN layer; adding Redis is premature",
-        artifact.id,
-      );
+      store.recordRejectedApproach({
+        description: artifact.title,
+        reason: "we already have a CDN layer; adding Redis is premature",
+        sourceArtifactId: artifact.id,
+      });
 
       const memory = store.getSessionMemory();
       const match = memory.rejectedApproaches.find((r) => r.description === "Proposed caching layer");
       expect(match).toBeDefined();
       expect(match?.reason).toContain("premature");
       expect(match?.sourceArtifactId).toBe(artifact.id);
+    });
+  });
+
+  describe("AA1 — concept.name flows through to ledger (Y5 + Z1 substrate consumer fix)", () => {
+    // Pre-AA1, server.ts:824 was passing option.description as the concept
+    // arg to recordRejectedApproach. The Y5-hoisted option.concept.name
+    // was dropped on the floor — the global ledger keyed on prose like
+    // "Use Fly.io — pay-per-request serverless platform" instead of the
+    // crisp "pay-per-request hosting" name. Cross-project compounding
+    // was broken: every project minted its own unique long key.
+    //
+    // These tests pin that the resolve handler now reads concept.name
+    // from each option and threads it through both rejection and
+    // approval paths.
+
+    it("rejected option's concept.name lands in the session ledger as `concept`", async () => {
+      // Present options with explicit concept.name on both. User picks A;
+      // B's concept should land in the rejected list.
+      await callTool("present_options", {
+        context: "Pick a deploy target",
+        options: [
+          {
+            id: "a", title: "AWS Fargate",
+            description: "managed container service",
+            pros: ["mature"], cons: ["complex"],
+            effort: "medium", risk: "low", recommendation: true,
+            concept: { name: "managed container service" },
+          },
+          {
+            id: "b", title: "Fly.io",
+            description: "pay-per-request hosting on the edge",
+            pros: ["cheap"], cons: ["less mature"],
+            effort: "low", risk: "medium", recommendation: false,
+            concept: { name: "pay-per-request hosting" },
+          },
+        ],
+      });
+      const artifact = store.getArtifacts()[0];
+      const dec = (artifact.content as any).decisionId;
+      // Resolve via the store (UI path); then trigger the next tool call
+      // so the resolve-handler post-processing fires.
+      store.resolveDecision(dec, "a", "fits our existing infra");
+      await callTool("check_feedback", {});
+
+      const memory = store.getSessionMemory();
+      const rejected = memory.rejectedApproaches.find(
+        (r) => r.description.includes("Fly.io"),
+      );
+      expect(rejected).toBeDefined();
+      // The concept is the Y5 short name, NOT the prose description.
+      expect(rejected?.concept).toBe("pay-per-request hosting");
+    });
+
+    it("approved option's concept.name flows through too (symmetric with rejection)", async () => {
+      // Same options shape; assert the WINNER's concept lands as a
+      // pattern in the global ledger via the approved path.
+      await callTool("present_options", {
+        context: "Pick password hashing",
+        options: [
+          {
+            id: "a", title: "argon2id",
+            description: "memory-hard password hashing",
+            pros: ["modern"], cons: ["newer"],
+            effort: "low", risk: "low", recommendation: true,
+            concept: { name: "argon2id for password hashing" },
+          },
+          {
+            id: "b", title: "bcrypt rounds=4",
+            description: "fast bcrypt with low cost factor",
+            pros: ["familiar"], cons: ["brute-forceable"],
+            effort: "low", risk: "high", recommendation: false,
+            concept: { name: "low-cost bcrypt" },
+          },
+        ],
+      });
+      const artifact = store.getArtifacts()[0];
+      const dec = (artifact.content as any).decisionId;
+      store.resolveDecision(dec, "a", "future-proof");
+      await callTool("check_feedback", {});
+
+      // Approved patterns track the prose description (legacy shape) but
+      // the GLOBAL ledger gets the concept.name as the bucket key. We
+      // don't have a getGlobalStore inspection helper here, but we DO
+      // verify the approval landed via the prose path.
+      const memory = store.getSessionMemory();
+      expect(
+        memory.approvedPatterns.some((p) => p.includes("argon2id")),
+      ).toBe(true);
+    });
+
+    it("falls back to option.description when concept is missing (back-compat)", async () => {
+      await callTool("present_options", {
+        context: "Pick a queue",
+        options: [
+          {
+            id: "a", title: "SQS", description: "managed queue",
+            pros: [], cons: [], effort: "low", risk: "low", recommendation: true,
+          },
+          {
+            id: "b", title: "Redis Streams", description: "in-memory queue with persistence",
+            pros: [], cons: [], effort: "medium", risk: "medium", recommendation: false,
+          },
+        ],
+      });
+      const artifact = store.getArtifacts()[0];
+      const dec = (artifact.content as any).decisionId;
+      store.resolveDecision(dec, "a", "we already use AWS");
+      await callTool("check_feedback", {});
+
+      const memory = store.getSessionMemory();
+      const rejected = memory.rejectedApproaches.find(
+        (r) => r.description.includes("Redis Streams"),
+      );
+      expect(rejected).toBeDefined();
+      // Without concept, falls back to the prose description.
+      expect(rejected?.concept).toBe("in-memory queue with persistence");
     });
   });
 
@@ -963,7 +1078,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("refuses when a requirement matches a rejected approach", async () => {
-      store.recordRejectedApproach("Auth: Railway", "too expensive");
+      store.recordRejectedApproach({ description: "Auth: Railway", reason: "too expensive" });
       const { isError, text } = await callTool("present_spec", {
         title: "Auth",
         objective: "stand up login",
@@ -1267,7 +1382,7 @@ describe("MCP Tool Handlers", () => {
 
   describe("recall — unified memory tool (N4)", () => {
     it("mode='any' surfaces philosophy ledger entries by concept", async () => {
-      store.recordRejectedApproach("Deploy: Railway", "too expensive", undefined, "pay-per-request hosting");
+      store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive", concept: "pay-per-request hosting" });
       const { text } = await callTool("recall", { query: "pay-per-request", mode: "any" });
       expect(text).toContain("Philosophy ledger");
       expect(text.toLowerCase()).toContain("pay-per-request hosting");
@@ -1280,7 +1395,7 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("mode='philosophy' returns a formatted stance for a known concept", async () => {
-      store.recordRejectedApproach("concept-x", "reason-y");
+      store.recordRejectedApproach({ description: "concept-x", reason: "reason-y" });
       const { text } = await callTool("recall", { query: "concept-x", mode: "philosophy" });
       expect(text).toContain("AVOID");
       expect(text).toContain("concept-x");
@@ -1292,17 +1407,17 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("mode='philosophy' with no query lists the whole ledger", async () => {
-      store.recordRejectedApproach("a", "x");
-      store.recordRejectedApproach("b", "y");
+      store.recordRejectedApproach({ description: "a", reason: "x" });
+      store.recordRejectedApproach({ description: "b", reason: "y" });
       const { text, isError } = await callTool("recall", { mode: "philosophy" });
       expect(isError).toBeFalsy();
       expect(text).toContain("Philosophy ledger");
     });
 
     it("mode='philosophy' filters by stance", async () => {
-      store.recordApprovedPattern("Service layer");
-      store.recordApprovedPattern("Service layer");
-      store.recordApprovedPattern("Service layer");
+      store.recordApprovedPattern({ description: "Service layer" });
+      store.recordApprovedPattern({ description: "Service layer" });
+      store.recordApprovedPattern({ description: "Service layer" });
       const { text } = await callTool("recall", { mode: "philosophy", stance: "prefer" });
       expect(text).toContain("Service layer");
       expect(text).toContain("PREFER");
@@ -1490,7 +1605,7 @@ describe("MCP Tool Handlers", () => {
         intent: "question",
         target: { sectionId: "decision_revision_requested" } as any,
       });
-      store.recordRejectedApproach("Use Railway", "expensive", undefined);
+      store.recordRejectedApproach({ description: "Use Railway", reason: "expensive" });
 
       const { text } = await callTool("present_findings", {
         summary: "trigger",
@@ -1525,10 +1640,10 @@ describe("MCP Tool Handlers", () => {
         target: { sectionId: "decision_revision_requested" } as any,
       });
       for (let i = 0; i < 50; i++) {
-        store.recordRejectedApproach(
-          `Approach ${i} with a deliberately verbose description so the section bloats fast and pushes past the budget`,
-          `Long-form reason ${i} so each entry is fat enough that 50 of them blow well past 1500 chars`,
-        );
+        store.recordRejectedApproach({
+          description: `Approach ${i} with a deliberately verbose description so the section bloats fast and pushes past the budget`,
+          reason: `Long-form reason ${i} so each entry is fat enough that 50 of them blow well past 1500 chars`,
+        });
       }
 
       const { text } = await callTool("present_findings", {
@@ -1547,10 +1662,10 @@ describe("MCP Tool Handlers", () => {
 
     it("hint stays under the 1500-char budget when contextual items would otherwise overflow", async () => {
       for (let i = 0; i < 50; i++) {
-        store.recordRejectedApproach(
-          `Bulky rejected approach ${i} ${"x".repeat(80)}`,
-          `Bulky reason ${i} ${"y".repeat(80)}`,
-        );
+        store.recordRejectedApproach({
+          description: `Bulky rejected approach ${i} ${"x".repeat(80)}`,
+          reason: `Bulky reason ${i} ${"y".repeat(80)}`,
+        });
       }
       const { text } = await callTool("present_findings", {
         summary: "trigger",
