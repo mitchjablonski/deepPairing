@@ -180,6 +180,13 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         )}
       </div>
 
+      {/* Z3 — preflight breadcrumb hoisted ABOVE the type-specific renderer
+          so the moat frames the proposal instead of footnoting it. PMF
+          council Y review: the single line that distinguishes deepPairing
+          from Cursor 3 was the LAST thing the user saw, after they'd
+          already decided. Now it's the first thing under the header. */}
+      <PreflightBreadcrumb artifactId={artifact.id} />
+
       {/* Causal chain — shows artifact relationships */}
       <CausalChain />
 
@@ -251,11 +258,6 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         </h4>
         <CommentThread artifactId={artifact.id} comments={generalComments} />
       </div>
-
-      {/* Y1' — preflight breadcrumb makes the silent ledger guard felt on
-          every artifact, not just on a block. Self-hides when no trace
-          exists or when the ledger had zero stances to consult. */}
-      <PreflightBreadcrumb artifactId={artifact.id} />
     </motion.div>
   );
 }
