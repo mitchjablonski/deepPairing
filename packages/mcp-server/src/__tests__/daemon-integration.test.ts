@@ -659,4 +659,63 @@ describe("DaemonClient", () => {
     expect(Array.isArray(arts)).toBe(true);
   });
 
+  // AA2 — meta-cache ordering, daemon_resumed broadcast, hand-rolled
+  // fetches routed through request().
+  describe("AA2 — recovery polish", () => {
+    it("AA2: 403 project_mismatch CLEARS lastRegisterMeta (no replay of bad meta)", async () => {
+      // Spin a tiny daemon-routes app pinned to a different projectRoot so
+      // /register 403s on a mismatched expectedProjectRoot.
+      const localApp = createDaemonRoutes(
+        new Map(),
+        new Map(),
+        (id) => { const s = new FileStore(tmpDir, id); return s; },
+        () => {},
+        undefined,
+        "/projects/A",
+      );
+      const localPort = TEST_PORT + 1;
+      const localServer = serve({ fetch: localApp.fetch, port: localPort });
+      const c = new DaemonClient(localPort, "aa2_meta");
+      await expect(
+        c.register({ expectedProjectRoot: "/projects/B" }),
+      ).rejects.toThrow(/project_mismatch|project mismatch/);
+      // Inspect the private field via cast to confirm clearance — this
+      // is the load-bearing assertion: pre-AA2 the bad meta would still
+      // be cached after the throw.
+      expect((c as any).lastRegisterMeta).toBeUndefined();
+      localServer?.close?.();
+    });
+
+    it("AA2: successful register CACHES meta only after the response is OK", async () => {
+      const c = new DaemonClient(TEST_PORT, "aa2_cache_session");
+      await c.register({ title: "x", project: "y", expectedProjectRoot: undefined });
+      expect((c as any).lastRegisterMeta).toEqual({ title: "x", project: "y", expectedProjectRoot: undefined });
+    });
+
+    it("AA2: auto-recover broadcasts daemon_resumed via /recovered", async () => {
+      // Use a fresh client whose sessionId is unknown to the running
+      // daemon — first call goes through the recover path, which
+      // fire-and-forgets a POST /recovered. Verify the broadcast lands.
+      const freshClient = new DaemonClient(TEST_PORT, "aa2_recover_session");
+      const before = broadcasts.length;
+      await freshClient.getArtifacts();
+      // Give the fire-and-forget POST a tick to land.
+      await new Promise((r) => setTimeout(r, 50));
+      const resumed = broadcasts.find(
+        (b) => b.event.type === "daemon_resumed" && b.sessionId === "aa2_recover_session",
+      );
+      expect(resumed).toBeDefined();
+      expect(broadcasts.length).toBeGreaterThan(before);
+    });
+
+    it("AA2: searchSessions throws on non-2xx instead of returning [] silently", async () => {
+      // The test daemon doesn't mount /api/search (that's a public-route
+      // app, not daemon-routes), so the call hits a 404. Pre-AA2 the
+      // hand-rolled fetch swallowed the status and returned []; now
+      // requestPublic throws with the structured [deepPairing] prefix.
+      // This IS the load-bearing assertion — silent-fail → loud-fail.
+      await expect(client.searchSessions("anything")).rejects.toThrow(/deepPairing/);
+    });
+  });
+
 });

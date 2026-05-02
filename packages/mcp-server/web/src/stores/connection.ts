@@ -249,6 +249,33 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           });
           break;
 
+        case "daemon_resumed":
+          // AA2 — wrapper auto-recovered from a 404 session_not_registered
+          // (daemon restarted while the wrapper was alive). The WS kept
+          // streaming on the same socket so the browser never knew its
+          // optimistic state may be stale; the daemon broadcasts this so
+          // we can refetch full state + toast the user.
+          fetch(`http://${window.location.host}/api/state`, {
+            headers: { "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((fresh) => {
+              if (!fresh) return;
+              store.reset();
+              for (const artifact of fresh.artifacts ?? []) store.addArtifact(artifact);
+              for (const comment of fresh.comments ?? []) store.addComment(comment);
+            })
+            .catch(() => {});
+          import("./toast").then(({ useToastStore }) => {
+            useToastStore.getState().push({
+              kind: "info",
+              title: "Daemon recovered — session state refetched",
+              body: "The deepPairing daemon restarted; the wrapper auto-re-registered. Anything you submitted in the last few seconds may need to be retried.",
+              ttl: 8000,
+            });
+          });
+          break;
+
         case "preflight_trace_recorded":
           // Y1' — bridge the WS event to a window CustomEvent so the
           // PreflightBreadcrumb component (mounted per-artifact) can
