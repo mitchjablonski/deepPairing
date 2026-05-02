@@ -170,6 +170,42 @@ describe("FileStore", () => {
     expect(metrics.avgReviewLatencyMs).toBeGreaterThanOrEqual(0);
   });
 
+  // AA3 — reviewLatencies persist across daemon restarts. Pre-AA3 they
+  // were in-memory only; an idle-shutdown silently reset all metrics.
+  it("AA3: reviewLatencies persist on flush + rehydrate on reload", () => {
+    const sid = "metrics_persist";
+    const store = createStore(sid);
+    store.createArtifact({ id: "art_aa3", type: "research", title: "x", content: {} });
+    // Trigger a review-latency record. updateArtifactStatus calls
+    // recordArtifactReviewed under the hood.
+    store.updateArtifactStatus("art_aa3", "approved");
+    store.forceFlush();
+
+    // metrics.json should exist next to the other session JSONs.
+    const metricsPath = path.join(tmpDir, ".deeppairing", "sessions", sid, "metrics.json");
+    expect(fs.existsSync(metricsPath)).toBe(true);
+    const onDisk = JSON.parse(fs.readFileSync(metricsPath, "utf-8"));
+    expect(Array.isArray(onDisk)).toBe(true);
+    expect(onDisk.length).toBe(1);
+    expect(onDisk[0].type).toBe("research");
+
+    // Rehydrate by constructing a fresh FileStore — the new instance must
+    // see the same metrics. Pre-AA3 this assertion would fail.
+    const reloaded = createStore(sid);
+    const metrics = reloaded.getEngagementMetrics();
+    expect(metrics.avgReviewLatencyMs).toBeGreaterThanOrEqual(0);
+    expect(metrics.reviewsByType.research?.count).toBe(1);
+  });
+
+  it("AA3: skips writing metrics.json when reviewLatencies is empty (keep session dir tidy)", () => {
+    const sid = "metrics_empty";
+    const store = createStore(sid);
+    store.createArtifact({ id: "art_x", type: "research", title: "x", content: {} });
+    store.forceFlush();
+    const metricsPath = path.join(tmpDir, ".deeppairing", "sessions", sid, "metrics.json");
+    expect(fs.existsSync(metricsPath)).toBe(false);
+  });
+
   it("stores and retrieves autonomy level", () => {
     const store = createStore( "autonomy");
     store.setAutonomyLevel("balanced");
