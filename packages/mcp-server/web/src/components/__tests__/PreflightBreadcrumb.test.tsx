@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { PreflightBreadcrumb } from "../PreflightBreadcrumb";
+import { PreflightBreadcrumb, classifyPreflightTier } from "../PreflightBreadcrumb";
 
 function trace(overrides: Partial<PreflightTrace> = {}): PreflightTrace {
   return {
@@ -226,5 +226,131 @@ describe("PreflightBreadcrumb (Y1')", () => {
       }));
     });
     expect(screen.queryByText(/Cross-checked/)).not.toBeInTheDocument();
+  });
+});
+
+// AA8 — three-tier visual treatment. Pure helper test plus per-tier
+// render assertions. PMF council Z review pushed back on always-on
+// violet box ("50 violet bars saying 'trust me'"); these tests pin the
+// scarcity-equals-signal rules.
+describe("classifyPreflightTier (AA8)", () => {
+  it("bootstrap when consideredCount is 0", () => {
+    expect(classifyPreflightTier(trace({ consideredCount: 0 }))).toBe("bootstrap");
+  });
+
+  it("signal when there's at least one near-miss", () => {
+    expect(
+      classifyPreflightTier(
+        trace({
+          consideredCount: 3,
+          consideredConcepts: [{ source: "session", concept: "x" }],
+          nearMisses: [{ source: "session", concept: "almost" }],
+        }),
+      ),
+    ).toBe("signal");
+  });
+
+  it("signal when at least one considered concept is team-source", () => {
+    expect(
+      classifyPreflightTier(
+        trace({
+          consideredCount: 1,
+          consideredConcepts: [{ source: "team", concept: "use the orm" }],
+          nearMisses: [],
+        }),
+      ),
+    ).toBe("signal");
+  });
+
+  it("ambient when only session-source concepts and no near-misses", () => {
+    expect(
+      classifyPreflightTier(
+        trace({
+          consideredCount: 5,
+          consideredConcepts: [
+            { source: "session", concept: "a" },
+            { source: "session", concept: "b" },
+          ],
+          nearMisses: [],
+        }),
+      ),
+    ).toBe("ambient");
+  });
+
+  it("near-miss wins over ambient even when other concepts are session-only", () => {
+    expect(
+      classifyPreflightTier(
+        trace({
+          consideredCount: 4,
+          consideredConcepts: [{ source: "session", concept: "x" }],
+          nearMisses: [{ source: "session", concept: "x" }],
+        }),
+      ),
+    ).toBe("signal");
+  });
+});
+
+describe("PreflightBreadcrumb tier render (AA8)", () => {
+  it("ambient tier renders the headline WITHOUT the violet card border", async () => {
+    vi.stubGlobal("fetch", mockFetchTrace(trace({
+      consideredCount: 7,
+      consideredConcepts: [{ source: "session", concept: "graphql" }],
+      nearMisses: [],
+    })));
+    const { container } = render(<PreflightBreadcrumb artifactId="art_amb" />);
+    await waitFor(() => screen.getByText(/7 prior stances shaped this proposal/));
+    // Top-level wrapper is the ambient div (no violet border classes).
+    const root = container.firstChild as HTMLElement;
+    expect(root?.className ?? "").not.toMatch(/border-accent-violet/);
+    expect(root?.className ?? "").not.toMatch(/bg-accent-violet-dim/);
+  });
+
+  it("signal tier renders the violet card when nearMisses is non-empty", async () => {
+    vi.stubGlobal("fetch", mockFetchTrace(trace({
+      consideredCount: 3,
+      consideredConcepts: [{ source: "session", concept: "x" }],
+      nearMisses: [{ source: "session", concept: "useEffect cleanup" }],
+    })));
+    const { container } = render(<PreflightBreadcrumb artifactId="art_sig" />);
+    await waitFor(() => screen.getByText(/3 prior stances shaped this proposal/));
+    const root = container.firstChild as HTMLElement;
+    expect(root?.className ?? "").toMatch(/border-accent-violet/);
+    expect(root?.className ?? "").toMatch(/bg-accent-violet-dim/);
+    expect(screen.getByText(/Almost flagged this/)).toBeInTheDocument();
+  });
+
+  it("signal tier renders the violet card when a team-source concept was weighed", async () => {
+    vi.stubGlobal("fetch", mockFetchTrace(trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "team", concept: "use the orm" }],
+      nearMisses: [],
+    })));
+    const { container } = render(<PreflightBreadcrumb artifactId="art_team" />);
+    await waitFor(() => screen.getByText(/1 prior stance shaped this proposal/));
+    const root = container.firstChild as HTMLElement;
+    expect(root?.className ?? "").toMatch(/border-accent-violet/);
+    expect(root?.className ?? "").toMatch(/bg-accent-violet-dim/);
+    // No near-miss line here; team-source alone earns the violet
+    // treatment but the amber "almost flagged" only appears when a
+    // near-miss exists.
+    expect(screen.queryByText(/Almost flagged this/)).not.toBeInTheDocument();
+  });
+
+  it("ambient tier still expands considered concepts on click", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", mockFetchTrace(trace({
+      consideredCount: 2,
+      consideredConcepts: [
+        { source: "session", concept: "global mutable state", reason: "testability" },
+        { source: "session", concept: "manual SQL", reason: "use the orm" },
+      ],
+      nearMisses: [],
+    })));
+    render(<PreflightBreadcrumb artifactId="art_amb_expand" />);
+    await waitFor(() => screen.getByText(/2 prior stances shaped this proposal/));
+    expect(screen.queryByText("Considered:")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("Considered:")).toBeInTheDocument();
+    expect(screen.getByText("global mutable state")).toBeInTheDocument();
   });
 });
