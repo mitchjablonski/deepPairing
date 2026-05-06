@@ -51,16 +51,15 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // this list on first call so it knows to stay supervised for changes
   // in those paths even when autonomy is "autonomous".
   try {
-    if (typeof (store as any).getProjectGuardrails === "function") {
-      const guardrails = await (store as any).getProjectGuardrails();
-      if (Array.isArray(guardrails) && guardrails.length > 0) {
-        const lines = guardrails.map((g: any) =>
-          `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`,
-        );
-        contextualParts.push(
-          `\n🛡 Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):\n${lines.join("\n")}`,
-        );
-      }
+    // AA7b — typed optional method (was a (store as any) cast pre-AA7).
+    const guardrails = await store.getProjectGuardrails?.();
+    if (Array.isArray(guardrails) && guardrails.length > 0) {
+      const lines = guardrails.map((g: any) =>
+        `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`,
+      );
+      contextualParts.push(
+        `\n🛡 Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):\n${lines.join("\n")}`,
+      );
     }
   } catch {
     // Non-fatal — we just won't surface guardrails
@@ -70,27 +69,26 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // distinct section from personal philosophy and structural guardrails
   // (NEVER merged — they're different kinds of authority).
   try {
-    if (typeof (store as any).getTeamPreferences === "function") {
-      const prefs = await (store as any).getTeamPreferences();
-      if (Array.isArray(prefs) && prefs.length > 0) {
-        const render = (p: any) => {
-          const scope = p.scope?.paths?.length
-            ? ` (scope: ${p.scope.paths.join(", ")})`
-            : "";
-          return `  - "${p.concept}"${scope} — ${p.rationale}`;
-        };
-        const required = prefs.filter((p: any) => p.kind === "require").map(render);
-        const avoided = prefs.filter((p: any) => p.kind === "avoid").map(render);
-        const preferred = prefs.filter((p: any) => p.kind === "prefer").map(render);
-        const sections: string[] = [];
-        if (required.length) sections.push(`Required:\n${required.join("\n")}`);
-        if (avoided.length) sections.push(`Avoid:\n${avoided.join("\n")}`);
-        if (preferred.length) sections.push(`Preferred:\n${preferred.join("\n")}`);
-        if (sections.length > 0) {
-          contextualParts.push(
-            `\n🏢 Team conventions (from .deeppairing/team.json — treat 'require' as hard rules, 'avoid' as refusal triggers, 'prefer' as taste):\n${sections.join("\n")}`,
-          );
-        }
+    // AA7b — typed optional method.
+    const prefs = await store.getTeamPreferences?.();
+    if (Array.isArray(prefs) && prefs.length > 0) {
+      const render = (p: any) => {
+        const scope = p.scope?.paths?.length
+          ? ` (scope: ${p.scope.paths.join(", ")})`
+          : "";
+        return `  - "${p.concept}"${scope} — ${p.rationale}`;
+      };
+      const required = prefs.filter((p: any) => p.kind === "require").map(render);
+      const avoided = prefs.filter((p: any) => p.kind === "avoid").map(render);
+      const preferred = prefs.filter((p: any) => p.kind === "prefer").map(render);
+      const sections: string[] = [];
+      if (required.length) sections.push(`Required:\n${required.join("\n")}`);
+      if (avoided.length) sections.push(`Avoid:\n${avoided.join("\n")}`);
+      if (preferred.length) sections.push(`Preferred:\n${preferred.join("\n")}`);
+      if (sections.length > 0) {
+        contextualParts.push(
+          `\n🏢 Team conventions (from .deeppairing/team.json — treat 'require' as hard rules, 'avoid' as refusal triggers, 'prefer' as taste):\n${sections.join("\n")}`,
+        );
       }
     }
   } catch {

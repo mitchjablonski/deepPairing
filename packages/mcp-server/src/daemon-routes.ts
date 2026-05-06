@@ -427,21 +427,21 @@ export function createDaemonRoutes(
 
   // --- Project context (guardrails + team preferences) ---
 
-  app.get("/api/internal/sessions/:sessionId/guardrails", (c) => {
+  app.get("/api/internal/sessions/:sessionId/guardrails", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const guardrails = typeof (r.store as any).getProjectGuardrails === "function"
-      ? (r.store as any).getProjectGuardrails()
-      : [];
+    // AA7b — typed optional-chain replaces the (r.store as any) cast.
+    // Side-bug noted in the deep dive: pre-AA7b the call was unawaited
+    // on a MaybePromise return — guardrails could be a Promise that
+    // serialized as `{}`. Now async + awaited.
+    const guardrails = (await r.store.getProjectGuardrails?.()) ?? [];
     return c.json({ guardrails });
   });
 
-  app.get("/api/internal/sessions/:sessionId/team-preferences", (c) => {
+  app.get("/api/internal/sessions/:sessionId/team-preferences", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const preferences = typeof (r.store as any).getTeamPreferences === "function"
-      ? (r.store as any).getTeamPreferences()
-      : [];
+    const preferences = (await r.store.getTeamPreferences?.()) ?? [];
     return c.json({ preferences });
   });
 
