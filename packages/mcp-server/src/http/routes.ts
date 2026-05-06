@@ -477,6 +477,51 @@ export function createHttpRoutes(
     return c.json({ predictions });
   });
 
+  // AA5 — ledger digest. The cross-project moat surface that Z1's
+  // durable preflight traces unlocked. Aggregates every trace across
+  // every session in this project + the global Philosophy Ledger so
+  // the YourTaste drawer's Ledger view can render:
+  //   - "N proposals shaped this project across M sessions"
+  //   - "N near-misses caught" / "N blocks fired"
+  //   - top stances by citation count, with a sample artifact to jump to.
+  //
+  // This is the move Cursor 3 / Claude Code auto-memory structurally
+  // cannot ship — they don't store rejection-reasoning as first-class
+  // objects, so they have nothing to aggregate.
+  app.get("/api/ledger/digest", (c) => {
+    if (!projectRoot) {
+      // Degraded shape — daemon was constructed without projectRoot
+      // (test fixtures, plugin install with bad cwd). Return zeros so
+      // the UI can render "your ledger will start filling in as you
+      // pair" without a blank state.
+      return c.json({
+        shapedThisProject: 0,
+        nearMissesThisProject: 0,
+        blockedThisProject: 0,
+        sessionsTouched: 0,
+        topCitedStances: [],
+        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
+      });
+    }
+    const project = FileStore.ledgerDigest(projectRoot);
+    // Pair with cross-project totals from the global ledger so the
+    // user can see the moat compounding beyond this project.
+    const entries = getGlobalStore().query({ limit: 10000 });
+    const projects = new Set<string>();
+    for (const e of entries) for (const inst of e.instances) projects.add(inst.project);
+    const multiProjectConcepts = entries.filter(
+      (e) => new Set(e.instances.map((i) => i.project)).size > 1,
+    ).length;
+    return c.json({
+      ...project,
+      globalLedger: {
+        concepts: entries.length,
+        projects: projects.size,
+        multiProjectConcepts,
+      },
+    });
+  });
+
   // R1: local telemetry surface. Read-only snapshot of the counts the
   // daemon has been writing to `.deeppairing/metrics.json` as events
   // flow through broadcast. The UI renders this in Settings → Session

@@ -15,7 +15,9 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { evictDaemon } from "../daemon-lifecycle.js";
 
-const TEST_PORT = 24847;
+// AA3 — distinct from port-sweep.test.ts (24847..24851) so the suites
+// can run in parallel without colliding on bind.
+const TEST_PORT = 24860;
 let server: { close?: (cb?: () => void) => void } | null = null;
 let confirmHeaderReceived: string | undefined;
 let evictHits = 0;
