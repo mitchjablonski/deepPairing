@@ -1314,4 +1314,105 @@ export class FileStore implements IStore {
     }
     return null;
   }
+
+  /**
+   * AA5 — ledger digest. Aggregates every preflight-traces.json across
+   * every session in this project + cross-references the global
+   * Philosophy Ledger. Drives the cross-project moat surface that Z1's
+   * durable traces unlocked.
+   *
+   * Headline: "N proposals shaped this project; M cross-project stances."
+   * Detail: top stances by citation count (with sample artifact + session
+   * for jump-back), and the count of near-misses caught.
+   *
+   * Pure read — no side effects, safe to call from a public route.
+   * Bounded: at most 200 stances returned (capped after sort), and the
+   * per-trace iteration is O(traces × stances-per-trace) which in
+   * practice is small (≤25 considered concepts × ≤50 sessions).
+   */
+  static ledgerDigest(projectRoot: string): {
+    shapedThisProject: number;
+    nearMissesThisProject: number;
+    blockedThisProject: number;
+    sessionsTouched: number;
+    topCitedStances: Array<{
+      concept: string;
+      source: "session" | "team";
+      citationCount: number;
+      sampleArtifactId?: string;
+      sampleSessionId?: string;
+    }>;
+  } {
+    const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
+    if (!fs.existsSync(sessionsDir)) {
+      return {
+        shapedThisProject: 0,
+        nearMissesThisProject: 0,
+        blockedThisProject: 0,
+        sessionsTouched: 0,
+        topCitedStances: [],
+      };
+    }
+    let shapedThisProject = 0;
+    let nearMissesThisProject = 0;
+    let blockedThisProject = 0;
+    let sessionsTouched = 0;
+    // concept → { citationCount, source, sample artifactId/sessionId }
+    type Cite = { concept: string; source: "session" | "team"; citationCount: number; sampleArtifactId?: string; sampleSessionId?: string };
+    const cites = new Map<string, Cite>();
+
+    for (const entry of fs.readdirSync(sessionsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const tracesPath = path.join(sessionsDir, entry.name, "preflight-traces.json");
+      if (!fs.existsSync(tracesPath)) continue;
+      let map: Record<string, any>;
+      try { map = JSON.parse(fs.readFileSync(tracesPath, "utf-8")); } catch { continue; }
+      const traceIds = Object.keys(map);
+      if (traceIds.length === 0) continue;
+      sessionsTouched++;
+      for (const artifactId of traceIds) {
+        const t = map[artifactId];
+        if (!t || typeof t !== "object") continue;
+        // Only count "shaped this project" when there was something to
+        // weigh — empty consideredCount is the bootstrap state, not a
+        // real moat moment.
+        if (Array.isArray(t.consideredConcepts) && t.consideredConcepts.length > 0) {
+          shapedThisProject++;
+        }
+        if (t.decision === "blocked") blockedThisProject++;
+        if (Array.isArray(t.nearMisses) && t.nearMisses.length > 0) {
+          nearMissesThisProject += t.nearMisses.length;
+        }
+        // Tally citations per considered concept.
+        for (const c of t.consideredConcepts ?? []) {
+          if (!c?.concept) continue;
+          const key = `${c.source}:${c.concept}`;
+          const existing = cites.get(key);
+          if (existing) {
+            existing.citationCount++;
+          } else {
+            cites.set(key, {
+              concept: c.concept,
+              source: c.source ?? "session",
+              citationCount: 1,
+              sampleArtifactId: artifactId,
+              sampleSessionId: entry.name,
+            });
+          }
+        }
+      }
+    }
+
+    const topCitedStances = Array.from(cites.values())
+      .sort((a, b) => b.citationCount - a.citationCount)
+      .slice(0, 50);
+
+    return {
+      shapedThisProject,
+      nearMissesThisProject,
+      blockedThisProject,
+      sessionsTouched,
+      topCitedStances,
+    };
+  }
 }

@@ -60,7 +60,29 @@ interface TeamPreferencesData {
 }
 
 type Filter = "all" | "avoid" | "prefer" | "mixed";
-type Tab = "stances" | "digest" | "team";
+// AA5 — "ledger" tab is the cross-project moat surface unlocked by Z1's
+// durable preflight traces. Aggregates how many proposals the ledger has
+// shaped IN this project + cross-project totals, with top cited stances.
+type Tab = "stances" | "ledger" | "digest" | "team";
+
+interface LedgerDigest {
+  shapedThisProject: number;
+  nearMissesThisProject: number;
+  blockedThisProject: number;
+  sessionsTouched: number;
+  topCitedStances: Array<{
+    concept: string;
+    source: "session" | "team";
+    citationCount: number;
+    sampleArtifactId?: string;
+    sampleSessionId?: string;
+  }>;
+  globalLedger: {
+    concepts: number;
+    projects: number;
+    multiProjectConcepts: number;
+  };
+}
 
 export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -68,6 +90,9 @@ export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<PhilosophyEntry[] | null>(null);
   const [digest, setDigest] = useState<DigestData | null>(null);
   const [teamPrefs, setTeamPrefs] = useState<TeamPreferencesData | null>(null);
+  // AA5 — ledger digest state. Lazy-loaded the first time the tab opens.
+  const [ledger, setLedger] = useState<LedgerDigest | null>(null);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [digestError, setDigestError] = useState<string | null>(null);
   const [teamError, setTeamError] = useState<string | null>(null);
@@ -112,6 +137,25 @@ export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
     })();
     return () => { cancelled = true; };
   }, [tab, digest, digestError]);
+
+  // AA5 — lazy-load ledger digest on first tab visit. Cheap on the
+  // server (one walk of .deeppairing/sessions/), but no point pre-loading
+  // before the user clicks in.
+  useEffect(() => {
+    if (tab !== "ledger" || ledger !== null || ledgerError !== null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`http://${window.location.host}/api/ledger/digest`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!cancelled) setLedger(data);
+      } catch (err: any) {
+        if (!cancelled) setLedgerError(err?.message ?? String(err));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tab, ledger, ledgerError]);
 
   // P3 — lazy-load team preferences on first tab visit.
   useEffect(() => {
@@ -168,6 +212,10 @@ export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
             still works for anyone who opts in. */}
         <div className="px-5 pt-3 border-b border-border-default flex gap-1">
           <TabButton active={tab === "stances"} onClick={() => setTab("stances")} label="Stances" />
+          {/* AA5 — Ledger tab is the cross-project moat surface. Always
+              visible (unlike the gated Digest tab) because the value
+              shows up from session #1 once Z1's traces exist. */}
+          <TabButton active={tab === "ledger"} onClick={() => setTab("ledger")} label="Ledger" />
           {isDigestEnabled() && (
             <TabButton active={tab === "digest"} onClick={() => setTab("digest")} label="This week" />
           )}
@@ -213,6 +261,8 @@ export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
             </div>
           </>
         )}
+
+        {tab === "ledger" && <LedgerPanel data={ledger} error={ledgerError} />}
 
         {tab === "digest" && isDigestEnabled() && <DigestPanel digest={digest} error={digestError} />}
 
@@ -303,6 +353,116 @@ function DigestPanel({ digest, error }: { digest: DigestData | null; error: stri
                 reason={e.latestReason}
                 strengthenedCount={e.newInstancesInPeriod}
               />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
+/**
+ * AA5 — Ledger panel. The cross-project moat surface that Z1's durable
+ * preflight traces unlocked. Lives next to the Stances list because it's
+ * the *consumption* view of the same data — Stances answers "what
+ * positions do I hold?", Ledger answers "did those positions actually
+ * matter to anything?". Without this surface, the moat is silent: users
+ * accumulated stances but never saw their compounding effect.
+ *
+ * Empty state explicitly invites the user to build the ledger via normal
+ * pairing rather than presupposing taste with a pre-seeded list (PMF
+ * council deep dive rejected the bootstrap-by-onboarding path).
+ */
+function LedgerPanel({ data, error }: { data: LedgerDigest | null; error: string | null }) {
+  if (error) {
+    return (
+      <div className="p-5 text-xs text-accent-red">
+        Could not load the ledger: {error}
+      </div>
+    );
+  }
+  if (!data) {
+    return <div className="p-5 text-xs text-text-muted">Loading…</div>;
+  }
+  const { shapedThisProject, nearMissesThisProject, blockedThisProject, sessionsTouched, topCitedStances, globalLedger } = data;
+  const empty = shapedThisProject === 0 && globalLedger.concepts === 0;
+
+  return (
+    <div className="p-5 space-y-5">
+      {/* Headline — the project + global numbers side by side. The
+          project number quantifies "the moat helped THIS work"; the
+          global number quantifies "the moat is bigger than THIS work". */}
+      <div className="grid grid-cols-2 gap-2">
+        <StatTile label="proposals shaped here" value={shapedThisProject} />
+        <StatTile label="cross-project stances" value={globalLedger.concepts} />
+      </div>
+      {(nearMissesThisProject > 0 || blockedThisProject > 0) && (
+        <div className="grid grid-cols-2 gap-2">
+          {nearMissesThisProject > 0 && (
+            <StatTile label="near-misses caught" value={nearMissesThisProject} />
+          )}
+          {blockedThisProject > 0 && (
+            <StatTile label="proposals blocked" value={blockedThisProject} />
+          )}
+        </div>
+      )}
+      <div className="text-2xs text-text-muted">
+        {sessionsTouched > 0
+          ? `${sessionsTouched} session${sessionsTouched === 1 ? "" : "s"} in this project · ${globalLedger.projects} project${globalLedger.projects === 1 ? "" : "s"} total`
+          : "No preflight traces in this project yet."}
+        {globalLedger.multiProjectConcepts > 0 && (
+          <> · <span className="text-accent-violet">{globalLedger.multiProjectConcepts} stances span multiple projects</span></>
+        )}
+      </div>
+
+      {/* Empty state — same framing as the breadcrumb's bootstrap copy
+          (PMF council Y3 amendment): tell the user where the data will
+          come from, don't presuppose what should be in it. */}
+      {empty && (
+        <div className="text-xs text-text-muted leading-relaxed border border-accent-violet/15 bg-accent-violet-dim/10 rounded p-3">
+          <p className="mb-2 font-medium text-text-secondary">Your ledger is empty.</p>
+          <p>
+            Reject something the agent proposes — or add reasoning to a pick — and
+            future proposals get cross-checked against it. After a few sessions,
+            this view shows which of your stances kept catching things, and which
+            spanned multiple projects.
+          </p>
+        </div>
+      )}
+
+      {/* Top stances by citation count. This is the moat made measurable —
+          "stance X was consulted N times" is the most concrete answer to
+          'why deepPairing vs Cursor 3' that this UI can deliver. */}
+      {topCitedStances.length > 0 && (
+        <section>
+          <div className="text-2xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
+            Top cited stances
+          </div>
+          <ul className="space-y-2">
+            {topCitedStances.slice(0, 10).map((s) => (
+              <li
+                key={`${s.source}:${s.concept}`}
+                className="rounded border border-border-default bg-surface-secondary p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-mono text-xs text-text-primary break-words">{s.concept}</div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span
+                      className={`px-1 py-px rounded text-[10px] uppercase tracking-wide ${
+                        s.source === "team"
+                          ? "bg-accent-blue-dim/40 text-accent-blue"
+                          : "bg-surface-elevated text-text-muted"
+                      }`}
+                      title={s.source === "team" ? "From .deeppairing/team.json" : "From your sessions"}
+                    >
+                      {s.source}
+                    </span>
+                    <span className="text-2xs font-semibold text-accent-violet">
+                      {s.citationCount}×
+                    </span>
+                  </div>
+                </div>
+              </li>
             ))}
           </ul>
         </section>

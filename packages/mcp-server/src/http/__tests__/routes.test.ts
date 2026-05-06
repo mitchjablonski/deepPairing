@@ -916,6 +916,119 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("AA5 — /api/ledger/digest", () => {
+    // Z1's durable preflight traces unlocked the cross-project moat
+    // surface. These tests pin the aggregation shape — what the YourTaste
+    // drawer's Ledger view consumes — and the empty-project fallback
+    // (UI must render "your ledger is empty" without a 5xx).
+
+    function seedTrace(sessionId: string, artifactId: string, trace: any) {
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+      fs.mkdirSync(dir, { recursive: true });
+      const tracesPath = path.join(dir, "preflight-traces.json");
+      const map = fs.existsSync(tracesPath) ? JSON.parse(fs.readFileSync(tracesPath, "utf-8")) : {};
+      map[artifactId] = trace;
+      fs.writeFileSync(tracesPath, JSON.stringify(map));
+    }
+
+    it("returns zeros + empty topCitedStances when no traces exist (empty project)", async () => {
+      const res = await app.request("/api/ledger/digest");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.shapedThisProject).toBe(0);
+      expect(body.nearMissesThisProject).toBe(0);
+      expect(body.blockedThisProject).toBe(0);
+      expect(body.sessionsTouched).toBe(0);
+      expect(body.topCitedStances).toEqual([]);
+      expect(body.globalLedger).toEqual({ concepts: 0, projects: 0, multiProjectConcepts: 0 });
+    });
+
+    it("aggregates across sessions and counts shaped/near-misses/blocked", async () => {
+      seedTrace("sess_a", "art_1", {
+        version: 1,
+        at: "2026-05-01T10:00:00Z",
+        artifactId: "art_1",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 2,
+        consideredConcepts: [
+          { source: "session", concept: "global state" },
+          { source: "session", concept: "manual SQL" },
+        ],
+        nearMisses: [{ source: "session", concept: "global state" }],
+      });
+      seedTrace("sess_a", "art_2", {
+        version: 1,
+        at: "2026-05-01T11:00:00Z",
+        artifactId: "art_2",
+        toolName: "present_options",
+        decision: "blocked",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "global state" }],
+        nearMisses: [],
+        block: { source: "session", concept: "global state" },
+      });
+      seedTrace("sess_b", "art_3", {
+        version: 1,
+        at: "2026-05-02T09:00:00Z",
+        artifactId: "art_3",
+        toolName: "present_plan",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "team", concept: "use the orm" }],
+        nearMisses: [],
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      expect(body.shapedThisProject).toBe(3);
+      expect(body.nearMissesThisProject).toBe(1);
+      expect(body.blockedThisProject).toBe(1);
+      expect(body.sessionsTouched).toBe(2);
+      // "global state" appears in art_1 and art_2 → 2 citations.
+      // "manual SQL" once. "use the orm" once.
+      const top = body.topCitedStances;
+      expect(top[0].concept).toBe("global state");
+      expect(top[0].citationCount).toBe(2);
+      expect(top.find((s: any) => s.concept === "use the orm")?.source).toBe("team");
+    });
+
+    it("sample artifact + session let the UI jump back to a citation", async () => {
+      seedTrace("sess_jump", "art_jumpback", {
+        version: 1,
+        at: "2026-05-01",
+        artifactId: "art_jumpback",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "x" }],
+        nearMisses: [],
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      const stance = body.topCitedStances.find((s: any) => s.concept === "x");
+      expect(stance.sampleArtifactId).toBe("art_jumpback");
+      expect(stance.sampleSessionId).toBe("sess_jump");
+    });
+
+    it("ignores traces with empty consideredConcepts (bootstrap state, not moat moments)", async () => {
+      seedTrace("sess_empty", "art_empty", {
+        version: 1,
+        at: "2026-05-01",
+        artifactId: "art_empty",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 0,
+        consideredConcepts: [],
+        nearMisses: [],
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      expect(body.shapedThisProject).toBe(0);
+      expect(body.sessionsTouched).toBe(1); // session dir touched, but no shaped count
+      expect(body.topCitedStances).toEqual([]);
+    });
+  });
+
   describe("AA4 — X-Project-Hash binding (browser stale-tab guard)", () => {
     // The threat: daemon-A on :3847 idle-shuts; daemon-B (different
     // projectRoot, different hash) claims :3847; user's tab still has
