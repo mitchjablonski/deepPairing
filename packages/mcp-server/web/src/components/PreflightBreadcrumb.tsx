@@ -27,20 +27,34 @@ import { API_BASE, sessionHeaders } from "../lib/api";
  */
 
 /**
- * Z3 — sessionStorage key for the empty-ledger bootstrap state. Once the
- * user dismisses it (or hits an artifact with a non-empty trace, which
- * means they have a ledger now), we don't show it again this session.
- * Per-tab sessionStorage so a fresh tab can re-onboard cleanly without
- * surviving across browser restarts.
+ * AA6.5 — bootstrap-dismissed flag, scoped by projectRoot in localStorage.
+ *
+ * Pre-AA6.5 this lived in sessionStorage with a single global key, so:
+ *   - Refreshing the browser re-showed the empty-ledger card every time
+ *     (sessionStorage clears on tab close, which a refresh effectively is
+ *     for this purpose). Seeing the same "your ledger is empty" twice
+ *     reads as "broken", not "fresh start".
+ *   - The flag was global across projects: dismissing in project A also
+ *     dismissed in project B, so a user with multiple projects only
+ *     learned about the moat in their first project.
+ *
+ * AA6.5 fix: localStorage (survives refresh) + key scoped by projectRoot
+ * (each project re-onboards once). Plus an implicit dismiss when ANY
+ * trace event with consideredCount > 0 lands — once the user has a
+ * ledger, the bootstrap card is moot.
  */
-const BOOTSTRAP_DISMISSED_KEY = "dp:preflight-bootstrap-dismissed";
+const BOOTSTRAP_DISMISSED_KEY_PREFIX = "dp:preflight-bootstrap-dismissed:";
 
-function readBootstrapDismissed(): boolean {
-  try { return sessionStorage.getItem(BOOTSTRAP_DISMISSED_KEY) === "1"; } catch { return false; }
+function bootstrapKey(projectRoot: string | null): string {
+  return BOOTSTRAP_DISMISSED_KEY_PREFIX + (projectRoot ?? "_unscoped");
 }
 
-function writeBootstrapDismissed(): void {
-  try { sessionStorage.setItem(BOOTSTRAP_DISMISSED_KEY, "1"); } catch {}
+function readBootstrapDismissed(projectRoot: string | null): boolean {
+  try { return localStorage.getItem(bootstrapKey(projectRoot)) === "1"; } catch { return false; }
+}
+
+function writeBootstrapDismissed(projectRoot: string | null): void {
+  try { localStorage.setItem(bootstrapKey(projectRoot), "1"); } catch {}
 }
 
 interface PreflightBreadcrumbProps {
@@ -51,9 +65,21 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   const [trace, setTrace] = useState<PreflightTrace | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
-  // Z3 — local mirror of the sessionStorage flag so the dismiss click
-  // re-renders THIS instance (sessionStorage writes don't trigger re-render).
-  const [bootstrapDismissed, setBootstrapDismissed] = useState<boolean>(() => readBootstrapDismissed());
+  // AA6.5 — projectRoot scopes the bootstrap-dismissed flag (each
+  // project re-onboards once). Read off the connection store via the
+  // same window-bag pattern lib/api.ts uses, so this stays a leaf
+  // component without subscribing to the whole zustand store.
+  const projectRoot: string | null = (() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return (window as any).__dpConnectionStore?.getState?.()?.projectRoot ?? null;
+    } catch { return null; }
+  })();
+  // AA6.5 — local mirror so the dismiss click re-renders THIS instance
+  // (localStorage writes don't trigger re-render).
+  const [bootstrapDismissed, setBootstrapDismissed] = useState<boolean>(
+    () => readBootstrapDismissed(projectRoot),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -75,11 +101,22 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
 
     // Y1' — listen for the live broadcast so the breadcrumb appears the
     // moment the agent records a fresh trace, without an HTTP roundtrip.
+    // AA6.5 — also implicit-dismiss the bootstrap when ANY trace event
+    // with consideredCount > 0 lands (cross-artifact, not just this one).
+    // Once the project has a non-empty trace, the user has a ledger; the
+    // "your ledger is empty" copy is moot.
     const handler = (evt: Event) => {
       const detail = (evt as CustomEvent).detail as
         | { artifactId?: string; trace?: PreflightTrace }
         | undefined;
-      if (!detail || detail.artifactId !== artifactId) return;
+      if (!detail) return;
+      if (detail.trace && (detail.trace.consideredCount ?? 0) > 0) {
+        if (!readBootstrapDismissed(projectRoot)) {
+          writeBootstrapDismissed(projectRoot);
+          setBootstrapDismissed(true);
+        }
+      }
+      if (detail.artifactId !== artifactId) return;
       if (detail.trace) setTrace(detail.trace);
     };
     window.addEventListener("dp:preflight-trace", handler as EventListener);
@@ -87,7 +124,7 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
       cancelled = true;
       window.removeEventListener("dp:preflight-trace", handler as EventListener);
     };
-  }, [artifactId]);
+  }, [artifactId, projectRoot]);
 
   if (!loaded) return null;
   if (!trace) return null;
@@ -121,7 +158,7 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
           <button
             type="button"
             onClick={() => {
-              writeBootstrapDismissed();
+              writeBootstrapDismissed(projectRoot);
               setBootstrapDismissed(true);
             }}
             className="text-text-muted hover:text-text-primary text-2xs px-1.5 py-0.5 rounded hover:bg-surface-hover transition-colors shrink-0"

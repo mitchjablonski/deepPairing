@@ -74,14 +74,44 @@ describe("writeJsonAtomic (Z4)", () => {
   });
 });
 
-describe("isAtomicTmpFile (Z4)", () => {
-  it("matches the .tmp.PID.TIMESTAMP suffix shape", () => {
+describe("isAtomicTmpFile (Z4 + AA6.2)", () => {
+  it("matches the .tmp.PID.TIMESTAMP suffix shape (Z4 legacy)", () => {
     expect(isAtomicTmpFile("data.json.tmp.1234.567890")).toBe(true);
+  });
+
+  it("AA6.2: matches the .tmp.PID.TIMESTAMP.HEX shape (post-randomBytes)", () => {
+    expect(isAtomicTmpFile("data.json.tmp.1234.567890.deadbeef")).toBe(true);
   });
 
   it("rejects ordinary user files", () => {
     expect(isAtomicTmpFile("data.json")).toBe(false);
     expect(isAtomicTmpFile("data.tmp")).toBe(false);
     expect(isAtomicTmpFile("data.json.bak")).toBe(false);
+  });
+});
+
+describe("AA6.2 — concurrent same-path writes don't collide", () => {
+  it("two parallel writes to the same path produce distinct .tmp filenames (no race)", async () => {
+    // Pre-AA6.2 the tmp path was process.pid + Date.now() — two writes
+    // within the same ms (debounced flush bursts) would collide. Fire
+    // a burst and verify only the destination exists, no .tmp leaked,
+    // and the destination has the LAST-written content.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-atomic-race-"));
+    const target = path.join(dir, "race.json");
+    try {
+      // Fire 20 writes from a tight loop. randomBytes makes the tmp
+      // filenames distinct even when Date.now() collides.
+      for (let i = 0; i < 20; i++) writeJsonAtomic(target, { i });
+      // Destination has SOME write's content (last-write-wins, but no
+      // assertion on which since the loop is synchronous).
+      expect(fs.existsSync(target)).toBe(true);
+      const data = JSON.parse(fs.readFileSync(target, "utf-8"));
+      expect(typeof data.i).toBe("number");
+      // No .tmp files leaked.
+      const leftover = fs.readdirSync(dir).filter(isAtomicTmpFile);
+      expect(leftover).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

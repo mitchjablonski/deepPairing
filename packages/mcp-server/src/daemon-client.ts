@@ -71,6 +71,22 @@ export class DaemonClient implements IStore {
       // Daemon restarted (or the supervisor killed + respawned it on idle
       // shutdown). The session map is empty server-side; re-register and
       // retry exactly once. Guard against infinite recursion via isRetry.
+      //
+      // AA6.4 — refuse to silently rebind when the original register
+      // didn't carry expectedProjectRoot. Without that binding, the
+      // retry could land against a different daemon (port re-adoption
+      // by another project's daemon) and silently bind to the wrong
+      // project — breaks the Y3' guarantee. Production wrappers
+      // (standalone.ts) always pass expectedProjectRoot; this guard
+      // catches non-standalone callers (tests, future plugin entry
+      // points, IDE extensions) that omit it.
+      if (this.lastRegisterMeta && !this.lastRegisterMeta.expectedProjectRoot) {
+        throw new Error(
+          `[deepPairing] retry refused — register meta lacks expectedProjectRoot binding. ` +
+          `Y3' protection requires the wrapper to declare which project it expects so the daemon can 403 on mismatch. ` +
+          `Pass expectedProjectRoot to register() before issuing requests.`,
+        );
+      }
       await this.register(this.lastRegisterMeta);
       // AA2 — notify the daemon (which broadcasts daemon_resumed to WS
       // clients) so the companion UI knows to refetch state. Fire-and-

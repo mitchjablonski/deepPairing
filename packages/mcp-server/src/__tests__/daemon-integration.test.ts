@@ -716,6 +716,40 @@ describe("DaemonClient", () => {
       // This IS the load-bearing assertion — silent-fail → loud-fail.
       await expect(client.searchSessions("anything")).rejects.toThrow(/deepPairing/);
     });
+
+    // AA6.4 — auto-recover refuses to silently rebind when register meta
+    // lacked expectedProjectRoot. Production wrappers always pass it;
+    // this guard catches non-standalone callers (tests, future plugins,
+    // IDE extensions) so a daemon swap during a session can't bind to
+    // the wrong project under their feet.
+    it("AA6.4: retry path REFUSES when register meta has no expectedProjectRoot", async () => {
+      // Can't simulate "wipe daemon map" from the test side (the running
+      // server captured `sessions` by parameter at beforeAll time, so
+      // `sessions.delete()` here doesn't affect its view — same caveat
+      // as the AA2 test above). Instead: use a sessionId the daemon
+      // doesn't know about so the first call genuinely 404s, AND
+      // pre-populate lastRegisterMeta WITHOUT expectedProjectRoot so
+      // the recover path's AA6.4 check fires.
+      const c = new DaemonClient(TEST_PORT, "aa6_unknown_no_root");
+      // Skip register() entirely; reach in to set lastRegisterMeta to
+      // the without-binding shape the guard catches.
+      (c as any).lastRegisterMeta = { title: "x", project: "y" };
+      await expect(c.getArtifacts()).rejects.toThrow(
+        /retry refused — register meta lacks expectedProjectRoot binding/,
+      );
+    });
+
+    it("AA6.4: retry path SUCCEEDS when register meta carries expectedProjectRoot", async () => {
+      const c = new DaemonClient(TEST_PORT, "aa6_unknown_with_root");
+      (c as any).lastRegisterMeta = {
+        title: "x", project: "y", expectedProjectRoot: "/projects/test",
+      };
+      // The recover path will register() with the binding — daemon
+      // doesn't enforce a specific projectRoot in this test fixture, so
+      // the register succeeds and the retry proceeds.
+      const arts = await c.getArtifacts();
+      expect(Array.isArray(arts)).toBe(true);
+    });
   });
 
 });
