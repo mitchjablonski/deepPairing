@@ -109,6 +109,33 @@ export interface RejectedApproach {
 export interface IStore {
   // Session
   getSessionId(): string;
+  /**
+   * AA7 — optional rename + cross-session reads. Both FileStore and
+   * DaemonClient already implement these; lifting to IStore (as
+   * optional, MaybePromise) lets callers stop casting `(store as any)`
+   * and gives the type system a chance to flag a missed implementor
+   * the next time a store is added.
+   */
+  renameSession?(title: string): MaybePromise<void>;
+  listPastSessions?(): MaybePromise<Array<{
+    id: string;
+    createdAt: string;
+    lastActivity: string;
+    summary: string;
+    artifactCount: number;
+    hasDecisions: boolean;
+  }>>;
+  loadPastSession?(sessionId: string): MaybePromise<any>;
+  searchSessions?(query: string, limit?: number): MaybePromise<Array<{
+    sessionId: string;
+    sessionTitle: string;
+    artifactId: string;
+    artifactType: string;
+    title: string;
+    excerpt: string;
+    score: number;
+    matchedVia: string[];
+  }>>;
   getFullState(): MaybePromise<{
     sessionId: string;
     artifacts: Artifact[];
