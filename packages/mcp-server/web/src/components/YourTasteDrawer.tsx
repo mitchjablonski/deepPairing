@@ -241,14 +241,33 @@ export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
                 <div className="text-xs text-text-muted">Loading…</div>
               )}
               {!error && entries !== null && entries.length === 0 && (
-                <div className="text-xs text-text-muted leading-relaxed">
-                  <p className="mb-2 font-medium text-text-secondary">Nothing here yet.</p>
-                  <p>
-                    Every time you reject or approve a concept in a deepPairing session,
-                    it lands here. After a few sessions the ledger starts compounding —
-                    rejected approaches from other projects carry forward as avoid stances,
-                    and your taste becomes visible.
-                  </p>
+                <div className="space-y-4">
+                  <div className="text-xs text-text-muted leading-relaxed">
+                    <p className="mb-2 font-medium text-text-secondary">Nothing here yet.</p>
+                    <p>
+                      Every time you reject or approve a concept in a deepPairing session,
+                      it lands here. After a few sessions the ledger starts compounding —
+                      rejected approaches from other projects carry forward as avoid stances,
+                      and your taste becomes visible.
+                    </p>
+                  </div>
+                  {/* AA9 — opt-in seed affordance. PMF council deep dive
+                      rejected pre-seeded stance picks (anti-thesis,
+                      culturally contested) and proposed this instead:
+                      let the user paste a rule from their CLAUDE.md /
+                      code-review checklist / team doc. Active accumulation,
+                      zero presupposed taste. */}
+                  <SeedAffordance onSeeded={() => {
+                    // Refetch the stance list so the just-seeded entry
+                    // appears immediately. Re-using the same fetch shape
+                    // the mount effect uses.
+                    fetch(`http://${window.location.host}/api/philosophy?limit=200`)
+                      .then((r) => r.ok ? r.json() : null)
+                      .then((data) => {
+                        if (data) setEntries(data.entries ?? []);
+                      })
+                      .catch(() => {});
+                  }} />
                 </div>
               )}
               {!error && filtered.length > 0 && (
@@ -468,6 +487,116 @@ function LedgerPanel({ data, error }: { data: LedgerDigest | null; error: string
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * AA9 — opt-in ledger seed. The PMF council's deep-dive resolution to
+ * the empty-ledger silent killer.
+ *
+ * Two failed framings the dive rejected:
+ *   - Pre-seeded stance picks ("I prefer composition over inheritance")
+ *     — opinionated, presupposes user taste, brand suicide for a tool
+ *     whose pitch is "your taste, accumulated."
+ *   - Bootstrap-by-instruction in the breadcrumb ("Reject something —
+ *     or add reasoning to a pick") — reads as a tooltip; the user has
+ *     to wait for the agent to propose something they DON'T want
+ *     before any signal lands.
+ *
+ * This is the third path: paste-a-rule. The user supplies one or more
+ * lines they've already written down (CLAUDE.md, code-review template,
+ * team doc) and pick whether each is something to PREFER or AVOID.
+ * The text becomes a recordInstance call with synthetic project="manual"
+ * + sessionId="seed" so the manually-seeded entries are distinguishable
+ * from session-driven ones in any future filtering view.
+ *
+ * Lives ONLY in the drawer's empty state — once the ledger has any
+ * entries, the affordance disappears. The user can still seed more via
+ * the obvious "Add" button we'll add in a future phase if there's
+ * pull, but the empty-state placement is the one anti-cold-start
+ * lever.
+ */
+function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
+  const [text, setText] = useState("");
+  const [verdict, setVerdict] = useState<"approved" | "rejected">("approved");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    const concept = text.trim();
+    if (!concept || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`http://${window.location.host}/api/philosophy/seed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept, verdict }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? `seed failed (${res.status})`);
+      }
+      setText("");
+      onSeeded();
+    } catch (err: any) {
+      setError(err?.message ?? String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="rounded border border-accent-violet/20 bg-accent-violet-dim/15 p-4">
+      <div className="text-2xs font-semibold text-accent-violet uppercase tracking-wide mb-2">
+        Seed your ledger
+      </div>
+      <p className="text-2xs text-text-muted leading-relaxed mb-3">
+        Paste a rule from your CLAUDE.md, code-review checklist, or team doc — anything
+        you've already written down about how you like code. It becomes a stance the
+        agent's preflight will check against on every proposal.
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="e.g. avoid global mutable state — prefer dependency injection so tests can swap impls"
+        rows={3}
+        disabled={submitting}
+        className="w-full px-3 py-2 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet resize-none"
+      />
+      <div className="mt-2 flex items-center gap-3 flex-wrap">
+        <div role="radiogroup" aria-label="Stance" className="flex items-center gap-1">
+          <VerdictPill active={verdict === "approved"} onClick={() => setVerdict("approved")} label="Prefer" tone="green" />
+          <VerdictPill active={verdict === "rejected"} onClick={() => setVerdict("rejected")} label="Avoid" tone="red" />
+        </div>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!text.trim() || submitting}
+          className="ml-auto px-3 py-1 rounded text-2xs font-medium bg-accent-violet text-white hover:bg-accent-violet/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {submitting ? "Seeding…" : "Add to ledger"}
+        </button>
+      </div>
+      {error && (
+        <div className="mt-2 text-2xs text-accent-red">Could not seed: {error}</div>
+      )}
+    </div>
+  );
+}
+
+function VerdictPill({ active, onClick, label, tone }: { active: boolean; onClick: () => void; label: string; tone: "green" | "red" }) {
+  const activeBg = tone === "green" ? "bg-accent-green-dim text-accent-green" : "bg-accent-red-dim text-accent-red";
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded text-2xs ${active ? activeBg : "text-text-muted hover:text-text-secondary"}`}
+    >
+      {label}
+    </button>
   );
 }
 

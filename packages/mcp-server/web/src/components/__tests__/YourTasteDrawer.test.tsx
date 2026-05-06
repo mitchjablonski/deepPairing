@@ -61,6 +61,52 @@ describe("YourTasteDrawer", () => {
     expect(screen.getByText(/compounding/i)).toBeInTheDocument();
   });
 
+  // AA9 — opt-in seed affordance lives in the empty state. PMF council
+  // deep dive's resolution to the empty-ledger silent killer: let the
+  // user paste a rule from their CLAUDE.md / code-review checklist
+  // instead of presupposing taste with a baked-in stance list.
+  it("AA9: renders the seed affordance only in the empty state", async () => {
+    vi.stubGlobal("fetch", mockPhilosophyFetch([]));
+    render(<YourTasteDrawer onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/seed your ledger/i)).toBeInTheDocument());
+    expect(screen.getByPlaceholderText(/avoid global mutable state/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add to ledger/i })).toBeInTheDocument();
+    // Both verdict pills are visible — radio semantics let the user toggle.
+    expect(screen.getByRole("radio", { name: /prefer/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /avoid/i })).toBeInTheDocument();
+  });
+
+  it("AA9: seed affordance is HIDDEN once the ledger has any entries", async () => {
+    vi.stubGlobal("fetch", mockPhilosophyFetch([
+      { key: "x", concept: "x", stance: "avoid", projectCount: 1, projects: ["a"], instanceCount: 1, approved: 0, rejected: 1, firstSeenAt: "2026-01", lastSeenAt: "2026-01" },
+    ]));
+    render(<YourTasteDrawer onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("x")).toBeInTheDocument());
+    expect(screen.queryByText(/seed your ledger/i)).not.toBeInTheDocument();
+  });
+
+  it("AA9: clicking 'Add to ledger' POSTs to /api/philosophy/seed with the chosen verdict", async () => {
+    const seedFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "seeded" }) });
+    const stancesFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ entries: [], total: 0 }) });
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: any) => {
+      if (init?.method === "POST" && url.includes("/api/philosophy/seed")) return seedFetch(url, init);
+      return stancesFetch(url, init);
+    }));
+    render(<YourTasteDrawer onClose={() => {}} />);
+    await waitFor(() => screen.getByText(/seed your ledger/i));
+
+    const textarea = screen.getByPlaceholderText(/avoid global mutable state/i);
+    await userEvent.type(textarea, "named exports only");
+    await userEvent.click(screen.getByRole("radio", { name: /avoid/i }));
+    await userEvent.click(screen.getByRole("button", { name: /add to ledger/i }));
+
+    await waitFor(() => expect(seedFetch).toHaveBeenCalled());
+    const [, init] = seedFetch.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    expect(body.concept).toBe("named exports only");
+    expect(body.verdict).toBe("rejected");
+  });
+
   it("filters by stance when a filter pill is clicked", async () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([
       { key: "a", concept: "global state", stance: "avoid", projectCount: 1, projects: ["x"], instanceCount: 1, approved: 0, rejected: 1, firstSeenAt: "2026-01", lastSeenAt: "2026-01" },
