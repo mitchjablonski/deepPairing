@@ -20,6 +20,13 @@ export function sessionHeaders(): Record<string, string> {
     if (connState?.sessionId) {
       headers["X-Session-Id"] = connState.sessionId;
     }
+    // AA4 — pair the sessionId with the daemon's projectHash so a
+    // stale-tab race after daemon restart on the same port is caught
+    // with a 403 project_hash_mismatch instead of silently routing the
+    // mutation into the wrong project's first session.
+    if (connState?.projectHash) {
+      headers["X-Project-Hash"] = connState.projectHash;
+    }
   } catch {}
   return headers;
 }

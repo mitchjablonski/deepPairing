@@ -28,6 +28,24 @@
  */
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
+
+/**
+ * AA4 — short, deterministic identity for a projectRoot. Same shape as
+ * the projectHash baked into deterministic sessionIds (standalone.ts:58),
+ * lifted here so the daemon, the wrapper, and the browser can all derive
+ * the same value from the same input.
+ *
+ * The browser sends this in `X-Project-Hash` alongside `X-Session-Id`;
+ * the daemon refuses with 403 project_mismatch if its own hash differs.
+ * Defends against a stale-tab-after-port-recycling write: when daemon-A
+ * idle-shuts and daemon-B claims the same port, a tab that still has
+ * daemon-A's sessionId would otherwise route mutations into B's first
+ * arbitrary session via the silent default-store fallback.
+ */
+export function projectHashOf(projectRoot: string): string {
+  return crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+}
 
 export type ProjectRootSource = "CLAUDE_PROJECT_DIR" | "DEEPPAIRING_PROJECT_ROOT" | "cwd";
 

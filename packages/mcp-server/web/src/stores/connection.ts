@@ -25,6 +25,14 @@ interface ConnectionState {
   connected: boolean;
   sessionId: string | null;
   projectRoot: string | null;
+  /**
+   * AA4 — short deterministic identity for projectRoot, advertised by the
+   * daemon on /api/daemon-info + the WS `connected` event. sessionHeaders()
+   * (lib/api.ts) sends it as `X-Project-Hash` on every mutation; the
+   * daemon 403s with project_hash_mismatch if its own hash differs.
+   * Closes the stale-tab-after-port-recycling write hole.
+   */
+  projectHash: string | null;
   autonomyLevel: "supervised" | "balanced" | "autonomous";
   adapter: ConnectionAdapter | null;
   activeSessions: ActiveSession[];
@@ -72,9 +80,24 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             newStartedAt != null &&
             previousStartedAt !== newStartedAt;
 
+          // AA4 — when the daemon process changed, the OLD sessionId is
+          // meaningless to the new daemon. Pre-AA4 we kept it cached in
+          // the store; sessionHeaders() then sent the stale id on the
+          // next mutation. Now: drop the cached sid on a detected
+          // restart and let the daemon's new state.sessionId (if any)
+          // become authoritative. Belt-and-suspenders alongside the
+          // X-Project-Hash check on the daemon side.
+          const inboundSid = data.state?.sessionId ?? null;
+          const sessionId = daemonRestarted
+            ? inboundSid // discard stale local sid; trust the new daemon
+            : (inboundSid ?? get().sessionId);
+
           set({
-            sessionId: data.state?.sessionId ?? null,
+            sessionId,
             projectRoot: data.projectRoot ?? null,
+            // AA4 — capture the daemon's projectHash so api.ts can echo
+            // it on every mutation as X-Project-Hash.
+            projectHash: data.projectHash ?? null,
             autonomyLevel: data.state?.autonomyLevel ?? "supervised",
             daemonStartedAt: newStartedAt,
           });
@@ -322,6 +345,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connected: false,
     sessionId: null,
     projectRoot: null,
+    projectHash: null,
     autonomyLevel: "supervised",
     adapter: null,
     activeSessions: [],

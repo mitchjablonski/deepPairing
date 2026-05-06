@@ -8,6 +8,7 @@ import { FileStore } from "../store/file-store.js";
 import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore } from "../store/global-store.js";
+import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import {
@@ -29,6 +30,38 @@ type LogFn = (msg: string) => void;
 /** Extract sessionId from X-Session-Id header */
 function getSessionId(c: any): string | undefined {
   return c.req.header("X-Session-Id") ?? undefined;
+}
+
+/**
+ * AA4 — verify the browser's X-Project-Hash against the daemon's own
+ * projectHash (if both are known). Returns a 403 Response on mismatch,
+ * `null` when the request can proceed.
+ *
+ * Threat model: a stale browser tab whose sessionId came from
+ * daemon-A's pre-shutdown state sends that sessionId to daemon-B (which
+ * adopted port 3847 after A idle-shut). Pre-AA4 the daemon's
+ * getDefaultStoreOrNull() fallback silently routed the mutation into
+ * B's first arbitrary session — wrong-store write under wrong attribution.
+ *
+ * Back-compat: if the browser doesn't send X-Project-Hash (older client),
+ * we let the request through. This makes the guard additive — once the
+ * Z3-shipped browser sends it, the protection lights up.
+ */
+function checkProjectHash(c: any, daemonHash: string | undefined): Response | null {
+  if (!daemonHash) return null;
+  const sentHash = c.req.header("X-Project-Hash");
+  if (!sentHash) return null;
+  if (sentHash !== daemonHash) {
+    return c.json(
+      {
+        error: `Project hash mismatch — your tab is pointed at a daemon serving a different project. Reload the page to re-bind.`,
+        code: "project_hash_mismatch",
+        expected: daemonHash,
+      },
+      403,
+    );
+  }
+  return null;
 }
 
 /** U0.6 — empty session state used when no MCP wrapper has registered yet.
@@ -62,7 +95,22 @@ export function createHttpRoutes(
   // No-op when running in standalone (no daemon log file).
   const log: LogFn = logFn ?? (() => {});
 
+  // AA4 — daemon's projectHash, computed once at route construction.
+  // Undefined when projectRoot wasn't passed (test fixtures); the
+  // checkProjectHash helper short-circuits in that case.
+  const daemonHash: string | undefined = projectRoot ? projectHashOf(projectRoot) : undefined;
+
   const app = new Hono();
+
+  // AA4 — global middleware. Every route checks X-Project-Hash before
+  // doing anything else. CORS preflight (OPTIONS) skips the check —
+  // browsers don't send our custom headers on preflight.
+  app.use("*", async (c, next) => {
+    if (c.req.method === "OPTIONS") return next();
+    const hashFail = checkProjectHash(c, daemonHash);
+    if (hashFail) return hashFail;
+    return next();
+  });
 
   app.use("/*", cors({
     origin: (origin) => {
