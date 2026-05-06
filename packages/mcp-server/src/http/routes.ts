@@ -407,8 +407,41 @@ export function createHttpRoutes(
 
   // N3.2: Weekly Ledger Digest — what compounded in your Philosophy Ledger
   // over the last N days. Point is to make the moat felt: the user sees the
-  // new stances added, existing stances strengthened by new instances, and
-  // multi-project reuse. Derives everything from the same ledger N3.1 reads.
+  // AA9 — manual ledger seed. PMF council deep dive resolution: instead
+  // of pre-seeded stance picks ("I prefer composition over inheritance"
+  // — opinionated, anti-thesis), let the user paste a rule from their
+  // CLAUDE.md / code-review checklist / team doc. The pasted text
+  // becomes a recordInstance call with synthetic project="manual" +
+  // sessionId="seed" + the verdict the user chose.
+  //
+  // Active accumulation, zero presupposed taste. The synthetic
+  // project/sessionId distinguish manual seeds from real session-driven
+  // entries so we can later filter ("3 of your 47 stances were
+  // manually seeded") without conflating the two.
+  app.post("/api/philosophy/seed", async (c) => {
+    let body: any;
+    try { body = await c.req.json(); } catch {
+      return c.json({ error: "invalid JSON body", code: "validation_error" }, 400);
+    }
+    const concept = String(body?.concept ?? "").trim();
+    const verdict = body?.verdict === "rejected" ? "rejected" : "approved";
+    const reason = body?.reason ? String(body.reason).trim() || undefined : undefined;
+    if (!concept) {
+      return c.json(
+        { error: "concept is required (paste a rule, idea, or pattern name)", code: "validation_error" },
+        400,
+      );
+    }
+    getGlobalStore().recordInstance(concept, {
+      project: "manual",
+      sessionId: "seed",
+      verdict,
+      reason,
+      description: reason ?? concept,
+    });
+    return c.json({ status: "seeded", concept, verdict });
+  });
+
   app.get("/api/philosophy/digest", (c) => {
     const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
     const now = Date.now();

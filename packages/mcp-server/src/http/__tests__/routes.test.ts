@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
-import { GlobalStore, setGlobalStoreForTests } from "../../store/global-store.js";
+import { GlobalStore, getGlobalStore, setGlobalStoreForTests } from "../../store/global-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -913,6 +913,81 @@ describe("HTTP Routes", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.fires).toEqual([]);
+    });
+  });
+
+  describe("AA9 — POST /api/philosophy/seed", () => {
+    // PMF deep dive's resolution to the empty-ledger silent killer:
+    // accept user-pasted rules from CLAUDE.md / code-review docs
+    // instead of presupposing taste with a baked-in stance list.
+    // Synthetic project="manual" + sessionId="seed" so manual seeds
+    // are distinguishable from session-driven ones.
+
+    it("400s with code=validation_error when concept is empty", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "" }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("validation_error");
+    });
+
+    it("400s on invalid JSON body", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "not json",
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("seeds an approved entry into the global ledger with synthetic project + sessionId", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          concept: "prefer dependency injection",
+          verdict: "approved",
+          reason: "tests can swap impls",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("seeded");
+      expect(body.verdict).toBe("approved");
+      // Verify the global ledger now carries the seeded entry.
+      const ledger = getGlobalStore().query({ limit: 100 });
+      const seeded = ledger.find((e) => e.concept === "prefer dependency injection");
+      expect(seeded).toBeDefined();
+      expect(seeded!.instances[0].project).toBe("manual");
+      expect(seeded!.instances[0].sessionId).toBe("seed");
+      expect(seeded!.instances[0].verdict).toBe("approved");
+      expect(seeded!.instances[0].reason).toBe("tests can swap impls");
+    });
+
+    it("defaults to verdict='approved' when not specified", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "named exports only" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.verdict).toBe("approved");
+    });
+
+    it("seeds a rejected entry when verdict='rejected'", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "global mutable state", verdict: "rejected" }),
+      });
+      expect(res.status).toBe(200);
+      const ledger = getGlobalStore().query({ limit: 100 });
+      const rejected = ledger.find((e) => e.concept === "global mutable state");
+      expect(rejected?.instances[0].verdict).toBe("rejected");
     });
   });
 
