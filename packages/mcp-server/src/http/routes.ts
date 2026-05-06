@@ -452,14 +452,22 @@ export function createHttpRoutes(
     // Pull a wide slice — the digest computes its own breakdowns.
     const entries = getGlobalStore().query({ limit: 500 });
 
+    // BB1 — synthetic project="manual" markers (AA9 seeds) must NOT
+    // count as a real project in cross-project totals. Otherwise a
+    // fresh install with one seed renders "1 projects total" and one
+    // seed + a real session of the same concept fires the false
+    // multi-project badge.
+    const realProjects = (insts: { project: string }[]) =>
+      new Set(insts.filter((i) => i.project !== "manual").map((i) => i.project));
+
     const totals = {
       concepts: entries.length,
       instances: entries.reduce((a, e) => a + e.instances.length, 0),
-      multiProjectConcepts: entries.filter((e) => new Set(e.instances.map((i) => i.project)).size > 1).length,
+      multiProjectConcepts: entries.filter((e) => realProjects(e.instances).size > 1).length,
     };
 
     const mapEntry = (e: typeof entries[number]) => {
-      const projects = new Set(e.instances.map((i) => i.project));
+      const projects = realProjects(e.instances);
       const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
       return {
         key: e.key,
@@ -539,11 +547,18 @@ export function createHttpRoutes(
     const project = FileStore.ledgerDigest(projectRoot);
     // Pair with cross-project totals from the global ledger so the
     // user can see the moat compounding beyond this project.
+    // BB1 — exclude synthetic project="manual" markers (AA9 seeds) so
+    // a manually seeded stance + one real project doesn't render as
+    // "spans 2 projects".
     const entries = getGlobalStore().query({ limit: 10000 });
     const projects = new Set<string>();
-    for (const e of entries) for (const inst of e.instances) projects.add(inst.project);
+    for (const e of entries) {
+      for (const inst of e.instances) {
+        if (inst.project !== "manual") projects.add(inst.project);
+      }
+    }
     const multiProjectConcepts = entries.filter(
-      (e) => new Set(e.instances.map((i) => i.project)).size > 1,
+      (e) => new Set(e.instances.filter((i) => i.project !== "manual").map((i) => i.project)).size > 1,
     ).length;
     return c.json({
       ...project,
