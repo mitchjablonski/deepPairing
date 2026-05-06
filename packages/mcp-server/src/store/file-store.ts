@@ -144,7 +144,12 @@ export class FileStore implements IStore {
   private fileMtimeMs: Record<string, number> = {};
   private fileSizes: Record<string, number> = {};
 
+  // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
+  // by projectRoot so all sessions in this project bust the same cache.
+  private readonly projectRoot: string;
+
   constructor(projectRoot: string, sessionId?: string) {
+    this.projectRoot = projectRoot;
     this.basePath = path.join(projectRoot, ".deeppairing");
     // Project hint for the global philosophy ledger — basename only so the
     // ledger stays portable across machines (never store absolute paths).
@@ -900,6 +905,9 @@ export class FileStore implements IStore {
     // the .tmp + renameSync pattern so readers see either the old map
     // or the new map, never a half-written byte stream.
     writeJsonAtomic(this.preflightTracesPath(), map);
+    // BB2 — bust the ledgerDigest cache so the YourTaste drawer's next
+    // poll reflects this new trace immediately.
+    FileStore.invalidateLedgerDigestCache(this.projectRoot);
   }
 
   getPreflightTrace(artifactId: string): PreflightTrace | null {
@@ -1330,6 +1338,22 @@ export class FileStore implements IStore {
    * per-trace iteration is O(traces × stances-per-trace) which in
    * practice is small (≤25 considered concepts × ≤50 sessions).
    */
+  // BB2 — short-TTL cache + targeted invalidation. The YourTaste drawer
+  // re-mounts on every open and React re-renders within a single mount
+  // can call this multiple times. The walk is sync fs (readdir + per-
+  // session readFileSync + JSON.parse) and blocks the event loop. Cache
+  // for DIGEST_CACHE_TTL_MS so a burst of polls is one fs walk; bust on
+  // recordPreflightTrace so newly persisted traces show up immediately.
+  private static ledgerDigestCache = new Map<
+    string,
+    { computedAt: number; result: ReturnType<typeof FileStore.ledgerDigest> }
+  >();
+  private static readonly DIGEST_CACHE_TTL_MS = 2000;
+
+  static invalidateLedgerDigestCache(projectRoot: string): void {
+    FileStore.ledgerDigestCache.delete(projectRoot);
+  }
+
   static ledgerDigest(projectRoot: string): {
     shapedThisProject: number;
     nearMissesThisProject: number;
@@ -1343,15 +1367,21 @@ export class FileStore implements IStore {
       sampleSessionId?: string;
     }>;
   } {
+    const cached = FileStore.ledgerDigestCache.get(projectRoot);
+    if (cached && Date.now() - cached.computedAt < FileStore.DIGEST_CACHE_TTL_MS) {
+      return cached.result;
+    }
     const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
     if (!fs.existsSync(sessionsDir)) {
-      return {
+      const empty = {
         shapedThisProject: 0,
         nearMissesThisProject: 0,
         blockedThisProject: 0,
         sessionsTouched: 0,
         topCitedStances: [],
       };
+      FileStore.ledgerDigestCache.set(projectRoot, { computedAt: Date.now(), result: empty });
+      return empty;
     }
     let shapedThisProject = 0;
     let nearMissesThisProject = 0;
@@ -1407,12 +1437,14 @@ export class FileStore implements IStore {
       .sort((a, b) => b.citationCount - a.citationCount)
       .slice(0, 50);
 
-    return {
+    const result = {
       shapedThisProject,
       nearMissesThisProject,
       blockedThisProject,
       sessionsTouched,
       topCitedStances,
     };
+    FileStore.ledgerDigestCache.set(projectRoot, { computedAt: Date.now(), result });
+    return result;
   }
 }
