@@ -79,10 +79,8 @@ export async function preflightRejectedApproaches(
   proposalPaths: string[] = [],
 ): Promise<PreflightHelperResult> {
   const memory = await store.getSessionMemory();
-  const teamPrefs: TeamPreference[] =
-    typeof (store as any).getTeamPreferences === "function"
-      ? (await (store as any).getTeamPreferences()) ?? []
-      : [];
+  // AA7b — typed optional method on IStore.
+  const teamPrefs: TeamPreference[] = (await store.getTeamPreferences?.()) ?? [];
 
   const result = runPreflight({
     toolName,
@@ -123,9 +121,8 @@ export class SessionNameLatch {
   async maybeName(title: string): Promise<void> {
     if (this.named || !title || title === "Research Findings" || title === "Reasoning") return;
     this.named = true;
-    if ("renameSession" in this.store && typeof (this.store as any).renameSession === "function") {
-      await (this.store as any).renameSession(title);
-    }
+    // AA7b — renameSession is now optional on IStore (added in AA7a).
+    await this.store.renameSession?.(title);
   }
 }
 

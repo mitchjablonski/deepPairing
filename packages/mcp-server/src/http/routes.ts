@@ -246,7 +246,8 @@ export function createHttpRoutes(
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const storeSid = (store as any).getSessionId?.() ?? "(unknown)";
+    // AA7b — getSessionId is on IStore, the cast was dead weight.
+    const storeSid = store.getSessionId?.() ?? "(unknown)";
     const artifactId = c.req.param("artifactId");
     const parsed = StatusUpdateBodySchema.safeParse(await c.req.json());
     if (!parsed.success) {
@@ -283,9 +284,8 @@ export function createHttpRoutes(
     // new status before its next tick. Without this, a 100ms debounce window
     // can mean the hook reads stale `draft` and traps the agent in a poll
     // loop even though the user just approved.
-    if (typeof (store as any).forceFlush === "function") {
-      (store as any).forceFlush();
-    }
+    // AA7b — forceFlush is required on IStore, no cast needed.
+    await store.forceFlush();
 
     if (feedback) {
       const comment = await store.addComment({
@@ -536,12 +536,12 @@ export function createHttpRoutes(
   // sessions in a project share the same team.json). Returns both the
   // preferences and an `exists` flag so the UI can nudge `team init`
   // when no file has been created yet.
-  app.get("/api/team-preferences", (c) => {
+  app.get("/api/team-preferences", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ preferences: [], exists: false });
-    const preferences = typeof (store as any).getTeamPreferences === "function"
-      ? (store as any).getTeamPreferences()
-      : [];
+    // AA7b — typed optional method. Async + await for the same
+    // MaybePromise reason as the daemon-routes guardrails fix.
+    const preferences = (await store.getTeamPreferences?.()) ?? [];
     // "exists" proxy: the file existed at FileStore-construction time if
     // any preference landed; otherwise we need another signal. Simplest
     // truth: a non-empty array implies the file exists. An empty array is

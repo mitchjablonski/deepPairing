@@ -494,8 +494,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   //   deeppairing://sessions                   — index of past sessions in this project
   //   deeppairing://session/{id}               — full state of a past session
 
-  const canListPast = typeof (store as any).listPastSessions === "function";
-  const canLoadPast = typeof (store as any).loadPastSession === "function";
+  // AA7b — typed optional methods on IStore (added in AA7a).
+  const canListPast = typeof store.listPastSessions === "function";
+  const canLoadPast = typeof store.loadPastSession === "function";
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
     const resources: Array<{ uri: string; name: string; description?: string; mimeType: string }> = [];
@@ -529,7 +530,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       });
 
       try {
-        const past = await (store as any).listPastSessions();
+        const past = (await store.listPastSessions?.()) ?? [];
         for (const s of past) {
           if (s.id === store.getSessionId()) continue; // skip active
           resources.push({
@@ -574,7 +575,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       if (!canListPast) {
         return { contents: [{ uri, mimeType: "application/json", text: "[]" }] };
       }
-      const past = await (store as any).listPastSessions();
+      const past = (await store.listPastSessions?.()) ?? [];
       return {
         contents: [{ uri, mimeType: "application/json", text: JSON.stringify(past, null, 2) }],
       };
@@ -586,7 +587,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       if (!canLoadPast) {
         throw new Error("Past session reads require a DaemonClient store.");
       }
-      const state = await (store as any).loadPastSession(sessionId);
+      const state = await store.loadPastSession!(sessionId);
       return {
         contents: [{ uri, mimeType: "application/json", text: JSON.stringify(state, null, 2) }],
       };
@@ -1027,10 +1028,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // Some stores may not yet implement getComment / markCommentAnswered
         // (e.g., a future fake). Guard so the tool still works with a plain
         // IStore.
-        let parent: any = undefined;
-        if (typeof (store as any).getComment === "function") {
-          parent = await (store as any).getComment(commentId);
-        }
+        // AA7b — getComment is required on IStore; cast was dead weight.
+        const parent = await store.getComment(commentId);
         if (!parent) {
           return {
             content: [{ type: "text", text: `answer_question: no comment with id ${commentId}.` }],
@@ -1065,9 +1064,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           (answerComment as any).codeReferences = codeRefs;
         }
 
-        if (typeof (store as any).markCommentAnswered === "function") {
-          await (store as any).markCommentAnswered(commentId, answerId);
-        }
+        // AA7b — markCommentAnswered is required on IStore.
+        await store.markCommentAnswered(commentId, answerId);
 
         broadcast({ type: "comment_added", comment: answerComment });
         // O7: distinct event so the UI can toast the answer moment (otherwise
@@ -1212,8 +1210,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         // --- Sessions branch ---
         const runSessions = async () => {
           if (!query) return [];
-          if (typeof (store as any).searchSessions !== "function") return [];
-          return (store as any).searchSessions(query, limit);
+          // AA7b — typed optional method.
+          return (await store.searchSessions?.(query, limit)) ?? [];
         };
 
         if (mode === "philosophy") {
@@ -1252,7 +1250,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               isError: true,
             };
           }
-          if (typeof (store as any).searchSessions !== "function") {
+          if (typeof store.searchSessions !== "function") {
             return {
               content: [{ type: "text", text: "recall with mode='sessions' requires the daemon store (not available here)." }],
               isError: true,

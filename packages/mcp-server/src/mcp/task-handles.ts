@@ -63,8 +63,10 @@ export async function taskHandleForArtifact(
     // Decision: completed when the human picked an option, otherwise input_required.
     const decisionContent = (artifact.content as any) ?? {};
     const decisionId = decisionContent.decisionId;
-    if (decisionId && typeof (store as any).getResolvedDecisions === "function") {
-      const resolved: DecisionRecord[] = await (store as any).getResolvedDecisions();
+    // AA7b — getResolvedDecisions + getPlanReviewVerdict are required
+    // on IStore; the casts + typeof guards were dead weight.
+    if (decisionId) {
+      const resolved: DecisionRecord[] = await store.getResolvedDecisions();
       const match = resolved.find((d) => d.decisionId === decisionId);
       if (match?.response) {
         status = "completed";
@@ -76,14 +78,10 @@ export async function taskHandleForArtifact(
       status = "input_required";
     }
   } else if (artifact.type === "plan") {
-    if (typeof (store as any).getPlanReviewVerdict === "function") {
-      const verdict = await (store as any).getPlanReviewVerdict(artifact.id);
-      if (verdict) {
-        status = "completed";
-        response = verdict;
-      } else {
-        status = "input_required";
-      }
+    const verdict = await store.getPlanReviewVerdict(artifact.id);
+    if (verdict) {
+      status = "completed";
+      response = verdict;
     } else {
       status = "input_required";
     }
