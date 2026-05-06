@@ -916,6 +916,62 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("AA4 — X-Project-Hash binding (browser stale-tab guard)", () => {
+    // The threat: daemon-A on :3847 idle-shuts; daemon-B (different
+    // projectRoot, different hash) claims :3847; user's tab still has
+    // daemon-A's sessionId AND projectHash cached. When the tab fires a
+    // mutation, X-Project-Hash mismatches daemon-B's hash → 403, instead
+    // of silently routing into daemon-B's first arbitrary session via
+    // the old getDefaultStoreOrNull fallback.
+    function appWithProject(root: string) {
+      // Use the same default store the outer harness uses; the hash
+      // check fires before any store dispatch so the store doesn't matter.
+      return createHttpRoutes(store, root);
+    }
+
+    it("403s with code project_hash_mismatch when X-Project-Hash differs from daemon's", async () => {
+      const a = appWithProject("/projects/A");
+      const res = await a.request("/api/state", {
+        headers: { "X-Project-Hash": "deadbeef", "X-Session-Id": "any" },
+      });
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("project_hash_mismatch");
+      expect(typeof body.expected).toBe("string");
+    });
+
+    it("accepts requests when X-Project-Hash matches the daemon's", async () => {
+      const a = appWithProject("/projects/A");
+      // Compute the same hash the daemon would (via the exported helper).
+      const { projectHashOf } = await import("../../project-root.js");
+      const hash = projectHashOf("/projects/A");
+      const res = await a.request("/api/state", {
+        headers: { "X-Project-Hash": hash },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("accepts requests with no X-Project-Hash header (back-compat with older browsers)", async () => {
+      // The whole point of AA4 being additive: existing clients that
+      // don't yet send the hash still work. The guard lights up only
+      // when the browser opts in by sending it.
+      const a = appWithProject("/projects/A");
+      const res = await a.request("/api/state");
+      expect(res.status).toBe(200);
+    });
+
+    it("short-circuits when projectRoot is undefined (test-fixture back-compat)", async () => {
+      // The outer harness creates routes WITHOUT a projectRoot; this is
+      // what every existing route test relies on. The hash check should
+      // silently allow whatever the client sends in that case.
+      const noRootApp = createHttpRoutes(store);
+      const res = await noRootApp.request("/api/state", {
+        headers: { "X-Project-Hash": "anything" },
+      });
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe("CORS", () => {
     it("allows localhost origins", async () => {
       const res = await app.request("/api/state", {

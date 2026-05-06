@@ -45,6 +45,12 @@ async function openBrowser(url: string): Promise<void> {
 const DEFAULT_PORT = 3847;
 const MAX_PORT_ATTEMPTS = 10;
 const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
+// AA4 — projectHash is the deterministic short identity advertised on
+// /api/daemon-info + the WS `connected` event. The browser echoes it
+// back in `X-Project-Hash` and any per-session route 403s on mismatch,
+// closing the stale-tab-after-port-recycling write hole.
+import { projectHashOf } from "./project-root.js";
+const daemonProjectHash = projectHashOf(projectRoot);
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
 const daemonInfoFile = path.join(dpDir, "daemon.json");
@@ -217,7 +223,16 @@ const publicRoutes = createHttpRoutes(
   (sessionId?: string) => {
     if (sessionId) {
       const store = sessions.get(sessionId);
-      if (store) return store;
+      // AA4 — when the browser explicitly sent X-Session-Id, NEVER fall
+      // back to the default store. Pre-AA4 a stale-tab sessionId from a
+      // pre-restart daemon would route into the new daemon's first
+      // arbitrary session via getDefaultStoreOrNull. Now we return null
+      // and the route degrades to the no_active_session response,
+      // surfacing the desync instead of silently corrupting state.
+      // The X-Project-Hash check (added to createHttpRoutes) catches
+      // the cross-project case earlier with a louder 403; this is the
+      // belt-and-suspenders for clients that don't yet send the hash.
+      return store ?? null;
     }
     return getDefaultStoreOrNull();
   },
@@ -241,7 +256,10 @@ app.route("/", publicRoutes);
 // adopting the right daemon before trusting a port (avoids cross-project
 // adoption when daemon.json has been deleted). Includes projectRoot + port.
 app.get("/api/daemon-info", (c) => {
-  return c.json({ pid: process.pid, projectRoot, startedAt });
+  // AA4 — projectHash is the value the browser must send back in
+  // X-Project-Hash for any X-Session-Id'd request. Advertised here so a
+  // future client can verify before sending mutations.
+  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt });
 });
 
 // AA3 — cooperative shutdown endpoint. The doctor's project-mismatch
@@ -536,7 +554,9 @@ async function main() {
         // daemon process means stale in-memory state, force re-hydrate).
         const store = sessions.get(sessionId);
         if (store) {
-          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, daemonStartedAt: startedAt }));
+          // AA4 — include projectHash so the browser can echo it in
+          // X-Project-Hash and the per-session routes can verify.
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
         }
 
         ws.on("close", () => {
@@ -555,7 +575,7 @@ async function main() {
         }));
         // U4 — include `daemonStartedAt` so global clients also detect a
         // daemon restart and re-hydrate session listings on reconnect.
-        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, daemonStartedAt: startedAt }));
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
 
         ws.on("close", () => {
           globalClients.delete(ws as any);
