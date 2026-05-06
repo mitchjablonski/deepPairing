@@ -57,6 +57,35 @@ function writeBootstrapDismissed(projectRoot: string | null): void {
   try { localStorage.setItem(bootstrapKey(projectRoot), "1"); } catch {}
 }
 
+/**
+ * AA8 — visual tier classifier. PMF council Z review pushed back hard
+ * on the always-on violet box: "with 50 artifacts that's 50 violet bars
+ * saying 'trust me, I checked' — turns the moat into a status bar."
+ * The deep dive's third-option resolution: scarcity = signal. Render
+ * tiered:
+ *
+ *   "bootstrap" — empty-ledger onboarding card (existing AA6.5 copy).
+ *   "signal"    — full violet card (current Z3 treatment) ONLY when
+ *                 there's a near-miss OR a team-source concept was
+ *                 weighed. These are the concrete pairing moments
+ *                 worth dedicated chrome.
+ *   "ambient"   — single muted line with the violet ◆ glyph but no
+ *                 box, no border, no bg-tint. The drumbeat stays
+ *                 (every artifact still surfaces "N stances shaped
+ *                 this") but reads as provenance, not chrome.
+ *
+ * Pure helper so it's testable without rendering. Exported for the
+ * tier-classification test below the component file.
+ */
+export type PreflightTier = "bootstrap" | "ambient" | "signal";
+
+export function classifyPreflightTier(trace: PreflightTrace): PreflightTier {
+  if (trace.consideredCount === 0) return "bootstrap";
+  if (trace.nearMisses.length > 0) return "signal";
+  if (trace.consideredConcepts.some((c) => c.source === "team")) return "signal";
+  return "ambient";
+}
+
 interface PreflightBreadcrumbProps {
   artifactId: string;
 }
@@ -129,13 +158,11 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   if (!loaded) return null;
   if (!trace) return null;
 
-  // Z3 — bootstrap state on empty ledger (PMF council Y review). Pre-Z3
-  // we hid the breadcrumb entirely, which meant a first-time user paired
-  // for an entire session and never saw the differentiating mechanic
-  // exist. Now: render a one-time "your ledger will start filling in"
-  // line on the very first artifact only, then suppress thereafter via
-  // sessionStorage so the user sees it ONCE, never as ongoing chrome.
-  if (trace.consideredCount === 0) {
+  // AA8 — three-tier render. See classifyPreflightTier above for rules.
+  const tier = classifyPreflightTier(trace);
+
+  // Bootstrap — empty-ledger onboarding (Z3 + AA6.5 copy + dismiss flow).
+  if (tier === "bootstrap") {
     if (bootstrapDismissed) return null;
     return (
       <div
@@ -176,88 +203,106 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   const hasDetails = trace.consideredConcepts.length > 0 || trace.nearMisses.length > 0;
   const nearMiss = trace.nearMisses[0];
 
-  return (
-    <div className="border border-accent-violet/15 bg-accent-violet-dim/10 rounded px-3 py-2 mb-2 text-2xs text-text-secondary">
-      <button
-        type="button"
-        onClick={() => hasDetails && setOpen((v) => !v)}
-        className={`inline-flex items-center gap-1.5 ${
-          hasDetails ? "hover:text-accent-violet cursor-pointer" : "cursor-default"
-        } transition-colors`}
-        aria-expanded={hasDetails ? open : undefined}
-        title={hasDetails ? "Click to see what was weighed" : "Preflight trace"}
-      >
-        <span aria-hidden className="text-accent-violet">◆</span>
-        {/* Z3 — active voice (PMF amendment). "Cross-checked your N prior
-            stances BEFORE proposing this" was passive — it described what
-            happened. "Shaped this proposal" connects the moat to the
-            output the user is about to act on. */}
-        <span className="text-text-primary">
-          {n} prior {n === 1 ? "stance" : "stances"} shaped this proposal.
-        </span>
-        {hasDetails && (
-          <span aria-hidden className="opacity-60">{open ? "▾" : "▸"}</span>
+  // Shared expand-on-click headline. Same affordance for both tiers; the
+  // wrapping container differs (signal = violet box; ambient = bare row).
+  const Headline = (
+    <button
+      type="button"
+      onClick={() => hasDetails && setOpen((v) => !v)}
+      className={`inline-flex items-center gap-1.5 ${
+        hasDetails ? "cursor-pointer" : "cursor-default"
+      } ${tier === "signal" ? "hover:text-accent-violet" : "hover:text-text-secondary"} transition-colors`}
+      aria-expanded={hasDetails ? open : undefined}
+      title={hasDetails ? "Click to see what was weighed" : "Preflight trace"}
+    >
+      <span aria-hidden className={tier === "signal" ? "text-accent-violet" : "text-accent-violet/60"}>◆</span>
+      <span className={tier === "signal" ? "text-text-primary" : "text-text-muted"}>
+        {n} prior {n === 1 ? "stance" : "stances"} shaped this proposal.
+      </span>
+      {hasDetails && (
+        <span aria-hidden className="opacity-60">{open ? "▾" : "▸"}</span>
+      )}
+    </button>
+  );
+
+  // Considered-concepts + extra-near-miss expansion. Identical for both
+  // tiers; the styling stays neutral so it works inside or outside the
+  // violet card.
+  const Expansion = open && hasDetails ? (
+    <div className="mt-2 pl-4 space-y-1.5">
+      {trace.consideredConcepts.length > 0 && (
+        <div>
+          <div className="text-text-secondary mb-1">Considered:</div>
+          <ul className="space-y-0.5">
+            {trace.consideredConcepts.map((c, i) => (
+              <li key={`c${i}`} className="flex items-start gap-2">
+                <span
+                  className={`shrink-0 px-1 py-px rounded text-[9px] uppercase tracking-wide ${
+                    c.source === "team"
+                      ? "bg-accent-blue-dim/40 text-accent-blue"
+                      : "bg-surface-elevated text-text-muted"
+                  }`}
+                  title={c.source === "team" ? "From .deeppairing/team.json" : "From this session"}
+                >
+                  {c.source}
+                </span>
+                <span className="font-mono text-text-secondary">{c.concept}</span>
+                {c.reason && (
+                  <span className="text-text-muted opacity-80">— {c.reason}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {trace.nearMisses.length > 1 && (
+        <div>
+          <div className="text-accent-amber mb-1">Other near-misses:</div>
+          <ul className="space-y-0.5">
+            {trace.nearMisses.slice(1).map((n, i) => (
+              <li key={`n${i}`} className="font-mono text-accent-amber/80">
+                {n.concept}
+                {n.reason && (
+                  <span className="text-text-muted font-sans"> — {n.reason}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  // Signal tier — violet card. The near-miss line stays OUTSIDE the
+  // expand toggle (concrete pairing moment, shouldn't be hidden by
+  // default). Team-source-without-near-miss skips the amber line.
+  if (tier === "signal") {
+    return (
+      <div className="border border-accent-violet/15 bg-accent-violet-dim/10 rounded px-3 py-2 mb-2 text-2xs text-text-secondary">
+        {Headline}
+        {nearMiss && (
+          <div className="mt-1 pl-4 text-accent-amber/90">
+            ↳ Almost flagged this — your past stance on{" "}
+            <span className="font-mono text-accent-amber">{nearMiss.concept}</span>{" "}
+            is adjacent.
+            {nearMiss.reason && (
+              <span className="text-text-muted"> ({nearMiss.reason})</span>
+            )}
+          </div>
         )}
-      </button>
+        {Expansion}
+      </div>
+    );
+  }
 
-      {/* Near-miss line lives outside the expand toggle — it's the
-          concrete pairing moment ("your past stance on X is adjacent")
-          and shouldn't be hidden by default when present. */}
-      {nearMiss && (
-        <div className="mt-1 pl-4 text-accent-amber/90">
-          ↳ Almost flagged this — your past stance on{" "}
-          <span className="font-mono text-accent-amber">{nearMiss.concept}</span>{" "}
-          is adjacent.
-          {nearMiss.reason && (
-            <span className="text-text-muted"> ({nearMiss.reason})</span>
-          )}
-        </div>
-      )}
-
-      {open && hasDetails && (
-        <div className="mt-2 pl-4 space-y-1.5">
-          {trace.consideredConcepts.length > 0 && (
-            <div>
-              <div className="text-text-secondary mb-1">Considered:</div>
-              <ul className="space-y-0.5">
-                {trace.consideredConcepts.map((c, i) => (
-                  <li key={`c${i}`} className="flex items-start gap-2">
-                    <span
-                      className={`shrink-0 px-1 py-px rounded text-[9px] uppercase tracking-wide ${
-                        c.source === "team"
-                          ? "bg-accent-blue-dim/40 text-accent-blue"
-                          : "bg-surface-elevated text-text-muted"
-                      }`}
-                      title={c.source === "team" ? "From .deeppairing/team.json" : "From this session"}
-                    >
-                      {c.source}
-                    </span>
-                    <span className="font-mono text-text-secondary">{c.concept}</span>
-                    {c.reason && (
-                      <span className="text-text-muted opacity-80">— {c.reason}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {trace.nearMisses.length > 1 && (
-            <div>
-              <div className="text-accent-amber mb-1">Other near-misses:</div>
-              <ul className="space-y-0.5">
-                {trace.nearMisses.slice(1).map((n, i) => (
-                  <li key={`n${i}`} className="font-mono text-accent-amber/80">
-                    {n.concept}
-                    {n.reason && (
-                      <span className="text-text-muted font-sans"> — {n.reason}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
+  // Ambient tier — single muted line, no box. The drumbeat lives here
+  // (every artifact still surfaces N stances) but reads as provenance
+  // rather than chrome. AA8 is the answer to PMF council's "50 violet
+  // bars saying 'trust me'" objection.
+  return (
+    <div className="px-3 py-1 mb-2">
+      {Headline}
+      {Expansion}
     </div>
   );
 }
