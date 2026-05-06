@@ -1122,6 +1122,50 @@ describe("HTTP Routes", () => {
       expect(stance.sampleSessionId).toBe("sess_jump");
     });
 
+    it("BB2 — caches the digest within TTL (back-to-back calls don't re-walk)", async () => {
+      // Read once to seed the cache, then write a trace directly to the
+      // filesystem (bypassing recordPreflightTrace's invalidation) and
+      // re-read. The second call must return the cached zeros — proof the
+      // cache short-circuits the fs walk within DIGEST_CACHE_TTL_MS.
+      const r1 = await app.request("/api/ledger/digest");
+      const b1 = await r1.json();
+      expect(b1.shapedThisProject).toBe(0);
+      seedTrace("sess_cache", "art_cache", {
+        version: 1,
+        at: "2026-05-05",
+        artifactId: "art_cache",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "x" }],
+        nearMisses: [],
+      });
+      const r2 = await app.request("/api/ledger/digest");
+      const b2 = await r2.json();
+      expect(b2.shapedThisProject).toBe(0); // still the cached zero
+    });
+
+    it("BB2 — recordPreflightTrace invalidates the cache so next read sees the new trace", async () => {
+      // Prime the cache with zeros.
+      const r1 = await app.request("/api/ledger/digest");
+      expect((await r1.json()).shapedThisProject).toBe(0);
+      // Go through the FileStore so invalidation fires.
+      store.recordPreflightTrace("art_invalidate", {
+        version: 1,
+        at: "2026-05-05T10:00:00Z",
+        artifactId: "art_invalidate",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "fresh" }],
+        nearMisses: [],
+      });
+      const r2 = await app.request("/api/ledger/digest");
+      const b2 = await r2.json();
+      expect(b2.shapedThisProject).toBe(1);
+      expect(b2.topCitedStances[0].concept).toBe("fresh");
+    });
+
     it("ignores traces with empty consideredConcepts (bootstrap state, not moat moments)", async () => {
       seedTrace("sess_empty", "art_empty", {
         version: 1,
