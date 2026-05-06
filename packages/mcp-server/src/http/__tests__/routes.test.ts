@@ -989,6 +989,43 @@ describe("HTTP Routes", () => {
       const rejected = ledger.find((e) => e.concept === "global mutable state");
       expect(rejected?.instances[0].verdict).toBe("rejected");
     });
+
+    it("BB1 — synthetic project='manual' does NOT inflate /api/ledger/digest globalLedger.projects", async () => {
+      // Fresh install: only manual seeds exist. The AA5 globalLedger panel
+      // must report projects=0, not 1, so the user doesn't see "shaped 0
+      // proposals across 1 project" before they've ever paired.
+      await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "BB1 seed-only" }),
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      expect(body.globalLedger.concepts).toBe(1);
+      expect(body.globalLedger.projects).toBe(0);
+      expect(body.globalLedger.multiProjectConcepts).toBe(0);
+    });
+
+    it("BB1 — manual seed + same concept in real project does NOT fire multi-project badge", async () => {
+      await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "BB1 cross-project" }),
+      });
+      // Simulate a real project recording the same concept (typical
+      // path: a present_options resolved with this concept).
+      getGlobalStore().recordInstance("BB1 cross-project", {
+        project: "/some/real/project",
+        sessionId: "real_session",
+        verdict: "approved",
+        description: "BB1 cross-project",
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      // 1 real project, manual filtered out → multiProjectConcepts must stay 0.
+      expect(body.globalLedger.projects).toBe(1);
+      expect(body.globalLedger.multiProjectConcepts).toBe(0);
+    });
   });
 
   describe("AA5 — /api/ledger/digest", () => {
