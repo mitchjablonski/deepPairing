@@ -36,9 +36,13 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
       openQuestions: validated.data.openQuestions ?? [],
     },
   });
-  ctx.broadcast({ type: "artifact_created", artifact });
-  // Y1' — persist + broadcast the preflight trace so the breadcrumb renders.
+  // AA6.3 — persist + broadcast the trace BEFORE artifact_created so the
+  // companion UI can render the breadcrumb populated on first paint
+  // instead of mounting it null and refetching when the trace event
+  // lands. Pre-AA6.3 there was a visible flash where the breadcrumb
+  // was missing on a freshly-created artifact.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

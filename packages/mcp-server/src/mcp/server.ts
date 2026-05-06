@@ -1388,6 +1388,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // The hint is meant for tools that WRITE (the agent is about to
     // create artifacts; rejected approaches matter). Read-only and
     // pull-style tools shouldn't carry it.
+    // AA6.1 — request_horizon_check + answer_question both write
+    // comments and motivate exactly the rejected-approach context the
+    // hint carries (the agent might re-introduce a stance in its answer
+    // text). Adding them to the allowlist closes a gap from Y2.
     const HINT_TOOLS: ReadonlySet<string> = new Set([
       "present_findings",
       "present_options",
@@ -1397,6 +1401,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       "log_reasoning",
       "revise_artifact",
       "post_pr_review",
+      "request_horizon_check",
+      "answer_question",
     ]);
     if (
       firstCallHint &&

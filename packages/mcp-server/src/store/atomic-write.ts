@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomBytes } from "node:crypto";
 
 /**
  * Z4 — atomic JSON file write.
@@ -40,7 +41,11 @@ export function writeJsonAtomic(filePath: string, value: unknown, indent = 2): v
   // Sibling temp path so the rename is on the same filesystem (cross-fs
   // renames are NOT atomic; a tmp under /tmp would defeat the purpose
   // when filePath is on a different volume).
-  const tmp = filePath + ".tmp." + process.pid + "." + Date.now();
+  // AA6.2 — append randomBytes so two writes from the same process to
+  // the same path within the same millisecond can't race onto identical
+  // tmp filenames. Without this, debounced flush bursts could have one
+  // write's writeFileSync truncate another's tmp before its rename.
+  const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
   fs.writeFileSync(tmp, data);
   try {
     fs.renameSync(tmp, filePath);
@@ -53,9 +58,11 @@ export function writeJsonAtomic(filePath: string, value: unknown, indent = 2): v
 }
 
 /**
- * Match the .tmp.PID.TS pattern from above. Exported for cleanup paths
- * in tests + a future doctor sweep. Won't match arbitrary user files.
+ * Match the .tmp.PID.TS[.RAND] pattern from above. Exported for cleanup
+ * paths in tests + a future doctor sweep. Won't match arbitrary user
+ * files. AA6.2 added the optional hex-suffix tail so cleanup still
+ * recognises post-AA6 atomic-write tmps.
  */
 export function isAtomicTmpFile(filename: string): boolean {
-  return /\.tmp\.\d+\.\d+$/.test(filename);
+  return /\.tmp\.\d+\.\d+(?:\.[0-9a-f]+)?$/.test(filename);
 }

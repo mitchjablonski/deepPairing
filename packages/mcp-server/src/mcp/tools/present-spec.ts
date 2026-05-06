@@ -34,9 +34,10 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
       openQuestions: openQuestions ?? [],
     },
   });
-  ctx.broadcast({ type: "artifact_created", artifact });
-  // Y1' — record the preflight trace alongside the artifact.
+  // AA6.3 — trace before broadcast so the breadcrumb is populated on
+  // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

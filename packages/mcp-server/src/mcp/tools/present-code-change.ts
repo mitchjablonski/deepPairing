@@ -22,9 +22,10 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
   });
-  ctx.broadcast({ type: "artifact_created", artifact });
-  // Y1' — record the preflight trace alongside the artifact.
+  // AA6.3 — trace before broadcast so the breadcrumb is populated on
+  // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
 
   // S7 — quick-approve via elicitation for small, confident edits.

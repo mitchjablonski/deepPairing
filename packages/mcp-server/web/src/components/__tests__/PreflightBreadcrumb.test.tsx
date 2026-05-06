@@ -26,9 +26,16 @@ function mockFetchTrace(t: PreflightTrace | null) {
 }
 
 beforeEach(() => {
-  // Z3 — clear the bootstrap-dismissed flag between tests so each test
-  // starts from a clean "first-time user" state.
-  try { sessionStorage.removeItem("dp:preflight-bootstrap-dismissed"); } catch {}
+  // AA6.5 — bootstrap-dismissed flag is now in localStorage scoped by
+  // projectRoot. Wipe both to give each test a clean "first-time user"
+  // state regardless of which storage the prior test used.
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("dp:preflight-bootstrap-dismissed")) localStorage.removeItem(k);
+    }
+    sessionStorage.removeItem("dp:preflight-bootstrap-dismissed");
+  } catch {}
 });
 
 afterEach(() => {
@@ -57,7 +64,7 @@ describe("PreflightBreadcrumb (Y1')", () => {
     ).toBeInTheDocument();
   });
 
-  it("Z3: dismiss button persists via sessionStorage", async () => {
+  it("AA6.5: dismiss button persists via localStorage scoped by projectRoot", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", mockFetchTrace(trace({ consideredCount: 0 })));
     const first = render(<PreflightBreadcrumb artifactId="art_test" />);
@@ -69,6 +76,56 @@ describe("PreflightBreadcrumb (Y1')", () => {
 
     // Mount a NEW instance for a different artifact — should still be hidden.
     render(<PreflightBreadcrumb artifactId="art_test_2" />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/Your philosophy ledger is empty/)).not.toBeInTheDocument();
+  });
+
+  it("AA6.5: dismissal is scoped per projectRoot (project A's dismiss doesn't silence project B)", async () => {
+    // Pre-AA6.5 the key was global; dismissing in any project silenced
+    // the bootstrap everywhere. Now each projectRoot has its own key
+    // so the user re-onboards once per project.
+    (window as any).__dpConnectionStore = { getState: () => ({ projectRoot: "/projects/A" }) };
+    vi.stubGlobal("fetch", mockFetchTrace(trace({ consideredCount: 0 })));
+    const userA = userEvent.setup();
+    const a = render(<PreflightBreadcrumb artifactId="art_a" />);
+    await waitFor(() => screen.getByText(/Your philosophy ledger is empty/));
+    await userA.click(screen.getByRole("button", { name: /dismiss bootstrap message/i }));
+    a.unmount();
+
+    // Switch to project B; the bootstrap should appear again.
+    (window as any).__dpConnectionStore = { getState: () => ({ projectRoot: "/projects/B" }) };
+    render(<PreflightBreadcrumb artifactId="art_b" />);
+    await waitFor(() => expect(
+      screen.getByText(/Your philosophy ledger is empty/),
+    ).toBeInTheDocument());
+  });
+
+  it("AA6.5: a non-empty trace event implicit-dismisses the bootstrap", async () => {
+    (window as any).__dpConnectionStore = { getState: () => ({ projectRoot: "/projects/A" }) };
+    vi.stubGlobal("fetch", mockFetchTrace(trace({ consideredCount: 0 })));
+    const a = render(<PreflightBreadcrumb artifactId="art_z" />);
+    await waitFor(() => screen.getByText(/Your philosophy ledger is empty/));
+
+    // Simulate the daemon broadcasting a non-empty trace for ANOTHER artifact.
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:preflight-trace", {
+        detail: {
+          artifactId: "art_other_with_data",
+          trace: trace({
+            artifactId: "art_other_with_data",
+            consideredCount: 5,
+            consideredConcepts: [{ source: "session", concept: "x" }],
+          }),
+        },
+      }));
+    });
+    // The bootstrap on THIS instance disappears (the user has a ledger now).
+    expect(screen.queryByText(/Your philosophy ledger is empty/)).not.toBeInTheDocument();
+    a.unmount();
+
+    // Mount a fresh instance — dismissal persists in localStorage for this project.
+    vi.stubGlobal("fetch", mockFetchTrace(trace({ consideredCount: 0 })));
+    render(<PreflightBreadcrumb artifactId="art_after" />);
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText(/Your philosophy ledger is empty/)).not.toBeInTheDocument();
   });
