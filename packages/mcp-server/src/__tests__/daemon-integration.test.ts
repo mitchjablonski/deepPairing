@@ -223,6 +223,49 @@ describe("Daemon Routes", () => {
     expect(memory.rejectedApproaches.map((r: any) => r.description)).toContain("Inline refactor");
   });
 
+  it("BB8 — memory/rejected returns 400 validation_error on missing description (not a 500)", async () => {
+    await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+    const res = await app.request(`/api/internal/sessions/${SESSION}/memory/rejected`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "no description here" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("validation_error");
+  });
+
+  it("BB8 — memory/approved returns 400 validation_error on non-string description", async () => {
+    await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+    const res = await app.request(`/api/internal/sessions/${SESSION}/memory/approved`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: 42 }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("validation_error");
+  });
+
+  it("BB8 — memory/rejected accepts the documented typed-object shape", async () => {
+    await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+    const res = await app.request(`/api/internal/sessions/${SESSION}/memory/rejected`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: "use bcrypt rounds=4",
+        reason: "brute-forceable",
+        concept: "weak password hashing",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const memRes = await app.request(`/api/internal/sessions/${SESSION}/memory`);
+    const memory = await memRes.json();
+    const entry = memory.rejectedApproaches.find((r: any) => r.description === "use bcrypt rounds=4");
+    expect(entry).toBeDefined();
+    expect(entry.reason).toBe("brute-forceable");
+  });
+
   it("exposes guardrails and team-preferences routes", async () => {
     await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
 
