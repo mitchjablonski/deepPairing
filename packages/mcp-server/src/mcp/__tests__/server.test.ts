@@ -321,6 +321,52 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Service");
     });
 
+    it("BB3 — waitFor='decision' ignores stale unack comments and waits for the decision", async () => {
+      // The agent just called present_options. There's an unrelated old
+      // comment sitting in the unack queue (e.g. on a previous artifact).
+      // Pre-BB3, check_feedback returned IMMEDIATELY because comments
+      // existed — so the agent never got the chance to wait for the user
+      // to actually pick an option. With waitFor='decision', the early-
+      // return guard is scoped to resolved decisions only.
+      await callTool("present_options", {
+        context: "Which pattern?",
+        options: [
+          { id: "a", title: "A", description: "A", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "B", description: "B", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const decisionArtId = store.getArtifacts()[0].id;
+      // Stash a stale comment on a different artifact.
+      store.addComment({ id: "cmt_stale", artifactId: "art_other", content: "old chatter", author: "human" });
+
+      // Schedule the decision resolution after 50ms so the long-poll wakes.
+      const dec = store.getPendingDecisions()[0];
+      setTimeout(() => store.resolveDecision(dec.decisionId, "a", "go with A"), 50);
+
+      const { text } = await callTool("check_feedback", { waitFor: "decision" });
+      // The stale comment is still in the queue (we didn't ack it for this
+      // poll's purpose), but the wake condition was the resolved decision.
+      expect(text).toContain("A");
+      // Sanity: the artifact we presented was the one that got resolved.
+      expect(decisionArtId).toBeTruthy();
+    });
+
+    it("BB3 — waitFor='comments' returns immediately when there's an unack comment, even with a draft decision", async () => {
+      await callTool("present_options", {
+        context: "Which?",
+        options: [
+          { id: "a", title: "A", description: "A", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "B", description: "B", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      store.addComment({ id: "cmt_now", artifactId: "any", content: "look here", author: "human" });
+      const t0 = Date.now();
+      const { text } = await callTool("check_feedback", { waitFor: "comments" });
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeLessThan(1000); // immediate, not the 30s long-poll
+      expect(text).toContain("look here");
+    });
+
     it("does NOT include session memory inside check_feedback", async () => {
       // Session memory is delivered on the first tool call hint (see
       // first-call-hint test below), never inside check_feedback — mixing
