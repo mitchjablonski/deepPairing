@@ -220,6 +220,23 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     expect(useToastStore.getState().toasts[0].title).toBe("Rename artifact failed");
   });
 
+  it("BB10 — project_hash_mismatch toasts a sticky 'reload' action instead of the generic error copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: "Project hash mismatch", code: "project_hash_mismatch", expected: "abc12345" }),
+      { status: 403, headers: { "Content-Type": "application/json" } },
+    )));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].title).toMatch(/stale daemon/i);
+    expect(toasts[0].ttl).toBe(0); // sticky
+    expect(toasts[0].action?.label).toBe("Reload");
+  });
+
   it("network-error rejection toasts the doctor hint", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     const { useToastStore } = await import("../toast");
