@@ -4,8 +4,28 @@
  */
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { z } from "zod";
 import type { FileStore } from "./store/file-store.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
+
+// BB8 — wire-input validation for the typed-object signatures AA1
+// introduced. AA1's typing protected only in-process callers; routes
+// that pass req.body straight through still crashed with TypeError if
+// `description` came in as undefined or non-string. A 500 isn't the
+// right shape — these are validation errors. Zod gives us a clean 400
+// with a structured code the wrapper can act on, plus first-line
+// safety against malformed JSON shapes. Mirrors the validation tier
+// the public `/api/philosophy/seed` route already does inline.
+const RecordRejectedBody = z.object({
+  description: z.string().min(1),
+  reason: z.string().optional(),
+  sourceArtifactId: z.string().optional(),
+  concept: z.string().optional(),
+});
+const RecordApprovedBody = z.object({
+  description: z.string().min(1),
+  concept: z.string().optional(),
+});
 
 type SessionMap = Map<string, FileStore>;
 type BroadcastFn = (sessionId: string, event: any) => void;
@@ -379,27 +399,32 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/memory/rejected", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    // AA1 — typed-object signature; pass body straight through. The route
-    // already accepted these fields from the wrapper, so the wire shape
-    // is unchanged.
-    const body = await c.req.json();
-    r.store.recordRejectedApproach({
-      description: body.description,
-      reason: body.reason,
-      sourceArtifactId: body.sourceArtifactId,
-      concept: body.concept,
-    });
+    // BB8 — Zod-validate the wire body. Pre-BB8, missing/non-string
+    // `description` reached FileStore.recordRejectedApproach which did
+    // `description.trim()` → TypeError → 500. The wrapper then saw an
+    // opaque error instead of an actionable validation_error.
+    let parsed: z.infer<typeof RecordRejectedBody>;
+    try {
+      parsed = RecordRejectedBody.parse(await c.req.json());
+    } catch (err) {
+      const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
+      return c.json({ error: message, code: "validation_error" }, 400);
+    }
+    r.store.recordRejectedApproach(parsed);
     return c.json({ status: "recorded" });
   });
 
   app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const body = await c.req.json();
-    r.store.recordApprovedPattern({
-      description: body.description,
-      concept: body.concept,
-    });
+    let parsed: z.infer<typeof RecordApprovedBody>;
+    try {
+      parsed = RecordApprovedBody.parse(await c.req.json());
+    } catch (err) {
+      const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
+      return c.json({ error: message, code: "validation_error" }, 400);
+    }
+    r.store.recordApprovedPattern(parsed);
     return c.json({ status: "recorded" });
   });
 
