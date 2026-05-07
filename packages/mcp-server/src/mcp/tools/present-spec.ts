@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -47,15 +47,16 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     `Accept to approve these requirements as-is.\n` +
     `Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${ctx.port}`,
   );
+  const traceSummary = formatPreflightTraceSummary(pre.trace);
   if (elicitAction === "approve") {
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${ctx.port}. Call check_feedback for their response.${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${ctx.port}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

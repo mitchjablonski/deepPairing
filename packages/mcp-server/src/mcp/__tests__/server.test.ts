@@ -64,6 +64,36 @@ describe("MCP Tool Handlers", () => {
       expect(types).toContain("artifact_created");
       expect(types).toContain("preflight_trace_recorded");
     });
+
+    it("BB5 — return text mentions consideredCount + near-misses when the preflight brushed a past stance", async () => {
+      // Concept tokens (≥4 chars): "global", "mutable", "state". The summary
+      // hits 2 of 3 → coverage 0.67 → near-miss (>= 0.5) without a full
+      // block (< 1.0). Note: present_findings' preflight matches against
+      // title + summary + finding titles + recommendations, NOT details.
+      store.recordRejectedApproach({
+        description: "global mutable state for caching",
+        concept: "global mutable state",
+      });
+      const { text } = await callTool("present_findings", {
+        summary: "Caching with a mutable state — explore tradeoffs",
+        findings: [{
+          category: "Performance",
+          detail: "x",
+          significance: "low",
+        }],
+      });
+      expect(text).toContain("Preflight: considered");
+      expect(text).toContain("near-miss");
+      expect(text).toContain("global mutable state");
+    });
+
+    it("BB5 — return text omits the preflight summary when there are no past stances (bootstrap state)", async () => {
+      const { text } = await callTool("present_findings", {
+        summary: "Fresh project, no memory",
+        findings: [{ category: "Test", detail: "x", significance: "low" }],
+      });
+      expect(text).not.toContain("Preflight: considered");
+    });
   });
 
   describe("present_options", () => {
