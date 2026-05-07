@@ -11,6 +11,26 @@ import { API_BASE, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 async function toastApiError(action: string, err: unknown): Promise<void> {
   const { useToastStore } = await import("./toast");
   const apiErr = err instanceof ApiError ? err : null;
+  // BB10 — project_hash_mismatch is the AA4 stale-tab guard firing.
+  // The user's tab is pinned to daemon-A's hash but the live daemon is
+  // daemon-B (after an idle-shutdown / port re-bind). The fix is always
+  // a reload to refetch the new hash. Pre-BB10 this came through as a
+  // generic "request failed" toast and the user had no idea what to do.
+  if (apiErr?.code === "project_hash_mismatch") {
+    useToastStore.getState().push({
+      kind: "error",
+      title: "Tab is bound to a stale daemon",
+      body: "This project's daemon was replaced. Reload the page to re-bind.",
+      ttl: 0,
+      action: {
+        label: "Reload",
+        onClick: () => {
+          if (typeof window !== "undefined") window.location.reload();
+        },
+      },
+    });
+    return;
+  }
   useToastStore.getState().push({
     kind: "error",
     title: `${action} failed`,

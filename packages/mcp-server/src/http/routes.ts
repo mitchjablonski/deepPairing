@@ -54,6 +54,8 @@ function checkProjectHash(c: any, daemonHash: string | undefined): Response | nu
   if (sentHash !== daemonHash) {
     return c.json(
       {
+        // BB10 — message is fallback copy. The browser specializes the
+        // toast on `code` and offers a one-click reload action.
         error: `Project hash mismatch — your tab is pointed at a daemon serving a different project. Reload the page to re-bind.`,
         code: "project_hash_mismatch",
         expected: daemonHash,
