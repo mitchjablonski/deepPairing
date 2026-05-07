@@ -316,10 +316,18 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "check_feedback",
-        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.",
+        description:
+          "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts." +
+          "\n\n`waitFor` scopes the long-poll wake condition: 'comments' wakes only on new comments, 'decision' only on a resolved present_options, 'plan_review' only on a plan status transition, 'artifact_status' on any artifact status change, 'any' (default) on any feedback. Use a narrow scope when you've just presented a specific artifact and want to ignore unrelated chatter.",
         inputSchema: {
           type: "object" as const,
-          properties: {},
+          properties: {
+            waitFor: {
+              type: "string",
+              enum: ["any", "comments", "decision", "plan_review", "artifact_status"],
+              description: "Scope the poll to a specific feedback type. Default 'any'.",
+            },
+          },
         },
       },
       {
@@ -677,14 +685,46 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         return handlePresentCodeChange(ctx, args);
 
       case "check_feedback": {
+        // BB3 — `waitFor` scopes which feedback signal counts as "ready".
+        // The agent can pin its poll to the artifact it just presented
+        // (e.g. waitFor='decision' after present_options) so an unrelated
+        // comment elsewhere doesn't wake the poll prematurely. Default
+        // 'any' preserves the historical broad behavior.
+        const waitForRaw = typeof args.waitFor === "string" ? args.waitFor : "any";
+        const waitForScope: "any" | "comments" | "decision" | "plan_review" | "artifact_status" =
+          (["any", "comments", "decision", "plan_review", "artifact_status"] as const).includes(
+            waitForRaw as any,
+          )
+            ? (waitForRaw as any)
+            : "any";
+
         // If no immediate feedback exists, long-poll for up to 30 seconds
         const unackComments = await store.getUnacknowledgedComments();
         const resolvedDecs = await store.getResolvedDecisions();
-        const hasImmediate = unackComments.length > 0 || resolvedDecs.length > 0;
+        const allArtsForScope = await store.getArtifacts();
+        const decidedPlans = allArtsForScope.filter(
+          (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
+        );
+        const decidedAny = allArtsForScope.filter(
+          (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
+        );
+
+        const hasImmediateFor = (scope: typeof waitForScope): boolean => {
+          switch (scope) {
+            case "comments": return unackComments.length > 0;
+            case "decision": return resolvedDecs.length > 0;
+            case "plan_review": return decidedPlans.length > 0;
+            case "artifact_status": return decidedAny.length > 0 || resolvedDecs.length > 0;
+            case "any":
+            default:
+              return unackComments.length > 0 || resolvedDecs.length > 0;
+          }
+        };
+        const hasImmediate = hasImmediateFor(waitForScope);
 
         if (!hasImmediate) {
           // Check if there are draft artifacts — if so, wait for human action
-          const allArts = await store.getArtifacts();
+          const allArts = allArtsForScope;
           const hasDrafts = allArts.some(
             (a) => a.status === "draft" && ["research", "spec", "plan", "decision", "code_change"].includes(a.type),
           );
