@@ -163,6 +163,32 @@ export async function persistPreflightTrace(
 }
 
 /**
+ * BB5 — short, agent-facing summary of the preflight consult that just
+ * fired. Couples to the trace persisted by persistPreflightTrace so the
+ * tool's return text mentions the moat at the moment it bit (or didn't).
+ *
+ * Pre-BB5 the trace was persisted + broadcast but the present_* return
+ * string never mentioned consideredCount/nearMisses. Agents had to
+ * separately call recall(mode='ledger') to learn that they'd just been
+ * shaped — by which point the proposal was already on the human's
+ * screen. With this in the return text, the agent's NEXT statement
+ * to the user can acknowledge "considered 3 past stances; near-miss
+ * on 'global mutable state'" without an extra round trip.
+ *
+ * Returns an empty string for the bootstrap case (no past stances yet)
+ * so the very first artifact in a fresh project doesn't ship a noisy
+ * "considered 0 past stance(s)" line.
+ */
+export function formatPreflightTraceSummary(trace: PreflightTracePartial): string {
+  if (!trace || trace.consideredCount === 0) return "";
+  const nm = trace.nearMisses ?? [];
+  const nearMissText = nm.length
+    ? `; near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}`
+    : "";
+  return ` Preflight: considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}${nearMissText}.`;
+}
+
+/**
  * Drain unacknowledged human comments and format them for the agent. Returns
  * an empty string when nothing is pending (so the caller can append it
  * unconditionally).

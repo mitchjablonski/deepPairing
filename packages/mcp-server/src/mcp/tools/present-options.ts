@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -48,6 +48,6 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // Decisions with multiple options are best reviewed in the companion UI;
   // the option comparison surface is much richer than a terminal form.
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }
