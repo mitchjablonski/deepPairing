@@ -243,6 +243,29 @@ export interface IStore {
   }): MaybePromise<void>;
   getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
   /**
+   * BB4 — cross-project ledger digest, the moat surface AA5 added for the
+   * UI. Optional because not every IStore impl can produce one (the
+   * shape requires walking projectRoot's sessions dir). Both FileStore
+   * (direct) and DaemonClient (via /api/ledger/digest) implement it.
+   * Returns the same shape as /api/ledger/digest including
+   * `globalLedger` (cross-project totals) so the agent-facing recall
+   * tool can render the moat status without making a second call.
+   */
+  getLedgerDigest?(): MaybePromise<{
+    shapedThisProject: number;
+    nearMissesThisProject: number;
+    blockedThisProject: number;
+    sessionsTouched: number;
+    topCitedStances: Array<{
+      concept: string;
+      source: "session" | "team";
+      citationCount: number;
+      sampleArtifactId?: string;
+      sampleSessionId?: string;
+    }>;
+    globalLedger: { concepts: number; projects: number; multiProjectConcepts: number };
+  }>;
+  /**
    * Filesystem-sensed guardrails for this project (migrations, workflows,
    * infra paths). Used by the MCP server in firstCallHint so the agent
    * knows to escalate for changes in these paths.

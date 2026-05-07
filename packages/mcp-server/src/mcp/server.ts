@@ -362,14 +362,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "recall",
         description:
-          "Search deepPairing memory. `mode: 'philosophy'` queries cross-project stances (avoid/prefer/mixed) with optional stance filter; empty query lists the whole ledger. `mode: 'sessions'` queries past artifacts in this project. `mode: 'any'` (default) unions both, philosophy first. All modes require a query except philosophy.",
+          "Search deepPairing memory. `mode: 'philosophy'` queries cross-project stances (avoid/prefer/mixed) with optional stance filter; empty query lists the whole ledger. `mode: 'sessions'` queries past artifacts in this project. `mode: 'ledger'` returns the cross-project moat digest — what's been shaped, near-misses caught, top cited stances; query is ignored. `mode: 'any'` (default) unions philosophy + sessions, philosophy first. All modes require a query except philosophy and ledger.",
         inputSchema: {
           type: "object" as const,
           properties: {
-            query: { type: "string", description: "Free-text query (concept, title, or content substring). Empty string with mode='philosophy' lists the whole ledger." },
+            query: { type: "string", description: "Free-text query (concept, title, or content substring). Empty string with mode='philosophy' lists the whole ledger; ignored for mode='ledger'." },
             mode: {
               type: "string",
-              enum: ["philosophy", "sessions", "any"],
+              enum: ["philosophy", "sessions", "ledger", "any"],
               description: "Which layer to search. Default 'any'.",
             },
             stance: {
@@ -1229,7 +1229,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
       case "recall": {
         const query = String(args?.query ?? "").trim();
-        const mode = (args?.mode ?? "any") as "philosophy" | "sessions" | "any";
+        const mode = (args?.mode ?? "any") as "philosophy" | "sessions" | "ledger" | "any";
         const stanceFilter = typeof args?.stance === "string" ? args.stance : undefined;
         const limit = Math.min(
           Math.max(typeof args?.limit === "number" ? args.limit : 20, 1),
@@ -1253,6 +1253,52 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           // AA7b — typed optional method.
           return (await store.searchSessions?.(query, limit)) ?? [];
         };
+
+        // BB4 — agent-facing moat surface. Same shape as /api/ledger/digest
+        // (the YourTaste drawer). Lets the agent open with "your ledger
+        // has shaped N proposals, top stances are X, Y, Z" before doing
+        // anything else. Cursor 3 / Claude Code auto-memory structurally
+        // can't ship this — they don't store rejection reasoning as
+        // first-class objects.
+        if (mode === "ledger") {
+          if (typeof store.getLedgerDigest !== "function") {
+            return {
+              content: [{ type: "text", text: "recall with mode='ledger' requires a project-bound store (not available here)." }],
+              isError: true,
+            };
+          }
+          const digest = await store.getLedgerDigest();
+          if (
+            digest.shapedThisProject === 0 &&
+            digest.globalLedger.concepts === 0
+          ) {
+            return {
+              content: [{
+                type: "text",
+                text: "Ledger is empty. The user hasn't accumulated cross-project stances yet — pair with them on rejected/approved approaches and the ledger will start filling in.",
+              }],
+            };
+          }
+          const top = digest.topCitedStances.slice(0, 8).map((s) => {
+            const tag = s.source === "team" ? "TEAM" : "self";
+            return `- [${tag}] "${s.concept}" — cited ${s.citationCount}× (sample: ${s.sampleArtifactId ?? "—"})`;
+          });
+          const headline =
+            `Project: shaped ${digest.shapedThisProject} proposal${digest.shapedThisProject === 1 ? "" : "s"}` +
+            ` across ${digest.sessionsTouched} session${digest.sessionsTouched === 1 ? "" : "s"}` +
+            ` — ${digest.nearMissesThisProject} near-miss${digest.nearMissesThisProject === 1 ? "" : "es"} caught, ${digest.blockedThisProject} blocked.`;
+          const cross =
+            `Cross-project ledger: ${digest.globalLedger.concepts} concept${digest.globalLedger.concepts === 1 ? "" : "s"}` +
+            ` across ${digest.globalLedger.projects} project${digest.globalLedger.projects === 1 ? "" : "s"}` +
+            (digest.globalLedger.multiProjectConcepts > 0 ? ` (${digest.globalLedger.multiProjectConcepts} multi-project)` : "") +
+            ".";
+          return {
+            content: [{
+              type: "text",
+              text: `${headline}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}\n\nRespect these stances — especially TEAM-source and high-citation entries — when shaping new proposals.`,
+            }],
+          };
+        }
 
         if (mode === "philosophy") {
           const entries = await runPhilosophy();
