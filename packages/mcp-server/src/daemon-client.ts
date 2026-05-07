@@ -443,6 +443,29 @@ export class DaemonClient implements IStore {
     return data.results ?? [];
   }
 
+  /**
+   * BB4 — agent-facing moat surface. Mirrors FileStore.getLedgerDigest by
+   * fetching the same /api/ledger/digest endpoint the YourTaste drawer
+   * uses, so a wrapper-mode agent can ask "what stances has this user
+   * accumulated cross-project?" without spinning up its own FileStore.
+   */
+  async getLedgerDigest(): Promise<{
+    shapedThisProject: number;
+    nearMissesThisProject: number;
+    blockedThisProject: number;
+    sessionsTouched: number;
+    topCitedStances: Array<{
+      concept: string;
+      source: "session" | "team";
+      citationCount: number;
+      sampleArtifactId?: string;
+      sampleSessionId?: string;
+    }>;
+    globalLedger: { concepts: number; projects: number; multiProjectConcepts: number };
+  }> {
+    return this.requestPublic("/api/ledger/digest");
+  }
+
   private portFromBaseUrl(): number {
     // baseUrl = http://localhost:{port}/api/internal/sessions/{sessionId}
     const match = this.baseUrl.match(/localhost:(\d+)/);

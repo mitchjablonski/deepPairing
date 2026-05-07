@@ -146,7 +146,9 @@ export class FileStore implements IStore {
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
-  private readonly projectRoot: string;
+  // BB4 — also read by the recall mode='ledger' handler to call
+  // FileStore.ledgerDigest(projectRoot) for the agent-facing moat surface.
+  readonly projectRoot: string;
 
   constructor(projectRoot: string, sessionId?: string) {
     this.projectRoot = projectRoot;
@@ -880,6 +882,37 @@ export class FileStore implements IStore {
     if (next.length === existing.length) return false;
     fs.writeFileSync(this.annotationsPath(), JSON.stringify(next, null, 2));
     return true;
+  }
+
+  // --- Ledger digest (BB4) ---
+
+  /**
+   * BB4 — agent-facing wrapper around the static ledgerDigest. Pairs the
+   * project-scoped digest with global-ledger totals (filtered for AA9
+   * synthetic project="manual" markers, same as /api/ledger/digest).
+   * Lets the recall mode='ledger' tool open with "your ledger has shaped
+   * N proposals" without two round trips.
+   */
+  getLedgerDigest() {
+    const project = FileStore.ledgerDigest(this.projectRoot);
+    const entries = getGlobalStore().query({ limit: 10000 });
+    const projects = new Set<string>();
+    for (const e of entries) {
+      for (const inst of e.instances) {
+        if (inst.project !== "manual") projects.add(inst.project);
+      }
+    }
+    const multiProjectConcepts = entries.filter(
+      (e) => new Set(e.instances.filter((i) => i.project !== "manual").map((i) => i.project)).size > 1,
+    ).length;
+    return {
+      ...project,
+      globalLedger: {
+        concepts: entries.length,
+        projects: projects.size,
+        multiProjectConcepts,
+      },
+    };
   }
 
   // --- Preflight traces (Y1') ---

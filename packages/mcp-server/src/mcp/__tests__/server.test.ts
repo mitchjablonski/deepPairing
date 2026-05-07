@@ -1474,6 +1474,38 @@ describe("MCP Tool Handlers", () => {
       expect(isError).toBe(true);
       expect(text).toContain("requires a query");
     });
+
+    it("BB4 — mode='ledger' returns empty-state guidance when nothing has accumulated", async () => {
+      const { text, isError } = await callTool("recall", { mode: "ledger" });
+      expect(isError).toBeFalsy();
+      expect(text).toContain("Ledger is empty");
+    });
+
+    it("BB4 — mode='ledger' renders shaped/near-miss/blocked headlines + top stances", async () => {
+      // Seed a preflight trace so ledgerDigest has something to count.
+      store.recordPreflightTrace("art_bb4", {
+        version: 1,
+        at: "2026-05-05T10:00:00Z",
+        artifactId: "art_bb4",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 2,
+        consideredConcepts: [
+          { source: "session", concept: "global mutable state" },
+          { source: "team", concept: "use the ORM" },
+        ],
+        nearMisses: [{ source: "session", concept: "global mutable state" }],
+      });
+      // Seed the global ledger so the cross-project headline has content.
+      store.recordRejectedApproach({ description: "global mutable state", concept: "global mutable state" });
+      const { text } = await callTool("recall", { mode: "ledger" });
+      expect(text).toContain("shaped 1 proposal");
+      expect(text).toContain("1 near-miss");
+      expect(text).toContain("Top cited stances:");
+      expect(text).toContain("global mutable state");
+      expect(text).toContain("[TEAM]");
+      expect(text).toContain("Cross-project ledger:");
+    });
   });
 
   describe("pr-comments export format (L3)", () => {
