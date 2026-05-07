@@ -274,6 +274,30 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0].action?.label).toMatch(/jump to answer/i);
     });
 
+    it("BB9 — pushes a sticky error toast on `daemon_evicting` and flips connected=false", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      // Simulate the connect lifecycle setting connected=true.
+      useConnectionStore.setState({ connected: true });
+      activeAdapter.emit({
+        type: "daemon_evicting",
+        reason: "evicted_by_doctor",
+        projectRoot: "/Users/alice/other-project",
+        pid: 12345,
+      });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("error");
+      expect(toasts[0].title).toMatch(/daemon shut down/i);
+      expect(toasts[0].body).toContain("/Users/alice/other-project");
+      expect(toasts[0].ttl).toBe(0); // sticky — user must dismiss
+      expect(useConnectionStore.getState().connected).toBe(false);
+    });
+
     it("pushes a success toast on `decision_resolved_hero` with the captured prediction", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();
