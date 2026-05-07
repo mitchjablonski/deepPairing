@@ -321,6 +321,28 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           }
           break;
 
+        case "daemon_evicting":
+          // BB9 — AA3's /api/evict route broadcasts this to every connected
+          // tab when another project's `doctor --fix` cooperatively shuts
+          // the daemon down (cross-project port collision). Pre-BB9 the
+          // browser silently lost its WS — no banner, no explanation, the
+          // user's tab just stopped receiving updates while their session
+          // was still on screen. Now we push a destructive toast so the
+          // user knows to close the tab or restart Claude Code in this
+          // project. Setting connected=false stops the optimistic-state
+          // feedback loop.
+          import("./toast").then(({ useToastStore }) => {
+            const otherProject = typeof data.projectRoot === "string" ? data.projectRoot : "another project";
+            useToastStore.getState().push({
+              kind: "error",
+              title: "Daemon shut down",
+              body: `${otherProject}'s doctor evicted the daemon to claim this port. Close this tab or restart Claude Code in this project to reconnect.`,
+              ttl: 0,
+            });
+          });
+          set({ connected: false });
+          break;
+
         case "decision_resolved_hero":
           // O7: captured prediction doesn't disappear into the decision
           // record — it's a calibration moment worth pinning for a few
