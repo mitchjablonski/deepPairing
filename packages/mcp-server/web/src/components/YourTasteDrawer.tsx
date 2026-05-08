@@ -66,7 +66,7 @@ type Filter = "all" | "avoid" | "prefer" | "mixed";
 // shaped IN this project + cross-project totals, with top cited stances.
 type Tab = "stances" | "ledger" | "digest" | "team";
 
-interface LedgerDigest {
+export interface LedgerDigest {
   shapedThisProject: number;
   nearMissesThisProject: number;
   blockedThisProject: number;
@@ -417,7 +417,10 @@ function DigestPanel({ digest, error }: { digest: DigestData | null; error: stri
  * pairing rather than presupposing taste with a pre-seeded list (PMF
  * council deep dive rejected the bootstrap-by-onboarding path).
  */
-function LedgerPanel({
+// BB7 — exported so IdleHome can render the same digest in the cold-start
+// home view (the moat is the screen the user sees, not a feature behind a
+// drawer button).
+export function LedgerPanel({
   data,
   error,
   onJumpToArtifact,
@@ -588,7 +591,12 @@ function LedgerPanel({
  * pull, but the empty-state placement is the one anti-cold-start
  * lever.
  */
-function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
+// BB7 — exported so the cold-start IdleHome can render this affordance
+// inline below the ledger digest. AA9's spec called the seed affordance
+// the answer to the empty-ledger silent killer; placing it on the home
+// screen instead of behind the YourTaste drawer button is what makes
+// "paste a rule" the obvious cold-start action.
+export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
   const [text, setText] = useState("");
   const [verdict, setVerdict] = useState<"approved" | "rejected">("approved");
   const [submitting, setSubmitting] = useState(false);
