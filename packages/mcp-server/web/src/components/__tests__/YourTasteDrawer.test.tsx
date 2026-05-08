@@ -288,18 +288,20 @@ describe("YourTasteDrawer", () => {
   });
 
   describe("BB6 — breadcrumb ↔ ledger round-trip", () => {
-    function mockLedgerFetch(topCitedStances: any[]) {
+    function mockLedgerFetch(topCitedStances: any[], opts?: { empty?: boolean }) {
       return vi.fn((url: string) => {
         if (url.includes("/api/ledger/digest")) {
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              shapedThisProject: 5,
-              nearMissesThisProject: 1,
+              shapedThisProject: opts?.empty ? 0 : 5,
+              nearMissesThisProject: opts?.empty ? 0 : 1,
               blockedThisProject: 0,
-              sessionsTouched: 2,
+              sessionsTouched: opts?.empty ? 0 : 2,
               topCitedStances,
-              globalLedger: { concepts: 1, projects: 1, multiProjectConcepts: 0 },
+              globalLedger: opts?.empty
+                ? { concepts: 0, projects: 0, multiProjectConcepts: 0 }
+                : { concepts: 1, projects: 1, multiProjectConcepts: 0 },
             }),
           });
         }
@@ -348,6 +350,56 @@ describe("YourTasteDrawer", () => {
       const alphaConcept = await screen.findByText("alpha");
       const alphaButton = alphaConcept.closest("button")!;
       expect(alphaButton.className).not.toMatch(/ring-accent-violet/);
+    });
+
+    it("CC2 — highlightConcept not in topCitedStances renders an orphan-acknowledgement banner", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([
+        { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
+        { concept: "beta", source: "session", citationCount: 2, sampleArtifactId: "art_b" },
+      ]));
+      render(
+        <YourTasteDrawer
+          onClose={() => {}}
+          initialTab="ledger"
+          highlightConcept="gamma" // not in the top stances above
+        />,
+      );
+      const banner = await screen.findByTestId("ledger-orphan-banner");
+      expect(banner.textContent).toContain("gamma");
+      expect(banner.textContent).toMatch(/isn't in your top cited stances yet/i);
+      // Existing rows still render unringed.
+      const alpha = (await screen.findByText("alpha")).closest("button");
+      expect(alpha?.className ?? "").not.toMatch(/ring-accent-violet/);
+    });
+
+    it("CC2 — highlightConcept that IS in topCitedStances does NOT show the orphan banner", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([
+        { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
+      ]));
+      render(
+        <YourTasteDrawer
+          onClose={() => {}}
+          initialTab="ledger"
+          highlightConcept="alpha"
+        />,
+      );
+      await screen.findByText("alpha");
+      expect(screen.queryByTestId("ledger-orphan-banner")).toBeNull();
+    });
+
+    it("CC2 — orphan banner renders even on a totally empty ledger so the click is acknowledged", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([], { empty: true }));
+      render(
+        <YourTasteDrawer
+          onClose={() => {}}
+          initialTab="ledger"
+          highlightConcept="brand new concept"
+        />,
+      );
+      const banner = await screen.findByTestId("ledger-orphan-banner");
+      expect(banner.textContent).toContain("brand new concept");
+      // Empty-state copy still renders alongside.
+      expect(screen.getByText(/your ledger is empty/i)).toBeInTheDocument();
     });
 
     it("rows without a sampleArtifactId render as plain (non-clickable) list items", async () => {

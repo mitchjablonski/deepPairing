@@ -450,6 +450,15 @@ export function LedgerPanel({
   }
   const { shapedThisProject, nearMissesThisProject, blockedThisProject, sessionsTouched, topCitedStances, globalLedger } = data;
   const empty = shapedThisProject === 0 && globalLedger.concepts === 0;
+  // CC2 — when the user deep-linked into the ledger from a PreflightBreadcrumb
+  // concept, the matching row may not be in topCitedStances (the digest caps
+  // at the top 10 by citation count, so a concept that fired once is invisible
+  // in the list). Pre-CC2 the click registered, the drawer opened, but
+  // nothing was highlighted — read as broken. Now we render an inline
+  // acknowledgement row above the list explaining the situation.
+  const highlightInList =
+    highlightConcept && topCitedStances.some((s) => s.concept === highlightConcept);
+  const highlightOrphan = highlightConcept && !highlightInList;
 
   return (
     <div className="p-5 space-y-5">
@@ -491,6 +500,21 @@ export function LedgerPanel({
             this view shows which of your stances kept catching things, and which
             spanned multiple projects.
           </p>
+        </div>
+      )}
+
+      {/* CC2 — orphan-highlight banner. The user clicked a "Considered:"
+          concept in a PreflightBreadcrumb that was consulted once and
+          isn't yet in the top-cited stances. Without this banner, the
+          drawer opens to a list that doesn't contain the concept and
+          the click feels broken. */}
+      {highlightOrphan && (
+        <div
+          data-testid="ledger-orphan-banner"
+          className="text-2xs text-text-secondary leading-relaxed border border-accent-violet/30 bg-accent-violet-dim/10 rounded px-3 py-2"
+        >
+          <span className="font-mono text-accent-violet">"{highlightConcept}"</span>
+          {" was consulted on this proposal but isn't in your top cited stances yet — it'll show here once it accumulates more citations."}
         </div>
       )}
 
