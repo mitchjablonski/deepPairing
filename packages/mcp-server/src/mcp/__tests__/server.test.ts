@@ -509,6 +509,35 @@ describe("MCP Tool Handlers", () => {
       expect(store.getArtifacts()).toHaveLength(0);
     });
 
+    it("CC1 — block message includes the trace summary so the agent sees considered/near-miss context on block too", async () => {
+      // BB5 added the summary on the ADMIT path; CC1 closes the asymmetry
+      // on the BLOCK path. The agent gets "...previously rejected as Y"
+      // for the matched concept PLUS "Preflight: considered N past
+      // stance(s)" for the broader picture.
+      store.recordRejectedApproach({
+        description: "Deploy: Railway",
+        reason: "too expensive",
+        concept: "pay-per-request hosting",
+      });
+      store.recordRejectedApproach({
+        description: "global mutable state",
+        concept: "global mutable state",
+      });
+      const result = await callTool("present_options", {
+        context: "Pick a deploy target with mutable backing",
+        options: [
+          { id: "a", title: "Railway", description: "Fast", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Render", description: "Boring", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      expect(result.isError).toBe(true);
+      // Original block message still there.
+      expect(result.text).toContain("REJECTED_APPROACH_BLOCKED");
+      expect(result.text).toContain("Railway");
+      // CC1 — appended trace summary covers BOTH considered stances.
+      expect(result.text).toContain("Preflight: considered");
+    });
+
     it("broadcasts a preflight_blocked event so the UI can toast (H1)", async () => {
       store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive", concept: "pay-per-request hosting" });
 
