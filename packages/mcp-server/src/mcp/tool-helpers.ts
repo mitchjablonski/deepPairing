@@ -98,11 +98,20 @@ export async function preflightRejectedApproaches(
   // can surface a toast.
   broadcast(result.block.broadcastEvent);
 
+  // CC1 — append the trace summary to the block message too. Pre-CC1 the
+  // agent saw the matched concept on block ("...which the user previously
+  // rejected as X") but not the broader consideredCount / near-misses the
+  // trace had already computed. Asymmetric: BB5 added the summary to the
+  // ADMIT path so the agent narrates the moat on every successful
+  // proposal, but on BLOCK — exactly when the moat is biting hardest —
+  // the agent got the least context. formatPreflightTraceSummary is a
+  // no-op when consideredCount===0 so this can't add noise on bootstrap.
+  const blockSummary = formatPreflightTraceSummary(result.trace);
   return {
     ok: false,
     trace: result.trace,
     response: {
-      content: [{ type: "text", text: result.block.message }],
+      content: [{ type: "text", text: result.block.message + blockSummary }],
       isError: true as const,
     },
   };
