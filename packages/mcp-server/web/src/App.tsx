@@ -26,6 +26,10 @@ function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTaste, setShowTaste] = useState(false);
+  // BB6 — when a PreflightBreadcrumb concept is clicked, open the drawer
+  // straight to the ledger tab and highlight the matching row. Cleared on
+  // close so a fresh open from the header button shows the default tab.
+  const [tasteOpts, setTasteOpts] = useState<{ initialTab?: "ledger"; highlightConcept?: string }>({});
   // W1 — conversation rail visibility. Wired the same way as showTaste:
   // header button toggles, dp:open-conversation event lets toasts open it,
   // Esc closes via the drawer's own keydown.
@@ -143,8 +147,16 @@ function App() {
 
   // O2: the PreflightBlockToast action dispatches this event to open the
   // Your Taste drawer. Decoupled so the toast doesn't need a ref to App state.
+  // BB6 — also accepts { initialTab, highlightConcept } in detail so the
+  // PreflightBreadcrumb's "Considered:" rows can deep-link into the ledger.
   useEffect(() => {
-    const openTaste = () => setShowTaste(true);
+    const openTaste = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail as
+        | { initialTab?: "ledger"; highlightConcept?: string }
+        | undefined;
+      setTasteOpts(detail ?? {});
+      setShowTaste(true);
+    };
     window.addEventListener("dp:open-your-taste", openTaste);
     return () => window.removeEventListener("dp:open-your-taste", openTaste);
   }, []);
@@ -344,7 +356,16 @@ function App() {
       {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}
 
       {/* Your taste drawer — cross-project Philosophy Ledger, read-only */}
-      {showTaste && <YourTasteDrawer onClose={() => setShowTaste(false)} />}
+      {showTaste && (
+        <YourTasteDrawer
+          initialTab={tasteOpts.initialTab}
+          highlightConcept={tasteOpts.highlightConcept}
+          onClose={() => {
+            setShowTaste(false);
+            setTasteOpts({});
+          }}
+        />
+      )}
       {showConversation && <ConversationRail onClose={() => setShowConversation(false)} />}
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}

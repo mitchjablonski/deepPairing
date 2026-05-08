@@ -353,4 +353,50 @@ describe("PreflightBreadcrumb tier render (AA8)", () => {
     expect(screen.getByText("Considered:")).toBeInTheDocument();
     expect(screen.getByText("global mutable state")).toBeInTheDocument();
   });
+
+  it("BB6 — clicking an expanded 'Considered' concept dispatches dp:open-your-taste with the ledger payload", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", mockFetchTrace(trace({
+      consideredCount: 1,
+      consideredConcepts: [
+        { source: "session", concept: "global mutable state", reason: "testability" },
+      ],
+      nearMisses: [],
+    })));
+    const events: any[] = [];
+    const listener = (e: Event) => events.push((e as CustomEvent).detail);
+    window.addEventListener("dp:open-your-taste", listener);
+    try {
+      render(<PreflightBreadcrumb artifactId="art_link" />);
+      await waitFor(() => screen.getByText(/1 prior stance shaped this proposal/));
+      await user.click(screen.getByRole("button", { expanded: false })); // expand
+      await user.click(screen.getByRole("button", { name: /global mutable state/i }));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({ initialTab: "ledger", highlightConcept: "global mutable state" });
+    } finally {
+      window.removeEventListener("dp:open-your-taste", listener);
+    }
+  });
+
+  it("BB6 — clicking the violet card's 'Almost flagged' near-miss concept also dispatches the deep-link", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", mockFetchTrace(trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "session", concept: "x" }],
+      nearMisses: [{ source: "session", concept: "useEffect cleanup", reason: "pattern" }],
+    })));
+    const events: any[] = [];
+    const listener = (e: Event) => events.push((e as CustomEvent).detail);
+    window.addEventListener("dp:open-your-taste", listener);
+    try {
+      render(<PreflightBreadcrumb artifactId="art_signal_link" />);
+      await waitFor(() => screen.getByText(/Almost flagged this/));
+      await user.click(screen.getByRole("button", { name: /useEffect cleanup/i }));
+      expect(events).toHaveLength(1);
+      expect(events[0].highlightConcept).toBe("useEffect cleanup");
+      expect(events[0].initialTab).toBe("ledger");
+    } finally {
+      window.removeEventListener("dp:open-your-taste", listener);
+    }
+  });
 });
