@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArtifactPanel } from "./components/ArtifactPanel";
-import { SessionBrowser } from "./components/SessionBrowser";
+import { IdleHome } from "./components/IdleHome";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
@@ -339,7 +339,7 @@ function App() {
             Failed to render — try selecting a different artifact
           </div>
         }>
-          {hasArtifacts ? <ArtifactPanel /> : <SessionBrowser />}
+          {hasArtifacts ? <ArtifactPanel /> : <IdleHome />}
         </ErrorBoundary>
       </div>
 
