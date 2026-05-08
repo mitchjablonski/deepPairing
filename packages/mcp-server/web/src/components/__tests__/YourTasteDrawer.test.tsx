@@ -286,4 +286,77 @@ describe("YourTasteDrawer", () => {
       await waitFor(() => expect(screen.getByText(/could not load team preferences/i)).toBeInTheDocument());
     });
   });
+
+  describe("BB6 — breadcrumb ↔ ledger round-trip", () => {
+    function mockLedgerFetch(topCitedStances: any[]) {
+      return vi.fn((url: string) => {
+        if (url.includes("/api/ledger/digest")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              shapedThisProject: 5,
+              nearMissesThisProject: 1,
+              blockedThisProject: 0,
+              sessionsTouched: 2,
+              topCitedStances,
+              globalLedger: { concepts: 1, projects: 1, multiProjectConcepts: 0 },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ entries: [], total: 0 }) });
+      });
+    }
+
+    it("clicking a top-cited stance with a sample artifact closes the drawer + selects the artifact", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([
+        {
+          concept: "global mutable state",
+          source: "session",
+          citationCount: 4,
+          sampleArtifactId: "art_jumpback",
+          sampleSessionId: "sess_a",
+        },
+      ]));
+      const { useArtifactStore } = await import("../../stores/artifact");
+      useArtifactStore.getState().reset();
+      const onClose = vi.fn();
+      render(<YourTasteDrawer onClose={onClose} initialTab="ledger" />);
+      const conceptText = await screen.findByText("global mutable state");
+      const row = conceptText.closest("button")!;
+      expect(row).toBeTruthy();
+      expect(row.getAttribute("title")).toMatch(/art_jumpback/);
+      await userEvent.click(row);
+      expect(onClose).toHaveBeenCalled();
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("art_jumpback");
+    });
+
+    it("highlightConcept gives the matching row a violet ring", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([
+        { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
+        { concept: "beta", source: "session", citationCount: 2, sampleArtifactId: "art_b" },
+      ]));
+      render(
+        <YourTasteDrawer
+          onClose={() => {}}
+          initialTab="ledger"
+          highlightConcept="beta"
+        />,
+      );
+      const betaConcept = await screen.findByText("beta");
+      const betaButton = betaConcept.closest("button")!;
+      expect(betaButton.className).toMatch(/ring-accent-violet/);
+      const alphaConcept = await screen.findByText("alpha");
+      const alphaButton = alphaConcept.closest("button")!;
+      expect(alphaButton.className).not.toMatch(/ring-accent-violet/);
+    });
+
+    it("rows without a sampleArtifactId render as plain (non-clickable) list items", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([
+        { concept: "no-sample-stance", source: "session", citationCount: 1 },
+      ]));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      await screen.findByText("no-sample-stance");
+      expect(screen.queryByRole("button", { name: /jump to a citing artifact/i })).toBeNull();
+    });
+  });
 });

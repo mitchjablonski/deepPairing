@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useArtifactStore } from "../stores/artifact";
 
 // O3: Weekly Digest is gated until real users have accumulated 4+ weeks of
 // ledger activity — otherwise the "new / strengthened" lists look embarrassing
@@ -84,9 +85,20 @@ interface LedgerDigest {
   };
 }
 
-export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
+export function YourTasteDrawer({
+  onClose,
+  initialTab,
+  highlightConcept,
+}: {
+  onClose: () => void;
+  // BB6 — when opened from a PreflightBreadcrumb deep-link, default the
+  // tab to the ledger so the user lands on the right surface and the
+  // matching row gets the violet ring + scrollIntoView.
+  initialTab?: Tab;
+  highlightConcept?: string;
+}) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const [tab, setTab] = useState<Tab>("stances");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "stances");
   const [entries, setEntries] = useState<PhilosophyEntry[] | null>(null);
   const [digest, setDigest] = useState<DigestData | null>(null);
   const [teamPrefs, setTeamPrefs] = useState<TeamPreferencesData | null>(null);
@@ -281,7 +293,20 @@ export function YourTasteDrawer({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        {tab === "ledger" && <LedgerPanel data={ledger} error={ledgerError} />}
+        {tab === "ledger" && (
+          <LedgerPanel
+            data={ledger}
+            error={ledgerError}
+            highlightConcept={highlightConcept}
+            onJumpToArtifact={(artifactId) => {
+              // BB6 — round-trip backlink. Click a top-cited stance, jump
+              // to a real artifact that cited it. Closes the drawer so
+              // the user lands directly on the artifact panel.
+              useArtifactStore.getState().selectArtifact(artifactId);
+              onClose();
+            }}
+          />
+        )}
 
         {tab === "digest" && isDigestEnabled() && <DigestPanel digest={digest} error={digestError} />}
 
@@ -392,7 +417,24 @@ function DigestPanel({ digest, error }: { digest: DigestData | null; error: stri
  * pairing rather than presupposing taste with a pre-seeded list (PMF
  * council deep dive rejected the bootstrap-by-onboarding path).
  */
-function LedgerPanel({ data, error }: { data: LedgerDigest | null; error: string | null }) {
+function LedgerPanel({
+  data,
+  error,
+  onJumpToArtifact,
+  highlightConcept,
+}: {
+  data: LedgerDigest | null;
+  error: string | null;
+  onJumpToArtifact?: (artifactId: string) => void;
+  highlightConcept?: string;
+}) {
+  const highlightRef = useRef<HTMLLIElement>(null);
+  // BB6 — scroll the highlighted row into view when the panel opens via
+  // a PreflightBreadcrumb deep-link. Optional chain on scrollIntoView for
+  // jsdom (per CLAUDE.md convention).
+  useEffect(() => {
+    if (highlightRef.current) highlightRef.current.scrollIntoView?.({ block: "center" });
+  }, [highlightConcept, data]);
   if (error) {
     return (
       <div className="p-5 text-xs text-accent-red">
@@ -458,11 +500,13 @@ function LedgerPanel({ data, error }: { data: LedgerDigest | null; error: string
             Top cited stances
           </div>
           <ul className="space-y-2">
-            {topCitedStances.slice(0, 10).map((s) => (
-              <li
-                key={`${s.source}:${s.concept}`}
-                className="rounded border border-border-default bg-surface-secondary p-3"
-              >
+            {topCitedStances.slice(0, 10).map((s) => {
+              // BB6 — clickable row when we know which artifact cited the
+              // stance. Without sampleArtifactId, fall back to a plain row
+              // (no jump target — happens for stances cited only in
+              // sessions whose digest didn't capture the sample).
+              const canJump = Boolean(s.sampleArtifactId && onJumpToArtifact);
+              const inner = (
                 <div className="flex items-start justify-between gap-2">
                   <div className="font-mono text-xs text-text-primary break-words">{s.concept}</div>
                   <div className="flex items-center gap-1.5 shrink-0">
@@ -481,8 +525,36 @@ function LedgerPanel({ data, error }: { data: LedgerDigest | null; error: string
                     </span>
                   </div>
                 </div>
-              </li>
-            ))}
+              );
+              const isHighlighted = highlightConcept === s.concept;
+              const ringClass = isHighlighted ? "ring-2 ring-accent-violet" : "";
+              if (canJump) {
+                return (
+                  <li
+                    key={`${s.source}:${s.concept}`}
+                    ref={isHighlighted ? highlightRef : undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onJumpToArtifact!(s.sampleArtifactId!)}
+                      className={`block w-full text-left rounded border border-border-default bg-surface-secondary p-3 hover:border-accent-violet/40 hover:bg-surface-elevated transition-colors ${ringClass}`}
+                      title={`Jump to a citing artifact (${s.sampleArtifactId})`}
+                    >
+                      {inner}
+                    </button>
+                  </li>
+                );
+              }
+              return (
+                <li
+                  key={`${s.source}:${s.concept}`}
+                  ref={isHighlighted ? highlightRef : undefined}
+                  className={`rounded border border-border-default bg-surface-secondary p-3 ${ringClass}`}
+                >
+                  {inner}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

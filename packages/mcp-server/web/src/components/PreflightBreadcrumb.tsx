@@ -228,6 +228,19 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   // Considered-concepts + extra-near-miss expansion. Identical for both
   // tiers; the styling stays neutral so it works inside or outside the
   // violet card.
+  // BB6 — clicking a concept opens the YourTasteDrawer at the ledger tab
+  // and highlights the matching row. Closes the breadcrumb→ledger loop:
+  // the breadcrumb says "considered N stances", the ledger now answers
+  // "here's the same stance and N more citations of it" without the user
+  // having to find the drawer button + scroll for a name match.
+  const openLedgerForConcept = (concept: string) => {
+    window.dispatchEvent(
+      new CustomEvent("dp:open-your-taste", {
+        detail: { initialTab: "ledger", highlightConcept: concept },
+      }),
+    );
+  };
+
   const Expansion = open && hasDetails ? (
     <div className="mt-2 pl-4 space-y-1.5">
       {trace.consideredConcepts.length > 0 && (
@@ -246,7 +259,14 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
                 >
                   {c.source}
                 </span>
-                <span className="font-mono text-text-secondary">{c.concept}</span>
+                <button
+                  type="button"
+                  onClick={() => openLedgerForConcept(c.concept)}
+                  className="font-mono text-text-secondary hover:text-accent-violet underline-offset-2 hover:underline text-left"
+                  title="Open this stance in the ledger view"
+                >
+                  {c.concept}
+                </button>
                 {c.reason && (
                   <span className="text-text-muted opacity-80">— {c.reason}</span>
                 )}
@@ -261,7 +281,14 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
           <ul className="space-y-0.5">
             {trace.nearMisses.slice(1).map((n, i) => (
               <li key={`n${i}`} className="font-mono text-accent-amber/80">
-                {n.concept}
+                <button
+                  type="button"
+                  onClick={() => openLedgerForConcept(n.concept)}
+                  className="hover:text-accent-violet underline-offset-2 hover:underline text-left"
+                  title="Open this stance in the ledger view"
+                >
+                  {n.concept}
+                </button>
                 {n.reason && (
                   <span className="text-text-muted font-sans"> — {n.reason}</span>
                 )}
@@ -283,7 +310,14 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
         {nearMiss && (
           <div className="mt-1 pl-4 text-accent-amber/90">
             ↳ Almost flagged this — your past stance on{" "}
-            <span className="font-mono text-accent-amber">{nearMiss.concept}</span>{" "}
+            <button
+              type="button"
+              onClick={() => openLedgerForConcept(nearMiss.concept)}
+              className="font-mono text-accent-amber hover:text-accent-violet underline-offset-2 hover:underline"
+              title="Open this stance in the ledger view"
+            >
+              {nearMiss.concept}
+            </button>{" "}
             is adjacent.
             {nearMiss.reason && (
               <span className="text-text-muted"> ({nearMiss.reason})</span>
