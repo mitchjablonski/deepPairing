@@ -12,6 +12,7 @@ import type {
   RecordDecisionParams,
   RejectedApproach,
 } from "./store/store-interface.js";
+import { projectHashOf } from "./project-root.js";
 
 export class DaemonClient implements IStore {
   private baseUrl: string;
@@ -29,9 +30,20 @@ export class DaemonClient implements IStore {
     expectedProjectRoot?: string;
   };
 
-  constructor(port: number, sessionId: string) {
+  // CC6 — when constructed with the wrapper's projectRoot we can stamp
+  // every outbound request with X-Project-Hash. Today this is belt-and-
+  // suspenders: the AA4 middleware enforces the header on a single global
+  // mount so /api/internal/* + /api/ledger/digest both go through the
+  // gate. If a future refactor moves public routes under a hashed mount
+  // (or splits mounts), the header is already on the wire — no surprise
+  // 403s. Optional so test fixtures that don't care about hashes still
+  // work (`new DaemonClient(port, sid)` keeps its prior signature).
+  private readonly projectHash: string | undefined;
+
+  constructor(port: number, sessionId: string, expectedProjectRoot?: string) {
     this.baseUrl = `http://localhost:${port}/api/internal/sessions/${sessionId}`;
     this.sessionId = sessionId;
+    this.projectHash = expectedProjectRoot ? projectHashOf(expectedProjectRoot) : undefined;
   }
 
   getSessionId(): string {
@@ -56,7 +68,13 @@ export class DaemonClient implements IStore {
     init: RequestInit,
     isRetry = false,
   ): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, init);
+    // CC6 — stamp X-Project-Hash on every wire call when the wrapper
+    // knows its projectRoot. Adds the header without disturbing
+    // anything the caller passed.
+    const initWithHash = this.projectHash
+      ? { ...init, headers: { ...(init.headers ?? {}), "X-Project-Hash": this.projectHash } }
+      : init;
+    const res = await fetch(`${this.baseUrl}${path}`, initWithHash);
     if (res.ok) return res.json();
 
     // Try to parse the structured error body the daemon now returns.
@@ -125,9 +143,14 @@ export class DaemonClient implements IStore {
     project?: string;
     expectedProjectRoot?: string;
   }): Promise<void> {
+    // CC6 — register() bypasses request() (it has its own 403 handling)
+    // so add the X-Project-Hash header here too. Without this, the very
+    // first call from the wrapper would skip the gate.
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.projectHash) headers["X-Project-Hash"] = this.projectHash;
     const res = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(meta ?? {}),
     });
     if (res.status === 403) {
@@ -401,7 +424,14 @@ export class DaemonClient implements IStore {
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
   private async requestPublic<T = any>(path: string): Promise<T> {
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path}`);
+    // CC6 — same X-Project-Hash stamp on the public-route fetches. Today
+    // these go through the same global middleware so the header is
+    // belt-and-suspenders; if /api/ledger/digest or /api/sessions ever
+    // moves under a hashed mount the call won't 403.
+    const init: RequestInit = this.projectHash
+      ? { headers: { "X-Project-Hash": this.projectHash } }
+      : {};
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path}`, init);
     if (res.ok) return res.json();
     let body: any = {};
     try { body = await res.clone().json(); } catch {}
