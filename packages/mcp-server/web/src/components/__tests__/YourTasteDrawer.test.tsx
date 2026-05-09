@@ -69,7 +69,7 @@ describe("YourTasteDrawer", () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([]));
     render(<YourTasteDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/seed your ledger/i)).toBeInTheDocument());
-    expect(screen.getByPlaceholderText(/avoid global mutable state/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/global mutable state/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add to ledger/i })).toBeInTheDocument();
     // Both verdict pills are visible — radio semantics let the user toggle.
     expect(screen.getByRole("radio", { name: /prefer/i })).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("YourTasteDrawer", () => {
     render(<YourTasteDrawer onClose={() => {}} />);
     await waitFor(() => screen.getByText(/seed your ledger/i));
 
-    const textarea = screen.getByPlaceholderText(/avoid global mutable state/i);
+    const textarea = screen.getByPlaceholderText(/global mutable state/i);
     await userEvent.type(textarea, "named exports only");
     await userEvent.click(screen.getByRole("radio", { name: /avoid/i }));
     await userEvent.click(screen.getByRole("button", { name: /add to ledger/i }));

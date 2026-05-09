@@ -657,14 +657,18 @@ export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
       </div>
       <p className="text-2xs text-text-muted leading-relaxed mb-3">
         Paste a rule from your CLAUDE.md, code-review checklist, or team doc — anything
-        you've already written down about how you like code. It becomes a stance the
-        agent's preflight will check against on every proposal.
+        you've already written down about how you like code. Each line becomes a stance
+        the agent's preflight will check against on every proposal.
+      </p>
+      <p className="text-2xs text-text-muted/80 leading-relaxed mb-2 italic">
+        One rule per line — short concept names match best (e.g. "global mutable state",
+        not "avoid global mutable state because…").
       </p>
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="e.g. avoid global mutable state — prefer dependency injection so tests can swap impls"
-        rows={3}
+        placeholder={"global mutable state\nbcrypt rounds < 12\ninline SQL strings\nsynchronous fs in request handlers"}
+        rows={4}
         disabled={submitting}
         className="w-full px-3 py-2 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet resize-none"
       />

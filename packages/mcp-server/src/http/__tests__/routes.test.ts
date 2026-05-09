@@ -990,6 +990,66 @@ describe("HTTP Routes", () => {
       expect(rejected?.instances[0].verdict).toBe("rejected");
     });
 
+    it("CC7 — splits multiline body on newlines, seeding one stance per line", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          concept: "global mutable state\nbcrypt rounds < 12\n\ninline SQL strings",
+          verdict: "rejected",
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.seededCount).toBe(3);
+      expect(body.concepts).toEqual([
+        "global mutable state",
+        "bcrypt rounds < 12",
+        "inline SQL strings",
+      ]);
+      // Back-compat: body.concept is the first one.
+      expect(body.concept).toBe("global mutable state");
+      // All three landed in the global ledger.
+      const ledger = getGlobalStore().query({ limit: 100 });
+      const conceptsSeeded = body.concepts as string[];
+      for (const c of conceptsSeeded) {
+        expect(ledger.find((e) => e.concept === c)).toBeDefined();
+      }
+    });
+
+    it("CC7 — single-line body still seeds exactly one entry (back-compat)", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "single rule" }),
+      });
+      const body = await res.json();
+      expect(body.seededCount).toBe(1);
+      expect(body.concept).toBe("single rule");
+    });
+
+    it("CC7 — duplicate lines in one body are de-duped (case-insensitive)", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "Global State\nglobal state\nGLOBAL STATE\nother thing" }),
+      });
+      const body = await res.json();
+      expect(body.seededCount).toBe(2);
+      expect(body.concepts[0]).toBe("Global State"); // first form preserved
+      expect(body.concepts[1]).toBe("other thing");
+    });
+
+    it("CC7 — empty input (only whitespace + newlines) returns 400", async () => {
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "   \n\n\t\n  " }),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe("validation_error");
+    });
+
     it("BB1 — synthetic project='manual' does NOT inflate /api/ledger/digest globalLedger.projects", async () => {
       // Fresh install: only manual seeds exist. The AA5 globalLedger panel
       // must report projects=0, not 1, so the user doesn't see "shaped 0

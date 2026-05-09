@@ -425,23 +425,56 @@ export function createHttpRoutes(
     try { body = await c.req.json(); } catch {
       return c.json({ error: "invalid JSON body", code: "validation_error" }, 400);
     }
-    const concept = String(body?.concept ?? "").trim();
+    const raw = String(body?.concept ?? "");
     const verdict = body?.verdict === "rejected" ? "rejected" : "approved";
     const reason = body?.reason ? String(body.reason).trim() || undefined : undefined;
-    if (!concept) {
+    // CC7 — split on newlines, treat each line as a separate stance. PMF
+    // council flagged the tokenization cliff: a long-form paste like
+    // "avoid global mutable state — prefer dependency injection so tests
+    // can swap impls" tokenizes into 8+ ≥4-char tokens, of which a real
+    // future proposal will hit 3-4 → tokenCoverage 0.4-0.5 → below the
+    // NEAR_MISS_THRESHOLD (0.5) → seed silently never matches. Splitting
+    // on newlines lets the user paste a rule list (one rule per line)
+    // and each entry has a tight token set the validator can actually
+    // hit. Backward compatible: a single-line paste seeds one entry,
+    // identical to pre-CC7 behavior.
+    const lines = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    const seenInThisPost = new Set<string>();
+    const concepts = lines.filter((l) => {
+      const k = l.toLowerCase();
+      if (seenInThisPost.has(k)) return false;
+      seenInThisPost.add(k);
+      return true;
+    });
+    if (concepts.length === 0) {
       return c.json(
         { error: "concept is required (paste a rule, idea, or pattern name)", code: "validation_error" },
         400,
       );
     }
-    getGlobalStore().recordInstance(concept, {
-      project: "manual",
-      sessionId: "seed",
+    for (const concept of concepts) {
+      getGlobalStore().recordInstance(concept, {
+        project: "manual",
+        sessionId: "seed",
+        verdict,
+        reason,
+        description: reason ?? concept,
+      });
+    }
+    // Backward-compatible single-entry shape; expose count + concepts so
+    // newer callers can render "Seeded 3 stances". Older test fixtures
+    // checking { status, concept, verdict } still pass — `concept` is
+    // the first one for compatibility.
+    return c.json({
+      status: "seeded",
+      concept: concepts[0],
+      concepts,
+      seededCount: concepts.length,
       verdict,
-      reason,
-      description: reason ?? concept,
     });
-    return c.json({ status: "seeded", concept, verdict });
   });
 
   app.get("/api/philosophy/digest", (c) => {
