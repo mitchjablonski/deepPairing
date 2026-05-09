@@ -57,7 +57,11 @@ async function main() {
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
   const sessionId = `session_${safeProjectName}_${projectHash}`;
-  const client = new DaemonClient(port, sessionId);
+  // CC6 — pass projectRoot so DaemonClient stamps X-Project-Hash on every
+  // request. Defends against the (currently latent) case where a public
+  // route moves under a hashed mount; today the AA4 middleware already
+  // gates everything but the header now travels with the wrapper either way.
+  const client = new DaemonClient(port, sessionId, projectRoot);
   // Y3' — pass expectedProjectRoot so the daemon refuses (403) if we
   // accidentally adopted a daemon serving a different project (port
   // collision / failed spawn fallback).

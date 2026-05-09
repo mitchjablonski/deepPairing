@@ -795,4 +795,75 @@ describe("DaemonClient", () => {
     });
   });
 
+  describe("CC6 — DaemonClient stamps X-Project-Hash on every request", () => {
+    // These tests run with fetch fully mocked so they exercise just the
+    // DaemonClient's header-injection logic — independent of any daemon
+    // route's middleware. The route-side enforcement is covered separately
+    // in routes.test.ts (AA4 X-Project-Hash binding).
+
+    function mockFetchOk() {
+      const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+      const stub = (async (url: any, init?: any) => {
+        calls.push({
+          url: String(url),
+          headers: { ...(init?.headers ?? {}) } as Record<string, string>,
+        });
+        return new Response(JSON.stringify({ artifacts: [], sessions: [], status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      return { calls, stub };
+    }
+
+    it("attaches X-Project-Hash on session-scoped requests when constructed with projectRoot", async () => {
+      const { calls, stub } = mockFetchOk();
+      const realFetch = global.fetch;
+      global.fetch = stub as any;
+      try {
+        const c = new DaemonClient(TEST_PORT, "cc6_session", "/some/project/root");
+        await c.register({ expectedProjectRoot: "/some/project/root" });
+        await c.getArtifacts();
+        const sessionScoped = calls.filter((k) => k.url.includes("/api/internal/sessions/"));
+        expect(sessionScoped.length).toBeGreaterThan(0);
+        for (const k of sessionScoped) {
+          expect(k.headers["X-Project-Hash"]).toMatch(/^[a-f0-9]{8}$/);
+        }
+      } finally {
+        global.fetch = realFetch;
+      }
+    });
+
+    it("attaches X-Project-Hash on requestPublic calls (e.g. listPastSessions)", async () => {
+      const { calls, stub } = mockFetchOk();
+      const realFetch = global.fetch;
+      global.fetch = stub as any;
+      try {
+        const c = new DaemonClient(TEST_PORT, "cc6_public_session", "/another/root");
+        await c.listPastSessions();
+        const publicCall = calls.find((k) => k.url.endsWith("/api/sessions"));
+        expect(publicCall).toBeDefined();
+        expect(publicCall!.headers["X-Project-Hash"]).toMatch(/^[a-f0-9]{8}$/);
+      } finally {
+        global.fetch = realFetch;
+      }
+    });
+
+    it("omits the header when constructed without projectRoot (back-compat)", async () => {
+      const { calls, stub } = mockFetchOk();
+      const realFetch = global.fetch;
+      global.fetch = stub as any;
+      try {
+        const c = new DaemonClient(TEST_PORT, "cc6_no_root_session"); // no third arg
+        await c.register();
+        await c.getArtifacts();
+        for (const k of calls) {
+          expect(k.headers["X-Project-Hash"]).toBeUndefined();
+        }
+      } finally {
+        global.fetch = realFetch;
+      }
+    });
+  });
+
 });
