@@ -762,6 +762,42 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           checkFeedbackPollCount++;
         }
 
+        // CC5 — respect waitFor scope post-wake. BB3 added the entry-guard
+        // branching but waitForFeedback still wakes on ANY feedback signal,
+        // and the response below assembles ALL comments + decisions. So an
+        // agent calling waitFor='decision' could be woken by an unrelated
+        // comment, fall through, and get a response stuffed with comments
+        // it explicitly said it wasn't waiting for. Re-check the scope with
+        // the fresh post-wake data; if it's narrow and unsatisfied, return
+        // a focused "still waiting" status instead of dumping out-of-scope
+        // chatter at the agent.
+        if (waitForScope !== "any") {
+          const allArtsPostWake = await store.getArtifacts();
+          const decidedPlansPostWake = allArtsPostWake.filter(
+            (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
+          );
+          const decidedAnyPostWake = allArtsPostWake.filter(
+            (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
+          );
+          const scopeSatisfied = (() => {
+            switch (waitForScope) {
+              case "comments": return newComments.length > 0;
+              case "decision": return newResolved.length > 0;
+              case "plan_review": return decidedPlansPostWake.length > 0;
+              case "artifact_status": return decidedAnyPostWake.length > 0 || newResolved.length > 0;
+              default: return true;
+            }
+          })();
+          if (!scopeSatisfied) {
+            return {
+              content: [{
+                type: "text",
+                text: `Still waiting on '${waitForScope}'. Nothing matching that scope arrived during the 30s poll. Call check_feedback again with the same waitFor (or with waitFor='any' to drain unrelated chatter).`,
+              }],
+            };
+          }
+        }
+
         // --- Session status preamble ---
         const allArtifacts = await store.getArtifacts();
         const totalArtifacts = allArtifacts.length;

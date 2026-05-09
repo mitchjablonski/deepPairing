@@ -381,6 +381,28 @@ describe("MCP Tool Handlers", () => {
       expect(decisionArtId).toBeTruthy();
     });
 
+    it("CC5 — waitFor='decision' wakes on an unrelated comment but returns 'still waiting' instead of dumping it", async () => {
+      // Pre-CC5: long-poll wakes on ANY signal, then post-wake assembly
+      // dumps all comments + decisions regardless of waitFor scope. The
+      // agent that asked for a decision-only wake gets a comment-flavored
+      // response — surprising, conflicts with the scoped contract.
+      await callTool("present_options", {
+        context: "Pick a deploy",
+        options: [
+          { id: "a", title: "A", description: "A", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "B", description: "B", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      // Schedule an unrelated comment (not the decision the agent is
+      // waiting for) after 50ms so the long-poll wakes mid-flight.
+      setTimeout(() => {
+        store.addComment({ id: "cmt_noise", artifactId: "art_other", content: "stray remark", author: "human" });
+      }, 50);
+      const { text } = await callTool("check_feedback", { waitFor: "decision" });
+      expect(text).toContain("Still waiting on 'decision'");
+      expect(text).not.toContain("stray remark");
+    });
+
     it("BB3 — waitFor='comments' returns immediately when there's an unack comment, even with a draft decision", async () => {
       await callTool("present_options", {
         context: "Which?",
