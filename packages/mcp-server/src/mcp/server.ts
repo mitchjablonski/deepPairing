@@ -1304,10 +1304,27 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             };
           }
           const digest = await store.getLedgerDigest();
-          if (
+          // CC8 — surface user-seeded stances even when shapedThisProject===0.
+          // Pre-CC8 the agent saw "Ledger is empty" until at least one
+          // preflight cited a stance, so a fresh project where the user
+          // had pasted rules into the SeedAffordance got NO acknowledgement
+          // from the agent — the seed action was invisible to the AI for
+          // the entire first session. Now we query the global ledger for
+          // entries that originated from a manual seed (project="manual"
+          // markers) and surface them as a "User has seeded:" list.
+          const allLedger = getGlobalStore().query({ limit: 200 });
+          const seededStances = allLedger
+            .filter((e) => e.instances.some((i) => i.project === "manual"))
+            .map((e) => ({
+              concept: e.concept,
+              stance: e.stance,
+              citedTimesElsewhere: e.instances.filter((i) => i.project !== "manual").length,
+            }));
+          const ledgerIsEmpty =
             digest.shapedThisProject === 0 &&
-            digest.globalLedger.concepts === 0
-          ) {
+            digest.globalLedger.concepts === 0 &&
+            seededStances.length === 0;
+          if (ledgerIsEmpty) {
             return {
               content: [{
                 type: "text",
@@ -1319,6 +1336,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             const tag = s.source === "team" ? "TEAM" : "self";
             return `- [${tag}] "${s.concept}" — cited ${s.citationCount}× (sample: ${s.sampleArtifactId ?? "—"})`;
           });
+          const seededLines = seededStances.slice(0, 12).map((s) => {
+            const elsewhere = s.citedTimesElsewhere > 0
+              ? ` (also cited ${s.citedTimesElsewhere}× in real sessions)`
+              : "";
+            return `- [SEED] "${s.concept}" — ${s.stance.toUpperCase()}${elsewhere}`;
+          });
           const headline =
             `Project: shaped ${digest.shapedThisProject} proposal${digest.shapedThisProject === 1 ? "" : "s"}` +
             ` across ${digest.sessionsTouched} session${digest.sessionsTouched === 1 ? "" : "s"}` +
@@ -1328,10 +1351,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             ` across ${digest.globalLedger.projects} project${digest.globalLedger.projects === 1 ? "" : "s"}` +
             (digest.globalLedger.multiProjectConcepts > 0 ? ` (${digest.globalLedger.multiProjectConcepts} multi-project)` : "") +
             ".";
+          const seededSection = seededLines.length
+            ? `\n\nUser-seeded stances (weight these as direct user policy):\n${seededLines.join("\n")}`
+            : "";
           return {
             content: [{
               type: "text",
-              text: `${headline}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}\n\nRespect these stances — especially TEAM-source and high-citation entries — when shaping new proposals.`,
+              text: `${headline}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}${seededSection}\n\nRespect these stances — especially TEAM-source, high-citation, and SEED entries — when shaping new proposals.`,
             }],
           };
         }
