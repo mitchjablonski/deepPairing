@@ -1562,6 +1562,62 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Ledger is empty");
     });
 
+    it("CC8 — mode='ledger' surfaces user-seeded stances even when shapedThisProject=0", async () => {
+      // Pre-CC8: a fresh project where the user pasted seeds via the
+      // SeedAffordance had a recall response of "Ledger is empty" — the
+      // seeded stances were counted in globalLedger.concepts but their
+      // names never made it into the agent-facing text. So the seed
+      // action was invisible to the AI for the entire first session.
+      const { getGlobalStore } = await import("../../store/global-store");
+      // Simulate the AA9 seed route writing project="manual" entries.
+      getGlobalStore().recordInstance("global mutable state", {
+        project: "manual",
+        sessionId: "seed",
+        verdict: "rejected",
+        description: "global mutable state",
+      });
+      getGlobalStore().recordInstance("bcrypt rounds < 12", {
+        project: "manual",
+        sessionId: "seed",
+        verdict: "rejected",
+        description: "bcrypt rounds < 12",
+      });
+      const { text } = await callTool("recall", { mode: "ledger" });
+      // Should NOT report empty — seeds count.
+      expect(text).not.toContain("Ledger is empty");
+      // Seeded section is the new CC8 surface.
+      expect(text).toContain("User-seeded stances");
+      expect(text).toContain("global mutable state");
+      expect(text).toContain("bcrypt rounds < 12");
+      expect(text).toContain("[SEED]");
+      // Trailer mentions SEED entries explicitly.
+      expect(text).toContain("SEED");
+    });
+
+    it("CC8 — seed that's also been cited in a real session shows the citation count alongside SEED tag", async () => {
+      const { getGlobalStore } = await import("../../store/global-store");
+      // Manual seed first.
+      getGlobalStore().recordInstance("inline SQL strings", {
+        project: "manual",
+        sessionId: "seed",
+        verdict: "rejected",
+        description: "inline SQL strings",
+      });
+      // Then a real-project session of the same concept (typical: agent
+      // proposed something containing "inline SQL strings" and the user
+      // hit the rejected approach).
+      getGlobalStore().recordInstance("inline SQL strings", {
+        project: "/some/real/project",
+        sessionId: "real_sess",
+        verdict: "rejected",
+        description: "inline SQL strings",
+      });
+      const { text } = await callTool("recall", { mode: "ledger" });
+      expect(text).toContain("[SEED]");
+      expect(text).toContain("inline SQL strings");
+      expect(text).toContain("also cited 1× in real sessions");
+    });
+
     it("BB4 — mode='ledger' renders shaped/near-miss/blocked headlines + top stances", async () => {
       // Seed a preflight trace so ledgerDigest has something to count.
       store.recordPreflightTrace("art_bb4", {
