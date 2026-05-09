@@ -216,7 +216,18 @@ function App() {
           <AutonomySlider />
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
-            onClick={() => setShowTaste(true)}
+            onClick={() => {
+              // CC3 — when the user is on the cold-start IdleHome (no
+              // artifacts yet), the home view's primary tab is already
+              // the ledger. The header button used to land on the
+              // "Stances" tab instead — so clicking the most ledger-
+              // shaped affordance during idle took users to a different
+              // surface than the one they were already looking at. Now
+              // the button respects the surface the user came from:
+              // idle → ledger tab, mid-session → default (stances).
+              setTasteOpts(hasArtifacts ? {} : { initialTab: "ledger" });
+              setShowTaste(true);
+            }}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
             title="Your cross-project taste from the Philosophy Ledger"
             aria-label="Open Your Taste drawer"

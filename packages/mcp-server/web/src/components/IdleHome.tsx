@@ -48,15 +48,21 @@ export function IdleHome() {
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="border-b border-border-default px-5 pt-4 pb-0 flex items-center gap-1 shrink-0">
-        <TabButton
+      {/* CC3 — asymmetric tab weights. PMF council flagged equal-sized
+          tabs as quietly inviting users to read "Your ledger" and "Past
+          sessions" as peer surfaces ("two ways to look back"), which
+          undercuts the moat positioning. The ledger is the headline; past
+          sessions is a retrieval affordance. Style the primary tab large,
+          the secondary as a smaller pill aligned right. */}
+      <div className="border-b border-border-default px-5 pt-4 pb-0 flex items-center justify-between shrink-0">
+        <PrimaryTab
           active={tab === "ledger"}
           onClick={() => setTab("ledger")}
           label="Your ledger"
         />
-        <TabButton
+        <SecondaryPill
           active={tab === "sessions"}
-          onClick={() => setTab("sessions")}
+          onClick={() => setTab(tab === "sessions" ? "ledger" : "sessions")}
           label="Past sessions"
         />
       </div>
@@ -81,7 +87,7 @@ export function IdleHome() {
   );
 }
 
-function TabButton({
+function PrimaryTab({
   active,
   onClick,
   label,
@@ -94,10 +100,34 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors ${
+      className={`px-1 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${
         active
           ? "border-accent-violet text-text-primary"
           : "border-transparent text-text-muted hover:text-text-secondary"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SecondaryPill({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`mb-1 px-2 py-0.5 rounded text-2xs transition-colors ${
+        active
+          ? "bg-surface-elevated text-text-primary border border-border-default"
+          : "text-text-muted hover:text-text-secondary hover:bg-surface-hover"
       }`}
     >
       {label}
