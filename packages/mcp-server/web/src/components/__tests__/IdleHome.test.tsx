@@ -84,6 +84,34 @@ describe("IdleHome (BB7)", () => {
     expect(sessionsPill.className).not.toMatch(/text-sm/);
   });
 
+  it("CC4 — refetches /api/ledger/digest when a dp:preflight-trace event fires", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/api/ledger/digest")) {
+        return Promise.resolve({ ok: true, json: async () => ledgerEmpty });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IdleHome />);
+    await waitFor(() => expect(screen.getByText(/your ledger is empty/i)).toBeInTheDocument());
+    const initialFetchCount = fetchMock.mock.calls.filter((c: any[]) =>
+      String(c[0]).includes("/api/ledger/digest"),
+    ).length;
+    expect(initialFetchCount).toBe(1);
+    // Simulate the WS bridge dispatching a fresh trace event.
+    window.dispatchEvent(
+      new CustomEvent("dp:preflight-trace", {
+        detail: { artifactId: "art_x", trace: { consideredCount: 1 } },
+      }),
+    );
+    await waitFor(() => {
+      const after = fetchMock.mock.calls.filter((c: any[]) =>
+        String(c[0]).includes("/api/ledger/digest"),
+      ).length;
+      expect(after).toBe(2);
+    });
+  });
+
   it("renders the ledger empty-state copy when no proposals have been shaped yet", async () => {
     vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerEmpty }));
     render(<IdleHome />);
