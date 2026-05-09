@@ -46,6 +46,21 @@ export function IdleHome() {
     };
   }, [reloadToken]);
 
+  // CC4 — keep the cold-start digest fresh as the agent persists traces
+  // mid-session (the user is mostly here BEFORE the first artifact, but a
+  // present_findings can land while they're still on the IdleHome — until
+  // App.tsx's hasArtifacts flips, the user is staring at this view).
+  // connection.ts already bridges WS preflight_trace_recorded events to a
+  // window CustomEvent for the breadcrumb's per-artifact fetch; we
+  // piggyback on the same event to bump reloadToken. No new event channel,
+  // and the BB2 server-side cache (TTL 2s, busted on recordPreflightTrace)
+  // makes the refetch cheap.
+  useEffect(() => {
+    const onTrace = () => setReloadToken((t) => t + 1);
+    window.addEventListener("dp:preflight-trace", onTrace);
+    return () => window.removeEventListener("dp:preflight-trace", onTrace);
+  }, []);
+
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* CC3 — asymmetric tab weights. PMF council flagged equal-sized
