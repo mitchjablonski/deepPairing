@@ -163,8 +163,22 @@ export class DaemonClient implements IStore {
       // unintentionally resurrect a stale binding.
       this.lastRegisterMeta = undefined;
       const body = await res.json().catch(() => ({}));
+      // DD4 — two 403 codes can fire here for the same root cause:
+      //   - "project_mismatch" — /register's own check (expectedProjectRoot
+      //     vs daemon projectRoot), with a rich `error` field.
+      //   - "project_hash_mismatch" — the global X-Project-Hash middleware
+      //     (CC6 stamps the hash on register itself). Fires FIRST, so the
+      //     /register handler's nicer message is unreachable in CC6+
+      //     daemon mode. Same root cause, different copy.
+      // Branch on the code so the user-visible message is actually
+      // actionable in both cases.
+      const code = body.code ?? "project_mismatch";
+      const explanation =
+        code === "project_hash_mismatch"
+          ? "The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run `npx deeppairing doctor --fix` to evict the squatter."
+          : (body.error ?? "Daemon serves a different project. Restart the wrapper.");
       throw new Error(
-        `[deepPairing] Daemon project mismatch (${body.code ?? "project_mismatch"}). ${body.error ?? "Daemon serves a different project. Restart the wrapper."}`,
+        `[deepPairing] Daemon project mismatch (${code}). ${explanation}`,
       );
     }
     if (!res.ok) {
