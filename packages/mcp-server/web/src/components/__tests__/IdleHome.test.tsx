@@ -50,7 +50,11 @@ describe("IdleHome (BB7)", () => {
     await waitFor(() => expect(screen.getByText(/proposals shaped here/i)).toBeInTheDocument());
     // Stat tile values render from the populated mock.
     expect(screen.getByText("7")).toBeInTheDocument();
-    expect(screen.getByText(/global mutable state/)).toBeInTheDocument();
+    // The cited stance label uses font-mono; the seed-affordance placeholder
+    // also mentions "global mutable state" (CC7 example list) so target the
+    // row by font-mono class to disambiguate.
+    const matches = screen.getAllByText(/global mutable state/);
+    expect(matches.some((el) => el.className.includes("font-mono"))).toBe(true);
     // Seed affordance is on the home screen, not behind the drawer.
     expect(screen.getByText(/seed your ledger/i)).toBeInTheDocument();
   });
