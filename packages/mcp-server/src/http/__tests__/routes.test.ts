@@ -1040,6 +1040,45 @@ describe("HTTP Routes", () => {
       expect(body.concepts[1]).toBe("other thing");
     });
 
+    it("DD2 — body exceeding 16 KiB returns 400 validation_error", async () => {
+      const big = "a".repeat(16 * 1024 + 1);
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: big }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("validation_error");
+      expect(body.error).toMatch(/exceeds.*bytes/i);
+    });
+
+    it("DD2 — paste exceeding 50 lines returns 400 validation_error", async () => {
+      const lines = Array.from({ length: 51 }, (_, i) => `line ${i}`).join("\n");
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: lines }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("validation_error");
+      expect(body.error).toMatch(/exceeds 50 lines/i);
+      expect(body.error).toContain("got 51");
+    });
+
+    it("DD2 — exactly 50 lines is accepted (boundary)", async () => {
+      const lines = Array.from({ length: 50 }, (_, i) => `boundary line ${i}`).join("\n");
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: lines }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.seededCount).toBe(50);
+    });
+
     it("CC7 — empty input (only whitespace + newlines) returns 400", async () => {
       const res = await app.request("/api/philosophy/seed", {
         method: "POST",
