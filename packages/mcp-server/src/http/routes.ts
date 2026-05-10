@@ -428,6 +428,24 @@ export function createHttpRoutes(
     const raw = String(body?.concept ?? "");
     const verdict = body?.verdict === "rejected" ? "rejected" : "approved";
     const reason = body?.reason ? String(body.reason).trim() || undefined : undefined;
+    // DD2 — body-size + line-count caps. CC7 amplified AA#5: one POST
+    // could insert hundreds of entries unbounded. The cap closes the
+    // amplification factor without needing a per-IP rate limiter (which
+    // is overkill for a localhost-only daemon). 16 KiB body cap ≈ a
+    // very generous CLAUDE.md paste; 50-line cap forces batching for
+    // anything larger and gives the user a clear validation error
+    // instead of a silently-overflowing ledger.
+    const MAX_BODY_BYTES = 16 * 1024;
+    const MAX_LINES = 50;
+    if (raw.length > MAX_BODY_BYTES) {
+      return c.json(
+        {
+          error: `seed body exceeds ${MAX_BODY_BYTES} bytes — paste in smaller batches.`,
+          code: "validation_error",
+        },
+        400,
+      );
+    }
     // CC7 — split on newlines, treat each line as a separate stance. PMF
     // council flagged the tokenization cliff: a long-form paste like
     // "avoid global mutable state — prefer dependency injection so tests
@@ -442,6 +460,15 @@ export function createHttpRoutes(
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
+    if (lines.length > MAX_LINES) {
+      return c.json(
+        {
+          error: `seed exceeds ${MAX_LINES} lines (got ${lines.length}) — paste in smaller batches.`,
+          code: "validation_error",
+        },
+        400,
+      );
+    }
     const seenInThisPost = new Set<string>();
     const concepts = lines.filter((l) => {
       const k = l.toLowerCase();
