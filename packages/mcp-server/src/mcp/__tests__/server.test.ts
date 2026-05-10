@@ -263,6 +263,58 @@ describe("MCP Tool Handlers", () => {
       expect(text).not.toContain("Your deepPairing ledger");
     });
 
+    it("DD3 — surfaces user-seeded stances as a [SEED] block in firstCallHint blocking tier", async () => {
+      // PMF + ease-of-use + MCP all flagged: pre-DD3, seeds appeared
+      // anonymously in the philosophy block (low priority, lost to
+      // budget truncation first). Now they get their own SEED-tagged
+      // block routed through blockingParts so the agent sees them on
+      // every fresh session even when the rest of the hint is heavy.
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      ledger.recordInstance("DD3 seeded avoid", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "DD3 seeded avoid",
+      });
+      ledger.recordInstance("DD3 seeded prefer", {
+        project: "manual", sessionId: "seed", verdict: "approved", description: "DD3 seeded prefer",
+      });
+      // A manual seed that ALSO got cited in a real session.
+      ledger.recordInstance("DD3 seed and fired", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "DD3 seed and fired",
+      });
+      ledger.recordInstance("DD3 seed and fired", {
+        project: "/some/real/project", sessionId: "real_sess", verdict: "rejected", description: "DD3 seed and fired",
+      });
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      expect(text).toContain("🌱 The user explicitly seeded these stances");
+      expect(text).toContain("[SEED]");
+      expect(text).toContain("DD3 seeded avoid");
+      expect(text).toContain("DD3 seeded prefer");
+      expect(text).toContain("DD3 seed and fired");
+      // Cited seed shows the also-fired count.
+      expect(text).toContain("also fired 1× in real sessions");
+    });
+
+    it("DD3 — R2 welcome-back line points the agent at recall mode='ledger'", async () => {
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      // 5 concepts so the R2 line activates.
+      for (let i = 0; i < 5; i++) {
+        ledger.recordInstance(`DD3 R2 concept ${i}`, {
+          project: "project-a",
+          sessionId: "s1",
+          verdict: "rejected",
+        });
+      }
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      expect(text).toContain("Call recall with mode='ledger'");
+    });
+
     it("surfaces the compounding summary once ≥5 concepts exist across projects", async () => {
       // Seed the global ledger with 5 concepts spanning 2 projects, mix of
       // avoid + prefer — then fire the first tool call.
