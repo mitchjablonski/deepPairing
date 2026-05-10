@@ -126,6 +126,31 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
         `\n🧭 Cross-project philosophy ledger (use recall with mode='philosophy' for more):\n${philosophyParts.join("\n")}`,
       );
     }
+
+    // DD3 — surface user-seeded stances explicitly. Pre-DD3 the
+    // philosophy block silently included project="manual" entries as
+    // anonymous low-citation rows that lost the truncation lottery
+    // first. A fresh project where the user pasted rules into the
+    // SeedAffordance got NO acknowledgement in the hint; the agent
+    // never learned the SEED affordance existed unless it
+    // independently called recall(mode='ledger'). Now we extract
+    // seeded entries and route them through blockingParts — they
+    // are direct user-policy declarations, not advisory cross-project
+    // signal. Cap at 8 so the budget doesn't get blown by a 50-line
+    // CLAUDE.md paste.
+    const allEntries = getGlobalStore().query({ limit: 200 });
+    const seeded = allEntries.filter((e) => e.instances.some((i) => i.project === "manual"));
+    if (seeded.length > 0) {
+      const seedLines = seeded.slice(0, 8).map((e) => {
+        const elsewhereCount = e.instances.filter((i) => i.project !== "manual").length;
+        const elsewhere = elsewhereCount > 0 ? ` (also fired ${elsewhereCount}× in real sessions)` : "";
+        return `  - [SEED] [${e.stance.toUpperCase()}] "${e.concept}"${elsewhere}`;
+      });
+      const more = seeded.length > 8 ? `\n  …${seeded.length - 8} more seeded stances (recall mode='ledger' for the full list).` : "";
+      blockingParts.push(
+        `\n🌱 The user explicitly seeded these stances — treat them as direct policy:\n${seedLines.join("\n")}${more}`,
+      );
+    }
   } catch {
     // Ledger read failure is non-fatal — we still have session-scoped memory.
   }
@@ -163,7 +188,12 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       ];
       if (localBlocks > 0) parts.push(`${localBlocks} block${localBlocks === 1 ? "" : "s"} fired here`);
       if (localSessions > 0) parts.push(`session #${localSessions + 1} in this project`);
-      contextualParts.push(`\n🌱 Your deepPairing ledger: ${parts.join(" · ")}.`);
+      // DD3 — point the agent at recall mode='ledger' for the full
+      // moat digest (BB4 added the surface; pre-DD3 the hint never
+      // told the agent the on-demand surface existed).
+      contextualParts.push(
+        `\n🌱 Your deepPairing ledger: ${parts.join(" · ")}. Call recall with mode='ledger' anytime to re-pull the full digest.`,
+      );
     }
   } catch {
     // Non-fatal — welcome-back line is cosmetic.
