@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { YourTasteDrawer } from "../YourTasteDrawer";
 
@@ -288,7 +288,7 @@ describe("YourTasteDrawer", () => {
   });
 
   describe("BB6 — breadcrumb ↔ ledger round-trip", () => {
-    function mockLedgerFetch(topCitedStances: any[], opts?: { empty?: boolean }) {
+    function mockLedgerFetch(topCitedStances: any[], opts?: { empty?: boolean; seededStances?: any[] }) {
       return vi.fn((url: string) => {
         if (url.includes("/api/ledger/digest")) {
           return Promise.resolve({
@@ -299,6 +299,7 @@ describe("YourTasteDrawer", () => {
               blockedThisProject: 0,
               sessionsTouched: opts?.empty ? 0 : 2,
               topCitedStances,
+              seededStances: opts?.seededStances ?? [],
               globalLedger: opts?.empty
                 ? { concepts: 0, projects: 0, multiProjectConcepts: 0 }
                 : { concepts: 1, projects: 1, multiProjectConcepts: 0 },
@@ -400,6 +401,37 @@ describe("YourTasteDrawer", () => {
       expect(banner.textContent).toContain("brand new concept");
       // Empty-state copy still renders alongside.
       expect(screen.getByText(/your ledger is empty/i)).toBeInTheDocument();
+    });
+
+    it("DD1 — renders 'Seeded by you' section with [SEED] badge when seededStances has entries", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([], {
+        seededStances: [
+          { concept: "global mutable state", stance: "avoid", citedTimesElsewhere: 0 },
+          { concept: "named exports only", stance: "prefer", citedTimesElsewhere: 3 },
+        ],
+      }));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      const section = await screen.findByTestId("ledger-seeded-section");
+      expect(section.textContent).toContain("Seeded by you");
+      expect(section.textContent).toContain("global mutable state");
+      expect(section.textContent).toContain("named exports only");
+      // SEED badges visible.
+      const seedBadges = within(section).getAllByText("SEED");
+      expect(seedBadges).toHaveLength(2);
+      // The cited seed shows the fired count.
+      expect(section.textContent).toContain("fired 3×");
+      // The orphan seed does NOT show "fired".
+      const orphanRow = within(section).getByText("global mutable state").closest("li")!;
+      expect(orphanRow.textContent).not.toContain("fired");
+    });
+
+    it("DD1 — seeded section is HIDDEN when seededStances is empty", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([
+        { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
+      ]));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      await screen.findByText("alpha");
+      expect(screen.queryByTestId("ledger-seeded-section")).toBeNull();
     });
 
     it("rows without a sampleArtifactId render as plain (non-clickable) list items", async () => {

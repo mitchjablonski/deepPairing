@@ -576,6 +576,7 @@ export function createHttpRoutes(
         blockedThisProject: 0,
         sessionsTouched: 0,
         topCitedStances: [],
+        seededStances: [],
         globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
       });
     }
@@ -595,8 +596,24 @@ export function createHttpRoutes(
     const multiProjectConcepts = entries.filter(
       (e) => new Set(e.instances.filter((i) => i.project !== "manual").map((i) => i.project)).size > 1,
     ).length;
+    // DD1 — UI-side seed visibility. CC8 added the [SEED] surface to the
+    // agent (recall mode='ledger') but the LedgerPanel still showed an
+    // empty "Top cited stances" list with just a "5" headline tile —
+    // user seeds 5 rules, opens the panel, reads it as broken. Surface
+    // the seeded stances on the same wire so the UI can render a
+    // "Seeded by you" section above the cited list. citedTimesElsewhere
+    // mirrors the agent-facing text so the UI can show "fired N times"
+    // alongside the seed.
+    const seededStances = entries
+      .filter((e) => e.instances.some((i) => i.project === "manual"))
+      .map((e) => ({
+        concept: e.concept,
+        stance: e.stance,
+        citedTimesElsewhere: e.instances.filter((i) => i.project !== "manual").length,
+      }));
     return c.json({
       ...project,
+      seededStances,
       globalLedger: {
         concepts: entries.length,
         projects: projects.size,

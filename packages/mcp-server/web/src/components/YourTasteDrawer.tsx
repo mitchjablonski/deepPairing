@@ -78,6 +78,16 @@ export interface LedgerDigest {
     sampleArtifactId?: string;
     sampleSessionId?: string;
   }>;
+  // DD1 — UI-side counterpart to CC8. Pre-DD1 the agent saw seeded
+  // stances by name via recall(mode='ledger') but the human only saw
+  // an aggregate "N concepts" tile and an empty cited-list — read as
+  // broken on cold start. seededStances mirrors the wire shape used
+  // in tools/recall.ts so both surfaces tell the same story.
+  seededStances?: Array<{
+    concept: string;
+    stance: "avoid" | "prefer" | "mixed";
+    citedTimesElsewhere: number;
+  }>;
   globalLedger: {
     concepts: number;
     projects: number;
@@ -449,7 +459,11 @@ export function LedgerPanel({
     return <div className="p-5 text-xs text-text-muted">Loading…</div>;
   }
   const { shapedThisProject, nearMissesThisProject, blockedThisProject, sessionsTouched, topCitedStances, globalLedger } = data;
-  const empty = shapedThisProject === 0 && globalLedger.concepts === 0;
+  const seededStances = data.seededStances ?? [];
+  // DD1 — empty test still requires no seeds either, so a fresh project
+  // with one paste doesn't show the bootstrap copy underneath the seeded
+  // section.
+  const empty = shapedThisProject === 0 && globalLedger.concepts === 0 && seededStances.length === 0;
   // CC2 — when the user deep-linked into the ledger from a PreflightBreadcrumb
   // concept, the matching row may not be in topCitedStances (the digest caps
   // at the top 10 by citation count, so a concept that fired once is invisible
@@ -516,6 +530,67 @@ export function LedgerPanel({
           <span className="font-mono text-accent-violet">"{highlightConcept}"</span>
           {" was consulted on this proposal but isn't in your top cited stances yet — it'll show here once it accumulates more citations."}
         </div>
+      )}
+
+      {/* DD1 — seeded stances, surfaced separately from cited stances.
+          Pre-DD1 a user who pasted 5 rules into the SeedAffordance saw
+          the cited list stay empty until the agent fired one of them —
+          read as "the seed didn't take." Now the panel acknowledges the
+          seeds explicitly. citedTimesElsewhere shows when an inbound
+          real-session citation also happened to match the seed. */}
+      {seededStances.length > 0 && (
+        <section data-testid="ledger-seeded-section">
+          <div className="text-2xs font-semibold text-text-secondary uppercase tracking-wide mb-2 flex items-center gap-2">
+            <span>Seeded by you</span>
+            <span className="text-text-muted normal-case font-normal">
+              ({seededStances.length})
+            </span>
+          </div>
+          <p className="text-2xs text-text-muted mb-2">
+            Fires when the agent proposes something that matches.
+          </p>
+          <ul className="space-y-2">
+            {seededStances.slice(0, 12).map((s) => {
+              const stanceTone =
+                s.stance === "avoid"
+                  ? "bg-accent-red-dim/40 text-accent-red"
+                  : s.stance === "prefer"
+                    ? "bg-accent-green-dim/40 text-accent-green"
+                    : "bg-surface-elevated text-text-muted";
+              return (
+                <li
+                  key={`seed:${s.concept}`}
+                  className="rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="font-mono text-xs text-text-primary break-words">{s.concept}</div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className="px-1 py-px rounded text-[10px] uppercase tracking-wide bg-accent-violet-dim/40 text-accent-violet"
+                        title="Manually seeded by you (not yet earned through a session)"
+                      >
+                        SEED
+                      </span>
+                      <span className={`px-1 py-px rounded text-[10px] uppercase tracking-wide ${stanceTone}`}>
+                        {s.stance}
+                      </span>
+                      {s.citedTimesElsewhere > 0 && (
+                        <span className="text-2xs font-semibold text-accent-violet" title="Times this seed has fired in real sessions">
+                          fired {s.citedTimesElsewhere}×
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {seededStances.length > 12 && (
+            <p className="text-2xs text-text-muted mt-1.5">
+              … {seededStances.length - 12} more seeded stances.
+            </p>
+          )}
+        </section>
       )}
 
       {/* Top stances by citation count. This is the moat made measurable —
