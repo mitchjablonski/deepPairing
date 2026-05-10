@@ -795,6 +795,48 @@ describe("DaemonClient", () => {
     });
   });
 
+  describe("DD4 — DaemonClient register() handles both 403 codes", () => {
+    function mockFetch403(code: string, errorMsg?: string) {
+      const calls: any[] = [];
+      const stub = (async (url: any, init?: any) => {
+        calls.push({ url: String(url), init });
+        return new Response(
+          JSON.stringify({ code, error: errorMsg ?? `daemon-side ${code} message` }),
+          { status: 403, headers: { "Content-Type": "application/json" } },
+        );
+      });
+      return { calls, stub };
+    }
+
+    it("project_hash_mismatch (CC6 middleware path) gets the doctor-evict copy", async () => {
+      const { stub } = mockFetch403("project_hash_mismatch");
+      const realFetch = global.fetch;
+      global.fetch = stub as any;
+      try {
+        const c = new DaemonClient(TEST_PORT, "dd4_session_a", "/some/root");
+        await expect(c.register({ expectedProjectRoot: "/some/root" })).rejects.toThrow(
+          /project_hash_mismatch.*doctor --fix/,
+        );
+      } finally {
+        global.fetch = realFetch;
+      }
+    });
+
+    it("project_mismatch (legacy /register handler path) preserves the daemon's nicer error field", async () => {
+      const { stub } = mockFetch403("project_mismatch", "expected /a but daemon serves /b");
+      const realFetch = global.fetch;
+      global.fetch = stub as any;
+      try {
+        const c = new DaemonClient(TEST_PORT, "dd4_session_b", "/a");
+        await expect(c.register({ expectedProjectRoot: "/a" })).rejects.toThrow(
+          /project_mismatch.*expected \/a but daemon serves \/b/,
+        );
+      } finally {
+        global.fetch = realFetch;
+      }
+    });
+  });
+
   describe("CC6 — DaemonClient stamps X-Project-Hash on every request", () => {
     // These tests run with fetch fully mocked so they exercise just the
     // DaemonClient's header-injection logic — independent of any daemon
