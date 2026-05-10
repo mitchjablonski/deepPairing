@@ -30,6 +30,15 @@ function App() {
   // straight to the ledger tab and highlight the matching row. Cleared on
   // close so a fresh open from the header button shows the default tab.
   const [tasteOpts, setTasteOpts] = useState<{ initialTab?: "ledger"; highlightConcept?: string }>({});
+  // CC9 — single close callback so tasteOpts is reset on EVERY close
+  // path (Esc, backdrop, drawer's own onClose). Pre-CC9 the Esc path at
+  // line ~99 only flipped showTaste=false without clearing tasteOpts;
+  // a subsequent reopen via the header button would render with the
+  // stale highlight ring/initialTab from the previous deep-link.
+  const closeTaste = () => {
+    setShowTaste(false);
+    setTasteOpts({});
+  };
   // W1 — conversation rail visibility. Wired the same way as showTaste:
   // header button toggles, dp:open-conversation event lets toasts open it,
   // Esc closes via the drawer's own keydown.
@@ -96,7 +105,7 @@ function App() {
         setShowHelp(false);
         setShowPalette(false);
         setShowSettings(false);
-        setShowTaste(false);
+        closeTaste(); // CC9 — also clears tasteOpts
         setShowConversation(false);
       }
 
@@ -371,10 +380,7 @@ function App() {
         <YourTasteDrawer
           initialTab={tasteOpts.initialTab}
           highlightConcept={tasteOpts.highlightConcept}
-          onClose={() => {
-            setShowTaste(false);
-            setTasteOpts({});
-          }}
+          onClose={closeTaste}
         />
       )}
       {showConversation && <ConversationRail onClose={() => setShowConversation(false)} />}
