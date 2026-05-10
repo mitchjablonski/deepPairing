@@ -1050,6 +1050,45 @@ describe("HTTP Routes", () => {
       expect((await res.json()).code).toBe("validation_error");
     });
 
+    it("DD1 — /api/ledger/digest returns seededStances list when manual seeds exist", async () => {
+      // Seed twice via the route + once again with a real-session marker.
+      await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "DD1 only-seeded", verdict: "rejected" }),
+      });
+      await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "DD1 seeded-and-cited", verdict: "rejected" }),
+      });
+      // Real-project citation of the second concept.
+      getGlobalStore().recordInstance("DD1 seeded-and-cited", {
+        project: "/some/real/project",
+        sessionId: "real_sess",
+        verdict: "rejected",
+        description: "DD1 seeded-and-cited",
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      expect(Array.isArray(body.seededStances)).toBe(true);
+      const concepts = body.seededStances.map((s: any) => s.concept);
+      expect(concepts).toContain("DD1 only-seeded");
+      expect(concepts).toContain("DD1 seeded-and-cited");
+      const cited = body.seededStances.find((s: any) => s.concept === "DD1 seeded-and-cited");
+      expect(cited.citedTimesElsewhere).toBe(1);
+      const orphan = body.seededStances.find((s: any) => s.concept === "DD1 only-seeded");
+      expect(orphan.citedTimesElsewhere).toBe(0);
+      expect(orphan.stance).toBe("avoid");
+    });
+
+    it("DD1 — /api/ledger/digest returns seededStances:[] when no seeds (back-compat)", async () => {
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      expect(Array.isArray(body.seededStances)).toBe(true);
+      expect(body.seededStances).toEqual([]);
+    });
+
     it("BB1 — synthetic project='manual' does NOT inflate /api/ledger/digest globalLedger.projects", async () => {
       // Fresh install: only manual seeds exist. The AA5 globalLedger panel
       // must report projects=0, not 1, so the user doesn't see "shaped 0
