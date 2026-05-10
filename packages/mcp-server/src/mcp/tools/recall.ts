@@ -20,6 +20,14 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
   const query = String(args?.query ?? "").trim();
   const mode = (args?.mode ?? "any") as "philosophy" | "sessions" | "ledger" | "any";
   const stanceFilter = typeof args?.stance === "string" ? args.stance : undefined;
+  // DD5 — `source` filter for mode='philosophy'. Lets the agent ask
+  // "show me what the user explicitly seeded" or "show me what came
+  // purely from sessions" without grepping prose. Validated against
+  // the same enum the inputSchema declares.
+  const sourceFilter =
+    args?.source === "user-seeded" || args?.source === "session"
+      ? (args.source as "user-seeded" | "session")
+      : undefined;
   const limit = Math.min(
     Math.max(typeof args?.limit === "number" ? args.limit : 20, 1),
     100,
@@ -31,6 +39,7 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
     const entries = getGlobalStore().query({
       concept,
       stance: stanceFilter as "avoid" | "prefer" | "mixed" | undefined,
+      source: sourceFilter,
       limit,
     });
     return entries;

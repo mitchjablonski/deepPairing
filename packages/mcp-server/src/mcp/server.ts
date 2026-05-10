@@ -363,7 +363,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "recall",
         description:
-          "Search deepPairing memory. `mode: 'philosophy'` queries cross-project stances (avoid/prefer/mixed) with optional stance filter; empty query lists the whole ledger. `mode: 'sessions'` queries past artifacts in this project. `mode: 'ledger'` returns the cross-project moat digest — what's been shaped, near-misses caught, top cited stances; query is ignored. `mode: 'any'` (default) unions philosophy + sessions, philosophy first. All modes require a query except philosophy and ledger.",
+          "Search deepPairing memory. `mode: 'philosophy'` queries cross-project stances (avoid/prefer/mixed) with optional stance + source filters; empty query lists the whole ledger. `mode: 'sessions'` queries past artifacts in this project. `mode: 'ledger'` returns the cross-project moat digest — what's been shaped, near-misses caught, top cited stances; query is ignored. `mode: 'any'` (default) unions philosophy + sessions, philosophy first. All modes require a query except philosophy and ledger.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -377,6 +377,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               type: "string",
               enum: ["avoid", "prefer", "mixed"],
               description: "Only applies when mode='philosophy' — filter to this derived stance.",
+            },
+            source: {
+              type: "string",
+              enum: ["user-seeded", "session"],
+              description: "Only applies when mode='philosophy' — filter to entries with at least one instance from this source. 'user-seeded' = manually pasted via the SeedAffordance; 'session' = recorded during a paired session.",
             },
             limit: { type: "number", description: "Max results (default 20, cap 100)" },
           },

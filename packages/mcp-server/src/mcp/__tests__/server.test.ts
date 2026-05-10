@@ -1593,6 +1593,36 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Philosophy ledger");
     });
 
+    it("DD5 — mode='philosophy' source='user-seeded' returns only entries with manual instances", async () => {
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      // Seed-only entry.
+      ledger.recordInstance("DD5 only-seeded", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "DD5 only-seeded",
+      });
+      // Session-only entry (no manual instance).
+      ledger.recordInstance("DD5 only-session", {
+        project: "/proj", sessionId: "s1", verdict: "rejected", description: "DD5 only-session",
+      });
+      // Both — seeded then cited.
+      ledger.recordInstance("DD5 both", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "DD5 both",
+      });
+      ledger.recordInstance("DD5 both", {
+        project: "/proj", sessionId: "s1", verdict: "rejected", description: "DD5 both",
+      });
+
+      const seeded = await callTool("recall", { mode: "philosophy", source: "user-seeded" });
+      expect(seeded.text).toContain("DD5 only-seeded");
+      expect(seeded.text).toContain("DD5 both");
+      expect(seeded.text).not.toContain("DD5 only-session");
+
+      const sessionOnly = await callTool("recall", { mode: "philosophy", source: "session" });
+      expect(sessionOnly.text).toContain("DD5 only-session");
+      expect(sessionOnly.text).toContain("DD5 both");
+      expect(sessionOnly.text).not.toContain("DD5 only-seeded");
+    });
+
     it("mode='philosophy' filters by stance", async () => {
       store.recordApprovedPattern({ description: "Service layer" });
       store.recordApprovedPattern({ description: "Service layer" });

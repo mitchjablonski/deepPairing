@@ -159,6 +159,17 @@ export class GlobalStore {
     concept?: string;
     stance?: PhilosophyStance;
     limit?: number;
+    /**
+     * DD5 — filter by instance origin. "user-seeded" returns entries
+     * with at least one project="manual" instance (the AA9/CC7 seed
+     * marker). "session" returns entries with at least one real-project
+     * instance (any non-manual project). Lets the agent ask "what did
+     * the user explicitly seed?" or "what came purely from sessions?"
+     * without grepping prose. Team-source filtering would need a
+     * different storage path (team prefs aren't in the global ledger);
+     * not exposed here.
+     */
+    source?: "user-seeded" | "session";
   } = {}): Array<PhilosophyEntry & { stance: PhilosophyStance }> {
     const ledger = this.read();
     const q = opts.concept?.trim().toLowerCase();
@@ -174,6 +185,11 @@ export class GlobalStore {
     }
     if (opts.stance) {
       filtered = filtered.filter((e) => e.stance === opts.stance);
+    }
+    if (opts.source === "user-seeded") {
+      filtered = filtered.filter((e) => e.instances.some((i) => i.project === "manual"));
+    } else if (opts.source === "session") {
+      filtered = filtered.filter((e) => e.instances.some((i) => i.project !== "manual"));
     }
     filtered.sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
     return filtered.slice(0, opts.limit ?? 50);
