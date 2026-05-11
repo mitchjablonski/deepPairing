@@ -353,7 +353,7 @@ describe("YourTasteDrawer", () => {
       expect(alphaButton.className).not.toMatch(/ring-accent-violet/);
     });
 
-    it("CC2 — highlightConcept not in topCitedStances renders an orphan-acknowledgement banner", async () => {
+    it("CC2/DD8 — orphan banner names the concrete threshold (top N + bottom citation count)", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([
         { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
         { concept: "beta", source: "session", citationCount: 2, sampleArtifactId: "art_b" },
@@ -367,7 +367,9 @@ describe("YourTasteDrawer", () => {
       );
       const banner = await screen.findByTestId("ledger-orphan-banner");
       expect(banner.textContent).toContain("gamma");
-      expect(banner.textContent).toMatch(/isn't in your top cited stances yet/i);
+      // DD8 — concrete threshold copy, not the vague "more citations".
+      expect(banner.textContent).toMatch(/top 2 cited stances/i);
+      expect(banner.textContent).toMatch(/cited 2×/i); // bottom entry's count
       // Existing rows still render unringed.
       const alpha = (await screen.findByText("alpha")).closest("button");
       expect(alpha?.className ?? "").not.toMatch(/ring-accent-violet/);
@@ -388,7 +390,7 @@ describe("YourTasteDrawer", () => {
       expect(screen.queryByTestId("ledger-orphan-banner")).toBeNull();
     });
 
-    it("CC2 — orphan banner renders even on a totally empty ledger so the click is acknowledged", async () => {
+    it("CC2/DD8 — orphan banner uses different copy when there are zero cited stances yet", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([], { empty: true }));
       render(
         <YourTasteDrawer
@@ -399,6 +401,8 @@ describe("YourTasteDrawer", () => {
       );
       const banner = await screen.findByTestId("ledger-orphan-banner");
       expect(banner.textContent).toContain("brand new concept");
+      // DD8 — special-case copy for the zero-list case (no "top N").
+      expect(banner.textContent).toMatch(/haven't accumulated any cited stances yet/i);
       // Empty-state copy still renders alongside.
       expect(screen.getByText(/your ledger is empty/i)).toBeInTheDocument();
     });

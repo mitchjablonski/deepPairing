@@ -521,14 +521,21 @@ export function LedgerPanel({
           concept in a PreflightBreadcrumb that was consulted once and
           isn't yet in the top-cited stances. Without this banner, the
           drawer opens to a list that doesn't contain the concept and
-          the click feels broken. */}
+          the click feels broken.
+          DD8 — make the threshold concrete. Pre-DD8 the copy ("it'll
+          show here once it accumulates more citations") implied a vague
+          future appearance; users had no model for "how many" or
+          "when". Now we read the bottom-of-list count and tell them
+          the actual threshold. */}
       {highlightOrphan && (
         <div
           data-testid="ledger-orphan-banner"
           className="text-2xs text-text-secondary leading-relaxed border border-accent-violet/30 bg-accent-violet-dim/10 rounded px-3 py-2"
         >
           <span className="font-mono text-accent-violet">"{highlightConcept}"</span>
-          {" was consulted on this proposal but isn't in your top cited stances yet — it'll show here once it accumulates more citations."}
+          {topCitedStances.length === 0
+            ? " was consulted on this proposal but you haven't accumulated any cited stances yet — it'll appear in the list as soon as one fires."
+            : ` was consulted on this proposal but isn't in the top ${topCitedStances.length} cited stances yet — it'll appear here once it's been cited more than the current bottom entry (cited ${topCitedStances[topCitedStances.length - 1].citationCount}×).`}
         </div>
       )}
 
