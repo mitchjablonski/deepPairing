@@ -77,7 +77,11 @@ export function IdleHome() {
         />
         <SecondaryPill
           active={tab === "sessions"}
-          onClick={() => setTab(tab === "sessions" ? "ledger" : "sessions")}
+          // DD9 — one-direction switch. Pre-DD9 the pill toggled
+          // (clicking sessions while on sessions snapped back to
+          // ledger), which violates every tab UI convention. PrimaryTab
+          // already handles "go back to ledger".
+          onClick={() => setTab("sessions")}
           label="Past sessions"
         />
       </div>
@@ -135,14 +139,19 @@ function SecondaryPill({
   onClick: () => void;
   label: string;
 }) {
+  // DD9 — give the inactive state a faint border so the pill reads as
+  // a control, not a label. Pre-DD9 the inactive pill had only a color
+  // class — flush-right of an underlined PrimaryTab it visually parsed
+  // as static text. The active state already had a border; mirror the
+  // shape on inactive with a subtler tone.
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`mb-1 px-2 py-0.5 rounded text-2xs transition-colors ${
+      className={`mb-1 px-2 py-0.5 rounded text-2xs border transition-colors ${
         active
-          ? "bg-surface-elevated text-text-primary border border-border-default"
-          : "text-text-muted hover:text-text-secondary hover:bg-surface-hover"
+          ? "bg-surface-elevated text-text-primary border-border-default"
+          : "text-text-muted border-border-subtle hover:text-text-secondary hover:bg-surface-hover hover:border-border-default"
       }`}
     >
       {label}

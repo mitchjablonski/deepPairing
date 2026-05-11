@@ -88,6 +88,33 @@ describe("IdleHome (BB7)", () => {
     expect(sessionsPill.className).not.toMatch(/text-sm/);
   });
 
+  it("DD9 — inactive Past sessions pill always has a border (reads as control, not label)", async () => {
+    vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerEmpty }));
+    render(<IdleHome />);
+    // Default tab is ledger, so Past sessions is INACTIVE. Pre-DD9 the
+    // inactive pill had no border.
+    const sessionsPill = await screen.findByRole("button", { name: /past sessions/i });
+    expect(sessionsPill.className).toMatch(/\bborder\b/);
+    expect(sessionsPill.className).toMatch(/border-border-subtle/);
+  });
+
+  it("DD9 — clicking 'Past sessions' goes to sessions; clicking again does NOT toggle back", async () => {
+    vi.stubGlobal("fetch", fetchHandler({
+      "/api/ledger/digest": ledgerEmpty,
+      "/api/sessions": { sessions: [] },
+    }));
+    render(<IdleHome />);
+    const sessionsPill = await screen.findByRole("button", { name: /past sessions/i });
+    await userEvent.click(sessionsPill);
+    await waitFor(() => {
+      expect(screen.queryByText(/seed your ledger/i)).not.toBeInTheDocument();
+    });
+    // Click again — pre-DD9 this snapped back to ledger; now it's a
+    // no-op (the pill is now active and stays active).
+    await userEvent.click(sessionsPill);
+    expect(screen.queryByText(/seed your ledger/i)).not.toBeInTheDocument();
+  });
+
   it("CC4 — refetches /api/ledger/digest when a dp:preflight-trace event fires", async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url.includes("/api/ledger/digest")) {
