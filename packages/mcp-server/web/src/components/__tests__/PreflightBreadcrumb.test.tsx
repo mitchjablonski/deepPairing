@@ -3,6 +3,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { PreflightBreadcrumb, classifyPreflightTier } from "../PreflightBreadcrumb";
+import { resetLedgerStoreForTests } from "../../stores/ledger";
 
 function trace(overrides: Partial<PreflightTrace> = {}): PreflightTrace {
   return {
@@ -36,10 +37,14 @@ beforeEach(() => {
     }
     sessionStorage.removeItem("dp:preflight-bootstrap-dismissed");
   } catch {}
+  // EE2 — reset the shared ledger store so each test starts with a
+  // clean digest cache + listener flag.
+  resetLedgerStoreForTests();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetLedgerStoreForTests();
 });
 
 describe("PreflightBreadcrumb (Y1')", () => {

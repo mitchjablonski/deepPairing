@@ -1,0 +1,123 @@
+import { create } from "zustand";
+import { API_BASE, sessionHeaders } from "../lib/api";
+
+/**
+ * EE2 — shared ledger digest store. Pre-EE2 three independent fetchers
+ * (PreflightBreadcrumb, IdleHome, YourTasteDrawer LedgerPanel) each
+ * mounted their own /api/ledger/digest fetch + dp:preflight-trace
+ * listener. With 50 artifacts on screen + a fresh trace event, that
+ * was 50 redundant network roundtrips per broadcast. The 2s server
+ * cache (BB2) absorbed the disk cost but every request still went
+ * through CORS, X-Project-Hash middleware, and JSON serialization.
+ *
+ * One fetch, one listener, all subscribers re-render.
+ *
+ * Optional `error` preserves the prior per-component behavior of
+ * surfacing a load failure inline (LedgerPanel renders "Could not
+ * load the ledger: {error}" when set).
+ */
+export interface LedgerDigest {
+  shapedThisProject: number;
+  nearMissesThisProject: number;
+  blockedThisProject: number;
+  sessionsTouched: number;
+  topCitedStances: Array<{
+    concept: string;
+    source: "session" | "team";
+    citationCount: number;
+    sampleArtifactId?: string;
+    sampleSessionId?: string;
+  }>;
+  seededStances?: Array<{
+    concept: string;
+    stance: "avoid" | "prefer" | "mixed";
+    citedTimesElsewhere: number;
+  }>;
+  globalLedger: { concepts: number; projects: number; multiProjectConcepts: number };
+}
+
+interface LedgerState {
+  digest: LedgerDigest | null;
+  error: string | null;
+  loading: boolean;
+  /** Bumps every successful fetch so callers can react to refresh. */
+  version: number;
+  /** Force-refetch (drops the in-flight request and starts a new one). */
+  refetch: () => Promise<void>;
+}
+
+let inflight: Promise<void> | null = null;
+let traceListenerAttached = false;
+
+async function doFetch(set: (partial: Partial<LedgerState>) => void): Promise<void> {
+  if (inflight) return inflight;
+  inflight = (async () => {
+    set({ loading: true });
+    try {
+      const res = await fetch(`${API_BASE}/api/ledger/digest`, {
+        headers: sessionHeaders(),
+      });
+      if (!res.ok) {
+        set({ error: `${res.status}`, loading: false });
+        return;
+      }
+      const body = (await res.json()) as LedgerDigest;
+      set((s: any) => ({
+        digest: body,
+        error: null,
+        loading: false,
+        version: (s.version ?? 0) + 1,
+      }) as Partial<LedgerState>);
+    } catch (err: any) {
+      set({ error: err?.message ?? String(err), loading: false });
+    } finally {
+      inflight = null;
+    }
+  })();
+  return inflight;
+}
+
+export const useLedgerStore = create<LedgerState>((set, get) => ({
+  digest: null,
+  error: null,
+  loading: false,
+  version: 0,
+  refetch: () => doFetch(set as any),
+}));
+
+/**
+ * Wire one global dp:preflight-trace listener that bumps the cache.
+ * Idempotent — re-importing the module doesn't double-attach.
+ * BB2's 2s server cache absorbs bursts; this is just the invalidation
+ * trigger.
+ */
+export function ensureLedgerSubscriptions(): void {
+  if (traceListenerAttached || typeof window === "undefined") return;
+  traceListenerAttached = true;
+  const onTrace = () => {
+    // Don't await — refetch fires async; subscribers re-render when
+    // the new digest lands.
+    void useLedgerStore.getState().refetch();
+  };
+  window.addEventListener("dp:preflight-trace", onTrace);
+  // Initial fetch on subscription wiring so the very first subscriber
+  // gets data without each component re-firing its own fetch.
+  void useLedgerStore.getState().refetch();
+}
+
+/**
+ * Reset module-level state (store + inflight + listener flag) for
+ * tests. Each `render()` in vitest runs against a fresh-mocked
+ * `fetch` and expects the digest to be re-fetched; without a reset
+ * the store carries last-test data over.
+ */
+export function resetLedgerStoreForTests(): void {
+  inflight = null;
+  traceListenerAttached = false;
+  useLedgerStore.setState({
+    digest: null,
+    error: null,
+    loading: false,
+    version: 0,
+  });
+}

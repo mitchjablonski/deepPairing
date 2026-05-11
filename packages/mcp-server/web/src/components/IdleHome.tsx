@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { LedgerPanel, SeedAffordance, type LedgerDigest } from "./YourTasteDrawer";
+import { LedgerPanel, SeedAffordance } from "./YourTasteDrawer";
 import { SessionBrowser } from "./SessionBrowser";
 import { useArtifactStore } from "../stores/artifact";
+import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 
 /**
  * BB7 — cold-start home. PMF council called the prior !hasArtifacts
@@ -24,42 +25,16 @@ type IdleTab = "ledger" | "sessions";
 
 export function IdleHome() {
   const [tab, setTab] = useState<IdleTab>("ledger");
-  const [ledger, setLedger] = useState<LedgerDigest | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
-
+  // EE2 — subscribe to the shared ledger store. CC4's per-component
+  // dp:preflight-trace listener moved into stores/ledger.ts so a single
+  // refetch fans out to every subscriber (PreflightBreadcrumb +
+  // YourTasteDrawer + IdleHome) instead of one fetch per surface.
   useEffect(() => {
-    let cancelled = false;
-    fetch(`http://${window.location.host}/api/ledger/digest`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
-      .then((data) => {
-        if (!cancelled) {
-          setLedger(data);
-          setError(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err?.message ?? String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadToken]);
-
-  // CC4 — keep the cold-start digest fresh as the agent persists traces
-  // mid-session (the user is mostly here BEFORE the first artifact, but a
-  // present_findings can land while they're still on the IdleHome — until
-  // App.tsx's hasArtifacts flips, the user is staring at this view).
-  // connection.ts already bridges WS preflight_trace_recorded events to a
-  // window CustomEvent for the breadcrumb's per-artifact fetch; we
-  // piggyback on the same event to bump reloadToken. No new event channel,
-  // and the BB2 server-side cache (TTL 2s, busted on recordPreflightTrace)
-  // makes the refetch cheap.
-  useEffect(() => {
-    const onTrace = () => setReloadToken((t) => t + 1);
-    window.addEventListener("dp:preflight-trace", onTrace);
-    return () => window.removeEventListener("dp:preflight-trace", onTrace);
+    ensureLedgerSubscriptions();
   }, []);
+  const ledger = useLedgerStore((s) => s.digest);
+  const error = useLedgerStore((s) => s.error);
+  const refetchLedger = useLedgerStore((s) => s.refetch);
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -105,7 +80,7 @@ export function IdleHome() {
                 becomes redundant chrome. */}
             {ledger && ledger.globalLedger.concepts === 0 && (
               <div className="px-5 pb-5">
-                <SeedAffordance onSeeded={() => setReloadToken((t) => t + 1)} />
+                <SeedAffordance onSeeded={() => { void refetchLedger(); }} />
               </div>
             )}
           </div>
