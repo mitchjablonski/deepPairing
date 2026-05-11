@@ -50,13 +50,23 @@ describe("IdleHome (BB7)", () => {
     await waitFor(() => expect(screen.getByText(/proposals shaped here/i)).toBeInTheDocument());
     // Stat tile values render from the populated mock.
     expect(screen.getByText("7")).toBeInTheDocument();
-    // The cited stance label uses font-mono; the seed-affordance placeholder
-    // also mentions "global mutable state" (CC7 example list) so target the
-    // row by font-mono class to disambiguate.
+    // Cited stance label renders as font-mono.
     const matches = screen.getAllByText(/global mutable state/);
     expect(matches.some((el) => el.className.includes("font-mono"))).toBe(true);
-    // Seed affordance is on the home screen, not behind the drawer.
-    expect(screen.getByText(/seed your ledger/i)).toBeInTheDocument();
+  });
+
+  it("DD10 — SeedAffordance is HIDDEN once globalLedger.concepts > 0", async () => {
+    vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerPopulated }));
+    render(<IdleHome />);
+    // Wait for the digest to load, then verify the seed affordance is gone.
+    await waitFor(() => expect(screen.getByText(/proposals shaped here/i)).toBeInTheDocument());
+    expect(screen.queryByText(/seed your ledger/i)).not.toBeInTheDocument();
+  });
+
+  it("DD10 — SeedAffordance is VISIBLE on a fresh ledger (concepts === 0)", async () => {
+    vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerEmpty }));
+    render(<IdleHome />);
+    await waitFor(() => expect(screen.getByText(/seed your ledger/i)).toBeInTheDocument());
   });
 
   it("switches to the 'Past sessions' tab when clicked", async () => {
