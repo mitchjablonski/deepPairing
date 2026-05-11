@@ -95,9 +95,19 @@ export function IdleHome() {
                 useArtifactStore.getState().selectArtifact(artifactId);
               }}
             />
-            <div className="px-5 pb-5">
-              <SeedAffordance onSeeded={() => setReloadToken((t) => t + 1)} />
-            </div>
+            {/* DD10 — gate the cold-start seed affordance on a fresh
+                ledger. Pre-DD10 the affordance kept rendering even
+                after the user seeded their first rule, doubling up
+                with the "Seeded by you" section DD1 added (and with
+                the YourTasteDrawer drawer's own empty-state-only
+                seed affordance). After the first seed the LedgerPanel
+                already shows the seeded list; the inline affordance
+                becomes redundant chrome. */}
+            {ledger && ledger.globalLedger.concepts === 0 && (
+              <div className="px-5 pb-5">
+                <SeedAffordance onSeeded={() => setReloadToken((t) => t + 1)} />
+              </div>
+            )}
           </div>
         )}
         {tab === "sessions" && <SessionBrowser />}
