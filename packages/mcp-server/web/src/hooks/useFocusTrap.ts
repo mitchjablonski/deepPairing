@@ -15,14 +15,21 @@ const FOCUSABLE = [
  * behind. Auto-focuses the first focusable element on mount when `active`
  * becomes true.
  *
- * Not a full a11y dialog — doesn't restore focus on unmount or wire
- * `aria-modal`. Callers should combine it with `role="dialog"` + Esc-to-close.
+ * DD7 — restores focus to the previously-focused element on unmount /
+ * deactivation. Pre-DD7 a keyboard user who opened a drawer via the
+ * header button and pressed Esc found focus dropped to <body> and had
+ * to Tab-walk to find their place. Standard a11y dialog pattern.
  */
 export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean): void {
   useEffect(() => {
     if (!active) return;
     const el = ref.current;
     if (!el) return;
+
+    // DD7 — capture the trigger element so Esc / dismiss returns focus
+    // to where the user came from. Done first so even an early-return
+    // path (no focusables inside) still records it.
+    const previouslyFocused = document.activeElement as HTMLElement | null;
 
     const getFocusable = (): HTMLElement[] =>
       Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
@@ -57,6 +64,14 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
     };
 
     el.addEventListener("keydown", handler);
-    return () => el.removeEventListener("keydown", handler);
+    return () => {
+      el.removeEventListener("keydown", handler);
+      // DD7 — restore focus only if the element is still in the DOM
+      // and focusable. Guards against the trigger having been
+      // unmounted in the meantime.
+      if (previouslyFocused && document.contains(previouslyFocused)) {
+        try { previouslyFocused.focus(); } catch {}
+      }
+    };
   }, [ref, active]);
 }
