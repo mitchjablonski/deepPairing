@@ -297,6 +297,39 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("also fired 1× in real sessions");
     });
 
+    it("EE1 — seeded stances respect the policy cap; cap-overflow nudges agent to recall mode='philosophy' source='user-seeded'", async () => {
+      // Pre-EE1, seeded stances pushed into blockingParts which was
+      // appended unconditionally before the contextual budget loop —
+      // 8 long seeds could occupy ~1200 chars uncapped. With this test
+      // we seed enough long-prose stances to overflow the policy cap
+      // (POLICY_BUDGET_CHARS=600) and assert: the 📦 dropped-context
+      // line fires AND mentions the source='user-seeded' recall path
+      // so the agent knows how to retrieve what was elided.
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      // 8 seeded stances with long prose (~140 chars per line × 8 ≈
+      // 1120 chars). Cap of 600 → at least 3 entries get dropped.
+      for (let i = 0; i < 8; i++) {
+        ledger.recordInstance(
+          `EE1 distinctly long seeded concept number ${i} ` +
+            `with sufficient distinctive prose to cross the cap aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd`,
+          { project: "manual", sessionId: "seed", verdict: "rejected", description: "long" },
+        );
+      }
+      const { text } = await callTool("present_findings", {
+        summary: "EE1 cap probe",
+        findings: [{ category: "y", detail: "EE1 cap probe detail", significance: "low" }],
+      });
+      // Header + at least one seed line survived (policy tier had room).
+      expect(text).toContain("🌱 The user explicitly seeded these stances");
+      // Seeds are sorted by lastSeenAt desc; latest insertions land first.
+      // At least one [SEED] line is in the output.
+      expect(text).toMatch(/\[SEED\] \[AVOID\] "EE1 distinctly long seeded concept number \d+/);
+      // The 📦 omission line fires AND points at the seeded-source filter.
+      expect(text).toContain("📦");
+      expect(text).toContain("source='user-seeded'");
+    });
+
     it("DD3 — R2 welcome-back line points the agent at recall mode='ledger'", async () => {
       const { getGlobalStore } = await import("../../store/global-store.js");
       const ledger = getGlobalStore();
