@@ -288,6 +288,32 @@ describe("classifyPreflightTier (AA8)", () => {
       ),
     ).toBe("signal");
   });
+
+  it("DD6 — escalates ambient to signal when a considered concept has citationCount ≥ 3", () => {
+    const t = trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "session", concept: "global mutable state" }],
+      nearMisses: [],
+    });
+    // No counts → ambient (existing behavior).
+    expect(classifyPreflightTier(t)).toBe("ambient");
+    // Below threshold → still ambient.
+    expect(classifyPreflightTier(t, { "global mutable state": 2 })).toBe("ambient");
+    // At threshold → signal.
+    expect(classifyPreflightTier(t, { "global mutable state": 3 })).toBe("signal");
+    // Above threshold → signal.
+    expect(classifyPreflightTier(t, { "global mutable state": 11 })).toBe("signal");
+  });
+
+  it("DD6 — citation escalation respects per-concept matching (unrelated counts don't trip)", () => {
+    const t = trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "session", concept: "alpha" }],
+      nearMisses: [],
+    });
+    // High count for an unrelated concept doesn't escalate.
+    expect(classifyPreflightTier(t, { "beta": 10 })).toBe("ambient");
+  });
 });
 
 describe("PreflightBreadcrumb tier render (AA8)", () => {

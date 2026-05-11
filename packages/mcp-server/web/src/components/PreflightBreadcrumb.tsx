@@ -79,10 +79,30 @@ function writeBootstrapDismissed(projectRoot: string | null): void {
  */
 export type PreflightTier = "bootstrap" | "ambient" | "signal";
 
-export function classifyPreflightTier(trace: PreflightTrace): PreflightTier {
+/**
+ * DD6 — escalate ambient → signal when any considered concept has
+ * been cited ≥ 3 times across the project. PMF council called this
+ * out as MORE acute post-CC: with IdleHome screaming "moat" and the
+ * breadcrumb's "Considered" deep-link wiring, ambient-only treatment
+ * for repeat-citations buries the concrete pairing moments under
+ * the same muted line as bootstrap traces. Citation counts come from
+ * /api/ledger/digest topCitedStances — the data is already on the
+ * wire; the component fetches and threads it in.
+ */
+const CITATION_SIGNAL_THRESHOLD = 3;
+
+export function classifyPreflightTier(
+  trace: PreflightTrace,
+  citationCounts?: Record<string, number>,
+): PreflightTier {
   if (trace.consideredCount === 0) return "bootstrap";
   if (trace.nearMisses.length > 0) return "signal";
   if (trace.consideredConcepts.some((c) => c.source === "team")) return "signal";
+  if (citationCounts) {
+    for (const c of trace.consideredConcepts) {
+      if ((citationCounts[c.concept] ?? 0) >= CITATION_SIGNAL_THRESHOLD) return "signal";
+    }
+  }
   return "ambient";
 }
 
@@ -94,6 +114,11 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   const [trace, setTrace] = useState<PreflightTrace | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
+  // DD6 — citation counts keyed by concept name. Fetched once per
+  // mount from /api/ledger/digest (BB2's 2s server cache makes the
+  // per-breadcrumb fetch cheap). Empty until the digest loads;
+  // classifyPreflightTier handles the missing case gracefully.
+  const [citationCounts, setCitationCounts] = useState<Record<string, number>>({});
   // AA6.5 — projectRoot scopes the bootstrap-dismissed flag (each
   // project re-onboards once). Read off the connection store via the
   // same window-bag pattern lib/api.ts uses, so this stays a leaf
@@ -155,11 +180,55 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     };
   }, [artifactId, projectRoot]);
 
+  // DD6 — fetch ledger digest in parallel with the trace so we can
+  // escalate self-source ambient → signal when a considered concept
+  // has been cited ≥ 3 times. Re-fetch when a new trace lands so the
+  // counts stay roughly fresh; BB2's 2s server cache absorbs bursts.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/ledger/digest`, { headers: sessionHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (cancelled || !body?.topCitedStances) return;
+        const map: Record<string, number> = {};
+        for (const s of body.topCitedStances) {
+          if (typeof s?.concept === "string" && typeof s?.citationCount === "number") {
+            map[s.concept] = s.citationCount;
+          }
+        }
+        setCitationCounts(map);
+      })
+      .catch(() => {});
+    const refresh = () => {
+      // Same fetch, fresh trigger. BB2 server cache prevents pile-on.
+      fetch(`${API_BASE}/api/ledger/digest`, { headers: sessionHeaders() })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body) => {
+          if (cancelled || !body?.topCitedStances) return;
+          const map: Record<string, number> = {};
+          for (const s of body.topCitedStances) {
+            if (typeof s?.concept === "string" && typeof s?.citationCount === "number") {
+              map[s.concept] = s.citationCount;
+            }
+          }
+          setCitationCounts(map);
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("dp:preflight-trace", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("dp:preflight-trace", refresh);
+    };
+  }, [artifactId]);
+
   if (!loaded) return null;
   if (!trace) return null;
 
   // AA8 — three-tier render. See classifyPreflightTier above for rules.
-  const tier = classifyPreflightTier(trace);
+  // DD6 — pass citationCounts so self-source ambient → signal escalates
+  // when any considered concept has been cited ≥ 3 times in the project.
+  const tier = classifyPreflightTier(trace, citationCounts);
 
   // Bootstrap — empty-ledger onboarding (Z3 + AA6.5 copy + dismiss flow).
   if (tier === "bootstrap") {
