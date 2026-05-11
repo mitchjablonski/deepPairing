@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { YourTasteDrawer } from "../YourTasteDrawer";
+import { resetLedgerStoreForTests } from "../../stores/ledger";
 
 function mockPhilosophyFetch(entries: any[]) {
   return vi.fn().mockResolvedValue({
@@ -23,10 +24,12 @@ function mockFetchByUrl(handlers: Record<string, any>) {
 
 beforeEach(() => {
   // The drawer fetches from window.location.host; jsdom sets this to localhost.
+  resetLedgerStoreForTests();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetLedgerStoreForTests();
 });
 
 describe("YourTasteDrawer", () => {
@@ -185,14 +188,16 @@ describe("YourTasteDrawer", () => {
       // Wait for initial stances load so the spinner resolves.
       await waitFor(() => expect(screen.queryByText(/loading…/i)).not.toBeInTheDocument());
 
-      // Digest endpoint shouldn't have been called yet.
-      expect(fetchMock.mock.calls.some((c: any[]) => String(c[0]).includes("/digest"))).toBe(false);
+      // Philosophy-digest endpoint shouldn't have been called yet
+      // (EE2's shared ledger store fetches /api/ledger/digest on mount,
+      // so we narrow the assertion to the philosophy-digest URL).
+      expect(fetchMock.mock.calls.some((c: any[]) => String(c[0]).includes("/philosophy/digest"))).toBe(false);
 
       // Switch tabs — triggers the lazy load.
       await userEvent.click(screen.getByRole("button", { name: /this week/i }));
 
       await waitFor(() =>
-        expect(fetchMock.mock.calls.some((c: any[]) => String(c[0]).includes("/digest"))).toBe(true),
+        expect(fetchMock.mock.calls.some((c: any[]) => String(c[0]).includes("/philosophy/digest"))).toBe(true),
       );
 
       // Headline tiles render.

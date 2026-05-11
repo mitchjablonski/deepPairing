@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IdleHome } from "../IdleHome";
+import { resetLedgerStoreForTests } from "../../stores/ledger";
 
 /**
  * BB7 — pre-BB7 the cold-start home was SessionBrowser. Now it's the
@@ -39,8 +40,13 @@ function fetchHandler(handlers: Record<string, any>) {
   });
 }
 
+beforeEach(() => {
+  resetLedgerStoreForTests();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  resetLedgerStoreForTests();
 });
 
 describe("IdleHome (BB7)", () => {

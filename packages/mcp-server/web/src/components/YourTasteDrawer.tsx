@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useArtifactStore } from "../stores/artifact";
+import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 
 // O3: Weekly Digest is gated until real users have accumulated 4+ weeks of
 // ledger activity — otherwise the "new / strengthened" lists look embarrassing
@@ -113,8 +114,13 @@ export function YourTasteDrawer({
   const [digest, setDigest] = useState<DigestData | null>(null);
   const [teamPrefs, setTeamPrefs] = useState<TeamPreferencesData | null>(null);
   // AA5 — ledger digest state. Lazy-loaded the first time the tab opens.
-  const [ledger, setLedger] = useState<LedgerDigest | null>(null);
-  const [ledgerError, setLedgerError] = useState<string | null>(null);
+  // EE2 — drawer's ledger view subscribes to the shared store. Pre-EE2
+  // the drawer kept its own local state and re-fetched on first tab
+  // visit; with IdleHome + PreflightBreadcrumb both also fetching, the
+  // user could pay 3 roundtrips for the same digest. Now: one fetch,
+  // all surfaces in sync.
+  const ledger = useLedgerStore((s) => s.digest);
+  const ledgerError = useLedgerStore((s) => s.error);
   const [error, setError] = useState<string | null>(null);
   const [digestError, setDigestError] = useState<string | null>(null);
   const [teamError, setTeamError] = useState<string | null>(null);
@@ -160,24 +166,18 @@ export function YourTasteDrawer({
     return () => { cancelled = true; };
   }, [tab, digest, digestError]);
 
-  // AA5 — lazy-load ledger digest on first tab visit. Cheap on the
-  // server (one walk of .deeppairing/sessions/), but no point pre-loading
-  // before the user clicks in.
+  // EE2 — wiring the shared store handles fetch + dp:preflight-trace
+  // refetch + cross-surface sync. Trigger an explicit refetch on first
+  // ledger-tab visit so a stale digest from earlier in the session
+  // gets refreshed even if no trace event has fired since last view.
   useEffect(() => {
-    if (tab !== "ledger" || ledger !== null || ledgerError !== null) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`http://${window.location.host}/api/ledger/digest`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (!cancelled) setLedger(data);
-      } catch (err: any) {
-        if (!cancelled) setLedgerError(err?.message ?? String(err));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [tab, ledger, ledgerError]);
+    ensureLedgerSubscriptions();
+  }, []);
+  useEffect(() => {
+    if (tab === "ledger") {
+      void useLedgerStore.getState().refetch();
+    }
+  }, [tab]);
 
   // P3 — lazy-load team preferences on first tab visit.
   useEffect(() => {

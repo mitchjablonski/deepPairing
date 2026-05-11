@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { API_BASE, sessionHeaders } from "../lib/api";
 
@@ -114,11 +115,6 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   const [trace, setTrace] = useState<PreflightTrace | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
-  // DD6 — citation counts keyed by concept name. Fetched once per
-  // mount from /api/ledger/digest (BB2's 2s server cache makes the
-  // per-breadcrumb fetch cheap). Empty until the digest loads;
-  // classifyPreflightTier handles the missing case gracefully.
-  const [citationCounts, setCitationCounts] = useState<Record<string, number>>({});
   // AA6.5 — projectRoot scopes the bootstrap-dismissed flag (each
   // project re-onboards once). Read off the connection store via the
   // same window-bag pattern lib/api.ts uses, so this stays a leaf
@@ -180,47 +176,24 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     };
   }, [artifactId, projectRoot]);
 
-  // DD6 — fetch ledger digest in parallel with the trace so we can
-  // escalate self-source ambient → signal when a considered concept
-  // has been cited ≥ 3 times. Re-fetch when a new trace lands so the
-  // counts stay roughly fresh; BB2's 2s server cache absorbs bursts.
+  // EE2 — citation counts come from the shared ledger store. Pre-EE2
+  // each breadcrumb mounted its own /api/ledger/digest fetch + WS
+  // listener; with 50 artifacts on screen + a fresh trace event, that
+  // was 50 redundant network roundtrips per broadcast. Now one fetch,
+  // one listener, all subscribers re-render via the Zustand selector.
   useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_BASE}/api/ledger/digest`, { headers: sessionHeaders() })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (cancelled || !body?.topCitedStances) return;
-        const map: Record<string, number> = {};
-        for (const s of body.topCitedStances) {
-          if (typeof s?.concept === "string" && typeof s?.citationCount === "number") {
-            map[s.concept] = s.citationCount;
-          }
-        }
-        setCitationCounts(map);
-      })
-      .catch(() => {});
-    const refresh = () => {
-      // Same fetch, fresh trigger. BB2 server cache prevents pile-on.
-      fetch(`${API_BASE}/api/ledger/digest`, { headers: sessionHeaders() })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((body) => {
-          if (cancelled || !body?.topCitedStances) return;
-          const map: Record<string, number> = {};
-          for (const s of body.topCitedStances) {
-            if (typeof s?.concept === "string" && typeof s?.citationCount === "number") {
-              map[s.concept] = s.citationCount;
-            }
-          }
-          setCitationCounts(map);
-        })
-        .catch(() => {});
-    };
-    window.addEventListener("dp:preflight-trace", refresh);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("dp:preflight-trace", refresh);
-    };
-  }, [artifactId]);
+    ensureLedgerSubscriptions();
+  }, []);
+  const topCitedStances = useLedgerStore((s) => s.digest?.topCitedStances);
+  const citationCounts = useMemo<Record<string, number>>(() => {
+    const map: Record<string, number> = {};
+    for (const s of topCitedStances ?? []) {
+      if (typeof s.concept === "string" && typeof s.citationCount === "number") {
+        map[s.concept] = s.citationCount;
+      }
+    }
+    return map;
+  }, [topCitedStances]);
 
   if (!loaded) return null;
   if (!trace) return null;
