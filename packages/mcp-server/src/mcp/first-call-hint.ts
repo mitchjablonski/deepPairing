@@ -21,10 +21,31 @@ import { getGlobalStore } from "../store/global-store.js";
  * string. No closure references back into server.ts.
  */
 const HINT_BUDGET_CHARS = 1500;
+// EE1 — dedicated cap for the user-policy tier (seeds). Pre-EE1, seeds
+// were appended to blockingParts which was concatenated unconditionally,
+// blowing past HINT_BUDGET_CHARS for a vanilla session and outranking
+// real this-turn obligations. Cap policy at this many chars so an 8-seed
+// list can't push Q4 follow-ups out of mind.
+const POLICY_BUDGET_CHARS = 600;
 
 export async function buildFirstCallHint(store: IStore, port: number): Promise<string> {
-  const blockingParts: string[] = [];
+  // EE1 — three-tier ordering for assembly:
+  //   1. obligationsParts: real this-turn obligations (Q4 follow-ups,
+  //      plain comments needing mirror, decision revisions). Uncapped —
+  //      the agent must address these or feedback breaks.
+  //   2. policyParts: user-policy declarations (seeds). Capped at
+  //      POLICY_BUDGET_CHARS. High priority but not unlimited.
+  //   3. contextualParts: advisory signals (memory, guardrails, team
+  //      prefs, philosophy, R2). Capped against the remaining budget.
+  // The pre-EE1 single `blockingParts` bucket let seeds crowd out
+  // unanswered human questions — exactly the wrong priority order.
+  const obligationsParts: string[] = [];
+  const policyParts: string[] = [];
   const contextualParts: string[] = [];
+  // Back-compat alias — old code paths still push into blockingParts; we
+  // route those into obligations at the bottom of the function. Kept as
+  // a const so existing pushes type-check unchanged.
+  const blockingParts: string[] = obligationsParts;
   const headerLine =
     `[First use this session] The companion UI is at http://localhost:${port} — the human can review artifacts, comment, and make decisions there.`;
 
@@ -141,15 +162,26 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     const allEntries = getGlobalStore().query({ limit: 200 });
     const seeded = allEntries.filter((e) => e.instances.some((i) => i.project === "manual"));
     if (seeded.length > 0) {
-      const seedLines = seeded.slice(0, 8).map((e) => {
+      // EE1 — push the section header + each seed line as separate
+      // policyParts elements so the cap pages cleanly. Pre-EE1 the
+      // entire block was a single ~1200-char string that the policy
+      // budget either accepted whole or dropped whole. Now: 1 header
+      // + N lines (capped at 8 visible; "…N more" trailer if there
+      // are extras), and the 600-char policy cap can include the
+      // header + as many lines as fit. Anything over → 📦 nudge to
+      // recall mode='philosophy' source='user-seeded'.
+      policyParts.push(
+        "\n🌱 The user explicitly seeded these stances — treat them as direct policy:",
+      );
+      const visible = seeded.slice(0, 8);
+      for (const e of visible) {
         const elsewhereCount = e.instances.filter((i) => i.project !== "manual").length;
         const elsewhere = elsewhereCount > 0 ? ` (also fired ${elsewhereCount}× in real sessions)` : "";
-        return `  - [SEED] [${e.stance.toUpperCase()}] "${e.concept}"${elsewhere}`;
-      });
-      const more = seeded.length > 8 ? `\n  …${seeded.length - 8} more seeded stances (recall mode='ledger' for the full list).` : "";
-      blockingParts.push(
-        `\n🌱 The user explicitly seeded these stances — treat them as direct policy:\n${seedLines.join("\n")}${more}`,
-      );
+        policyParts.push(`  - [SEED] [${e.stance.toUpperCase()}] "${e.concept}"${elsewhere}`);
+      }
+      if (seeded.length > 8) {
+        policyParts.push(`  …${seeded.length - 8} more seeded stances (recall mode='ledger' for the full list).`);
+      }
     }
   } catch {
     // Ledger read failure is non-fatal — we still have session-scoped memory.
@@ -288,9 +320,27 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     // Non-fatal.
   }
 
-  // X3 — assemble: header + ALL blocking signals + capped contextual signals.
-  const assembled: string[] = [headerLine, ...blockingParts];
+  // EE1 — three-tier assembly:
+  //   1. headerLine + obligationsParts (uncapped)
+  //   2. policyParts capped at POLICY_BUDGET_CHARS
+  //   3. contextualParts fills the remaining HINT_BUDGET_CHARS budget
+  const assembled: string[] = [headerLine, ...obligationsParts];
   let droppedContextual = 0;
+  let droppedPolicy = 0;
+
+  // Policy tier: own budget so seeds don't displace contextual entirely.
+  let policyLen = 0;
+  for (const part of policyParts) {
+    if (policyLen + part.length + 1 <= POLICY_BUDGET_CHARS) {
+      assembled.push(part);
+      policyLen += part.length + 1;
+    } else {
+      droppedPolicy++;
+    }
+  }
+
+  // Contextual tier: cap against the global budget, including everything
+  // above (header + obligations + accepted policy).
   const baselineLen = assembled.join("\n").length;
   let runningLen = baselineLen;
   for (const part of contextualParts) {
@@ -301,9 +351,13 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       droppedContextual++;
     }
   }
-  if (droppedContextual > 0) {
+  const droppedTotal = droppedContextual + droppedPolicy;
+  if (droppedTotal > 0) {
+    const policyHint = droppedPolicy > 0
+      ? ` Use \`recall\` with mode='philosophy' source='user-seeded' to see all seeded stances.`
+      : "";
     assembled.push(
-      `\n📦 ${droppedContextual} additional context section${droppedContextual === 1 ? "" : "s"} omitted to keep this hint focused (rejected approaches, team prefs, ledger stats, etc). Call \`recall\` with mode='philosophy' or mode='sessions' to pull what you need.`,
+      `\n📦 ${droppedTotal} additional context section${droppedTotal === 1 ? "" : "s"} omitted to keep this hint focused (rejected approaches, team prefs, ledger stats, etc). Call \`recall\` with mode='philosophy' or mode='sessions' to pull what you need.${policyHint}`,
     );
   }
   return `\n${assembled.join("\n")}`;
