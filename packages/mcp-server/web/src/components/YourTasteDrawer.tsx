@@ -603,6 +603,14 @@ export function LedgerPanel({
               … {seededStances.length - 12} more seeded stances.
             </p>
           )}
+          {/* EE10 — post-cold-start seed affordance. Pre-EE10, after the
+              user pasted their first rule both inline SeedAffordances
+              disappeared (DD10 in IdleHome + the drawer's empty-state
+              gating). Adding a 6th rule a week later required either
+              wiping the ledger or hitting /api/philosophy/seed directly.
+              Inline toggle keeps the path obvious without competing
+              with the moat-headline framing. */}
+          <SeedMoreInline />
         </section>
       )}
 
@@ -712,6 +720,50 @@ export function LedgerPanel({
  * pull, but the empty-state placement is the one anti-cold-start
  * lever.
  */
+/**
+ * EE10 — collapsed-by-default "+ Seed more" affordance for the
+ * post-cold-start path. Lives at the bottom of the LedgerPanel's
+ * "Seeded by you" section. Pre-EE10 the user could only paste rules
+ * during the empty-ledger window; after the first seed, both inline
+ * SeedAffordance instances disappeared (DD10 in IdleHome + drawer's
+ * empty-state gating) and adding a 6th rule a week later required
+ * direct API access.
+ */
+function SeedMoreInline() {
+  const [open, setOpen] = useState(false);
+  const refetchLedger = useLedgerStore((s) => s.refetch);
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-3 text-2xs text-accent-violet hover:text-accent-violet/80 underline-offset-2 hover:underline transition-colors"
+      >
+        + Seed more
+      </button>
+    );
+  }
+  return (
+    <div className="mt-3">
+      <SeedAffordance
+        onSeeded={() => {
+          // Refresh the digest so the new seeds appear immediately,
+          // and collapse back so the user can post another batch.
+          void refetchLedger();
+          setOpen(false);
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => setOpen(false)}
+        className="mt-2 text-2xs text-text-muted hover:text-text-secondary transition-colors"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 // BB7 — exported so the cold-start IdleHome can render this affordance
 // inline below the ledger digest. AA9's spec called the seed affordance
 // the answer to the empty-ledger silent killer; placing it on the home
