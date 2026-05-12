@@ -437,7 +437,12 @@ export function createHttpRoutes(
     // instead of a silently-overflowing ledger.
     const MAX_BODY_BYTES = 16 * 1024;
     const MAX_LINES = 50;
-    if (raw.length > MAX_BODY_BYTES) {
+    // EE8 — measure UTF-8 bytes, not UTF-16 code units. Pre-EE8 the
+    // cap compared raw.length (string code units) against a value
+    // labeled "bytes". Direction was permissive: a non-ASCII paste
+    // (CJK, emoji) hit the cap at ~16384 chars = up to 64 KB actual
+    // UTF-8 — looser limit for non-ASCII users, but still wrong-shaped.
+    if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
       return c.json(
         {
           error: `seed body exceeds ${MAX_BODY_BYTES} bytes — paste in smaller batches.`,
