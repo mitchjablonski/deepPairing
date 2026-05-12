@@ -606,16 +606,24 @@ export function LedgerPanel({
         </section>
       )}
 
-      {/* Top stances by citation count. This is the moat made measurable —
-          "stance X was consulted N times" is the most concrete answer to
-          'why deepPairing vs Cursor 3' that this UI can deliver. */}
-      {topCitedStances.length > 0 && (
+      {/* EE4 — dedup against the Seeded by you section above. Pre-EE4
+          a seed cited in a real session of THIS project rendered TWICE:
+          once in "Seeded by you (fired N×)" and once in "Top cited
+          stances" with the same concept name and a session-source pill.
+          The seeded section already shows the citation count via
+          citedTimesElsewhere — keep the seeded entry as the canonical
+          render, drop the duplicate from the cited list. */}
+      {(() => {
+        const seededConceptKeys = new Set(seededStances.map((s) => s.concept));
+        const dedupedTopCited = topCitedStances.filter((s) => !seededConceptKeys.has(s.concept));
+        if (dedupedTopCited.length === 0) return null;
+        return (
         <section>
           <div className="text-2xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
             Top cited stances
           </div>
           <ul className="space-y-2">
-            {topCitedStances.slice(0, 10).map((s) => {
+            {dedupedTopCited.slice(0, 10).map((s) => {
               // BB6 — clickable row when we know which artifact cited the
               // stance. Without sampleArtifactId, fall back to a plain row
               // (no jump target — happens for stances cited only in
@@ -672,7 +680,8 @@ export function LedgerPanel({
             })}
           </ul>
         </section>
-      )}
+        );
+      })()}
     </div>
   );
 }

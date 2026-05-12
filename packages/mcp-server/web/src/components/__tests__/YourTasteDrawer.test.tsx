@@ -434,6 +434,44 @@ describe("YourTasteDrawer", () => {
       expect(orphanRow.textContent).not.toContain("fired");
     });
 
+    it("EE4 — concepts in BOTH seeded and topCited render only in the seeded section", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch(
+        [
+          { concept: "global mutable state", source: "session", citationCount: 4, sampleArtifactId: "art_a" },
+          { concept: "unique cited concept", source: "session", citationCount: 2, sampleArtifactId: "art_b" },
+        ],
+        {
+          seededStances: [
+            { concept: "global mutable state", stance: "avoid", citedTimesElsewhere: 4 },
+          ],
+        },
+      ));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      const seededSection = await screen.findByTestId("ledger-seeded-section");
+      expect(seededSection.textContent).toContain("global mutable state");
+      // The concept appears once total (in the seeded section), not duplicated in Top cited.
+      expect(screen.getAllByText("global mutable state").length).toBe(1);
+      // The unique top-cited row still renders.
+      expect(screen.getByText("unique cited concept")).toBeInTheDocument();
+    });
+
+    it("EE4 — Top cited section is HIDDEN when every cited concept is also seeded (full overlap)", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch(
+        [
+          { concept: "alpha", source: "session", citationCount: 2, sampleArtifactId: "art_a" },
+        ],
+        {
+          seededStances: [
+            { concept: "alpha", stance: "avoid", citedTimesElsewhere: 2 },
+          ],
+        },
+      ));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      await screen.findByTestId("ledger-seeded-section");
+      // No "Top cited stances" header rendered (would be empty).
+      expect(screen.queryByText(/top cited stances/i)).toBeNull();
+    });
+
     it("DD1 — seeded section is HIDDEN when seededStances is empty", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([
         { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
