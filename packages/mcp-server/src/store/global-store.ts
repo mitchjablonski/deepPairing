@@ -60,6 +60,16 @@ function normalizeKey(concept: string): string {
   return concept.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * EE5 — single source of truth for "is this entry user-seeded?".
+ * Pre-EE5 the predicate was hand-rolled at four call sites
+ * (routes.ts, first-call-hint.ts, tools/recall.ts, query()) — drift
+ * risk if the seed-marker semantics ever change. Use this everywhere.
+ */
+export function isSeededEntry(entry: PhilosophyEntry): boolean {
+  return entry.instances.some((i) => i.project === "manual");
+}
+
 /** Derive a stance from an entry's instance counts. */
 export function deriveStance(entry: PhilosophyEntry): PhilosophyStance {
   const rejections = entry.instances.filter((i) => i.verdict === "rejected").length;
@@ -187,7 +197,7 @@ export class GlobalStore {
       filtered = filtered.filter((e) => e.stance === opts.stance);
     }
     if (opts.source === "user-seeded") {
-      filtered = filtered.filter((e) => e.instances.some((i) => i.project === "manual"));
+      filtered = filtered.filter(isSeededEntry);
     } else if (opts.source === "session") {
       filtered = filtered.filter((e) => e.instances.some((i) => i.project !== "manual"));
     }

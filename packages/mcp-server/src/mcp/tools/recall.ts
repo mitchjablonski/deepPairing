@@ -74,9 +74,9 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
     // the entire first session. Now we query the global ledger for
     // entries that originated from a manual seed (project="manual"
     // markers) and surface them as a "User has seeded:" list.
-    const allLedger = getGlobalStore().query({ limit: 200 });
-    const seededStances = allLedger
-      .filter((e) => e.instances.some((i) => i.project === "manual"))
+    // EE5 — typed source filter; one source of truth in global-store.ts.
+    const seededStances = getGlobalStore()
+      .query({ source: "user-seeded", limit: 200 })
       .map((e) => ({
         concept: e.concept,
         stance: e.stance,

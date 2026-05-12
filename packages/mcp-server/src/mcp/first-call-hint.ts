@@ -159,8 +159,10 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     // are direct user-policy declarations, not advisory cross-project
     // signal. Cap at 8 so the budget doesn't get blown by a 50-line
     // CLAUDE.md paste.
-    const allEntries = getGlobalStore().query({ limit: 200 });
-    const seeded = allEntries.filter((e) => e.instances.some((i) => i.project === "manual"));
+    // EE5 — typed source filter at the query level instead of a
+    // hand-rolled `.filter(i => i.project === "manual")`. Same
+    // semantics, single source of truth in global-store.ts.
+    const seeded = getGlobalStore().query({ source: "user-seeded", limit: 200 });
     if (seeded.length > 0) {
       // EE1 — push the section header + each seed line as separate
       // policyParts elements so the cap pages cleanly. Pre-EE1 the

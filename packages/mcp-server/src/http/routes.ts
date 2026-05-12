@@ -7,7 +7,7 @@ import type { IStore } from "../store/store-interface.js";
 import { FileStore } from "../store/file-store.js";
 import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
-import { getGlobalStore } from "../store/global-store.js";
+import { getGlobalStore, isSeededEntry } from "../store/global-store.js";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
@@ -632,7 +632,7 @@ export function createHttpRoutes(
     // mirrors the agent-facing text so the UI can show "fired N times"
     // alongside the seed.
     const seededStances = entries
-      .filter((e) => e.instances.some((i) => i.project === "manual"))
+      .filter(isSeededEntry)
       .map((e) => ({
         concept: e.concept,
         stance: e.stance,
