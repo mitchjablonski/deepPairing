@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { API_BASE, sessionHeaders } from "../lib/api";
@@ -214,13 +214,26 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     return map;
   }, [topCitedStances]);
 
+  // EE9 — hysteresis latch. Must be declared BEFORE the early returns
+  // so React's rules-of-hooks see a consistent call order across
+  // renders. Once a breadcrumb classifies as signal in a given mount,
+  // latch and never downgrade to ambient. Pre-EE9 a popular stance
+  // hovering at threshold could flicker signal→ambient as
+  // /api/ledger/digest's topCitedStances reordered when new traces
+  // landed (CC4 live-refetch + DD6 citation map). Visually: chrome
+  // (border, bg-tint, padding) appeared and disappeared on every
+  // broadcast. Latch protects the user from the flap.
+  const signalLatch = useRef(false);
+
   if (!loaded) return null;
   if (!trace) return null;
 
   // AA8 — three-tier render. See classifyPreflightTier above for rules.
   // DD6 — pass citationCounts so self-source ambient → signal escalates
   // when any considered concept has been cited ≥ 3 times in the project.
-  const tier = classifyPreflightTier(trace, citationCounts);
+  const computedTier = classifyPreflightTier(trace, citationCounts);
+  if (computedTier === "signal") signalLatch.current = true;
+  const tier = signalLatch.current && computedTier === "ambient" ? "signal" : computedTier;
 
   // Bootstrap — empty-ledger onboarding (Z3 + AA6.5 copy + dismiss flow).
   if (tier === "bootstrap") {

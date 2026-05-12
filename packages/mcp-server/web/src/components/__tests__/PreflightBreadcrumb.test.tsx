@@ -394,6 +394,77 @@ describe("PreflightBreadcrumb tier render (AA8)", () => {
     expect(screen.queryByText(/Almost flagged this/)).not.toBeInTheDocument();
   });
 
+  it("EE9 — once classified signal, never downgrades to ambient mid-mount (latch)", async () => {
+    // Pre-EE9 a popular stance hovering at the citation threshold could
+    // flicker signal → ambient as topCitedStances reordered when new
+    // traces landed. The latch keeps the violet chrome stable across
+    // re-renders triggered by store updates.
+    const { useLedgerStore } = await import("../../stores/ledger");
+    const myTrace = trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "session", concept: "alpha" }],
+      nearMisses: [],
+    });
+    // URL-aware fetch: trace endpoint returns the trace, digest
+    // endpoint returns whatever's currently in the store. Otherwise
+    // the store overwrites our seeded high-count digest.
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.includes("/preflight-trace")) {
+        return Promise.resolve({ ok: true, json: async () => ({ trace: myTrace }) });
+      }
+      if (url.includes("/api/ledger/digest")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => useLedgerStore.getState().digest,
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    }));
+    // Seed shared store with a high citation count → tier should be signal.
+    act(() => {
+      useLedgerStore.setState({
+        digest: {
+          shapedThisProject: 1,
+          nearMissesThisProject: 0,
+          blockedThisProject: 0,
+          sessionsTouched: 1,
+          topCitedStances: [
+            { concept: "alpha", source: "session", citationCount: 5, globalCitationCount: 5 },
+          ],
+          seededStances: [],
+          globalLedger: { concepts: 1, projects: 1, multiProjectConcepts: 0 },
+        },
+        error: null,
+        loading: false,
+        version: 1,
+      });
+    });
+    const { container } = render(<PreflightBreadcrumb artifactId="art_latch" />);
+    await waitFor(() => screen.getByText(/1 prior stance shaped this proposal/));
+    expect((container.firstChild as HTMLElement)?.className).toMatch(/border-accent-violet/);
+    // Now simulate a re-fetch where the count drops below threshold —
+    // pre-EE9 would flicker to ambient. With the latch, stays signal.
+    act(() => {
+      useLedgerStore.setState({
+        digest: {
+          shapedThisProject: 1,
+          nearMissesThisProject: 0,
+          blockedThisProject: 0,
+          sessionsTouched: 1,
+          topCitedStances: [
+            { concept: "alpha", source: "session", citationCount: 1, globalCitationCount: 1 },
+          ],
+          seededStances: [],
+          globalLedger: { concepts: 1, projects: 1, multiProjectConcepts: 0 },
+        },
+        error: null,
+        loading: false,
+        version: 2,
+      });
+    });
+    expect((container.firstChild as HTMLElement)?.className).toMatch(/border-accent-violet/);
+  });
+
   it("ambient tier still expands considered concepts on click", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", mockFetchTrace(trace({
