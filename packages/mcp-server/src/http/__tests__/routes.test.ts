@@ -1053,6 +1053,24 @@ describe("HTTP Routes", () => {
       expect(body.error).toMatch(/exceeds.*bytes/i);
     });
 
+    it("EE8 — body cap measures UTF-8 bytes (not UTF-16 code units)", async () => {
+      // Pre-EE8 the cap used raw.length which counts code units.
+      // 8500 four-byte emojis = 8500 chars but 34000 UTF-8 bytes.
+      // The byte cap (16384) should reject this; the code-unit cap
+      // would have accepted it.
+      const fourByteEmoji = "🎉"; // U+1F389 = 4 bytes UTF-8
+      const big = fourByteEmoji.repeat(8500); // ~34 KB UTF-8
+      const res = await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: big }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("validation_error");
+      expect(body.error).toMatch(/exceeds.*bytes/i);
+    });
+
     it("DD2 — paste exceeding 50 lines returns 400 validation_error", async () => {
       const lines = Array.from({ length: 51 }, (_, i) => `line ${i}`).join("\n");
       const res = await app.request("/api/philosophy/seed", {
