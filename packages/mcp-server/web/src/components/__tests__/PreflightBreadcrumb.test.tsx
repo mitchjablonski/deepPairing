@@ -319,6 +319,33 @@ describe("classifyPreflightTier (AA8)", () => {
     // High count for an unrelated concept doesn't escalate.
     expect(classifyPreflightTier(t, { "beta": 10 })).toBe("ambient");
   });
+
+  it("EE3 — escalates on cross-project citation count even when project-local count is below threshold", () => {
+    const t = trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "session", concept: "global mutable state" }],
+      nearMisses: [],
+    });
+    // Project-local 1 (below DD6 threshold of 3), global 5 (at EE3 threshold).
+    expect(classifyPreflightTier(t, {
+      "global mutable state": { project: 1, global: 5 },
+    })).toBe("signal");
+    // Just-below global threshold (4) → still ambient.
+    expect(classifyPreflightTier(t, {
+      "global mutable state": { project: 1, global: 4 },
+    })).toBe("ambient");
+  });
+
+  it("EE3 — back-compat: bare-number entries still treated as project-local count", () => {
+    const t = trace({
+      consideredCount: 1,
+      consideredConcepts: [{ source: "session", concept: "x" }],
+      nearMisses: [],
+    });
+    // Pre-EE3 callers passed Record<string, number>; that path still works.
+    expect(classifyPreflightTier(t, { x: 3 })).toBe("signal");
+    expect(classifyPreflightTier(t, { x: 2 })).toBe("ambient");
+  });
 });
 
 describe("PreflightBreadcrumb tier render (AA8)", () => {

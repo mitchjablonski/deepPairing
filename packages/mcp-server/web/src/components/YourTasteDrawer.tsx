@@ -76,6 +76,12 @@ export interface LedgerDigest {
     concept: string;
     source: "session" | "team";
     citationCount: number;
+    /**
+     * EE3 — cross-project citation count for the same concept (sum of
+     * non-manual instances across the global ledger). Optional for
+     * back-compat with pre-EE3 fixtures.
+     */
+    globalCitationCount?: number;
     sampleArtifactId?: string;
     sampleSessionId?: string;
   }>;

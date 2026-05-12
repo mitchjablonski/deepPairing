@@ -1089,6 +1089,78 @@ describe("HTTP Routes", () => {
       expect((await res.json()).code).toBe("validation_error");
     });
 
+    it("EE3 — /api/ledger/digest topCitedStances rows include globalCitationCount", async () => {
+      // Seed a project-local trace via the FileStore (cited once here).
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "sess_ee3");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "preflight-traces.json"),
+        JSON.stringify({
+          art_ee3: {
+            version: 1,
+            at: "2026-05-10T10:00:00Z",
+            artifactId: "art_ee3",
+            toolName: "present_findings",
+            decision: "admitted",
+            consideredCount: 1,
+            consideredConcepts: [{ source: "session", concept: "EE3 cross-cited concept" }],
+            nearMisses: [],
+          },
+        }),
+      );
+      // And a few cross-project instances for the same concept via the
+      // global ledger (3 different projects, all "session"-source — not manual).
+      getGlobalStore().recordInstance("EE3 cross-cited concept", {
+        project: "/proj/a", sessionId: "s1", verdict: "rejected", description: "x",
+      });
+      getGlobalStore().recordInstance("EE3 cross-cited concept", {
+        project: "/proj/b", sessionId: "s2", verdict: "rejected", description: "x",
+      });
+      getGlobalStore().recordInstance("EE3 cross-cited concept", {
+        project: "/proj/c", sessionId: "s3", verdict: "rejected", description: "x",
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      const row = body.topCitedStances.find((s: any) => s.concept === "EE3 cross-cited concept");
+      expect(row).toBeDefined();
+      // Project-local citation count (1 trace) preserved.
+      expect(row.citationCount).toBe(1);
+      // Global count = 3 cross-project instances. Manual seeds excluded.
+      expect(row.globalCitationCount).toBe(3);
+    });
+
+    it("EE3 — globalCitationCount excludes manual seeds for the same concept", async () => {
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "sess_ee3b");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "preflight-traces.json"),
+        JSON.stringify({
+          art_ee3b: {
+            version: 1,
+            at: "2026-05-10T10:00:00Z",
+            artifactId: "art_ee3b",
+            toolName: "present_findings",
+            decision: "admitted",
+            consideredCount: 1,
+            consideredConcepts: [{ source: "session", concept: "EE3 mixed concept" }],
+            nearMisses: [],
+          },
+        }),
+      );
+      getGlobalStore().recordInstance("EE3 mixed concept", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "x",
+      });
+      getGlobalStore().recordInstance("EE3 mixed concept", {
+        project: "/proj/a", sessionId: "s1", verdict: "rejected", description: "x",
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      const row = body.topCitedStances.find((s: any) => s.concept === "EE3 mixed concept");
+      expect(row).toBeDefined();
+      // 1 real-project instance, manual excluded.
+      expect(row.globalCitationCount).toBe(1);
+    });
+
     it("DD1 — /api/ledger/digest returns seededStances list when manual seeds exist", async () => {
       // Seed twice via the route + once again with a real-session marker.
       await app.request("/api/philosophy/seed", {
