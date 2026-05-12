@@ -638,8 +638,28 @@ export function createHttpRoutes(
         stance: e.stance,
         citedTimesElsewhere: e.instances.filter((i) => i.project !== "manual").length,
       }));
+    // EE3 — augment topCitedStances rows with globalCitationCount so the
+    // PreflightBreadcrumb can escalate ambient → signal not just on
+    // project-local citation counts (DD6) but also on cross-project
+    // ones. PMF council called this out as the literal contradiction:
+    // pre-EE3 the escalation rule said "your moat earns the violet card
+    // when a stance fires 3× HERE" — but the moat positioning is
+    // cross-project, so a stance you've rejected in 3 sister projects
+    // should already escalate. Build a single concept→cross-project-
+    // citation-count map from the global query (manual seeds excluded
+    // — they aren't real citations), then merge onto each row.
+    const globalCitationByConcept = new Map<string, number>();
+    for (const e of entries) {
+      const realCount = e.instances.filter((i) => i.project !== "manual").length;
+      if (realCount > 0) globalCitationByConcept.set(e.concept, realCount);
+    }
+    const topCitedStancesWithGlobal = project.topCitedStances.map((s) => ({
+      ...s,
+      globalCitationCount: globalCitationByConcept.get(s.concept) ?? s.citationCount,
+    }));
     return c.json({
       ...project,
+      topCitedStances: topCitedStancesWithGlobal,
       seededStances,
       globalLedger: {
         concepts: entries.length,

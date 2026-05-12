@@ -25,6 +25,15 @@ export interface LedgerDigest {
     concept: string;
     source: "session" | "team";
     citationCount: number;
+    /**
+     * EE3 — cross-project citation count (sum of non-manual instances
+     * for this concept across the whole global ledger, including the
+     * project-local count). Lets PreflightBreadcrumb escalate to
+     * signal tier when a stance has accumulated multi-project weight
+     * even if it hasn't fired enough times in THIS project yet.
+     * Optional for back-compat with pre-EE3 fixtures.
+     */
+    globalCitationCount?: number;
     sampleArtifactId?: string;
     sampleSessionId?: string;
   }>;

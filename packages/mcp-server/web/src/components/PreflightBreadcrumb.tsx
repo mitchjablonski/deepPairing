@@ -81,27 +81,43 @@ function writeBootstrapDismissed(projectRoot: string | null): void {
 export type PreflightTier = "bootstrap" | "ambient" | "signal";
 
 /**
- * DD6 — escalate ambient → signal when any considered concept has
- * been cited ≥ 3 times across the project. PMF council called this
- * out as MORE acute post-CC: with IdleHome screaming "moat" and the
- * breadcrumb's "Considered" deep-link wiring, ambient-only treatment
- * for repeat-citations buries the concrete pairing moments under
- * the same muted line as bootstrap traces. Citation counts come from
- * /api/ledger/digest topCitedStances — the data is already on the
- * wire; the component fetches and threads it in.
+ * DD6 + EE3 — escalate ambient → signal when a considered concept has
+ * accumulated either:
+ *   - ≥ CITATION_SIGNAL_THRESHOLD project-local citations (DD6), OR
+ *   - ≥ GLOBAL_CITATION_SIGNAL_THRESHOLD cross-project citations (EE3).
+ *
+ * Pre-EE3 the rule was project-local only — directly contradicting the
+ * cross-project moat positioning. PMF council: a stance the user has
+ * rejected in 3 sister projects but never in this one rendered as
+ * ambient, exactly the opposite of what the pitch promises. The
+ * cross-project threshold is higher (5 vs 3) since global signal is
+ * broader; the dual-rule means either path gets the violet card.
  */
 const CITATION_SIGNAL_THRESHOLD = 3;
+const GLOBAL_CITATION_SIGNAL_THRESHOLD = 5;
+
+export interface ConceptCitationCount {
+  /** Citations in this project. */
+  project: number;
+  /** Citations across all projects (EE3). */
+  global: number;
+}
 
 export function classifyPreflightTier(
   trace: PreflightTrace,
-  citationCounts?: Record<string, number>,
+  citationCounts?: Record<string, number | ConceptCitationCount>,
 ): PreflightTier {
   if (trace.consideredCount === 0) return "bootstrap";
   if (trace.nearMisses.length > 0) return "signal";
   if (trace.consideredConcepts.some((c) => c.source === "team")) return "signal";
   if (citationCounts) {
     for (const c of trace.consideredConcepts) {
-      if ((citationCounts[c.concept] ?? 0) >= CITATION_SIGNAL_THRESHOLD) return "signal";
+      const entry = citationCounts[c.concept];
+      // Back-compat: a bare number means project-local count only.
+      const projectN = typeof entry === "number" ? entry : (entry?.project ?? 0);
+      const globalN = typeof entry === "number" ? entry : (entry?.global ?? 0);
+      if (projectN >= CITATION_SIGNAL_THRESHOLD) return "signal";
+      if (globalN >= GLOBAL_CITATION_SIGNAL_THRESHOLD) return "signal";
     }
   }
   return "ambient";
@@ -185,12 +201,15 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     ensureLedgerSubscriptions();
   }, []);
   const topCitedStances = useLedgerStore((s) => s.digest?.topCitedStances);
-  const citationCounts = useMemo<Record<string, number>>(() => {
-    const map: Record<string, number> = {};
+  const citationCounts = useMemo<Record<string, ConceptCitationCount>>(() => {
+    const map: Record<string, ConceptCitationCount> = {};
     for (const s of topCitedStances ?? []) {
-      if (typeof s.concept === "string" && typeof s.citationCount === "number") {
-        map[s.concept] = s.citationCount;
-      }
+      if (typeof s.concept !== "string") continue;
+      const project = typeof s.citationCount === "number" ? s.citationCount : 0;
+      // EE3 — globalCitationCount falls back to project count when the
+      // server didn't ship the field (back-compat with pre-EE3 fixtures).
+      const global = typeof s.globalCitationCount === "number" ? s.globalCitationCount : project;
+      map[s.concept] = { project, global };
     }
     return map;
   }, [topCitedStances]);
