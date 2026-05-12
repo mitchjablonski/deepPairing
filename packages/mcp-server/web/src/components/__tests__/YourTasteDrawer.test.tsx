@@ -472,6 +472,25 @@ describe("YourTasteDrawer", () => {
       expect(screen.queryByText(/top cited stances/i)).toBeNull();
     });
 
+    it("EE10 — '+ Seed more' button at the bottom of Seeded by you opens an inline SeedAffordance", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([], {
+        seededStances: [
+          { concept: "alpha", stance: "avoid", citedTimesElsewhere: 0 },
+        ],
+      }));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      const seededSection = await screen.findByTestId("ledger-seeded-section");
+      // Button is visible by default, affordance is collapsed.
+      const seedMoreBtn = within(seededSection).getByRole("button", { name: /\+ seed more/i });
+      expect(within(seededSection).queryByText(/seed your ledger/i)).toBeNull();
+      // Click expands.
+      await userEvent.click(seedMoreBtn);
+      expect(within(seededSection).getByText(/seed your ledger/i)).toBeInTheDocument();
+      // Cancel button collapses again.
+      await userEvent.click(within(seededSection).getByRole("button", { name: /cancel/i }));
+      expect(within(seededSection).queryByText(/seed your ledger/i)).toBeNull();
+    });
+
     it("DD1 — seeded section is HIDDEN when seededStances is empty", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([
         { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
