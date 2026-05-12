@@ -94,16 +94,29 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
         }],
       };
     }
-    const top = digest.topCitedStances.slice(0, 8).map((s) => {
-      const tag = s.source === "team" ? "TEAM" : "self";
-      return `- [${tag}] "${s.concept}" — cited ${s.citationCount}× (sample: ${s.sampleArtifactId ?? "—"})`;
-    });
-    const seededLines = seededStances.slice(0, 12).map((s) => {
-      const elsewhere = s.citedTimesElsewhere > 0
-        ? ` (also cited ${s.citedTimesElsewhere}× in real sessions)`
-        : "";
-      return `- [SEED] "${s.concept}" — ${s.stance.toUpperCase()}${elsewhere}`;
-    });
+    // EE7 — mode='ledger' accepts the same source filter as
+    // mode='philosophy'. "user-seeded" hides the cited list (just SEED
+    // entries + headlines + a count of suppressed cited stances);
+    // "session" hides the SEED section (just headlines + cited list).
+    // Lets agents narrowly ask "show me only what the user explicitly
+    // told me to do" without losing the digest framing (shaped/blocked
+    // counts) that mode='philosophy' source='user-seeded' would drop.
+    const showCited = sourceFilter !== "user-seeded";
+    const showSeeded = sourceFilter !== "session";
+    const top = showCited
+      ? digest.topCitedStances.slice(0, 8).map((s) => {
+          const tag = s.source === "team" ? "TEAM" : "self";
+          return `- [${tag}] "${s.concept}" — cited ${s.citationCount}× (sample: ${s.sampleArtifactId ?? "—"})`;
+        })
+      : [];
+    const seededLines = showSeeded
+      ? seededStances.slice(0, 12).map((s) => {
+          const elsewhere = s.citedTimesElsewhere > 0
+            ? ` (also cited ${s.citedTimesElsewhere}× in real sessions)`
+            : "";
+          return `- [SEED] "${s.concept}" — ${s.stance.toUpperCase()}${elsewhere}`;
+        })
+      : [];
     const headline =
       `Project: shaped ${digest.shapedThisProject} proposal${digest.shapedThisProject === 1 ? "" : "s"}` +
       ` across ${digest.sessionsTouched} session${digest.sessionsTouched === 1 ? "" : "s"}` +
@@ -116,10 +129,17 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
     const seededSection = seededLines.length
       ? `\n\nUser-seeded stances (weight these as direct user policy):\n${seededLines.join("\n")}`
       : "";
+    // EE7 — when filtering, mention what's suppressed so the agent
+    // knows to widen if needed.
+    const suppressionNote = sourceFilter === "user-seeded" && digest.topCitedStances.length > 0
+      ? `\n\n(${digest.topCitedStances.length} cited stance${digest.topCitedStances.length === 1 ? "" : "s"} suppressed via source='user-seeded'.)`
+      : sourceFilter === "session" && seededStances.length > 0
+        ? `\n\n(${seededStances.length} seeded stance${seededStances.length === 1 ? "" : "s"} suppressed via source='session'.)`
+        : "";
     return {
       content: [{
         type: "text",
-        text: `${headline}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}${seededSection}\n\nRespect these stances — especially TEAM-source, high-citation, and SEED entries — when shaping new proposals.`,
+        text: `${headline}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}${seededSection}${suppressionNote}\n\nRespect these stances — especially TEAM-source, high-citation, and SEED entries — when shaping new proposals.`,
       }],
     };
   }

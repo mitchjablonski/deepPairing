@@ -381,7 +381,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             source: {
               type: "string",
               enum: ["user-seeded", "session"],
-              description: "Only applies when mode='philosophy' — filter to entries with at least one instance from this source. 'user-seeded' = manually pasted via the SeedAffordance; 'session' = recorded during a paired session.",
+              description: "Filter to entries with at least one instance from this source. With mode='philosophy', restricts the result list. With mode='ledger', hides the suppressed section (e.g. source='user-seeded' shows only the SEED block + headline counts, with a note about suppressed cited stances). 'user-seeded' = manually pasted via the SeedAffordance; 'session' = recorded during a paired session.",
             },
             limit: { type: "number", description: "Max results (default 20, cap 100)" },
           },
