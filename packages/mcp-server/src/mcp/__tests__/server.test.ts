@@ -1732,6 +1732,54 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("SEED");
     });
 
+    it("EE7 — mode='ledger' source='user-seeded' suppresses cited stances + notes the suppression", async () => {
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      // 1 seeded entry.
+      ledger.recordInstance("EE7 seeded one", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "x",
+      });
+      // Trace fixture so the digest has cited stances.
+      store.recordPreflightTrace("art_ee7", {
+        version: 1,
+        at: "2026-05-11T10:00:00Z",
+        artifactId: "art_ee7",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "EE7 cited concept" }],
+        nearMisses: [],
+      });
+      const { text } = await callTool("recall", { mode: "ledger", source: "user-seeded" });
+      expect(text).toContain("EE7 seeded one");
+      // Cited section is suppressed.
+      expect(text).not.toContain("Top cited stances");
+      // Suppression note explains.
+      expect(text).toMatch(/suppressed via source='user-seeded'/i);
+    });
+
+    it("EE7 — mode='ledger' source='session' suppresses the SEED block + notes the suppression", async () => {
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      ledger.recordInstance("EE7b seeded only", {
+        project: "manual", sessionId: "seed", verdict: "rejected", description: "x",
+      });
+      store.recordPreflightTrace("art_ee7b", {
+        version: 1,
+        at: "2026-05-11T10:00:00Z",
+        artifactId: "art_ee7b",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "EE7b cited only" }],
+        nearMisses: [],
+      });
+      const { text } = await callTool("recall", { mode: "ledger", source: "session" });
+      expect(text).toContain("EE7b cited only");
+      expect(text).not.toContain("[SEED]");
+      expect(text).toMatch(/suppressed via source='session'/i);
+    });
+
     it("CC8 — seed that's also been cited in a real session shows the citation count alongside SEED tag", async () => {
       const { getGlobalStore } = await import("../../store/global-store");
       // Manual seed first.
