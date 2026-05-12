@@ -184,6 +184,17 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       if (seeded.length > 8) {
         policyParts.push(`  …${seeded.length - 8} more seeded stances (recall mode='ledger' for the full list).`);
       }
+      // EE6 — when the R2 welcome-back line WON'T fire (ledger has
+      // fewer than 5 concepts total), append the recall pointer here
+      // so a fresh project with seeds still tells the agent how to
+      // pull the full digest. Pre-EE6 the agent saw the SEED block
+      // but had no on-ramp to mode='ledger' until session ≥ 5.
+      const totalConcepts = getGlobalStore().query({ limit: 10000 }).length;
+      if (totalConcepts < 5) {
+        policyParts.push(
+          "  Call recall mode='ledger' for the full digest, or mode='philosophy' source='user-seeded' to query just these.",
+        );
+      }
     }
   } catch {
     // Ledger read failure is non-fatal — we still have session-scoped memory.
