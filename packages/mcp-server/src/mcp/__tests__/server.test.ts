@@ -330,6 +330,29 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("source='user-seeded'");
     });
 
+    it("EE6 — fresh-with-seeds project (concepts < 5) gets the recall pointer in the SEED block", async () => {
+      // Pre-EE6 the recall pointer was gated on R2's >=5 concept rule —
+      // a fresh project with 3 seeds learned about [SEED] but never
+      // about how to pull the full digest. Now the SEED block carries
+      // its own pointer when R2 won't fire.
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      ledger.recordInstance("EE6 only seed 1", { project: "manual", sessionId: "seed", verdict: "rejected", description: "x" });
+      ledger.recordInstance("EE6 only seed 2", { project: "manual", sessionId: "seed", verdict: "rejected", description: "x" });
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      // SEED block fires.
+      expect(text).toContain("EE6 only seed 1");
+      // Nudge appears in the SEED block.
+      expect(text).toContain("Call recall mode='ledger' for the full digest");
+      expect(text).toContain("source='user-seeded'");
+      // R2 welcome line (gated on >=5) does NOT fire — verify ledger
+      // is below threshold.
+      expect(text).not.toContain("Your deepPairing ledger:");
+    });
+
     it("DD3 — R2 welcome-back line points the agent at recall mode='ledger'", async () => {
       const { getGlobalStore } = await import("../../store/global-store.js");
       const ledger = getGlobalStore();
