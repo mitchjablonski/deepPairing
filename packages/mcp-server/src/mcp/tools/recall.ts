@@ -129,17 +129,25 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
     const seededSection = seededLines.length
       ? `\n\nUser-seeded stances (weight these as direct user policy):\n${seededLines.join("\n")}`
       : "";
-    // EE7 — when filtering, mention what's suppressed so the agent
-    // knows to widen if needed.
+    // FF2 — when source filter is set, the headline counts STILL reflect
+    // all stances (shaped/near-miss/blocked are project-trace counters,
+    // not filterable). Pre-FF2 this read as a contradiction: "shaped 7
+    // proposals... (3 cited stances suppressed)" — agent thought the
+    // shaping work it could see came from the suppressed stances. Now
+    // we annotate the headline AND the suppression note carries the
+    // remedy (what to call to see what's hidden).
+    const headlineQualifier = sourceFilter
+      ? " (headlines reflect ALL stances; the list below is filtered)"
+      : "";
     const suppressionNote = sourceFilter === "user-seeded" && digest.topCitedStances.length > 0
-      ? `\n\n(${digest.topCitedStances.length} cited stance${digest.topCitedStances.length === 1 ? "" : "s"} suppressed via source='user-seeded'.)`
+      ? `\n\n(${digest.topCitedStances.length} cited stance${digest.topCitedStances.length === 1 ? "" : "s"} suppressed via source='user-seeded'. Re-call without source filter to include them, or with source='session' to query just the cited list.)`
       : sourceFilter === "session" && seededStances.length > 0
-        ? `\n\n(${seededStances.length} seeded stance${seededStances.length === 1 ? "" : "s"} suppressed via source='session'.)`
+        ? `\n\n(${seededStances.length} seeded stance${seededStances.length === 1 ? "" : "s"} suppressed via source='session'. Re-call without source filter to include them, or with source='user-seeded' to query just the seeded list.)`
         : "";
     return {
       content: [{
         type: "text",
-        text: `${headline}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}${seededSection}${suppressionNote}\n\nRespect these stances — especially TEAM-source, high-citation, and SEED entries — when shaping new proposals.`,
+        text: `${headline}${headlineQualifier}\n${cross}${top.length ? `\n\nTop cited stances:\n${top.join("\n")}` : ""}${seededSection}${suppressionNote}\n\nRespect these stances — especially TEAM-source, high-citation, and SEED entries — when shaping new proposals.`,
       }],
     };
   }
