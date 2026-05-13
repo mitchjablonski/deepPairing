@@ -41,6 +41,15 @@ export interface LedgerDigest {
     concept: string;
     stance: "avoid" | "prefer" | "mixed";
     citedTimesElsewhere: number;
+    /**
+     * FF1 — when a seed has been cited in a real session, the digest
+     * threads the citing artifact through so the LedgerPanel can render
+     * the BB6 jump-to-citing-artifact button on the seeded row. Pre-FF1
+     * EE4's dedup deleted the duplicate top-cited row, taking the link
+     * with it.
+     */
+    sampleArtifactId?: string;
+    sampleSessionId?: string;
   }>;
   globalLedger: { concepts: number; projects: number; multiProjectConcepts: number };
 }

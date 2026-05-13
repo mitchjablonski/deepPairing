@@ -472,6 +472,44 @@ describe("YourTasteDrawer", () => {
       expect(screen.queryByText(/top cited stances/i)).toBeNull();
     });
 
+    it("FF1 — seeded row with sampleArtifactId becomes a clickable jump button", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([], {
+        seededStances: [
+          {
+            concept: "FF1 hot seed",
+            stance: "avoid",
+            citedTimesElsewhere: 2,
+            sampleArtifactId: "art_jump",
+            sampleSessionId: "sess_x",
+          },
+        ],
+      }));
+      const { useArtifactStore } = await import("../../stores/artifact");
+      useArtifactStore.getState().reset();
+      const onClose = vi.fn();
+      render(<YourTasteDrawer onClose={onClose} initialTab="ledger" />);
+      const seededSection = await screen.findByTestId("ledger-seeded-section");
+      const conceptText = within(seededSection).getByText("FF1 hot seed");
+      const button = conceptText.closest("button");
+      expect(button).not.toBeNull();
+      expect(button!.getAttribute("title")).toMatch(/art_jump/);
+      await userEvent.click(button!);
+      expect(useArtifactStore.getState().selectedArtifactId).toBe("art_jump");
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("FF1 — seeded row WITHOUT sampleArtifactId stays as a plain (non-clickable) list item", async () => {
+      vi.stubGlobal("fetch", mockLedgerFetch([], {
+        seededStances: [
+          { concept: "FF1 cold seed", stance: "avoid", citedTimesElsewhere: 0 },
+        ],
+      }));
+      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      const seededSection = await screen.findByTestId("ledger-seeded-section");
+      const conceptText = within(seededSection).getByText("FF1 cold seed");
+      expect(conceptText.closest("button")).toBeNull();
+    });
+
     it("EE10 — '+ Seed more' button at the bottom of Seeded by you opens an inline SeedAffordance", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([], {
         seededStances: [

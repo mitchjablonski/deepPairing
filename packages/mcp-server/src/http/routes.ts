@@ -636,13 +636,34 @@ export function createHttpRoutes(
     // "Seeded by you" section above the cited list. citedTimesElsewhere
     // mirrors the agent-facing text so the UI can show "fired N times"
     // alongside the seed.
+    // FF1 — when a seed has been cited in a real session of THIS
+    // project, look up the citing artifact from project.topCitedStances
+    // (already collected by FileStore.ledgerDigest) and thread the
+    // sample IDs onto the seed row. EE4 dedup deletes the duplicate
+    // top-cited row, so without this lookup the user loses the BB6
+    // jump-to-citing-artifact affordance for exactly the rows they
+    // care about most. Build a concept→sample lookup once.
+    const sampleByConcept = new Map<string, { sampleArtifactId?: string; sampleSessionId?: string }>();
+    for (const s of project.topCitedStances) {
+      if (s.sampleArtifactId) {
+        sampleByConcept.set(s.concept, {
+          sampleArtifactId: s.sampleArtifactId,
+          sampleSessionId: s.sampleSessionId,
+        });
+      }
+    }
     const seededStances = entries
       .filter(isSeededEntry)
-      .map((e) => ({
-        concept: e.concept,
-        stance: e.stance,
-        citedTimesElsewhere: e.instances.filter((i) => i.project !== "manual").length,
-      }));
+      .map((e) => {
+        const sample = sampleByConcept.get(e.concept);
+        return {
+          concept: e.concept,
+          stance: e.stance,
+          citedTimesElsewhere: e.instances.filter((i) => i.project !== "manual").length,
+          sampleArtifactId: sample?.sampleArtifactId,
+          sampleSessionId: sample?.sampleSessionId,
+        };
+      });
     // EE3 — augment topCitedStances rows with globalCitationCount so the
     // PreflightBreadcrumb can escalate ambient → signal not just on
     // project-local citation counts (DD6) but also on cross-project
