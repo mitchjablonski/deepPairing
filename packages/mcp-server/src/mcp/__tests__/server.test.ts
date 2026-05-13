@@ -1754,8 +1754,13 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("EE7 seeded one");
       // Cited section is suppressed.
       expect(text).not.toContain("Top cited stances");
-      // Suppression note explains.
+      // FF2 — suppression note carries the remedy (next call to make).
       expect(text).toMatch(/suppressed via source='user-seeded'/i);
+      expect(text).toMatch(/Re-call without source filter/i);
+      expect(text).toMatch(/source='session'/i);
+      // FF2 — headline qualifier prevents the "shaped N proposals" ↔
+      // "stances suppressed" contradiction.
+      expect(text).toMatch(/headlines reflect ALL stances/i);
     });
 
     it("EE7 — mode='ledger' source='session' suppresses the SEED block + notes the suppression", async () => {
@@ -1777,7 +1782,10 @@ describe("MCP Tool Handlers", () => {
       const { text } = await callTool("recall", { mode: "ledger", source: "session" });
       expect(text).toContain("EE7b cited only");
       expect(text).not.toContain("[SEED]");
+      // FF2 — suppression note carries the remedy.
       expect(text).toMatch(/suppressed via source='session'/i);
+      expect(text).toMatch(/Re-call without source filter/i);
+      expect(text).toMatch(/source='user-seeded'/i);
     });
 
     it("CC8 — seed that's also been cited in a real session shows the citation count alongside SEED tag", async () => {
