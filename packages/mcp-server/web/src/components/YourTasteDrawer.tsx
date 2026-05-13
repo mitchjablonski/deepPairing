@@ -94,6 +94,13 @@ export interface LedgerDigest {
     concept: string;
     stance: "avoid" | "prefer" | "mixed";
     citedTimesElsewhere: number;
+    /**
+     * FF1 — citing-artifact sample for the BB6 deep-link from a seeded
+     * row. Optional: only present when the seed has been cited in a
+     * real session of THIS project.
+     */
+    sampleArtifactId?: string;
+    sampleSessionId?: string;
   }>;
   globalLedger: {
     concepts: number;
@@ -570,30 +577,53 @@ export function LedgerPanel({
                   : s.stance === "prefer"
                     ? "bg-accent-green-dim/40 text-accent-green"
                     : "bg-surface-elevated text-text-muted";
+              const inner = (
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-mono text-xs text-text-primary break-words">{s.concept}</div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span
+                      className="px-1 py-px rounded text-[10px] uppercase tracking-wide bg-accent-violet-dim/40 text-accent-violet"
+                      title="Manually seeded by you (not yet earned through a session)"
+                    >
+                      SEED
+                    </span>
+                    <span className={`px-1 py-px rounded text-[10px] uppercase tracking-wide ${stanceTone}`}>
+                      {s.stance}
+                    </span>
+                    {s.citedTimesElsewhere > 0 && (
+                      <span className="text-2xs font-semibold text-accent-violet" title="Times this seed has fired in real sessions">
+                        fired {s.citedTimesElsewhere}×
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+              // FF1 — restore the BB6 jump-to-citing-artifact for seeded
+              // rows that have a sample. EE4's dedup deleted the
+              // duplicate top-cited row that previously carried this
+              // affordance. Without this restoration, the seeded → real
+              // citation causal-graph link was broken.
+              const canJump = Boolean(s.sampleArtifactId && onJumpToArtifact);
+              if (canJump) {
+                return (
+                  <li key={`seed:${s.concept}`}>
+                    <button
+                      type="button"
+                      onClick={() => onJumpToArtifact!(s.sampleArtifactId!)}
+                      className="block w-full text-left rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3 hover:border-accent-violet/40 hover:bg-accent-violet-dim/15 transition-colors"
+                      title={`Jump to a citing artifact (${s.sampleArtifactId})`}
+                    >
+                      {inner}
+                    </button>
+                  </li>
+                );
+              }
               return (
                 <li
                   key={`seed:${s.concept}`}
                   className="rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="font-mono text-xs text-text-primary break-words">{s.concept}</div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span
-                        className="px-1 py-px rounded text-[10px] uppercase tracking-wide bg-accent-violet-dim/40 text-accent-violet"
-                        title="Manually seeded by you (not yet earned through a session)"
-                      >
-                        SEED
-                      </span>
-                      <span className={`px-1 py-px rounded text-[10px] uppercase tracking-wide ${stanceTone}`}>
-                        {s.stance}
-                      </span>
-                      {s.citedTimesElsewhere > 0 && (
-                        <span className="text-2xs font-semibold text-accent-violet" title="Times this seed has fired in real sessions">
-                          fired {s.citedTimesElsewhere}×
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  {inner}
                 </li>
               );
             })}

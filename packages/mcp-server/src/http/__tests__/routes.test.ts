@@ -1179,6 +1179,53 @@ describe("HTTP Routes", () => {
       expect(row.globalCitationCount).toBe(1);
     });
 
+    it("FF1 — seededStances rows include sampleArtifactId when the seed has been cited in this project", async () => {
+      // Seed once via the route.
+      await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "FF1 seeded-and-cited", verdict: "rejected" }),
+      });
+      // Then a real-project trace cites the same concept.
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "sess_ff1");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "preflight-traces.json"),
+        JSON.stringify({
+          art_ff1: {
+            version: 1,
+            at: "2026-05-12T10:00:00Z",
+            artifactId: "art_ff1",
+            toolName: "present_findings",
+            decision: "admitted",
+            consideredCount: 1,
+            consideredConcepts: [{ source: "session", concept: "FF1 seeded-and-cited" }],
+            nearMisses: [],
+          },
+        }),
+      );
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      const seed = body.seededStances.find((s: any) => s.concept === "FF1 seeded-and-cited");
+      expect(seed).toBeDefined();
+      expect(seed.sampleArtifactId).toBe("art_ff1");
+      expect(seed.sampleSessionId).toBe("sess_ff1");
+      expect(seed.citedTimesElsewhere).toBe(0); // 0 because real session is THIS project
+    });
+
+    it("FF1 — seededStances rows have NO sampleArtifactId when the seed hasn't fired here", async () => {
+      await app.request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "FF1 only-seeded", verdict: "rejected" }),
+      });
+      const res = await app.request("/api/ledger/digest");
+      const body = await res.json();
+      const seed = body.seededStances.find((s: any) => s.concept === "FF1 only-seeded");
+      expect(seed).toBeDefined();
+      expect(seed.sampleArtifactId).toBeUndefined();
+    });
+
     it("DD1 — /api/ledger/digest returns seededStances list when manual seeds exist", async () => {
       // Seed twice via the route + once again with a real-session marker.
       await app.request("/api/philosophy/seed", {
