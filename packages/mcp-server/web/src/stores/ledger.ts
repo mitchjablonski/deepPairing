@@ -65,16 +65,40 @@ interface LedgerState {
 }
 
 let inflight: Promise<void> | null = null;
-let traceListenerAttached = false;
+// FF3 — hold a reference to the listener so resetLedgerStoreForTests
+// can actually removeEventListener it. Pre-FF3 reset only flipped the
+// `traceListenerAttached` flag; the previous listener stayed wired and
+// kept calling refetch() forever. In production this is one process
+// (no leak), but in vitest jsdom is shared across files — N test files
+// = N live listeners per `dp:preflight-trace` event = N redundant
+// refetches on every test that dispatches.
+let activeTraceListener: ((e: Event) => void) | null = null;
+
+/**
+ * FF3 — retry once on a 5xx with 500ms backoff before settling into the
+ * error state. Pre-FF3 a transient flaky 500 stuck `error` in the store
+ * and any subscribed component rendered "Could not load the ledger"
+ * until the next dp:preflight-trace event triggered another attempt.
+ * One retry catches the most common transient failure window without
+ * pinning the user on a stale error during a brief blip.
+ */
+async function fetchOnce(): Promise<Response> {
+  return fetch(`${API_BASE}/api/ledger/digest`, { headers: sessionHeaders() });
+}
+
+async function fetchWithRetry(): Promise<Response> {
+  const res = await fetchOnce();
+  if (res.ok || res.status < 500) return res;
+  await new Promise((r) => setTimeout(r, 500));
+  return fetchOnce();
+}
 
 async function doFetch(set: (partial: Partial<LedgerState>) => void): Promise<void> {
   if (inflight) return inflight;
   inflight = (async () => {
     set({ loading: true });
     try {
-      const res = await fetch(`${API_BASE}/api/ledger/digest`, {
-        headers: sessionHeaders(),
-      });
+      const res = await fetchWithRetry();
       if (!res.ok) {
         set({ error: `${res.status}`, loading: false });
         return;
@@ -110,14 +134,13 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
  * trigger.
  */
 export function ensureLedgerSubscriptions(): void {
-  if (traceListenerAttached || typeof window === "undefined") return;
-  traceListenerAttached = true;
-  const onTrace = () => {
+  if (activeTraceListener || typeof window === "undefined") return;
+  activeTraceListener = () => {
     // Don't await — refetch fires async; subscribers re-render when
     // the new digest lands.
     void useLedgerStore.getState().refetch();
   };
-  window.addEventListener("dp:preflight-trace", onTrace);
+  window.addEventListener("dp:preflight-trace", activeTraceListener);
   // Initial fetch on subscription wiring so the very first subscriber
   // gets data without each component re-firing its own fetch.
   void useLedgerStore.getState().refetch();
@@ -131,7 +154,12 @@ export function ensureLedgerSubscriptions(): void {
  */
 export function resetLedgerStoreForTests(): void {
   inflight = null;
-  traceListenerAttached = false;
+  // FF3 — actually remove the listener (not just flip a flag) so vitest
+  // doesn't accumulate live listeners across files.
+  if (activeTraceListener && typeof window !== "undefined") {
+    window.removeEventListener("dp:preflight-trace", activeTraceListener);
+  }
+  activeTraceListener = null;
   useLedgerStore.setState({
     digest: null,
     error: null,
