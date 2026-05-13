@@ -1812,6 +1812,49 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("also cited 1× in real sessions");
     });
 
+    it("FF4 — recall mode='ledger' surfaces 'cited N× here, M× cross-project' when globalCitationCount > local", async () => {
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      // Cross-project: 3 separate real-project instances of the same concept.
+      ledger.recordInstance("FF4 hot stance", { project: "/proj/a", sessionId: "s1", verdict: "rejected", description: "x" });
+      ledger.recordInstance("FF4 hot stance", { project: "/proj/b", sessionId: "s2", verdict: "rejected", description: "x" });
+      ledger.recordInstance("FF4 hot stance", { project: "/proj/c", sessionId: "s3", verdict: "rejected", description: "x" });
+      // And ONE local trace of the same concept (project-local count = 1).
+      store.recordPreflightTrace("art_ff4", {
+        version: 1,
+        at: "2026-05-12T10:00:00Z",
+        artifactId: "art_ff4",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "FF4 hot stance" }],
+        nearMisses: [],
+      });
+      const { text } = await callTool("recall", { mode: "ledger" });
+      expect(text).toContain("FF4 hot stance");
+      // Cross-project signal exposed to the agent.
+      expect(text).toMatch(/cited 1× here, 3× cross-project/i);
+    });
+
+    it("FF4 — recall mode='ledger' shows just 'cited N×' when globalCitationCount equals local (no cross-project bonus)", async () => {
+      // One trace, no other instances.
+      store.recordPreflightTrace("art_ff4b", {
+        version: 1,
+        at: "2026-05-12T10:00:00Z",
+        artifactId: "art_ff4b",
+        toolName: "present_findings",
+        decision: "admitted",
+        consideredCount: 1,
+        consideredConcepts: [{ source: "session", concept: "FF4b solo" }],
+        nearMisses: [],
+      });
+      const { text } = await callTool("recall", { mode: "ledger" });
+      expect(text).toContain("FF4b solo");
+      expect(text).toMatch(/cited 1×/);
+      // No cross-project clause when global == local.
+      expect(text).not.toMatch(/cross-project/);
+    });
+
     it("BB4 — mode='ledger' renders shaped/near-miss/blocked headlines + top stances", async () => {
       // Seed a preflight trace so ledgerDigest has something to count.
       store.recordPreflightTrace("art_bb4", {

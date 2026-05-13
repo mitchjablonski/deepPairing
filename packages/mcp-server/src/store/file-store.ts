@@ -897,7 +897,15 @@ export class FileStore implements IStore {
     const project = FileStore.ledgerDigest(this.projectRoot);
     const entries = getGlobalStore().query({ limit: 10000 });
     const projects = new Set<string>();
+    // FF4 — same concept→cross-project-citation map the HTTP route uses
+    // (EE3) so the agent-facing path also surfaces "cited N× here, M×
+    // cross-project" via recall mode='ledger'. Pre-FF4 this method
+    // returned topCitedStances unaugmented; the wire endpoint had the
+    // augmentation but agents in standalone mode (no daemon) lost it.
+    const globalCitationByConcept = new Map<string, number>();
     for (const e of entries) {
+      const realCount = e.instances.filter((i) => i.project !== "manual").length;
+      if (realCount > 0) globalCitationByConcept.set(e.concept, realCount);
       for (const inst of e.instances) {
         if (inst.project !== "manual") projects.add(inst.project);
       }
@@ -905,8 +913,13 @@ export class FileStore implements IStore {
     const multiProjectConcepts = entries.filter(
       (e) => new Set(e.instances.filter((i) => i.project !== "manual").map((i) => i.project)).size > 1,
     ).length;
+    const topCitedStancesWithGlobal = project.topCitedStances.map((s) => ({
+      ...s,
+      globalCitationCount: globalCitationByConcept.get(s.concept) ?? s.citationCount,
+    }));
     return {
       ...project,
+      topCitedStances: topCitedStancesWithGlobal,
       globalLedger: {
         concepts: entries.length,
         projects: projects.size,

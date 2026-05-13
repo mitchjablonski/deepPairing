@@ -260,6 +260,14 @@ export interface IStore {
       concept: string;
       source: "session" | "team";
       citationCount: number;
+      /**
+       * EE3/FF4 — cross-project citation count (sum of non-manual
+       * instances for this concept across the global ledger). Lets
+       * the agent narrate "cited N× here, M× cross-project" so the
+       * moat-compounds-across-projects pitch is visible at the wire.
+       * Optional for back-compat with pre-EE3 FileStore stubs.
+       */
+      globalCitationCount?: number;
       sampleArtifactId?: string;
       sampleSessionId?: string;
     }>;
