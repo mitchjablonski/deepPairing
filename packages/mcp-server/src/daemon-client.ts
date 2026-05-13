@@ -502,6 +502,8 @@ export class DaemonClient implements IStore {
       concept: string;
       source: "session" | "team";
       citationCount: number;
+      // FF4 — passed through from the daemon's EE3 augmentation.
+      globalCitationCount?: number;
       sampleArtifactId?: string;
       sampleSessionId?: string;
     }>;

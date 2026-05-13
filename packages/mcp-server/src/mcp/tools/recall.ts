@@ -106,7 +106,17 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
     const top = showCited
       ? digest.topCitedStances.slice(0, 8).map((s) => {
           const tag = s.source === "team" ? "TEAM" : "self";
-          return `- [${tag}] "${s.concept}" — cited ${s.citationCount}× (sample: ${s.sampleArtifactId ?? "—"})`;
+          // FF4 — surface the cross-project citation count when it
+          // exceeds the project-local count. "cited 3× here, 8×
+          // cross-project" tells the agent the moat is bigger than
+          // this project — exactly the pitch the EE3 chrome makes
+          // to the human; now the agent gets the same signal.
+          const globalN = (s as any).globalCitationCount as number | undefined;
+          const citationStr =
+            typeof globalN === "number" && globalN > s.citationCount
+              ? `cited ${s.citationCount}× here, ${globalN}× cross-project`
+              : `cited ${s.citationCount}×`;
+          return `- [${tag}] "${s.concept}" — ${citationStr} (sample: ${s.sampleArtifactId ?? "—"})`;
         })
       : [];
     const seededLines = showSeeded
