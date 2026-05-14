@@ -83,7 +83,10 @@ export async function startHttpServer(
   let port = DEFAULT_PORT;
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
     try {
-      const server = serve({ fetch: app.fetch, port });
+      // GG1 — bind 127.0.0.1 explicitly (see daemon.ts:480 for the
+      // full rationale). Pre-GG1 this defaulted to 0.0.0.0 — LAN
+      // exposure of every artifact + comment + trace.
+      const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" });
 
       // WebSocket server on the same HTTP server
       const wss = new WebSocketServer({ noServer: true });

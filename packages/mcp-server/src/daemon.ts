@@ -477,7 +477,15 @@ async function main() {
     let lastBindErr: any = null;
     for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
       const candidate = DEFAULT_PORT + attempt;
-      const candidateServer = serve({ fetch: app.fetch, port: candidate });
+      // GG1 — bind 127.0.0.1 explicitly. Pre-GG1 the call omitted
+      // `hostname` and the underlying @hono/node-server passed undefined
+      // to server.listen, which Node interprets as "all interfaces"
+      // (0.0.0.0). Combined with the WS upgrade handler (GG2 fixes that
+      // separately) this exposed the daemon to anyone on the local
+      // network — every artifact, comment, and trace was reachable
+      // from a sibling laptop on the same wifi. Comments throughout
+      // this file claimed localhost-only; now the code matches.
+      const candidateServer = serve({ fetch: app.fetch, port: candidate, hostname: "127.0.0.1" });
       const result = await new Promise<{ ok: true } | { ok: false; err: any }>((resolve) => {
         const s: any = candidateServer;
         const onError = (err: any) => {
