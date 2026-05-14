@@ -510,7 +510,7 @@ describe("YourTasteDrawer", () => {
       expect(conceptText.closest("button")).toBeNull();
     });
 
-    it("EE10 — '+ Seed more' button at the bottom of Seeded by you opens an inline SeedAffordance", async () => {
+    it("FF7 — 'Seed more' renders SeedAffordance inline (no toggle, matches cold-start gesture)", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([], {
         seededStances: [
           { concept: "alpha", stance: "avoid", citedTimesElsewhere: 0 },
@@ -518,15 +518,14 @@ describe("YourTasteDrawer", () => {
       }));
       render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
       const seededSection = await screen.findByTestId("ledger-seeded-section");
-      // Button is visible by default, affordance is collapsed.
-      const seedMoreBtn = within(seededSection).getByRole("button", { name: /\+ seed more/i });
-      expect(within(seededSection).queryByText(/seed your ledger/i)).toBeNull();
-      // Click expands.
-      await userEvent.click(seedMoreBtn);
-      expect(within(seededSection).getByText(/seed your ledger/i)).toBeInTheDocument();
-      // Cancel button collapses again.
-      await userEvent.click(within(seededSection).getByRole("button", { name: /cancel/i }));
-      expect(within(seededSection).queryByText(/seed your ledger/i)).toBeNull();
+      const seedMore = within(seededSection).getByTestId("ledger-seed-more");
+      // Affordance is rendered directly — no "+ Seed more" toggle, no
+      // Cancel. Matches the cold-start IdleHome path: the input is
+      // always visible.
+      expect(within(seedMore).getByText(/seed more/i)).toBeInTheDocument();
+      expect(within(seedMore).getByText(/seed your ledger/i)).toBeInTheDocument();
+      expect(within(seedMore).queryByRole("button", { name: /^\+ seed more$/i })).toBeNull();
+      expect(within(seedMore).queryByRole("button", { name: /^cancel$/i })).toBeNull();
     });
 
     it("DD1 — seeded section is HIDDEN when seededStances is empty", async () => {
