@@ -613,36 +613,59 @@ export function createHttpRoutes(
       });
     }
     const project = FileStore.ledgerDigest(projectRoot);
-    // Pair with cross-project totals from the global ledger so the
-    // user can see the moat compounding beyond this project.
-    // BB1 — exclude synthetic project="manual" markers (AA9 seeds) so
-    // a manually seeded stance + one real project doesn't render as
-    // "spans 2 projects".
     const entries = getGlobalStore().query({ limit: 10000 });
+    // FF6 — single-pass fold over entries. Pre-FF6 the same array was
+    // walked four separate times (projects Set, multiProjectConcepts
+    // filter with per-entry Set allocation, seededStances filter+map,
+    // globalCitationByConcept Map). At limit=10000 with ~5 instances
+    // per entry, that was ~200k Set allocations per request. The
+    // BB2 server cache (TTL 2s) absorbed steady-state but cold-cache
+    // was hot. One loop fills:
+    //   - projects: distinct non-manual projects across all entries
+    //     (BB1 — exclude project="manual" seed markers)
+    //   - multiProjectConcepts: entries whose own non-manual project
+    //     count is > 1 (counted inline via per-entry Set, but only
+    //     allocated when the entry has ≥2 instances)
+    //   - globalCitationByConcept: EE3 cross-project citation count
+    //     per concept (real instances only)
+    //   - seededRaw: entries flagged by isSeededEntry, holding the
+    //     non-manual instance count for citedTimesElsewhere
     const projects = new Set<string>();
+    let multiProjectConcepts = 0;
+    const globalCitationByConcept = new Map<string, number>();
+    const seededRaw: Array<{ concept: string; stance: typeof entries[number]["stance"]; citedTimesElsewhere: number }> = [];
     for (const e of entries) {
+      let realInstanceCount = 0;
+      let entryProjects: Set<string> | null = null;
       for (const inst of e.instances) {
-        if (inst.project !== "manual") projects.add(inst.project);
+        if (inst.project === "manual") continue;
+        realInstanceCount++;
+        projects.add(inst.project);
+        // Allocate the per-entry Set only when we already know there's
+        // at least 2 instances — saves the alloc for solo-entry stances
+        // (the common case).
+        if (realInstanceCount === 2 && !entryProjects) {
+          entryProjects = new Set<string>();
+          for (const prior of e.instances) {
+            if (prior.project !== "manual") entryProjects.add(prior.project);
+          }
+        } else if (entryProjects) {
+          entryProjects.add(inst.project);
+        }
+      }
+      if (entryProjects && entryProjects.size > 1) multiProjectConcepts++;
+      if (realInstanceCount > 0) globalCitationByConcept.set(e.concept, realInstanceCount);
+      if (isSeededEntry(e)) {
+        seededRaw.push({
+          concept: e.concept,
+          stance: e.stance,
+          citedTimesElsewhere: realInstanceCount,
+        });
       }
     }
-    const multiProjectConcepts = entries.filter(
-      (e) => new Set(e.instances.filter((i) => i.project !== "manual").map((i) => i.project)).size > 1,
-    ).length;
-    // DD1 — UI-side seed visibility. CC8 added the [SEED] surface to the
-    // agent (recall mode='ledger') but the LedgerPanel still showed an
-    // empty "Top cited stances" list with just a "5" headline tile —
-    // user seeds 5 rules, opens the panel, reads it as broken. Surface
-    // the seeded stances on the same wire so the UI can render a
-    // "Seeded by you" section above the cited list. citedTimesElsewhere
-    // mirrors the agent-facing text so the UI can show "fired N times"
-    // alongside the seed.
-    // FF1 — when a seed has been cited in a real session of THIS
-    // project, look up the citing artifact from project.topCitedStances
-    // (already collected by FileStore.ledgerDigest) and thread the
-    // sample IDs onto the seed row. EE4 dedup deletes the duplicate
-    // top-cited row, so without this lookup the user loses the BB6
-    // jump-to-citing-artifact affordance for exactly the rows they
-    // care about most. Build a concept→sample lookup once.
+    // FF1 — concept→sample lookup from project-scoped topCitedStances
+    // so seeded rows that have been cited in this project can render
+    // the BB6 deep-link button. Cheap separate pass — small array.
     const sampleByConcept = new Map<string, { sampleArtifactId?: string; sampleSessionId?: string }>();
     for (const s of project.topCitedStances) {
       if (s.sampleArtifactId) {
@@ -652,33 +675,14 @@ export function createHttpRoutes(
         });
       }
     }
-    const seededStances = entries
-      .filter(isSeededEntry)
-      .map((e) => {
-        const sample = sampleByConcept.get(e.concept);
-        return {
-          concept: e.concept,
-          stance: e.stance,
-          citedTimesElsewhere: e.instances.filter((i) => i.project !== "manual").length,
-          sampleArtifactId: sample?.sampleArtifactId,
-          sampleSessionId: sample?.sampleSessionId,
-        };
-      });
-    // EE3 — augment topCitedStances rows with globalCitationCount so the
-    // PreflightBreadcrumb can escalate ambient → signal not just on
-    // project-local citation counts (DD6) but also on cross-project
-    // ones. PMF council called this out as the literal contradiction:
-    // pre-EE3 the escalation rule said "your moat earns the violet card
-    // when a stance fires 3× HERE" — but the moat positioning is
-    // cross-project, so a stance you've rejected in 3 sister projects
-    // should already escalate. Build a single concept→cross-project-
-    // citation-count map from the global query (manual seeds excluded
-    // — they aren't real citations), then merge onto each row.
-    const globalCitationByConcept = new Map<string, number>();
-    for (const e of entries) {
-      const realCount = e.instances.filter((i) => i.project !== "manual").length;
-      if (realCount > 0) globalCitationByConcept.set(e.concept, realCount);
-    }
+    const seededStances = seededRaw.map((s) => {
+      const sample = sampleByConcept.get(s.concept);
+      return {
+        ...s,
+        sampleArtifactId: sample?.sampleArtifactId,
+        sampleSessionId: sample?.sampleSessionId,
+      };
+    });
     const topCitedStancesWithGlobal = project.topCitedStances.map((s) => ({
       ...s,
       globalCitationCount: globalCitationByConcept.get(s.concept) ?? s.citationCount,
