@@ -129,9 +129,18 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   }
 
   // J4 — cross-project philosophy kickoff brief.
+  // FF10 — hoist ONE getGlobalStore().query({ limit: 10000 }) for the
+  // entire philosophy + R2 region. Pre-FF10 the same in-memory ledger
+  // was queried 5 times: avoid (limit 3), prefer (limit 3), seeded
+  // (limit 200), totalConcepts (limit 10000), and R2 ledgerEntries
+  // (limit 10000). All derive from the same data — one walk + JS
+  // filters is cheaper and clearer.
+  type LedgerEntry = ReturnType<ReturnType<typeof getGlobalStore>["query"]>[number];
+  let allLedgerEntries: LedgerEntry[] = [];
   try {
-    const avoidList = getGlobalStore().query({ stance: "avoid", limit: 3 });
-    const preferList = getGlobalStore().query({ stance: "prefer", limit: 3 });
+    allLedgerEntries = getGlobalStore().query({ limit: 10000 });
+    const avoidList = allLedgerEntries.filter((e) => e.stance === "avoid").slice(0, 3);
+    const preferList = allLedgerEntries.filter((e) => e.stance === "prefer").slice(0, 3);
     const philosophyParts: string[] = [];
     if (avoidList.length > 0) {
       philosophyParts.push(
@@ -171,10 +180,13 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     // are direct user-policy declarations, not advisory cross-project
     // signal. Cap at 8 so the budget doesn't get blown by a 50-line
     // CLAUDE.md paste.
-    // EE5 — typed source filter at the query level instead of a
-    // hand-rolled `.filter(i => i.project === "manual")`. Same
-    // semantics, single source of truth in global-store.ts.
-    const seeded = getGlobalStore().query({ source: "user-seeded", limit: 200 });
+    // FF10 — derive seeded from the hoisted allLedgerEntries instead
+    // of a separate query. Re-introduces the inline filter EE5
+    // factored out, but it's a derived view here (one fold) — not the
+    // public query API.
+    const seeded = allLedgerEntries.filter((e) =>
+      e.instances.some((i) => i.project === "manual"),
+    );
     if (seeded.length > 0) {
       // EE1 — push the section header + each seed line as separate
       // policyParts elements so the cap pages cleanly. Pre-EE1 the
@@ -201,8 +213,8 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       // so a fresh project with seeds still tells the agent how to
       // pull the full digest. Pre-EE6 the agent saw the SEED block
       // but had no on-ramp to mode='ledger' until session ≥ 5.
-      const totalConcepts = getGlobalStore().query({ limit: 10000 }).length;
-      if (totalConcepts < 5) {
+      // FF10 — totalConcepts comes from the hoisted query, no new fetch.
+      if (allLedgerEntries.length < 5) {
         policyParts.push(
           "  Call recall mode='ledger' for the full digest, or mode='philosophy' source='user-seeded' to query just these.",
         );
@@ -213,8 +225,12 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   }
 
   // R2 — "moat made measurable" welcome-back line. Silent below 5 concepts.
+  // FF10 — reuse the hoisted allLedgerEntries from the philosophy block
+  // above. If the philosophy try-block threw and left allLedgerEntries
+  // empty, R2 silently no-ops (right behavior — without ledger data the
+  // welcome line has nothing to say).
   try {
-    const ledgerEntries = getGlobalStore().query({ limit: 10000 });
+    const ledgerEntries = allLedgerEntries;
     if (ledgerEntries.length >= 5) {
       const projects = new Set<string>();
       for (const e of ledgerEntries) {
