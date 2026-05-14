@@ -223,6 +223,53 @@ describe("MCP Tool Handlers", () => {
       fs.rmSync(freshTmp, { recursive: true, force: true });
     });
 
+    it("FF5 — 'require'/'avoid' route to obligations tier (uncapped), 'prefer' stays in contextual (capped)", async () => {
+      // Pre-FF5 all three groups went into contextualParts and could
+      // be silently dropped by HINT_BUDGET_CHARS truncation. Now hard
+      // rules survive the budget; taste competes with other context.
+      const freshTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-team-ff5-"));
+      fs.mkdirSync(path.join(freshTmp, ".deeppairing"), { recursive: true });
+      fs.writeFileSync(
+        path.join(freshTmp, ".deeppairing", "team.json"),
+        JSON.stringify({
+          version: 1,
+          preferences: [
+            { id: "r1", kind: "require", concept: "FF5 hard required", rationale: "regulatory" },
+            { id: "a1", kind: "avoid", concept: "FF5 hard avoid", rationale: "incident history" },
+            { id: "p1", kind: "prefer", concept: "FF5 soft preference", rationale: "team taste" },
+          ],
+        }),
+      );
+      const freshStore = new FileStore(freshTmp, "team_ff5_session");
+      const { server: freshServer } = createMcpServer(freshStore, () => {}, 4000);
+      const [c, s] = InMemoryTransport.createLinkedPair();
+      await freshServer.connect(s);
+      const freshClient = new Client({ name: "t", version: "1.0" });
+      await freshClient.connect(c);
+      const result = await freshClient.callTool({
+        name: "present_findings",
+        arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
+      });
+      const text = (result.content as any[])?.[0]?.text ?? "";
+      // Hard rules block is the obligations-tier copy.
+      expect(text).toContain("🏢 Team conventions");
+      expect(text).toMatch(/hard rules.*'require' as imperatives.*'avoid' as refusal triggers/i);
+      expect(text).toContain("FF5 hard required");
+      expect(text).toContain("FF5 hard avoid");
+      // Soft preferences are now a separate, contextual-tier block.
+      expect(text).toContain("🏢 Team preferences");
+      expect(text).toMatch(/taste, weigh against the user's goal/i);
+      expect(text).toContain("FF5 soft preference");
+      // The hard-rules block precedes the soft-preferences block in the
+      // assembled hint (obligations come before contextual).
+      const hardIdx = text.indexOf("🏢 Team conventions");
+      const softIdx = text.indexOf("🏢 Team preferences");
+      expect(hardIdx).toBeGreaterThanOrEqual(0);
+      expect(softIdx).toBeGreaterThan(hardIdx);
+      freshStore.forceFlush();
+      fs.rmSync(freshTmp, { recursive: true, force: true });
+    });
+
     it("omits the section entirely when the only prefs would produce empty groups", async () => {
       // With zero valid preferences, the section must not appear (low-signal
       // empty sections just add noise to the hint).

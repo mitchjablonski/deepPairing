@@ -102,13 +102,25 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       const required = prefs.filter((p: any) => p.kind === "require").map(render);
       const avoided = prefs.filter((p: any) => p.kind === "avoid").map(render);
       const preferred = prefs.filter((p: any) => p.kind === "prefer").map(render);
-      const sections: string[] = [];
-      if (required.length) sections.push(`Required:\n${required.join("\n")}`);
-      if (avoided.length) sections.push(`Avoid:\n${avoided.join("\n")}`);
-      if (preferred.length) sections.push(`Preferred:\n${preferred.join("\n")}`);
-      if (sections.length > 0) {
+      // FF5 — split team prefs across tiers. 'require' and 'avoid' are
+      // hard rules with refusal/coercion semantics; pre-FF5 they lived
+      // in contextualParts (droppable behind the budget cap), which
+      // meant a busy session could silently lose hard rules to ledger
+      // stats or other advisory copy. 'prefer' is taste — fine in
+      // contextual. The header line stays consistent so the agent
+      // sees the same framing whether the rules came through
+      // obligations or contextual.
+      const hardSections: string[] = [];
+      if (required.length) hardSections.push(`Required:\n${required.join("\n")}`);
+      if (avoided.length) hardSections.push(`Avoid:\n${avoided.join("\n")}`);
+      if (hardSections.length > 0) {
+        obligationsParts.push(
+          `\n🏢 Team conventions (from .deeppairing/team.json — hard rules — 'require' as imperatives, 'avoid' as refusal triggers):\n${hardSections.join("\n")}`,
+        );
+      }
+      if (preferred.length > 0) {
         contextualParts.push(
-          `\n🏢 Team conventions (from .deeppairing/team.json — treat 'require' as hard rules, 'avoid' as refusal triggers, 'prefer' as taste):\n${sections.join("\n")}`,
+          `\n🏢 Team preferences (from .deeppairing/team.json — taste, weigh against the user's goal):\nPreferred:\n${preferred.join("\n")}`,
         );
       }
     }
