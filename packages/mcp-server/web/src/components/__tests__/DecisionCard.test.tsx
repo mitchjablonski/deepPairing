@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
@@ -433,9 +433,12 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
   });
 
   it("X5 — Cancel during prediction returns to idle (no stale selectedId)", async () => {
-    // High-stakes path: option click moves to predicting. Cancel must
+    // High-stakes path with FF9 opt-in: enable prediction capture
+    // explicitly, then option click moves to predicting. Cancel must
     // return all the way to idle (not leave selectedId set).
     render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
+    // FF9 — opt in to prediction capture before clicking the option.
+    await userEvent.click(screen.getByRole("button", { name: /capture prediction/i }));
     await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
     // Predicting form is showing.
     expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
@@ -446,6 +449,52 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
     const redisBtn = screen.getByText("Redis").closest('[role="button"]')!;
     expect(redisBtn).toHaveAttribute("aria-disabled", "false");
+  });
+
+  it("FF9 — high-stakes pick WITHOUT opting in submits directly (no prediction modal)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
+    // No opt-in click. Pick directly.
+    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    // Pre-FF9 this would have entered the predicting modal. Now it
+    // submits straight through.
+    expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const calls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes("/api/decisions"));
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    // Body has no prediction payload.
+    const body = JSON.parse(calls[0][1].body as string);
+    expect(body.predictedOutcome).toBeUndefined();
+    expect(body.confidence).toBeUndefined();
+  });
+
+  it("FF9 — high-stakes pick WITH opting in enters predicting + submits prediction payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
+    await userEvent.click(screen.getByRole("button", { name: /capture prediction/i }));
+    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
+    // Fill prediction and confirm.
+    await userEvent.type(screen.getByPlaceholderText(/cache hit rate/i), "smooth rollout");
+    const confirmBtn = await screen.findByRole("button", { name: /commit with prediction/i });
+    await userEvent.click(confirmBtn);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const calls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes("/api/decisions"));
+    const body = JSON.parse(calls[calls.length - 1][1].body as string);
+    expect(body.predictedOutcome).toBe("smooth rollout");
+  });
+
+  it("FF9 — toggle button is HIDDEN on non-high-stakes decisions", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" stakes="medium" />);
+    expect(screen.queryByRole("button", { name: /capture prediction/i })).toBeNull();
   });
 
   it("X5 — sendBack rapid double-submit fires only ONE comment POST", async () => {

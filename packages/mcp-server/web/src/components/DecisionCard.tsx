@@ -90,6 +90,16 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
    */
   const [showSendBack, setShowSendBack] = useState(false);
   const [sendBackText, setSendBackText] = useState("");
+  // FF9 — opt-in for the prediction-capture phase on high-stakes
+  // decisions. Pre-FF9 every high-stakes pick was forced through the
+  // predicting modal, which the PMF council called the loudest
+  // remaining friction post-EE ("the prediction step now shouts
+  // because everything else has gone quiet"). Memory entry
+  // `feedback_optional_features.md` codifies the principle: opinionated
+  // agent behaviors should be opt-in, not always-on. Default off; user
+  // toggles "+ Capture prediction with my pick" before clicking an
+  // option to enter the predicting flow.
+  const [predictOptIn, setPredictOptIn] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Derived flags — keep the read sites readable without sprinkling
@@ -124,8 +134,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
   const handleSelect = async (optionId: string) => {
     if (phase.kind !== "idle") return;
-    // High-stakes → gate on a prediction capture step
-    if (stakes === "high") {
+    // FF9 — gate on stakes==='high' AND user opted in to prediction
+    // capture for THIS decision. Pre-FF9 the predicting phase fired
+    // unconditionally on high-stakes; users habituated to mashing
+    // through the modal and the calibration data quality dropped.
+    if (stakes === "high" && predictOptIn) {
       setPhase({ kind: "predicting", optionId });
       return;
     }
@@ -662,6 +675,21 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                 title="The reason you pick gets recorded as the why for every rejected option"
               >
                 + Add reasoning <span className="opacity-60">(remembered across sessions)</span>
+              </button>
+            )}
+            {/* FF9 — opt-in prediction capture toggle on high-stakes
+                decisions. When ON, clicking an option enters the
+                predicting phase (confidence + outcome inputs) before
+                submitting; when OFF (default), the pick submits
+                immediately. Surfaces only when stakes='high'. */}
+            {stakes === "high" && (
+              <button
+                onClick={() => setPredictOptIn((v) => !v)}
+                className={`transition-colors ${predictOptIn ? "text-accent-violet" : "hover:text-accent-violet"}`}
+                title="Capture confidence + predicted outcome on this pick — for calibration over time"
+                aria-pressed={predictOptIn}
+              >
+                {predictOptIn ? "✓ Predicting outcome" : "+ Capture prediction with my pick"}
               </button>
             )}
             {artifactId && !showSendBack && (
