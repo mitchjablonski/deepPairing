@@ -751,45 +751,34 @@ export function LedgerPanel({
  * lever.
  */
 /**
- * EE10 — collapsed-by-default "+ Seed more" affordance for the
- * post-cold-start path. Lives at the bottom of the LedgerPanel's
- * "Seeded by you" section. Pre-EE10 the user could only paste rules
- * during the empty-ledger window; after the first seed, both inline
- * SeedAffordance instances disappeared (DD10 in IdleHome + drawer's
- * empty-state gating) and adding a 6th rule a week later required
- * direct API access.
+ * EE10 + FF7 — inline "Seed more" affordance at the bottom of the
+ * LedgerPanel's "Seeded by you" section.
+ *
+ * Pre-EE10 the user could only paste rules during the empty-ledger
+ * window; after the first seed, both inline SeedAffordance instances
+ * disappeared (DD10 in IdleHome + drawer's empty-state gating) and
+ * adding a 6th rule a week later required direct API access. EE10
+ * fixed the access gap with a "+ Seed more" → "Cancel" toggle, but
+ * ease-of-use council called the click model out as inconsistent
+ * with the cold-start path (which renders SeedAffordance directly,
+ * no toggle). FF7 drops the toggle: SeedAffordance always renders
+ * inline under a slim "Seed more" label, matching cold-start. One
+ * gesture for both paths.
  */
 function SeedMoreInline() {
-  const [open, setOpen] = useState(false);
   const refetchLedger = useLedgerStore((s) => s.refetch);
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="mt-3 text-2xs text-accent-violet hover:text-accent-violet/80 underline-offset-2 hover:underline transition-colors"
-      >
-        + Seed more
-      </button>
-    );
-  }
   return (
-    <div className="mt-3">
+    <div className="mt-3" data-testid="ledger-seed-more">
+      <div className="text-2xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
+        Seed more
+      </div>
       <SeedAffordance
         onSeeded={() => {
-          // Refresh the digest so the new seeds appear immediately,
-          // and collapse back so the user can post another batch.
+          // Refresh the digest so the new seeds appear immediately
+          // in the "Seeded by you" section above.
           void refetchLedger();
-          setOpen(false);
         }}
       />
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        className="mt-2 text-2xs text-text-muted hover:text-text-secondary transition-colors"
-      >
-        Cancel
-      </button>
     </div>
   );
 }
