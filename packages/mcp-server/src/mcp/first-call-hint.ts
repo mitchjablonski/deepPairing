@@ -378,7 +378,12 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   }
   const droppedTotal = droppedContextual + droppedPolicy;
   if (droppedTotal > 0) {
-    const policyHint = droppedPolicy > 0
+    // FF8 — only emit the policy-specific hint when ONLY policy items
+    // dropped. If contextual also dropped, the generic recall pointer
+    // already named mode='philosophy' and the agent will discover the
+    // source filter via the recall tool description; stacking two
+    // hints reads as noisy.
+    const policyHint = droppedPolicy > 0 && droppedContextual === 0
       ? ` Use \`recall\` with mode='philosophy' source='user-seeded' to see all seeded stances.`
       : "";
     assembled.push(

@@ -344,6 +344,39 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("also fired 1× in real sessions");
     });
 
+    it("FF8 — when BOTH policy and contextual drop, the policy-specific hint is suppressed (single recall pointer suffices)", async () => {
+      // Pre-FF8 the 📦 line ended with two hints stacked: "Call recall
+      // with mode='philosophy' or mode='sessions'..." plus "Use recall
+      // with mode='philosophy' source='user-seeded'..." Noisy. Now the
+      // policy-specific hint only fires when ONLY policy dropped.
+      const { getGlobalStore } = await import("../../store/global-store.js");
+      const ledger = getGlobalStore();
+      // Heavy seeded stances → policy tier overflows.
+      for (let i = 0; i < 8; i++) {
+        ledger.recordInstance(
+          `FF8 long seed ${i} aaaaaaaaaaaaaa bbbbbbbbbb cccccccccccc dddddddddddddd eeeeeeeeeee`,
+          { project: "manual", sessionId: "seed", verdict: "rejected", description: "x" },
+        );
+      }
+      // AND a heavy contextual-tier rejected approach so contextual also
+      // overflows. Use repeated rejections to make a chunky memory block.
+      for (let i = 0; i < 6; i++) {
+        store.recordRejectedApproach({
+          description: `FF8 contextual rejection number ${i} with long-prose content padding to push budget over the cap aaaa bbbb cccc dddd eeee`,
+          reason: "test padding to push budget consumption past the contextual cap",
+        });
+      }
+      const { text } = await callTool("present_findings", {
+        summary: "FF8 trigger",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      expect(text).toContain("📦");
+      // The generic recall pointer is present.
+      expect(text).toMatch(/Call `recall` with mode='philosophy' or mode='sessions'/);
+      // The policy-specific hint is NOT stacked on top.
+      expect(text).not.toMatch(/Use `recall` with mode='philosophy' source='user-seeded'/);
+    });
+
     it("EE1 — seeded stances respect the policy cap; cap-overflow nudges agent to recall mode='philosophy' source='user-seeded'", async () => {
       // Pre-EE1, seeded stances pushed into blockingParts which was
       // appended unconditionally before the contextual budget loop —
