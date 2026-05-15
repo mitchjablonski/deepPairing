@@ -536,14 +536,67 @@ async function main() {
     // WebSocket server
     const wss = new WebSocketServer({ noServer: true });
 
+    // GG2 — auth the WebSocket upgrade. Pre-GG2 the upgrade handler did
+    // ZERO checks: no Origin, no X-Project-Hash, accepted any sessionId
+    // from the URL. Combined with the (pre-GG1) 0.0.0.0 bind that meant
+    // anyone on the LAN who guessed a sessionId got a real-time stream
+    // of every artifact + comment + trace for that session. Even with
+    // GG1's bind to 127.0.0.1, this is still defense-in-depth: a
+    // malicious site the user visits could (with the right Origin) try
+    // to upgrade against the daemon. Two checks:
+    //   1. Origin must be missing (curl/test path) OR localhost.
+    //      Browsers always send Origin on upgrade; cross-origin pages
+    //      can't lie about it.
+    //   2. X-Project-Hash query param (or header) must match the
+    //      daemon's projectHash when the daemon was constructed with
+    //      a projectRoot. Test fixtures without projectRoot get the
+    //      back-compat path (no hash check).
     (server as any).on?.("upgrade", (request: any, socket: any, head: any) => {
-      if (request.url?.startsWith("/ws")) {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit("connection", ws, request);
-        });
-      } else {
+      if (!request.url?.startsWith("/ws")) {
         socket.destroy();
+        return;
       }
+      // Origin guard.
+      const origin = request.headers?.origin as string | undefined;
+      if (origin) {
+        let host: string;
+        try {
+          host = new URL(origin).hostname;
+        } catch {
+          log(`[ws-upgrade] reject: malformed Origin "${origin}"`);
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]" && host !== "::1") {
+          log(`[ws-upgrade] reject: non-local Origin host "${host}"`);
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+      }
+      // Project-hash guard. Skip when the daemon wasn't constructed
+      // with a projectRoot (test fixtures, plugin install with bad
+      // cwd) — there's nothing to compare against.
+      if (daemonProjectHash) {
+        const url = new URL(request.url, "http://localhost");
+        const sentHash =
+          url.searchParams.get("projectHash") ||
+          (request.headers?.["x-project-hash"] as string | undefined);
+        if (sentHash && sentHash !== daemonProjectHash) {
+          log(`[ws-upgrade] reject: project-hash mismatch (sent=${sentHash} daemon=${daemonProjectHash})`);
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        // Note: if the client sends NO projectHash we fall through
+        // (back-compat for older browsers that haven't started sending
+        // it yet). Once every shipped client sends the hash this can
+        // tighten to require it.
+      }
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
     });
 
     wss.on("connection", (ws, request) => {
