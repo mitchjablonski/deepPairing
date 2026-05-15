@@ -47,9 +47,7 @@ Auto-memory is a text dump the model is *encouraged* to consult. Canvases are pr
 
 deepPairing's `runPreflight` ([packages/mcp-server/src/mcp/preflight-validator.ts](packages/mcp-server/src/mcp/preflight-validator.ts)) is a hard pre-flight gate. Every `present_findings` / `present_options` / `present_plan` / `present_code_change` call gets matched against your Philosophy Ledger via concept-token + scope-glob rules. Match → tool returns `REJECTED_APPROACH_BLOCKED` and the artifact is never created. The agent has to revise or escalate; it can't paraphrase past you.
 
-That's the moat. Everything below is the surface that makes it usable.[^1]
-
-[^1]: Theoretical backing: [Multi-Round Human–AI Collaboration with User-Specified Requirements](https://arxiv.org/html/2602.17646v1) (arXiv 2602.17646) formalizes user-defined indicator functions of counterfactual harm + online calibration to provably enforce collaboration constraints. The Philosophy Ledger is one realization of that idea applied to long-lived pairing across projects.
+That's the moat. Everything below is the surface that makes it usable.
 
 ## What makes this different
 

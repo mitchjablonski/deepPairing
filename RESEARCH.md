@@ -1,8 +1,13 @@
 # deepPairing - Research Brief
 
+> **Note:** This document captures research notes from project inception
+> (early 2026). It is not a current architecture spec — see
+> [CLAUDE.md](CLAUDE.md) for the shipped design. Some early framings here
+> have been refined as the build progressed.
+
 ## Executive Summary
 
-There is a clear, underserved gap in the AI developer tools market. The industry has bifurcated into two camps — **full autonomy** (Devin, Copilot Workspace) and **augmented autocomplete** (Copilot, basic Cursor) — while the **collaborative middle** remains nearly unexplored as a deliberate product design. deepPairing targets this gap with a framework where AI gathers information and presents structured decision points, while humans steer, decide, and refine.
+There is a clear, underserved gap in the AI developer tools market. The industry has bifurcated into two camps — **full autonomy** (Devin, Copilot Workspace) and **augmented autocomplete** (Copilot, basic Cursor) — while the **collaborative middle** remains relatively underexplored as an intentional product surface. Adjacent tools (Aider's architect mode, Cline, Continue) gesture at this space; deepPairing targets it with a framework where AI gathers information and presents structured decision points, while humans steer, decide, and refine.
 
 ### The Core Thesis (Validated by Research)
 
@@ -193,6 +198,8 @@ Features get copied in months. The moat is:
 ### Key Architectural Decisions
 
 **Event-sourced state management** with checkpoint-based branching (git-like DAG for decisions). Every state change — human and agent — recorded as an append-only event log. Gives full history, replayability, and branching.
+
+> *(Inception-era proposal — not the shipped design. The actual implementation uses a per-session JSON file store with append-only audit comments and a separate cross-project Philosophy Ledger. See [CLAUDE.md](CLAUDE.md) for current architecture.)*
 
 **Tiered autonomy model:**
 - Low-risk actions → auto-execute (formatting, simple refactors)
