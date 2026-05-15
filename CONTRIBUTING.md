@@ -33,7 +33,7 @@ packages/
   shared/         # Zod schemas, types, fixtures (published as @deeppairing/shared)
   mcp-server/     # MCP server + HTTP/WS server + companion web UI
     src/
-      mcp/        # MCP protocol handlers (8 tools)
+      mcp/        # MCP protocol handlers (13 tools)
       http/       # Hono HTTP + WebSocket server
       store/      # File-based persistence (.deeppairing/)
       cli/        # npx deeppairing init
