@@ -1,5 +1,12 @@
 # deepPairing
 
+**An MCP server + companion web UI that turns Claude Code into a pair-programming partner — and remembers your "no" across every project so the agent can't paraphrase past you.**
+
+![hero — rejection-block toast](docs/assets/hero.png)
+*The hero moment: the agent paraphrases a stance you rejected last week, deepPairing intercepts before the artifact is created. Replace this image by recording your own session — see [`docs/assets/README.md`](docs/assets/README.md).*
+
+---
+
 > The agent proposes "let's add a global mutable ConfigStore singleton."
 > You reject it: *"we tried global state for config last project — broke testability."*
 > Three minutes later it tries again, paraphrased: *"add a global config cache for hot lookups."*
@@ -9,6 +16,9 @@
 > *You rejected this 3 days ago: "broke testability in 3 places."*
 
 That refusal — and the cross-project taste it's drawing from — is what deepPairing exists to do.
+
+![Your taste drawer — Philosophy Ledger](docs/assets/ledger.png)
+*The Ledger view inside the companion UI: every stance you've accumulated, with citation counts here and across projects.*
 
 ## Try it in two minutes (no Claude Code yet)
 
