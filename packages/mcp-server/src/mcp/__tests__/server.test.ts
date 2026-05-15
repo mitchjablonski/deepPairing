@@ -171,7 +171,7 @@ describe("MCP Tool Handlers", () => {
         summary: "x",
         findings: [{ category: "x", detail: "x", significance: "low" }],
       });
-      expect(text).not.toContain("🏢 Team conventions");
+      expect(text).not.toContain("🚫 Team rules");
     });
 
     it("renders require / avoid / prefer groups with scope and rationale", async () => {
@@ -203,7 +203,7 @@ describe("MCP Tool Handlers", () => {
       });
       const text = (result.content as any[])?.[0]?.text ?? "";
 
-      expect(text).toContain("🏢 Team conventions");
+      expect(text).toContain("🚫 Team rules");
       expect(text).toContain("Required:");
       expect(text).toContain("argon2id for password hashing");
       expect(text).toContain("bcrypt is brute-forceable");
@@ -215,7 +215,7 @@ describe("MCP Tool Handlers", () => {
 
       // Team conventions + personal philosophy + guardrails are NEVER merged —
       // each has its own header so the agent can see the authority distinction.
-      expect(text).toContain("🏢 Team conventions");
+      expect(text).toContain("🚫 Team rules");
       // No stray merged "Team + personal" header.
       expect(text).not.toMatch(/Team\s*\+\s*personal/i);
 
@@ -252,20 +252,83 @@ describe("MCP Tool Handlers", () => {
       });
       const text = (result.content as any[])?.[0]?.text ?? "";
       // Hard rules block is the obligations-tier copy.
-      expect(text).toContain("🏢 Team conventions");
-      expect(text).toMatch(/hard rules.*'require' as imperatives.*'avoid' as refusal triggers/i);
+      expect(text).toContain("🚫 Team rules");
+      expect(text).toMatch(/hard.*'require' as imperatives.*'avoid' as refusal triggers/i);
       expect(text).toContain("FF5 hard required");
       expect(text).toContain("FF5 hard avoid");
       // Soft preferences are now a separate, contextual-tier block.
-      expect(text).toContain("🏢 Team preferences");
+      expect(text).toContain("💡 Team preferences");
       expect(text).toMatch(/taste, weigh against the user's goal/i);
       expect(text).toContain("FF5 soft preference");
       // The hard-rules block precedes the soft-preferences block in the
       // assembled hint (obligations come before contextual).
-      const hardIdx = text.indexOf("🏢 Team conventions");
-      const softIdx = text.indexOf("🏢 Team preferences");
+      const hardIdx = text.indexOf("🚫 Team rules");
+      const softIdx = text.indexOf("💡 Team preferences");
       expect(hardIdx).toBeGreaterThanOrEqual(0);
       expect(softIdx).toBeGreaterThan(hardIdx);
+      freshStore.forceFlush();
+      fs.rmSync(freshTmp, { recursive: true, force: true });
+    });
+
+    it("GG4 — large team.json caps the rules section at TEAM_RULES_BUDGET_CHARS + emits 📦 N more trailer", async () => {
+      // Pre-GG4 obligationsParts was uncapped — a 50-rule team.json
+      // dumped ~6KB into every first-call hint, dwarfing the 1500-char
+      // budget. Cap is 600 chars; trailer mentions the dropped count
+      // and points the agent at .deeppairing/team.json for the rest.
+      const freshTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-team-gg4-"));
+      fs.mkdirSync(path.join(freshTmp, ".deeppairing"), { recursive: true });
+      // 30 require + 30 avoid rules, each ~80 chars rendered. Total
+      // ~5KB — well past the 600 cap.
+      const preferences = [];
+      for (let i = 0; i < 30; i++) {
+        preferences.push({
+          id: `req${i}`, kind: "require",
+          concept: `GG4 required rule number ${i} with prose`,
+          rationale: `regulatory requirement that exists for compliance reason number ${i}`,
+        });
+      }
+      for (let i = 0; i < 30; i++) {
+        preferences.push({
+          id: `av${i}`, kind: "avoid",
+          concept: `GG4 forbidden pattern number ${i}`,
+          rationale: `incident history reason number ${i} that we never want to repeat`,
+        });
+      }
+      fs.writeFileSync(
+        path.join(freshTmp, ".deeppairing", "team.json"),
+        JSON.stringify({ version: 1, preferences }),
+      );
+      const freshStore = new FileStore(freshTmp, "team_gg4_session");
+      const { server: freshServer } = createMcpServer(freshStore, () => {}, 4000);
+      const [c, s] = InMemoryTransport.createLinkedPair();
+      await freshServer.connect(s);
+      const freshClient = new Client({ name: "t", version: "1.0" });
+      await freshClient.connect(c);
+      const result = await freshClient.callTool({
+        name: "present_findings",
+        arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
+      });
+      const text = (result.content as any[])?.[0]?.text ?? "";
+      // Header survives.
+      expect(text).toContain("🚫 Team rules");
+      // At least one rule survives.
+      expect(text).toMatch(/GG4 (required|forbidden)/);
+      // The 📦 trailer appears with a dropped count + pointer.
+      expect(text).toMatch(/📦 \d+ more rule lines? — see \.deeppairing\/team\.json/);
+      // The team-rules block alone is bounded — pull out just the section.
+      const sectionStart = text.indexOf("🚫 Team rules");
+      const nextSectionStart = (() => {
+        const candidates = ["📋 From previous sessions", "🌱", "🧭", "💡 Team preferences", "📦"];
+        let best = text.length;
+        for (const c of candidates) {
+          const idx = text.indexOf(c, sectionStart + 1);
+          if (idx > 0 && idx < best) best = idx;
+        }
+        return best;
+      })();
+      const teamSection = text.slice(sectionStart, nextSectionStart);
+      // Allow some overhead — must be well under the 1500-char total budget.
+      expect(teamSection.length).toBeLessThan(800);
       freshStore.forceFlush();
       fs.rmSync(freshTmp, { recursive: true, force: true });
     });
@@ -292,7 +355,7 @@ describe("MCP Tool Handlers", () => {
       });
       const text = (result.content as any[])?.[0]?.text ?? "";
 
-      expect(text).not.toContain("🏢 Team conventions");
+      expect(text).not.toContain("🚫 Team rules");
 
       freshStore.forceFlush();
       fs.rmSync(freshTmp, { recursive: true, force: true });
