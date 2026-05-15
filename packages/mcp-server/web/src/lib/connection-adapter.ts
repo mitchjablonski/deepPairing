@@ -27,16 +27,38 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
   constructor(url?: string, private sessionId?: string) {
     const base = url ?? `ws://${window.location.host}/ws`;
-    this.url = sessionId ? `${base}?sessionId=${sessionId}` : base;
+    this.url = WebSocketAdapter.appendQuery(base, sessionId);
   }
 
   /** Reconnect to a different session */
   switchSession(sessionId: string): void {
     this.sessionId = sessionId;
     const base = `ws://${window.location.host}/ws`;
-    this.url = `${base}?sessionId=${sessionId}`;
+    this.url = WebSocketAdapter.appendQuery(base, sessionId);
     this.disconnect();
     this.connect();
+  }
+
+  // GG2 — also stamp projectHash on the WS connect URL when the
+  // connection store knows it. The daemon's upgrade handler enforces
+  // the match (defense-in-depth on top of GG1's 127.0.0.1 bind).
+  // Pre-GG2 the URL was just `?sessionId=...` and the daemon accepted
+  // any guess; with this every WS upgrade carries the stale-tab
+  // guard the AA4 X-Project-Hash middleware already enforces on HTTP.
+  private static appendQuery(base: string, sessionId?: string): string {
+    const params = new URLSearchParams();
+    if (sessionId) params.set("sessionId", sessionId);
+    try {
+      const projectHash = (window as any).__dpConnectionStore?.getState?.()?.projectHash;
+      if (typeof projectHash === "string" && projectHash) {
+        params.set("projectHash", projectHash);
+      }
+    } catch {
+      // Connection store not yet available (early mount); the daemon
+      // back-compat path accepts the upgrade without a hash.
+    }
+    const qs = params.toString();
+    return qs ? `${base}?${qs}` : base;
   }
 
   connect(): void {
