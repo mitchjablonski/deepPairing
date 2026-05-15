@@ -137,8 +137,17 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // filters is cheaper and clearer.
   type LedgerEntry = ReturnType<ReturnType<typeof getGlobalStore>["query"]>[number];
   let allLedgerEntries: LedgerEntry[] = [];
+  // GG3 — load the ledger in its OWN try so a downstream philosophy/seed
+  // assembly throw doesn't strand allLedgerEntries empty (which would
+  // silence R2 below). Pre-GG3 the FF10 hoist put the load + assembly
+  // in one try-catch; any future bad-instance crash inside seeded
+  // mapping silently killed the welcome-back line too.
   try {
     allLedgerEntries = getGlobalStore().query({ limit: 10000 });
+  } catch {
+    // Ledger read failure — both philosophy and R2 will skip cleanly.
+  }
+  try {
     const avoidList = allLedgerEntries.filter((e) => e.stance === "avoid").slice(0, 3);
     const preferList = allLedgerEntries.filter((e) => e.stance === "prefer").slice(0, 3);
     const philosophyParts: string[] = [];
