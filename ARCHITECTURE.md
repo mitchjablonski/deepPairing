@@ -1,557 +1,211 @@
-# deepPairing — Architecture & Risk Assessment
+# deepPairing Architecture
 
-## System Architecture
+> Last updated: 2026-05. For day-to-day project conventions see
+> [CLAUDE.md](CLAUDE.md). For research notes from project inception see
+> [RESEARCH.md](RESEARCH.md) (historical, not current).
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         USER'S BROWSER                              │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                    deepPairing Web App (React + Vite)          │ │
-│  │                                                                │ │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────┐ │ │
-│  │  │  Research    │  │  Decision    │  │  Code Editor         │ │ │
-│  │  │  Dashboard   │  │  Tree View   │  │  (CodeMirror 6)      │ │ │
-│  │  │             │  │  (React Flow)│  │  - Annotated diffs   │ │ │
-│  │  │  - Findings │  │  - Branch    │  │  - Inline reasoning  │ │ │
-│  │  │  - Evidence │  │  - Compare   │  │  - Comment threads   │ │ │
-│  │  │  - Citations│  │  - Navigate  │  │  - Accept/reject     │ │ │
-│  │  └─────────────┘  └──────────────┘  └──────────────────────┘ │ │
-│  │                                                                │ │
-│  │  ┌──────────────────────┐  ┌────────────────────────────────┐ │ │
-│  │  │  Option Comparison   │  │  Agent Activity Stream         │ │ │
-│  │  │  - Side-by-side      │  │  - Real-time tool calls        │ │ │
-│  │  │  - Tradeoff matrix   │  │  - Progress indicators         │ │ │
-│  │  │  - Human selection   │  │  - Interrupt/redirect controls │ │ │
-│  │  └──────────────────────┘  └────────────────────────────────┘ │ │
-│  │                                                                │ │
-│  │  State: Zustand + Immer (immutable snapshots for branching)   │ │
-│  │  Agent Workflows: XState (state machines for session lifecycle)│ │
-│  └────────────────────────────────────────────────────────────────┘ │
-│         │                                    ▲                      │
-│         │ HTTP/WebSocket                     │ SSE (streaming)      │
-└─────────┼────────────────────────────────────┼──────────────────────┘
-          │                                    │
-          ▼                                    │
-┌─────────────────────────────────────────────────────────────────────┐
-│                    deepPairing API Server                            │
-│                    (TypeScript + Hono)                               │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    SESSION ORCHESTRATOR                       │   │
-│  │                                                              │   │
-│  │  ┌─────────────────┐  ┌──────────────────────────────────┐  │   │
-│  │  │ Session Manager  │  │ Streaming Parser                 │  │   │
-│  │  │                 │  │                                  │  │   │
-│  │  │ - Create/resume │  │ - Parse stream-json events       │  │   │
-│  │  │ - Fork at       │  │ - Classify: text / tool_call /   │  │   │
-│  │  │   decision pts  │  │   tool_result / thinking         │  │   │
-│  │  │ - Track lineage │  │ - Emit structured UI events      │  │   │
-│  │  │ - GC old        │  │ - Detect agent state (reading/   │  │   │
-│  │  │   sessions      │  │   writing/running/thinking)      │  │   │
-│  │  └─────────────────┘  └──────────────────────────────────┘  │   │
-│  │                                                              │   │
-│  │  ┌─────────────────┐  ┌──────────────────────────────────┐  │   │
-│  │  │ Decision Engine  │  │ Approval Gate                    │  │   │
-│  │  │                 │  │                                  │  │   │
-│  │  │ - Classify risk │  │ - Low risk: auto-approve         │  │   │
-│  │  │ - Record        │  │ - Med risk: approve + flag       │  │   │
-│  │  │   decisions     │  │ - High risk: BLOCK → present     │  │   │
-│  │  │ - Build DAG     │  │   decision UI → wait for human   │  │   │
-│  │  │ - Track         │  │ - Timeout: configurable per-risk │  │   │
-│  │  │   downstream    │  │ - Default action on timeout      │  │   │
-│  │  └─────────────────┘  └──────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    HOOK HANDLER                               │   │
-│  │                                                              │   │
-│  │  Receives all PreToolUse / PostToolUse events from Agent SDK │   │
-│  │                                                              │   │
-│  │  On PreToolUse:                                              │   │
-│  │    1. Classify risk level (read=low, edit=med, bash=varies)  │   │
-│  │    2. Log to event store                                     │   │
-│  │    3. If high-risk: BLOCK, push to approval queue            │   │
-│  │    4. If low-risk: ALLOW, stream event to UI                 │   │
-│  │                                                              │   │
-│  │  On PostToolUse:                                             │   │
-│  │    1. Capture result                                         │   │
-│  │    2. Update decision tree state                             │   │
-│  │    3. Stream result to UI                                    │   │
-│  │                                                              │   │
-│  │  ⚠️  CONSTRAINT: Hooks have 60s timeout (configurable)       │   │
-│  │  ⚠️  Human approval must complete within timeout window      │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    MCP SERVER                                 │   │
-│  │                    (@modelcontextprotocol/sdk)                │   │
-│  │                                                              │   │
-│  │  Exposes tools that Claude can call:                         │   │
-│  │                                                              │   │
-│  │  deepPairing:present_findings                                │   │
-│  │    → Agent calls this after research phase                   │   │
-│  │    → Returns structured findings for UI rendering            │   │
-│  │                                                              │   │
-│  │  deepPairing:request_decision                                │   │
-│  │    → Agent calls this at decision points                     │   │
-│  │    → Blocks until human responds via UI                      │   │
-│  │    → Returns selected option + human reasoning               │   │
-│  │                                                              │   │
-│  │  deepPairing:present_options                                 │   │
-│  │    → Agent calls with 2-3 approaches + tradeoffs             │   │
-│  │    → UI renders comparison view                              │   │
-│  │    → Returns human's selection                               │   │
-│  │                                                              │   │
-│  │  deepPairing:log_reasoning                                   │   │
-│  │    → Agent explains WHY it's doing something                 │   │
-│  │    → Stored in decision DAG, shown as annotations            │   │
-│  │                                                              │   │
-│  │  ⚠️  CONSTRAINT: Claude treats MCP tools like any tool —     │   │
-│  │  no guarantee it calls them without strong prompting         │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                          │                                          │
-│                          │ Agent SDK (TypeScript)                   │
-│                          │ Spawns Claude Code as subprocess         │
-│                          ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    CLAUDE CODE SESSION                        │   │
-│  │                    (via Agent SDK query())                    │   │
-│  │                                                              │   │
-│  │  System prompt includes:                                     │   │
-│  │    - deepPairing collaboration instructions                  │   │
-│  │    - "Always use deepPairing:present_options at decisions"   │   │
-│  │    - "Always use deepPairing:log_reasoning before changes"   │   │
-│  │    - Project context (CLAUDE.md)                             │   │
-│  │    - User preferences learned over time                      │   │
-│  │                                                              │   │
-│  │  Built-in tools: Read, Edit, Bash, Grep, Glob, WebSearch    │   │
-│  │  MCP tools: deepPairing:* (from our MCP server)             │   │
-│  │  Hooks: PreToolUse, PostToolUse, Stop (from our handler)    │   │
-│  │                                                              │   │
-│  │  Config:                                                     │   │
-│  │    max_turns: 50 (loop guard)                                │   │
-│  │    max_budget_usd: 2.00 (cost guard)                         │   │
-│  │    output_format: stream-json                                │   │
-│  │                                                              │   │
-│  │  ⚠️  CONSTRAINT: ~12s startup overhead per new session       │   │
-│  │  ⚠️  CONSTRAINT: ~8-12 internal API calls per agent turn     │   │
-│  │  ⚠️  CONSTRAINT: Auto-compaction is opaque and destructive   │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                    POSTGRESQL (Neon)                          │   │
-│  │                                                              │   │
-│  │  events          — Append-only event log (all actions)       │   │
-│  │  decisions       — Decision DAG nodes                        │   │
-│  │  decision_edges  — Parent→child relationships in tree        │   │
-│  │  sessions        — Session metadata + forking lineage        │   │
-│  │  annotations     — Human comments on agent work              │   │
-│  │  user_prefs      — Learned autonomy preferences              │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+## One-paragraph summary
 
----
+deepPairing is an **MCP server + companion web UI** that runs inside
+Claude Code. Claude Code IS the agent — deepPairing is the *protocol +
+review surface* that turns one-shot tool calls into pair-programming.
+Findings, decisions, plans, and code changes go through structured
+artifacts that the human reviews in a local web UI; every rejection
+becomes a typed entry in a cross-project Philosophy Ledger that future
+sessions match against before the agent can paraphrase past you.
 
-## Interaction Flow: The Three Phases
+## Process model
 
 ```
-PHASE 1: GATHER                    PHASE 2: PRESENT                   PHASE 3: EXECUTE
-(Agent works, human watches)       (Human decides, agent waits)       (Agent executes decision)
-
-┌─────────────────────────┐   ┌──────────────────────────────┐   ┌─────────────────────────┐
-│                         │   │                              │   │                         │
-│  Agent receives task    │   │  Agent calls MCP tool:       │   │  Agent implements       │
-│  via system prompt      │   │  deepPairing:present_options │   │  selected approach      │
-│         │               │   │         │                    │   │         │               │
-│         ▼               │   │         ▼                    │   │         ▼               │
-│  Agent uses built-in    │   │  Backend receives structured │   │  Each tool call flows   │
-│  tools to research:     │   │  options data, pushes to UI  │   │  through hooks:         │
-│  - Read (explore code)  │   │         │                    │   │  - Low risk: auto       │
-│  - Grep (find patterns) │   │         ▼                    │   │  - High risk: approve   │
-│  - Bash (run analysis)  │   │  UI renders comparison view: │   │         │               │
-│  - WebSearch (docs)     │   │  ┌────────┬────────┐        │   │         ▼               │
-│         │               │   │  │Option A│Option B│        │   │  Changes streamed to    │
-│         ▼               │   │  │        │        │        │   │  UI as annotated diffs  │
-│  All tool calls stream  │   │  │Pros:   │Pros:   │        │   │  with reasoning from    │
-│  to UI via hooks →      │   │  │  ...   │  ...   │        │   │  deepPairing:log_reason │
-│  "Agent Activity" panel │   │  │Cons:   │Cons:   │        │   │         │               │
-│         │               │   │  │  ...   │  ...   │        │   │         ▼               │
-│         ▼               │   │  └────────┴────────┘        │   │  Human can:             │
-│  Agent calls MCP tool:  │   │         │                    │   │  - Accept changes       │
-│  deepPairing:present_   │   │         ▼                    │   │  - Edit inline          │
-│    findings             │   │  Human selects option,       │   │  - Comment/annotate     │
-│  (triggers Phase 2)     │   │  optionally adds reasoning   │   │  - Redirect agent       │
-│                         │   │         │                    │   │  - Branch to explore    │
-│                         │   │         ▼                    │   │    alternative           │
-│                         │   │  MCP tool returns selection  │   │                         │
-│                         │   │  to agent (triggers Phase 3) │   │                         │
-└─────────────────────────┘   └──────────────────────────────┘   └─────────────────────────┘
-
-         │                              │                              │
-         ▼                              ▼                              ▼
-   Hook: PostToolUse             MCP: Blocking call              Hook: PreToolUse
-   streams to UI                 waits for human                 gates execution
-   (fire-and-forget)             (up to timeout)                 (allow/deny/ask)
+┌──────────────────┐       stdio (MCP)        ┌──────────────────────┐
+│   Claude Code    │ ◄──────────────────────► │  MCP server wrapper  │
+│  (IS the agent)  │                          │   (per-session,      │
+└──────────────────┘                          │    src/standalone.ts)│
+                                              └──────────┬───────────┘
+                                                         │ HTTP
+                                                         ▼
+┌──────────────────┐    HTTP+WS    ┌────────────────────────────────┐
+│ Companion web UI │ ◄───────────► │   deepPairing daemon           │
+│ localhost:3847   │  port 3847    │   (one per host, not per       │
+│ (React + Vite)   │               │    project — multi-session)    │
+└──────────────────┘               │   src/daemon.ts + http/        │
+                                   └────────────────────────────────┘
+                                                         │
+                                                         ▼ FileStore
+                                            ┌────────────────────────┐
+                                            │  <project>/.deeppairing/│
+                                            │  ~/.deeppairing/        │
+                                            │  (JSON files)           │
+                                            └────────────────────────┘
 ```
 
----
+Three processes:
 
-## Session Branching Model
+- **Claude Code** is the LLM client. It speaks the Model Context
+  Protocol over stdio.
+- **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
+  session. Implements the 13 MCP tools (see below). Talks to the
+  daemon over HTTP for state read/write so multiple sessions share a
+  single source of truth.
+- **deepPairing daemon** (`src/daemon.ts`) — one per host. Owns the
+  HTTP+WebSocket server on port 3847, the per-session FileStores, and
+  the global Philosophy Ledger. Auto-shuts down when no clients have
+  been connected for ~5 minutes.
 
-```
-                        Session A (main)
-                             │
-                    Agent researches...
-                             │
-                    Presents 3 options
-                             │
-                   Human selects Option B
-                             │
-              ┌──────────────┼──────────────┐
-              │              │              │
-         Session A      Session A-1     Session A-2
-         (continues     (fork: what     (fork: what
-          with B)        if we chose     if we chose
-                         Option A?)      Option C?)
-              │              │              │
-         Implements B   Implements A    Implements C
-              │              │              │
-              ▼              ▼              ▼
-         Human reviews  (background)   (background)
-         main path      available for   available for
-                        comparison      comparison
+This split was the X-series refactor. Pre-X, every wrapper ran its own
+HTTP server and the companion UI couldn't see other projects. Post-X,
+the daemon is the single owner; wrappers register sessions with it and
+DaemonClient (`src/daemon-client.ts`) implements `IStore` over HTTP so
+the same code paths work in standalone or daemon mode.
 
-IMPLEMENTATION:
-  - "Fork" = new query() call with same session history + different user message
-  - Each fork runs in a SEPARATE git worktree (avoids file conflicts)
-  - Fork results stored in DB for comparison UI
-  - Human can "adopt" a fork as the new main path
-```
+## The MCP tool surface (13 tools)
 
----
+Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
+in `src/mcp/server.ts`. The split:
 
-## Risk Assessment & Mitigations
+**Present-* tools** (creates a draft artifact, broadcasts to UI):
+- `present_findings` — research artifact with structured evidence
+- `present_options` — decision artifact, prompts human to pick
+- `present_spec` — requirements/acceptance criteria
+- `present_plan` — multi-step implementation plan
+- `present_code_change` — before/after diff with reasoning
 
-### RISK 1: Hook Timeout on Human Approval (CRITICAL)
+**Polling**:
+- `check_feedback` — long-poll up to 30s, returns new comments,
+  decision picks, plan verdicts. Optional `waitFor` enum scopes the
+  wake condition.
 
-**The Problem:**
-Hooks have a 60-second default timeout. If a human takes >60s to review and approve a
-high-risk action, the hook times out. The agent either proceeds without approval or
-fails — neither is acceptable.
+**Memory + memory queries**:
+- `recall` — search `mode='philosophy' | 'sessions' | 'ledger' | 'any'`
+  with optional `stance` and `source` filters
+- `log_reasoning` — record agent reasoning (low-stakes journal entry)
+- `revise_artifact` — supersede or retract a prior artifact
 
-**Severity:** Critical — breaks the core collaboration loop
+**Side-channel**:
+- `request_horizon_check` — flag a decision for retrospective review at
+  3mo/1y/2y
+- `answer_question` — agent reply to a human question on an artifact
+- `post_pr_review` — push approved findings as inline comments to a PR
+- `export_session` — markdown / pr-comments / json dump
 
-**Mitigations:**
-```
-Option A: MCP-based blocking (RECOMMENDED)
-  Instead of using hooks to block, have the AGENT call an MCP tool
-  (deepPairing:request_decision) that blocks on the server side.
-  The MCP tool handler holds the request open (long-poll) until the
-  human responds via the UI. No hook timeout issue.
+Tool calls return text-only `content` (no `structuredContent` yet —
+deferred). The companion UI subscribes to WebSocket broadcasts for
+artifact_created / comment_added / decision_resolved / etc. so the
+review surface stays live without HTTP polling.
 
-  Flow: Agent calls MCP tool → server holds → human responds via UI →
-        server returns to agent → agent proceeds
+## Pre-flight as the protocol gate
 
-  Risk: Agent may not always call the MCP tool when we want it to.
-  Mitigation: Strong system prompt instructions + hook as fallback.
+The defensible primitive. Every `present_*` call goes through
+`runPreflight` (`src/mcp/preflight-validator.ts`) BEFORE the artifact
+is created. The matcher reads:
 
-Option B: Extend hook timeout
-  Set hook timeout to 300s+ for approval-required hooks.
-  Risk: Blocks the entire agent for 5+ minutes. Expensive (context held in memory).
+- This session's `rejectedApproaches` (from `getSessionMemory`)
+- Team rules from `<project>/.deeppairing/team.json` (via
+  `getTeamPreferences`, with optional path-glob scope)
 
-Option C: Deny-and-requeue
-  Hook immediately denies the action. Backend queues the denied action.
-  When human approves, a new agent turn is started with "proceed with X."
-  Risk: More complex; agent may lose context between denial and re-approval.
+A match returns `REJECTED_APPROACH_BLOCKED` from the tool — the
+artifact is never created. Near-misses (50%-100% token coverage) get
+recorded in a sidecar trace so the breadcrumb in the UI can render
+"Almost flagged this — your past stance on X is adjacent."
 
-RECOMMENDATION: Option A (MCP-based) as primary, Option C as fallback.
-```
-
-### RISK 2: Claude Not Calling MCP Tools Reliably (HIGH)
-
-**The Problem:**
-Claude treats MCP tools like any other tool — it decides when to call them based on
-its own judgment. If Claude doesn't call `deepPairing:present_options` at decision
-points, the collaboration breaks.
-
-**Severity:** High — degrades to a standard autonomous agent
-
-**Mitigations:**
-```
-1. STRONG system prompt:
-   "CRITICAL: Before making ANY architectural decision or code change that
-    affects more than one file, you MUST call deepPairing:present_options
-    with at least 2 alternatives. Before ANY code change, call
-    deepPairing:log_reasoning explaining your approach."
-
-2. Hook-based enforcement:
-   PreToolUse hook for Edit/Write checks if deepPairing:log_reasoning
-   was called recently. If not, DENY the edit and return a message:
-   "You must explain your reasoning before making changes."
-
-3. Dual-path approach:
-   Use MCP tools as the HAPPY PATH. Use hooks as the ENFORCEMENT LAYER.
-   If the agent tries to edit without presenting options first, the hook
-   blocks it and reminds it to call the MCP tool.
-
-4. Prompt engineering iteration:
-   This will require significant testing. Budget 2-3 weeks of prompt
-   tuning to get Claude to reliably follow the collaboration protocol.
-
-RECOMMENDATION: Dual-path (MCP + hook enforcement). Test extensively.
-```
-
-### RISK 3: Session Startup Latency (MEDIUM)
-
-**The Problem:**
-~12 seconds to start a new Agent SDK session. Each turn involves 8-12 internal API
-calls. This creates noticeable latency at every interaction.
-
-**Severity:** Medium — hurts UX, doesn't break functionality
-
-**Mitigations:**
-```
-1. Keep sessions warm:
-   Don't create a new session per interaction. Keep a long-running session
-   and send new prompts via resume(). Startup cost is paid once.
-
-2. Optimistic UI:
-   Show the agent "thinking" animation immediately. Stream partial results
-   as they arrive. The UI should never feel frozen.
-
-3. Pre-warm sessions:
-   When user opens a project, pre-create a session in the background
-   with project context loaded. By the time they type, it's ready.
-
-4. Background forks:
-   When forking for exploration, run forks in background. User continues
-   with main session. Forks populate comparison UI when done.
-
-RECOMMENDATION: Warm sessions + optimistic UI. Budget for 2-5s per turn.
-```
-
-### RISK 4: Context Compaction Losing Decisions (HIGH)
-
-**The Problem:**
-Auto-compaction is opaque and destructive. In a long session, early decisions
-and their reasoning may be summarized away. The agent "forgets" why it chose
-approach B over A.
-
-**Severity:** High — undermines decision continuity, a core feature
-
-**Mitigations:**
-```
-1. External decision store (PRIMARY):
-   Every decision is persisted to PostgreSQL immediately via MCP tool
-   or hook. The agent's context window is NOT the source of truth for
-   decisions. The database is.
-
-2. Decision injection on compaction:
-   Register a PreCompact hook that captures critical context. After
-   compaction, inject a summary of key decisions back into the session.
-   
-   PreCompact hook → read decision DAG from DB → format as concise
-   summary → inject as system context for next turn.
-
-3. Short session strategy:
-   For complex tasks, prefer MANY short sessions over ONE long session.
-   Each session gets a briefing from the decision store.
-   
-   Session 1: Research → decisions stored in DB
-   Session 2: "Based on these decisions [from DB], implement..."
-   Session 3: "Review implementation against these decisions [from DB]..."
-
-4. Context budget monitoring:
-   Track token usage per session. When approaching 60% of context limit,
-   proactively start a new session with a decision summary.
-
-RECOMMENDATION: External decision store + short session strategy.
-The DB is the brain, not the context window.
-```
-
-### RISK 5: Concurrent Sessions on Same Codebase (MEDIUM)
-
-**The Problem:**
-File locking bugs and git race conditions when multiple sessions touch the
-same files. Branching exploration requires parallel sessions.
-
-**Severity:** Medium — breaks branching feature if unmitigated
-
-**Mitigations:**
-```
-1. Git worktrees for forks:
-   Each exploration branch runs in a separate git worktree.
-   
-   main session → works in /project
-   fork A → works in /project-worktree-a (git worktree add)
-   fork B → works in /project-worktree-b (git worktree add)
-   
-   No file conflicts. Each session has its own filesystem.
-   Comparison UI diffs the worktrees.
-
-2. Sequential main session:
-   Only ONE session modifies the main worktree at a time.
-   Forks are read-only analysis or operate on worktree copies.
-
-3. Job queue serialization:
-   Use BullMQ to serialize write operations to the same directory.
-   Multiple sessions can READ in parallel; WRITES are queued.
-
-RECOMMENDATION: Git worktrees for forks. This is clean and well-understood.
-```
-
-### RISK 6: Cost at Scale (MEDIUM)
-
-**The Problem:**
-$0.10-$1.00 per agent turn. A session with 20 turns = $2-20. With the
-collaboration loop (more turns due to human steering), costs could be higher
-than autonomous agents.
-
-**Severity:** Medium — affects pricing model and margins
-
-**Mitigations:**
-```
-1. Tiered model usage:
-   - Research/reading: Use Haiku ($0.25/$1.25 per MTok) for information gathering
-   - Decisions/planning: Use Sonnet for option generation
-   - Complex reasoning: Use Opus only when needed
-   
-   Most turns DON'T need Opus. A smart router saves 60-80% on costs.
-
-2. Aggressive caching:
-   Prompt caching (automatic in Agent SDK) reduces repeat context costs.
-   Cache hit = 90% discount on input tokens.
-
-3. Short, focused sessions:
-   Instead of one 50-turn session, run 5 × 10-turn sessions.
-   Each session gets a focused brief from the decision store.
-   Less context accumulation = lower cost per turn.
-
-4. Pass-through pricing:
-   Price deepPairing as $20-40/mo + usage. Let users choose their
-   cost/quality tradeoff (Haiku vs Opus).
-
-RECOMMENDATION: Tiered model routing + short sessions. Track cost per
-decision, not per session.
-```
-
-### RISK 7: Vendor Lock-in (LOW-MEDIUM)
-
-**The Problem:**
-Deep dependency on Anthropic's Agent SDK, Claude's behavior, and Anthropic's pricing.
-
-**Severity:** Low-medium — strategic risk, not immediate
-
-**Mitigations:**
-```
-1. Abstraction layer:
-   Define an AgentProvider interface:
-   
-   interface AgentProvider {
-     createSession(config): Session
-     query(session, prompt): AsyncStream<Event>
-     fork(session): Session
-     resume(session, prompt): AsyncStream<Event>
-   }
-   
-   Implement ClaudeAgentProvider first. Could add OpenAIProvider later.
-
-2. MCP is a standard:
-   MCP (Model Context Protocol) is becoming an industry standard.
-   Our MCP server works with any MCP-compatible agent, not just Claude.
-
-3. Decision store is portable:
-   The decision DAG, event log, and annotations are in PostgreSQL.
-   They're OUR data, not Claude's. Switching agents doesn't lose history.
-
-4. Prompt-level abstraction:
-   Keep collaboration instructions in configurable templates, not
-   hardcoded. Different agents may need different prompting styles.
-
-RECOMMENDATION: Build the abstraction layer from day 1. It's cheap
-insurance and enforces good architecture.
-```
-
----
-
-## What We Build vs. What We Get for Free
+## Persistence layout
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        WE BUILD                                  │
-│                                                                  │
-│  ✦ Research Dashboard UI          ✦ Decision Tree visualization │
-│  ✦ Option Comparison panels       ✦ Annotated diff viewer       │
-│  ✦ Approval Gate UI               ✦ Agent Activity stream       │
-│  ✦ Session Orchestrator           ✦ Hook Handler                │
-│  ✦ MCP Server (decision tools)    ✦ Streaming Parser            │
-│  ✦ Decision Engine + DAG store    ✦ Risk classifier             │
-│  ✦ Context injection on compact   ✦ Cost router (model tier)    │
-│  ✦ Git worktree manager           ✦ AgentProvider abstraction   │
-│                                                                  │
-│  EFFORT: ~80% of engineering time                                │
-│  VALUE:  This IS the product — the collaboration UX              │
-└─────────────────────────────────────────────────────────────────┘
+<project>/.deeppairing/
+  sessions/
+    <session_id>/
+      artifacts.json              # Findings, decisions, plans, code-changes
+      comments.json               # Human ↔ agent inline comments
+      decisions.json              # Resolved + pending decision records
+      plan-reviews.json           # Plan approval verdicts
+      preflight-traces.json       # Sidecar: what stances were considered
+      annotations.json            # Per-artifact UI annotations
+      session.json                # Session metadata + autonomy level
+      retrospectives.json         # P2 calibration outcomes
+  team.json                       # Team-shared rules (commit to git)
+  metrics.json                    # Local engagement counters
+  hooks-state.json                # Stop-hook fire log
 
-┌─────────────────────────────────────────────────────────────────┐
-│                      WE GET FOR FREE                             │
-│                      (from Claude Code Agent SDK)                │
-│                                                                  │
-│  ✦ File system tools (Read, Edit, Write, Glob, Grep)           │
-│  ✦ Bash execution (sandboxed)                                   │
-│  ✦ Web search & fetch                                           │
-│  ✦ Code analysis & understanding                                │
-│  ✦ Session persistence & resumption                             │
-│  ✦ Token streaming                                              │
-│  ✦ Prompt caching                                               │
-│  ✦ Subagent orchestration                                       │
-│  ✦ MCP protocol support                                         │
-│  ✦ Extended thinking / reasoning                                │
-│  ✦ Permission system (baseline)                                 │
-│                                                                  │
-│  EFFORT: ~0% (SDK dependency)                                    │
-│  VALUE:  Battle-tested agent infrastructure we'd spend           │
-│          6+ months building ourselves                            │
-└─────────────────────────────────────────────────────────────────┘
+~/.deeppairing/
+  philosophy/v1.json              # Cross-project Philosophy Ledger
+  daemon.json                     # Daemon liveness info (pid, port, project)
 ```
 
----
+All writes go through `writeJsonAtomic` (`.tmp.PID.TS.RAND` +
+`renameSync`) so a SIGKILL mid-write cannot corrupt the JSON store.
 
-## Decision: Build on Agent SDK?
+## The Philosophy Ledger (the moat)
 
-### YES, with guardrails
+`~/.deeppairing/philosophy/v1.json` is the single cross-project file.
+Schema is an append-only log of `PhilosophyInstance` entries keyed by
+normalized concept (lowercased, whitespace-collapsed). Stance
+(`avoid` / `prefer` / `mixed`) is *derived* from the rejection vs
+approval count, not stored — so a concept's stance can flip as the user
+re-evaluates without losing history.
 
-The Agent SDK gives us a massive head start on the agent infrastructure so we can
-focus on what actually differentiates deepPairing: the collaboration UX. But we must:
+Manually-seeded entries (via `POST /api/philosophy/seed` or the UI's
+SeedAffordance) carry `project: "manual"` so they're distinguishable
+from session-driven entries. Caps: ≤50 lines, ≤16 KiB UTF-8 per POST.
 
-1. **Never treat the agent's context as source of truth** — the DB is the brain
-2. **Use MCP tools as primary interaction + hooks as enforcement** — dual-path
-3. **Build the AgentProvider abstraction from day 1** — hedge vendor risk
-4. **Design for short sessions** — avoid context compaction problems
-5. **Use git worktrees for parallel exploration** — avoid file locking issues
-6. **Budget 2-3 weeks for prompt engineering** — getting Claude to reliably follow
-   the collaboration protocol is the hardest integration challenge
-7. **Monitor costs obsessively** — per-decision cost tracking, model tiering
+The ledger is the only structurally cross-project surface. Every
+session can query it via `recall(mode='philosophy' | 'ledger')` and
+the daemon's `/api/ledger/digest` aggregates it for the UI.
 
-### The honest tradeoff
+## Companion UI
 
-| | Build on Agent SDK | Build custom (LangGraph) |
-|---|---|---|
-| **Time to MVP** | 6-8 weeks | 16-20 weeks |
-| **Agent quality** | Excellent (Claude + battle-tested tools) | Good (but unproven custom tooling) |
-| **Collaboration control** | Indirect (prompts + hooks + MCP) | Direct (custom code at every step) |
-| **Cost per user** | Higher (Claude API pricing) | Lower (can use cheaper models) |
-| **Vendor lock-in** | Moderate (Anthropic) | Low (model-agnostic) |
-| **Maintenance** | SDK updates may break things | Full ownership, full burden |
-| **Branching/forking** | Workaround needed (worktrees) | First-class if designed in |
+```
+packages/mcp-server/web/
+  src/
+    App.tsx
+    components/         # ArtifactPanel, DecisionCard, LedgerPanel, etc.
+    stores/             # Zustand: artifact, connection, ledger, toast, ...
+    lib/                # connection-adapter, api, comment-anchor
+    hooks/              # useFocusTrap, useHighlightedCode, ...
+```
 
-**The collaboration control tradeoff is the key tension.** With Agent SDK, we influence
-Claude's behavior through prompts, hooks, and MCP tools — we don't directly control it.
-This is usually fine but occasionally frustrating. With a custom build, we control every
-step but spend months building inferior agent infrastructure.
+React + Vite + Tailwind + Zustand. WebSocket connects on mount; HTTP
+goes through `safeFetch` in `lib/api.ts` with structured `ApiError`
+typing. Project-hash binding (`X-Project-Hash` header + `?projectHash=`
+WS query) defends against stale-tab routing across daemon restarts.
 
-**Recommendation: Start with Agent SDK.** Ship the MVP fast. If the indirect control
-becomes a real bottleneck (not just an annoyance), we can build a custom agent layer
-later — informed by what we learned about what collaboration actually needs.
+The drawer (`YourTasteDrawer.tsx`) carries the four ledger surfaces:
+Stances, Ledger digest, This week (digest), Team. The cold-start home
+(`IdleHome.tsx`) defaults to the Ledger view + a SeedAffordance when
+no artifacts exist yet.
+
+## Security model
+
+See [SECURITY.md](SECURITY.md). Short version: the daemon binds
+`127.0.0.1` only, the WS upgrade enforces Origin + project-hash, and
+all HTTP routes go through the AA4 X-Project-Hash middleware. The
+threat model assumes the host machine is trusted — malicious npm
+packages in your project's dep tree can read `.deeppairing/sessions/`
+directly off disk.
+
+## Testing posture
+
+- **Fakes not mocks** (per CLAUDE.md). FileStore in `:memory:` mode
+  for fast tests; full HTTP integration tests for the daemon-routes
+  surface.
+- **Atomic suite**: `pnpm --filter @deeppairing/mcp-server test`
+  (~1000 tests, ~70s on a modern laptop).
+- **Component tests** in `web/src/components/__tests__/` use happy-dom
+  via the workspace vitest config; pure tests run in node.
+
+## Where to look first
+
+| Task                              | Start here                                              |
+|-----------------------------------|---------------------------------------------------------|
+| Add a new MCP tool                | `src/mcp/tools/` (mirror the `present-*.ts` pattern)    |
+| Change the preflight matcher      | `src/mcp/preflight-validator.ts`                        |
+| Wire a new HTTP route             | `src/http/routes.ts` or `src/daemon-routes.ts`          |
+| Add a UI surface                  | `web/src/components/` + a Zustand store in `web/src/stores/` |
+| Change the global ledger          | `src/store/global-store.ts` + `routes.ts:/api/ledger/*` |
+| Surface a WS event to the UI      | `src/daemon.ts` broadcast + `web/src/stores/connection.ts` switch |
+
+## Schemas live in `packages/shared`
+
+Zod schemas in `packages/shared/src/schemas/` are the single source of
+truth for `Artifact`, `Comment`, `Evidence`, `Finding`, etc. Both the
+MCP server and the companion UI import from `@deeppairing/shared`. New
+fields must be optional for back-compat (per CLAUDE.md).
