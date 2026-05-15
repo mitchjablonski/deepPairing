@@ -102,25 +102,55 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       const required = prefs.filter((p: any) => p.kind === "require").map(render);
       const avoided = prefs.filter((p: any) => p.kind === "avoid").map(render);
       const preferred = prefs.filter((p: any) => p.kind === "prefer").map(render);
-      // FF5 — split team prefs across tiers. 'require' and 'avoid' are
-      // hard rules with refusal/coercion semantics; pre-FF5 they lived
-      // in contextualParts (droppable behind the budget cap), which
-      // meant a busy session could silently lose hard rules to ledger
-      // stats or other advisory copy. 'prefer' is taste — fine in
-      // contextual. The header line stays consistent so the agent
-      // sees the same framing whether the rules came through
-      // obligations or contextual.
-      const hardSections: string[] = [];
-      if (required.length) hardSections.push(`Required:\n${required.join("\n")}`);
-      if (avoided.length) hardSections.push(`Avoid:\n${avoided.join("\n")}`);
-      if (hardSections.length > 0) {
-        obligationsParts.push(
-          `\n🏢 Team conventions (from .deeppairing/team.json — hard rules — 'require' as imperatives, 'avoid' as refusal triggers):\n${hardSections.join("\n")}`,
-        );
+      // FF5 + GG4 — split team prefs across tiers. 'require' and 'avoid'
+      // are hard rules with refusal/coercion semantics; FF5 promoted
+      // them to obligationsParts (uncapped) so they couldn't get
+      // dropped behind contextual budget. GG4 caps the team-rules
+      // section itself: a 50-rule team.json was dumping ~6KB of
+      // unconditional context into every first-call hint, dwarfing the
+      // 1500-char total budget. Page rules into TEAM_RULES_BUDGET_CHARS
+      // and emit a "📦 N more — see .deeppairing/team.json" trailer.
+      const TEAM_RULES_BUDGET_CHARS = 600;
+      const hardLines: string[] = [];
+      // Section labels first so they're guaranteed visible if any rules
+      // fit at all.
+      if (required.length) {
+        hardLines.push("Required:");
+        for (const r of required) hardLines.push(r);
+      }
+      if (avoided.length) {
+        if (hardLines.length > 0) hardLines.push("");
+        hardLines.push("Avoid:");
+        for (const a of avoided) hardLines.push(a);
+      }
+      if (hardLines.length > 0) {
+        const header =
+          "\n🚫 Team rules (from .deeppairing/team.json — hard — 'require' as imperatives, 'avoid' as refusal triggers):";
+        let used = header.length;
+        const visible: string[] = [header];
+        let droppedRuleLines = 0;
+        for (const line of hardLines) {
+          // +1 for the join newline.
+          if (used + line.length + 1 <= TEAM_RULES_BUDGET_CHARS) {
+            visible.push(line);
+            used += line.length + 1;
+          } else {
+            droppedRuleLines++;
+          }
+        }
+        if (droppedRuleLines > 0) {
+          visible.push(
+            `  📦 ${droppedRuleLines} more rule line${droppedRuleLines === 1 ? "" : "s"} — see .deeppairing/team.json for the full list.`,
+          );
+        }
+        obligationsParts.push(visible.join("\n"));
       }
       if (preferred.length > 0) {
+        // GG9 — disambiguating glyph: 💡 for soft/taste vs 🚫 for hard
+        // rules above. Pre-GG9 both sections led with 🏢 and were
+        // visually one block split mid-stream.
         contextualParts.push(
-          `\n🏢 Team preferences (from .deeppairing/team.json — taste, weigh against the user's goal):\nPreferred:\n${preferred.join("\n")}`,
+          `\n💡 Team preferences (from .deeppairing/team.json — soft — taste, weigh against the user's goal):\nPreferred:\n${preferred.join("\n")}`,
         );
       }
     }
