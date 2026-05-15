@@ -321,31 +321,56 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
         <div>
           <div className="text-text-secondary mb-1">Considered:</div>
           <ul className="space-y-0.5">
-            {trace.consideredConcepts.map((c, i) => (
-              <li key={`c${i}`} className="flex items-start gap-2">
-                <span
-                  className={`shrink-0 px-1 py-px rounded text-[9px] uppercase tracking-wide ${
-                    c.source === "team"
-                      ? "bg-accent-blue-dim/40 text-accent-blue"
-                      : "bg-surface-elevated text-text-muted"
-                  }`}
-                  title={c.source === "team" ? "From .deeppairing/team.json" : "From this session"}
-                >
-                  {c.source}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => openLedgerForConcept(c.concept)}
-                  className="font-mono text-text-secondary hover:text-accent-violet underline-offset-2 hover:underline text-left"
-                  title="Open this stance in the ledger view"
-                >
-                  {c.concept}
-                </button>
-                {c.reason && (
-                  <span className="text-text-muted opacity-80">— {c.reason}</span>
-                )}
-              </li>
-            ))}
+            {trace.consideredConcepts.map((c, i) => {
+              // GG9 — surface the cross-project citation count to the
+              // human, not just the agent. Pre-GG9 EE3/FF4 added
+              // globalCitationCount to the digest + recall surface,
+              // but the breadcrumb's "Considered" rows showed concept
+              // name + reason only. Now: when counts > 0, render
+              // "cited Nx here · Mx across projects" so the user can
+              // see the moat compounding visibly. Reads zero-fetch
+              // from citationCounts (already in scope from EE2/EE3).
+              const counts = citationCounts[c.concept];
+              const projectN = typeof counts === "object" ? counts.project : counts;
+              const globalN = typeof counts === "object" ? counts.global : counts;
+              const showCount =
+                typeof projectN === "number" &&
+                typeof globalN === "number" &&
+                (projectN > 0 || globalN > 0);
+              return (
+                <li key={`c${i}`} className="flex items-start gap-2 flex-wrap">
+                  <span
+                    className={`shrink-0 px-1 py-px rounded text-[9px] uppercase tracking-wide ${
+                      c.source === "team"
+                        ? "bg-accent-blue-dim/40 text-accent-blue"
+                        : "bg-surface-elevated text-text-muted"
+                    }`}
+                    title={c.source === "team" ? "From .deeppairing/team.json" : "From this session"}
+                  >
+                    {c.source}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => openLedgerForConcept(c.concept)}
+                    className="font-mono text-text-secondary hover:text-accent-violet underline-offset-2 hover:underline text-left"
+                    title="Open this stance in the ledger view"
+                  >
+                    {c.concept}
+                  </button>
+                  {showCount && (
+                    <span
+                      className="text-2xs text-text-muted"
+                      title="Citation counts within this project and across all your projects"
+                    >
+                      cited {projectN}× here{globalN! > projectN! ? ` · ${globalN}× across projects` : ""}
+                    </span>
+                  )}
+                  {c.reason && (
+                    <span className="text-text-muted opacity-80">— {c.reason}</span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
