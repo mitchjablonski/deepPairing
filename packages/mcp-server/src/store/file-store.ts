@@ -1479,9 +1479,20 @@ export class FileStore implements IStore {
       }
     }
 
+    // GG5 — raised from 50 to 200. Pre-GG5 the cap meant FF1's seeded-row
+    // sample lookup silently dropped seeds whose concept wasn't in the
+    // top 50 by citation count — a power user with a busy project saw
+    // inconsistent jump affordances on the seeded list ("why does THIS
+    // seed click but that one doesn't?"). PMF council called the lift
+    // the most-leveraged GG move because it makes the seeded → real
+    // citation causal-graph link universal across the seeded panel.
+    // 200 covers virtually every project (a user with 200+ distinct
+    // concepts in one project is a 99.9th percentile case); the digest
+    // walk is already O(traces × concepts-per-trace) so the slice
+    // size doesn't change the dominant cost.
     const topCitedStances = Array.from(cites.values())
       .sort((a, b) => b.citationCount - a.citationCount)
-      .slice(0, 50);
+      .slice(0, 200);
 
     const result = {
       shapedThisProject,
