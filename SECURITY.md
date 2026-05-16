@@ -2,11 +2,15 @@
 
 ## Reporting a vulnerability
 
-Please email **security@deeppairing.dev** (or open a private GitHub
-security advisory at https://github.com/deeppairing/deeppairing/security/advisories/new).
+**Open a private GitHub security advisory:**
+https://github.com/deeppairing/deeppairing/security/advisories/new
 
 We aim to respond within 5 business days. Please do not file public
 issues for vulnerability reports.
+
+We do not maintain a security email mailbox; GitHub Advisories are
+the only intake channel. They give us free triage, private patch
+coordination, and a real CVE pipeline if one ends up warranted.
 
 ## Supported versions
 
