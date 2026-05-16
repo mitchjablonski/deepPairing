@@ -10,6 +10,14 @@ export interface ConnectionAdapter {
   onMessage(handler: (data: any) => void): void;
   onConnect(handler: () => void): void;
   onDisconnect(handler: () => void): void;
+  /**
+   * HH1 — optional. When the connection store learns a new
+   * projectHash (or any other URL-shaping field), it can call this
+   * to have the adapter rebuild its connect URL and reconnect.
+   * Adapters that don't carry per-URL state (VS Code message passing)
+   * leave this undefined.
+   */
+  refreshUrl?(): void;
 }
 
 /**
@@ -25,16 +33,40 @@ export class WebSocketAdapter implements ConnectionAdapter {
   private reconnectAttempt = 0;
   private readonly maxReconnectDelay = 30000;
 
+  // HH1 — track the base separately so we can rebuild this.url whenever
+  // the connection store learns projectHash. Pre-HH1 the URL was
+  // computed once in the constructor BEFORE the inbound `connected`
+  // payload populated projectHash, so every long-lived UI session
+  // silently ran on the daemon's back-compat path. The GG2 defense-
+  // in-depth was effectively never engaged in real browser sessions.
+  private readonly baseUrl: string;
+
   constructor(url?: string, private sessionId?: string) {
-    const base = url ?? `ws://${window.location.host}/ws`;
-    this.url = WebSocketAdapter.appendQuery(base, sessionId);
+    this.baseUrl = url ?? `ws://${window.location.host}/ws`;
+    this.url = WebSocketAdapter.appendQuery(this.baseUrl, sessionId);
   }
 
   /** Reconnect to a different session */
   switchSession(sessionId: string): void {
     this.sessionId = sessionId;
-    const base = `ws://${window.location.host}/ws`;
-    this.url = WebSocketAdapter.appendQuery(base, sessionId);
+    this.url = WebSocketAdapter.appendQuery(this.baseUrl, sessionId);
+    this.disconnect();
+    this.connect();
+  }
+
+  /**
+   * HH1 — public hook for the connection store to call after the
+   * `connected` payload populates projectHash. Rebuilds the URL with
+   * the fresh hash and reconnects (so the next WS upgrade carries it).
+   * Idempotent: when the URL hasn't changed (already had the hash) it
+   * skips the reconnect to avoid flapping. Cheap when called on every
+   * `connected` event; the disconnect/connect cycle only fires when
+   * the URL actually changed.
+   */
+  refreshUrl(): void {
+    const next = WebSocketAdapter.appendQuery(this.baseUrl, this.sessionId);
+    if (next === this.url) return;
+    this.url = next;
     this.disconnect();
     this.connect();
   }
