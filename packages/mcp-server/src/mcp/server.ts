@@ -363,7 +363,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "recall",
         description:
-          "Search deepPairing memory. `mode: 'philosophy'` queries cross-project stances (avoid/prefer/mixed) with optional stance + source filters; empty query lists the whole ledger. `mode: 'sessions'` queries past artifacts in this project. `mode: 'ledger'` returns the cross-project moat digest — what's been shaped, near-misses caught, top cited stances; query is ignored. `mode: 'any'` (default) unions philosophy + sessions, philosophy first. All modes require a query except philosophy and ledger.",
+          "Search deepPairing memory.\n\n" +
+          "Modes:\n" +
+          "- `philosophy` — cross-project stances (avoid/prefer/mixed). Optional `stance` + `source` filters. Empty query lists the whole ledger.\n" +
+          "- `sessions` — past artifacts in THIS project. Requires a query.\n" +
+          "- `ledger` — cross-project moat digest (shaped/near-misses/blocked counts + top cited stances + seeded). Query ignored.\n" +
+          "- `any` (default) — unions philosophy + sessions, philosophy first. Requires a query.",
         inputSchema: {
           type: "object" as const,
           properties: {
