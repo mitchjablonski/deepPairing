@@ -270,6 +270,46 @@ describe("MCP Tool Handlers", () => {
       fs.rmSync(freshTmp, { recursive: true, force: true });
     });
 
+    it("HH6 — oversize hard rule gets truncated (not dropped) so the agent still sees the imperative", async () => {
+      // Pre-HH6 a single 700-char require entry was dropped entirely:
+      // agent saw "🚫 Team rules" + "Required:" + "📦 1 more rule line"
+      // with NO rule body. Wrong failure mode for a hard rule. Now we
+      // truncate to fit and tag with "…[truncated; full rule in
+      // .deeppairing/team.json]".
+      const freshTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-team-hh6-"));
+      fs.mkdirSync(path.join(freshTmp, ".deeppairing"), { recursive: true });
+      // One require entry whose rendered line will exceed the budget.
+      const longRationale = "the regulatory authority requires explicit attestation that ".repeat(20);
+      fs.writeFileSync(
+        path.join(freshTmp, ".deeppairing", "team.json"),
+        JSON.stringify({
+          version: 1,
+          preferences: [
+            { id: "r1", kind: "require", concept: "HH6 oversize hard rule", rationale: longRationale },
+          ],
+        }),
+      );
+      const freshStore = new FileStore(freshTmp, "team_hh6_session");
+      const { server: freshServer } = createMcpServer(freshStore, () => {}, 4000);
+      const [c, s] = InMemoryTransport.createLinkedPair();
+      await freshServer.connect(s);
+      const freshClient = new Client({ name: "t", version: "1.0" });
+      await freshClient.connect(c);
+      const result = await freshClient.callTool({
+        name: "present_findings",
+        arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
+      });
+      const text = (result.content as any[])?.[0]?.text ?? "";
+      // The rule is present (concept name survives truncation).
+      expect(text).toContain("HH6 oversize hard rule");
+      // The truncation marker fires.
+      expect(text).toMatch(/\[truncated; full rule in \.deeppairing\/team\.json\]/);
+      // Critically: the section is NOT empty (no header-only output).
+      expect(text).toContain("Required:");
+      freshStore.forceFlush();
+      fs.rmSync(freshTmp, { recursive: true, force: true });
+    });
+
     it("GG4 — large team.json caps the rules section at TEAM_RULES_BUDGET_CHARS + emits 📦 N more trailer", async () => {
       // Pre-GG4 obligationsParts was uncapped — a 50-rule team.json
       // dumped ~6KB into every first-call hint, dwarfing the 1500-char

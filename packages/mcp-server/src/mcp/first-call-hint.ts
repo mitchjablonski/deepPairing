@@ -129,11 +129,27 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
         let used = header.length;
         const visible: string[] = [header];
         let droppedRuleLines = 0;
+        // HH6 — truncation marker. Pre-HH6 a single oversize rule
+        // (>~460 chars after the section header took its share of the
+        // 600 budget) was dropped entirely — agent saw "🚫 Team rules"
+        // + "Required:" + "📦 1 more rule line" with NO actual rule
+        // body. Wrong failure mode for a hard rule the agent must
+        // observe. Now we truncate any line that would otherwise be
+        // dropped, preserving the imperative + tagging it so the
+        // agent knows to fetch the full text from team.json.
+        const TRUNC_MARKER = " …[truncated; full rule in .deeppairing/team.json]";
         for (const line of hardLines) {
-          // +1 for the join newline.
           if (used + line.length + 1 <= TEAM_RULES_BUDGET_CHARS) {
             visible.push(line);
             used += line.length + 1;
+            continue;
+          }
+          // Doesn't fit. Try to truncate to fit + the marker.
+          const remaining = TEAM_RULES_BUDGET_CHARS - used - 1 - TRUNC_MARKER.length;
+          if (remaining > 60) {
+            // Enough room for a meaningful prefix.
+            visible.push(line.slice(0, remaining) + TRUNC_MARKER);
+            used += remaining + TRUNC_MARKER.length + 1;
           } else {
             droppedRuleLines++;
           }
