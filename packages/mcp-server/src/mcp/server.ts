@@ -107,9 +107,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_options",
         description:
-          "Present 2–4 options with pros/cons/effort/risk for the human to choose. `stakes: \"high\"` triggers prediction capture for hard-to-reverse decisions. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects in the philosophy ledger." +
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. `stakes: \"high\"` offers prediction capture for hard-to-reverse decisions. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects in the philosophy ledger." +
           "\n\nSchema note: `options` is an array of 2–4 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
-          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human selects in the companion UI. Don't list options in chat. Call check_feedback for their selection.",
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human selects in the companion UI. Don't list options in chat. Call check_feedback for their selection." +
+          "\n\nFF9 — when stakes='high', the resolved decision returned by check_feedback MAY include `predictedOutcome` and `confidence` if the human opted in to prediction capture for that decision. Both fields are absent when the human skipped — handle as optional.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -117,7 +118,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             stakes: {
               type: "string",
               enum: ["low", "medium", "high"],
-              description: "Consequentiality — on 'high', the UI captures the human's prediction + confidence",
+              description: "Consequentiality — on 'high' the UI offers an opt-in prediction-capture toggle (FF9). When the human enables it for a particular pick, the resolved decision carries `predictedOutcome` and `confidence`; otherwise both fields are absent.",
             },
             options: {
               type: "array",
