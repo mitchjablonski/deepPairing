@@ -1,6 +1,6 @@
 # deepPairing
 
-**An MCP server + companion web UI that turns Claude Code into a pair-programming partner — and remembers your "no" across every project so the agent can't paraphrase past you.**
+**An MCP server + companion web UI that turns Claude Code into a pair-programming partner — and blocks the agent from paraphrasing past decisions you've already rejected, across every project.**
 
 ![hero — rejection-block toast](docs/assets/hero.png)
 *🚧 Placeholder — the hero moment will land here pre-launch. The agent paraphrases a stance you rejected last week, deepPairing intercepts before the artifact is created. See [`docs/assets/README.md`](docs/assets/README.md) for the recording recipe.*
