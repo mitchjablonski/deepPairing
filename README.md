@@ -3,7 +3,7 @@
 **An MCP server + companion web UI that turns Claude Code into a pair-programming partner — and remembers your "no" across every project so the agent can't paraphrase past you.**
 
 ![hero — rejection-block toast](docs/assets/hero.png)
-*The hero moment: the agent paraphrases a stance you rejected last week, deepPairing intercepts before the artifact is created. Replace this image by recording your own session — see [`docs/assets/README.md`](docs/assets/README.md).*
+*🚧 Placeholder — the hero moment will land here pre-launch. The agent paraphrases a stance you rejected last week, deepPairing intercepts before the artifact is created. See [`docs/assets/README.md`](docs/assets/README.md) for the recording recipe.*
 
 ---
 
@@ -18,7 +18,7 @@
 That refusal — and the cross-project taste it's drawing from — is what deepPairing exists to do.
 
 ![Your taste drawer — Philosophy Ledger](docs/assets/ledger.png)
-*The Ledger view inside the companion UI: every stance you've accumulated, with citation counts here and across projects.*
+*🚧 Placeholder — the Ledger view will land here pre-launch. Inside the companion UI: every stance you've accumulated, with citation counts here and across projects.*
 
 ## Try it in two minutes (no Claude Code yet)
 
