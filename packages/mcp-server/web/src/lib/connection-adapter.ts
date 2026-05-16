@@ -118,6 +118,17 @@ export class WebSocketAdapter implements ConnectionAdapter {
         1000 * Math.pow(2, this.reconnectAttempt - 1),
         this.maxReconnectDelay,
       );
+      // HH4 — stale-tab self-heal. After 3 consecutive failed
+      // connects, the daemon is likely either down OR has restarted
+      // on the same port serving a different project (so the GG2
+      // gate keeps 403'ing our cached projectHash). Probe
+      // /api/daemon-info to discover the current daemon's hash; if
+      // it differs, rebuild the URL with the fresh hash before the
+      // next reconnect. Pre-HH4 the loop ran forever with the wrong
+      // hash and never recovered without a manual reload.
+      if (this.reconnectAttempt >= 3) {
+        void this.probeDaemonAndMaybeRefresh();
+      }
       this.reconnectTimer = setTimeout(() => this.connect(), delay);
     };
 
@@ -145,6 +156,40 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
   onDisconnect(handler: () => void): void {
     this.disconnectHandler = handler;
+  }
+
+  /**
+   * HH4 — when reconnects keep failing, probe /api/daemon-info to
+   * learn the live daemon's projectHash. If it differs from the one
+   * baked into our URL, push it into the connection store (which in
+   * turn calls refreshUrl via HH1) so the next reconnect carries the
+   * fresh hash. Localhost-only fetch; falls through silently on any
+   * error so the existing reconnect timer still fires.
+   */
+  private async probeDaemonAndMaybeRefresh(): Promise<void> {
+    try {
+      const host = this.baseUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
+      const res = await fetch(`${host}/api/daemon-info`);
+      if (!res.ok) return;
+      const body = await res.json();
+      const liveHash = typeof body?.projectHash === "string" ? body.projectHash : null;
+      if (!liveHash) return;
+      const store = (window as any).__dpConnectionStore;
+      if (!store?.getState || !store?.setState) return;
+      const cachedHash = store.getState().projectHash;
+      if (cachedHash !== liveHash) {
+        // Pushing the fresh hash triggers the connection-store's
+        // `connected`-handler refreshUrl call on the next successful
+        // open. We also call refreshUrl directly here so the very
+        // next reconnect attempt uses the new URL without waiting
+        // for a successful connect first.
+        store.setState({ projectHash: liveHash });
+        this.refreshUrl();
+      }
+    } catch {
+      // Probe failed (daemon down, CORS issue in test fixture, etc).
+      // The reconnect timer continues; we'll try again next cycle.
+    }
   }
 }
 
