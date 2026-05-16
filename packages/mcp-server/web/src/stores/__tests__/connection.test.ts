@@ -11,12 +11,14 @@ class FakeAdapter implements ConnectionAdapter {
   connectHandler: (() => void) | null = null;
   disconnectHandler: (() => void) | null = null;
   connected = false;
+  refreshUrlCalls = 0;
 
   connect() { this.connected = true; this.connectHandler?.(); }
   disconnect() { this.connected = false; this.disconnectHandler?.(); }
   onMessage(h: (data: any) => void) { this.messageHandler = h; }
   onConnect(h: () => void) { this.connectHandler = h; }
   onDisconnect(h: () => void) { this.disconnectHandler = h; }
+  refreshUrl() { this.refreshUrlCalls++; }
 
   /** Test helper: deliver a message to the connection store. */
   emit(data: any) {
@@ -90,6 +92,26 @@ describe("connection store — handleMessage dispatch", () => {
     expect(art.artifacts).toHaveLength(1);
     expect(art.artifacts[0].id).toBe("a1");
     expect(art.comments["a1"]).toHaveLength(1);
+  });
+
+  it("HH1 — calls adapter.refreshUrl after `connected` arrives so the WS rebuilds with projectHash", async () => {
+    // Pre-HH1 the URL was built once at construction (before
+    // projectHash was known) and never updated. Every long-lived UI
+    // session silently used the daemon's back-compat path and the
+    // GG2 defense-in-depth never engaged. The connection store now
+    // calls adapter.refreshUrl after `connected` so the next WS
+    // upgrade carries the hash.
+    useConnectionStore.getState().connect();
+    expect(activeAdapter.refreshUrlCalls).toBe(0);
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/home/mitch/proj",
+      projectHash: "abcd1234",
+      state: { sessionId: "sess_hh1", autonomyLevel: "balanced", artifacts: [], comments: [] },
+    });
+    await flush();
+    expect(activeAdapter.refreshUrlCalls).toBe(1);
+    expect(useConnectionStore.getState().projectHash).toBe("abcd1234");
   });
 
   it("resets before hydrating so reconnect doesn't duplicate artifacts", async () => {

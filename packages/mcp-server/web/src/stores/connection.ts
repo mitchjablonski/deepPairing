@@ -102,6 +102,18 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             daemonStartedAt: newStartedAt,
           });
 
+          // HH1 — close the GG2 regression. The first WS upgrade
+          // happened BEFORE projectHash was known, so the URL was
+          // built without it and the daemon accepted on back-compat.
+          // Now that the hash has arrived, ask the adapter to rebuild
+          // its URL with the hash appended and reconnect — the next
+          // upgrade carries the gate parameter the daemon expects.
+          // Idempotent: refreshUrl is a no-op when the URL hasn't
+          // changed, so this doesn't flap on subsequent connected
+          // events that carry the same hash.
+          const adapter = get().adapter;
+          if (adapter?.refreshUrl) adapter.refreshUrl();
+
           // Reset before hydration to prevent duplicates on reconnect
           if (data.state) {
             store.reset();
