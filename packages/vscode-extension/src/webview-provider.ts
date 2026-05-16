@@ -114,7 +114,36 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
     if (this.ws && this.ws.readyState <= 1) return;
 
     try {
-      this.ws = new WebSocket(`ws://localhost:${this.serverPort}/ws`);
+      // HH5 — fetch the daemon's projectHash so the WS upgrade carries
+      // the GG2 gate parameter. Pre-HH5 the extension opened the WS
+      // with no projectHash query and the daemon accepted via the
+      // back-compat path — same gap that HH1 closed for the browser
+      // path. Fetch is fire-and-forget; if it 404s (daemon down or
+      // pre-GG2 daemon) we fall through to the unhashed connect, same
+      // back-compat behavior. The actual WS open happens inside the
+      // `.then` so the hash is on the URL when the upgrade fires.
+      void fetch(`http://localhost:${this.serverPort}/api/daemon-info`)
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null)
+        .then((info: any) => {
+          const projectHash = typeof info?.projectHash === "string" ? info.projectHash : null;
+          const url = projectHash
+            ? `ws://localhost:${this.serverPort}/ws?projectHash=${encodeURIComponent(projectHash)}`
+            : `ws://localhost:${this.serverPort}/ws`;
+          this.openWebSocket(webview, url);
+        });
+      return;
+    } catch (e) {
+      // Outer try guards against synchronous fetch errors (very rare in node).
+      console.error("[deepPairing] WS connect setup failed:", e);
+      return;
+    }
+  }
+
+  private openWebSocket(webview: vscode.Webview, url: string): void {
+    if (this.ws && this.ws.readyState <= 1) return;
+    try {
+      this.ws = new WebSocket(url);
 
       this.ws.on("open", () => {
         this.reconnectAttempt = 0; // Reset backoff on success
