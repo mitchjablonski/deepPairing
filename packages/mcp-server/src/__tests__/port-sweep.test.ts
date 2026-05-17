@@ -47,9 +47,11 @@ describe("port sweep adoption", () => {
     expect(adopted?.port).toBe(TEST_RANGE_START);
     expect(adopted?.pid).toBe(12345);
 
-    // Adoption persists daemon.json so future calls go fast-path.
-    const daemonJson = path.join(tmpDir, ".deeppairing", "daemon.json");
-    expect(fs.existsSync(daemonJson)).toBe(true);
+    // II1 — wrapper-side writeDaemonInfo is gone (it was overwriting the
+    // daemon's authToken-bearing file with a salvage record). The real
+    // daemon writes daemon.json on startup + heartbeat; the wrapper only
+    // reads. Test fakes don't write daemon.json, so adoption returns the
+    // in-memory probe record without persisting. This is correct now.
   });
 
   it("does NOT adopt another project's daemon on the same range", async () => {

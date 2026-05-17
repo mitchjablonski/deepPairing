@@ -58,6 +58,54 @@ describe("GlobalStore — append-only instance log", () => {
     store.recordInstance("   ", { project: "r", sessionId: "s", verdict: "rejected" });
     expect(store.size()).toBe(0);
   });
+
+  // II6 — DaemonClient auto-recover-on-404 replays the original POST.
+  // For recordRejectedApproach, the session FileStore deduplicates by
+  // description (the session-scoped path is safe) but the global ledger
+  // had no gate, so the retry appended a second instance with a different
+  // timestamp. Over a flaky network this compounded into N copies the
+  // agent then cited N times in preflight. The dedupe window scopes to
+  // (project, sessionId, verdict) so genuine cross-session rejections of
+  // the same concept still land.
+  it("II6 — collapses identical (project, sessionId, verdict) instances within 5s", () => {
+    store.recordInstance("rate limiter", {
+      project: "repo-a",
+      sessionId: "s1",
+      verdict: "rejected",
+      reason: "first call",
+      at: "2026-05-16T10:00:00.000Z",
+    });
+    // Retry 2s later — same shape, different reason text (the wrapper
+    // doesn't reconstruct identical reasons). Dedupe keys on identity
+    // tuple, not on reason.
+    store.recordInstance("rate limiter", {
+      project: "repo-a",
+      sessionId: "s1",
+      verdict: "rejected",
+      reason: "retry",
+      at: "2026-05-16T10:00:02.000Z",
+    });
+    const entry = store.get("rate limiter");
+    expect(entry?.instances).toHaveLength(1);
+    expect(entry?.instances[0].reason).toBe("first call");
+  });
+
+  it("II6 — does NOT dedupe across sessions (genuine cross-session signal)", () => {
+    // Same concept, same project, DIFFERENT session — this is the user
+    // rejecting the same idea twice across two different work sessions.
+    // That's signal worth keeping (stance derivation depends on the count).
+    store.recordInstance("eventual consistency", { project: "repo-a", sessionId: "s1", verdict: "rejected", at: "2026-05-16T10:00:00.000Z" });
+    store.recordInstance("eventual consistency", { project: "repo-a", sessionId: "s2", verdict: "rejected", at: "2026-05-16T10:00:02.000Z" });
+    expect(store.get("eventual consistency")?.instances).toHaveLength(2);
+  });
+
+  it("II6 — does NOT dedupe outside the 5s window (genuine repeat)", () => {
+    store.recordInstance("global state", { project: "repo-a", sessionId: "s1", verdict: "rejected", at: "2026-05-16T10:00:00.000Z" });
+    // 10s later — same session, but enough time has passed that we treat
+    // it as a genuine second rejection.
+    store.recordInstance("global state", { project: "repo-a", sessionId: "s1", verdict: "rejected", at: "2026-05-16T10:00:10.000Z" });
+    expect(store.get("global state")?.instances).toHaveLength(2);
+  });
 });
 
 describe("GlobalStore — derived stance", () => {

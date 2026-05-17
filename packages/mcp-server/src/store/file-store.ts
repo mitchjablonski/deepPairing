@@ -270,12 +270,12 @@ export class FileStore implements IStore {
     }, 100);
   }
 
-  /** Atomic write: write to .tmp then rename. Refreshes mtime+size watermark
-   *  after rename so the next external-change check uses the new baseline. */
+  /** Atomic write: delegates to writeJsonAtomic (PID+TS+random temp suffix
+   *  so concurrent flushes to the same path can't truncate each other's tmp).
+   *  Refreshes mtime+size watermark after rename so the next external-change
+   *  check uses the new baseline. */
   private atomicWrite(filePath: string, data: unknown): void {
-    const tmp = filePath + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-    fs.renameSync(tmp, filePath);
+    writeJsonAtomic(filePath, data);
     try {
       const stat = fs.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
@@ -842,7 +842,10 @@ export class FileStore implements IStore {
 
   private writePreferences(prefs: Record<string, any>): void {
     const prefsPath = path.join(this.basePath, "preferences.json");
-    fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+    // II4 — preferences.json holds the rejected-approach memory used by every
+    // preflight. A torn write here silently wipes the moat, so use the atomic
+    // helper instead of the raw writeFileSync this used to do.
+    writeJsonAtomic(prefsPath, prefs);
   }
 
   // --- Session annotations (learner's replay notes) ---
@@ -872,7 +875,7 @@ export class FileStore implements IStore {
     };
     const existing = this.getAnnotations();
     existing.push(annotation);
-    fs.writeFileSync(this.annotationsPath(), JSON.stringify(existing, null, 2));
+    writeJsonAtomic(this.annotationsPath(), existing);
     return annotation;
   }
 
@@ -880,7 +883,7 @@ export class FileStore implements IStore {
     const existing = this.getAnnotations();
     const next = existing.filter((a) => a.id !== annotationId);
     if (next.length === existing.length) return false;
-    fs.writeFileSync(this.annotationsPath(), JSON.stringify(next, null, 2));
+    writeJsonAtomic(this.annotationsPath(), next);
     return true;
   }
 
@@ -1362,7 +1365,7 @@ export class FileStore implements IStore {
       } catch {}
       const filtered = existing.filter((r) => r.decisionId !== params.decisionId);
       filtered.push(retrospective);
-      fs.writeFileSync(retrosPath, JSON.stringify(filtered, null, 2));
+      writeJsonAtomic(retrosPath, filtered);
 
       return { retrospective, sessionId: session.id };
     }

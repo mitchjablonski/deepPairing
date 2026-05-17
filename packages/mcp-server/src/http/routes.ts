@@ -33,9 +33,9 @@ function getSessionId(c: any): string | undefined {
 }
 
 /**
- * AA4 — verify the browser's X-Project-Hash against the daemon's own
- * projectHash (if both are known). Returns a 403 Response on mismatch,
- * `null` when the request can proceed.
+ * AA4 + II2 — verify the browser's X-Project-Hash against the daemon's own
+ * projectHash. Returns a 403 Response on mismatch or absence, `null` when
+ * the request can proceed.
  *
  * Threat model: a stale browser tab whose sessionId came from
  * daemon-A's pre-shutdown state sends that sessionId to daemon-B (which
@@ -43,15 +43,16 @@ function getSessionId(c: any): string | undefined {
  * getDefaultStoreOrNull() fallback silently routed the mutation into
  * B's first arbitrary session — wrong-store write under wrong attribution.
  *
- * Back-compat: if the browser doesn't send X-Project-Hash (older client),
- * we let the request through. This makes the guard additive — once the
- * Z3-shipped browser sends it, the protection lights up.
+ * II2 — was back-compat-permissive: any request with no X-Project-Hash
+ * fell through. Every shipped browser + the VSCode extension now send it
+ * (HH1/HH4/HH5), so the back-compat path is now an attacker convenience:
+ * a malicious local process can omit the header and hit the default
+ * store. Flip to fail-closed.
  */
 function checkProjectHash(c: any, daemonHash: string | undefined): Response | null {
   if (!daemonHash) return null;
   const sentHash = c.req.header("X-Project-Hash");
-  if (!sentHash) return null;
-  if (sentHash !== daemonHash) {
+  if (!sentHash || sentHash !== daemonHash) {
     return c.json(
       {
         // BB10 — message is fallback copy. The browser specializes the
@@ -785,8 +786,27 @@ export function createHttpRoutes(
     if (!resolved.startsWith(resolvedRoot + path.sep) && resolved !== resolvedRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
+    // II3 — defeat symlink escape. The startsWith check above stops literal
+    // `../` traversal in the query string, but if a malicious dependency
+    // dropped a symlink inside the project (e.g. `pkg/sneaky → /etc/passwd`),
+    // path.resolve happily passes containment and fs.readFileSync follows the
+    // link. realpath the resolved target and re-check containment against
+    // realpath(projectRoot) so symlinks pointing outside the project tree
+    // are rejected.
+    let realResolved: string;
+    let realRoot: string;
     try {
-      const content = fs.readFileSync(resolved, "utf-8");
+      realResolved = fs.realpathSync(resolved);
+      realRoot = fs.realpathSync(resolvedRoot);
+    } catch (err: any) {
+      if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
+      return c.json({ error: "Cannot read file" }, 500);
+    }
+    if (!realResolved.startsWith(realRoot + path.sep) && realResolved !== realRoot) {
+      return c.json({ error: "Path outside project root" }, 403);
+    }
+    try {
+      const content = fs.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err: any) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
@@ -903,9 +923,27 @@ export function createHttpRoutes(
     try {
       fs.mkdirSync(promptsDir, { recursive: true });
       const fullPath = path.join(promptsDir, filename);
-      // Final safety: resolve and ensure the write stays inside promptsDir
+      // Final safety: resolve and ensure the write stays inside promptsDir.
       const resolved = path.resolve(fullPath);
-      if (!resolved.startsWith(path.resolve(promptsDir) + path.sep)) {
+      const resolvedDir = path.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path.sep)) {
+        return c.json({ error: "invalid path" }, 400);
+      }
+      // II3 — defeat symlink-as-target. An attacker with prior local access
+      // can pre-plant `promptsDir/<filename> → /Users/you/.ssh/authorized_keys`
+      // and the write follows the symlink (writeFileSync truncates the link
+      // target). Reject if the target exists and is a symlink; if it doesn't
+      // exist yet, realpath the parent dir and re-check containment so a
+      // symlinked promptsDir itself can't escape.
+      try {
+        const stat = fs.lstatSync(resolved);
+        if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
+      } catch (err: any) {
+        if (err?.code !== "ENOENT") throw err;
+      }
+      const realDir = fs.realpathSync(resolvedDir);
+      const realRoot = fs.realpathSync(path.resolve(projectRoot));
+      if (!realDir.startsWith(realRoot + path.sep) && realDir !== realRoot) {
         return c.json({ error: "invalid path" }, 400);
       }
       fs.writeFileSync(resolved, content, "utf-8");

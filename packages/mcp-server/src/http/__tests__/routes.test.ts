@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
 import { GlobalStore, getGlobalStore, setGlobalStoreForTests } from "../../store/global-store.js";
+import { projectHashOf } from "../../project-root.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,11 +11,26 @@ let tmpDir: string;
 let store: FileStore;
 let app: ReturnType<typeof createHttpRoutes>;
 
+// II2 — fail-closed X-Project-Hash. Wrap any test-constructed Hono app so
+// the gate doesn't trip on every existing test. Tests that exercise the gate
+// itself construct an unwrapped app via createHttpRoutes directly, or pass
+// an explicit X-Project-Hash header to override the auto-injected one.
+function withHash<T extends { request: any }>(appLike: T, root: string): T {
+  const projectHash = projectHashOf(root);
+  const origRequest = appLike.request.bind(appLike);
+  (appLike as any).request = (url: any, init?: any) => {
+    const headers = new Headers(init?.headers || {});
+    if (!headers.has("X-Project-Hash")) headers.set("X-Project-Hash", projectHash);
+    return origRequest(url, { ...(init || {}), headers });
+  };
+  return appLike;
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-route-test-"));
   setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
   store = new FileStore(tmpDir, "test_session");
-  app = createHttpRoutes(store, tmpDir);
+  app = withHash(createHttpRoutes(store, tmpDir), tmpDir);
 });
 
 afterEach(() => {
@@ -486,7 +502,7 @@ describe("HTTP Routes", () => {
       );
       store.forceFlush();
       const freshStore = new FileStore(tmpDir, "refresh");
-      const freshApp = createHttpRoutes(freshStore, tmpDir);
+      const freshApp = withHash(createHttpRoutes(freshStore, tmpDir), tmpDir);
       const res = await freshApp.request("/api/team-preferences");
       const body = await res.json();
       expect(body.exists).toBe(true);
@@ -690,10 +706,13 @@ describe("HTTP Routes", () => {
 
     function makeApp() {
       const broadcasts: any[] = [];
-      const app = createHttpRoutes(
-        () => null,
+      const app = withHash(
+        createHttpRoutes(
+          () => null,
+          tmpDir,
+          (event) => broadcasts.push(event),
+        ),
         tmpDir,
-        (event) => broadcasts.push(event),
       );
       return { app, broadcasts };
     }
@@ -774,10 +793,13 @@ describe("HTTP Routes", () => {
       const storeA = new FileStore(tmpDir, "session_a");
       const storeB = new FileStore(tmpDir, "session_b");
       const broadcasts: Array<{ event: any; sessionId?: string }> = [];
-      const multiApp = createHttpRoutes(
-        (sid?: string) => (sid === "session_b" ? storeB : storeA),
+      const multiApp = withHash(
+        createHttpRoutes(
+          (sid?: string) => (sid === "session_b" ? storeB : storeA),
+          tmpDir,
+          (event, sessionId) => broadcasts.push({ event, sessionId }),
+        ),
         tmpDir,
-        (event, sessionId) => broadcasts.push({ event, sessionId }),
       );
 
       const res = await multiApp.request("/api/comments", {
@@ -809,10 +831,13 @@ describe("HTTP Routes", () => {
       storeB.createArtifact({ id: "art_x", type: "plan", title: "B", content: { steps: [] } });
 
       const broadcasts: Array<{ event: any; sessionId?: string }> = [];
-      const multiApp = createHttpRoutes(
-        (sid?: string) => (sid === "session_b2" ? storeB : storeA),
+      const multiApp = withHash(
+        createHttpRoutes(
+          (sid?: string) => (sid === "session_b2" ? storeB : storeA),
+          tmpDir,
+          (event, sessionId) => broadcasts.push({ event, sessionId }),
+        ),
         tmpDir,
-        (event, sessionId) => broadcasts.push({ event, sessionId }),
       );
 
       const res = await multiApp.request("/api/artifacts/art_x/status", {
@@ -837,8 +862,11 @@ describe("HTTP Routes", () => {
     it("falls back to default store when X-Session-Id is absent", async () => {
       const storeDefault = new FileStore(tmpDir, "default_session");
       const storeOther = new FileStore(tmpDir, "other_session");
-      const multiApp = createHttpRoutes(
-        (sid?: string) => (sid === "other_session" ? storeOther : storeDefault),
+      const multiApp = withHash(
+        createHttpRoutes(
+          (sid?: string) => (sid === "other_session" ? storeOther : storeDefault),
+          tmpDir,
+        ),
         tmpDir,
       );
 
@@ -1495,13 +1523,15 @@ describe("HTTP Routes", () => {
       expect(res.status).toBe(200);
     });
 
-    it("accepts requests with no X-Project-Hash header (back-compat with older browsers)", async () => {
-      // The whole point of AA4 being additive: existing clients that
-      // don't yet send the hash still work. The guard lights up only
-      // when the browser opts in by sending it.
+    it("II2 — 403s when X-Project-Hash header is absent (was back-compat-permissive pre-II2)", async () => {
+      // Pre-II2 the guard was additive: missing header fell through.
+      // Every shipped client now sends the hash (HH1/HH4/HH5), so
+      // absence is now treated as the same failure mode as mismatch.
       const a = appWithProject("/projects/A");
       const res = await a.request("/api/state");
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.code).toBe("project_hash_mismatch");
     });
 
     it("short-circuits when projectRoot is undefined (test-fixture back-compat)", async () => {

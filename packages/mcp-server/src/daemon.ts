@@ -14,6 +14,7 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -55,6 +56,12 @@ const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
 const daemonInfoFile = path.join(dpDir, "daemon.json");
 const startedAt = new Date().toISOString();
+// II1 — shared secret minted at daemon startup. Written into daemon.json
+// (mode 0600 below) so only the same uid can read it. DaemonClient picks
+// it up via daemon-lifecycle.readDaemonInfo and stamps it on every
+// `/api/internal/*` request as `Authorization: Bearer <token>`. Other
+// local processes that can't read the file get a 401.
+const daemonAuthToken = crypto.randomBytes(32).toString("hex");
 
 // --- Logging ---
 
@@ -209,8 +216,9 @@ app.use("/*", cors({
   },
 }));
 
-// Mount internal daemon routes (for MCP wrappers)
-const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot);
+// Mount internal daemon routes (for MCP wrappers).
+// II1 — pass authToken so every /api/internal/* requires Authorization.
+const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken);
 app.route("/", daemonRoutes);
 
 // Mount public web UI routes (for browser)
@@ -443,10 +451,19 @@ function cleanup(): void {
 }
 
 function writeDaemonInfo(port: number): void {
-  const info = { pid: process.pid, port, startedAt, projectRoot };
+  // II1 — include authToken so DaemonClient can pick it up. The chmod
+  // below is what actually defends the token; on Unix only the daemon's
+  // uid can read it, which is exactly the boundary we want (the same uid
+  // already owns the dev environment, and a different uid is a different
+  // attacker class entirely).
+  const info = { pid: process.pid, port, startedAt, projectRoot, authToken: daemonAuthToken };
   try {
     fs.mkdirSync(path.dirname(daemonInfoFile), { recursive: true });
     fs.writeFileSync(daemonInfoFile, JSON.stringify(info, null, 2));
+    // II1 — mode 0600 (owner read/write only). On Windows fs.chmodSync is
+    // largely a no-op but the file inherits the user's ACL which is the
+    // local equivalent. Best-effort; failure logged but non-fatal.
+    try { fs.chmodSync(daemonInfoFile, 0o600); } catch {}
   } catch (err) {
     log(`Failed to write daemon.json: ${err}`);
   }
@@ -583,16 +600,16 @@ async function main() {
         const sentHash =
           url.searchParams.get("projectHash") ||
           (request.headers?.["x-project-hash"] as string | undefined);
-        if (sentHash && sentHash !== daemonProjectHash) {
-          log(`[ws-upgrade] reject: project-hash mismatch (sent=${sentHash} daemon=${daemonProjectHash})`);
+        // II2 — was back-compat-permissive: clients with no projectHash
+        // fell through. Every shipped browser + the VSCode extension
+        // now send it (HH1/HH4/HH5), so absence is now a signal of a
+        // stale or hostile caller. Fail-closed.
+        if (!sentHash || sentHash !== daemonProjectHash) {
+          log(`[ws-upgrade] reject: project-hash ${sentHash ? "mismatch" : "missing"} (sent=${sentHash ?? "<none>"} daemon=${daemonProjectHash})`);
           socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
           socket.destroy();
           return;
         }
-        // Note: if the client sends NO projectHash we fall through
-        // (back-compat for older browsers that haven't started sending
-        // it yet). Once every shipped client sends the hash this can
-        // tighten to require it.
       }
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request);
@@ -620,6 +637,16 @@ async function main() {
           ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
         }
 
+        // II5 — handle 'error' before 'close'. An RSV1 framing error, an
+        // EPIPE on a half-open client, or a slow consumer all emit 'error'
+        // first; with no listener the EventEmitter throws and crashes the
+        // daemon process. The wrapper has no auto-respawn for that mode.
+        // Always pair: error → log + force-close so the 'close' handler
+        // runs the standard cleanup path.
+        ws.on("error", (err: any) => {
+          log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
+          try { (ws as any).terminate?.(); } catch {}
+        });
         ws.on("close", () => {
           clients!.delete(ws as any);
           if (clients!.size === 0) wsClients.delete(sessionId);
@@ -638,6 +665,11 @@ async function main() {
         // daemon restart and re-hydrate session listings on reconnect.
         ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
 
+        // II5 — see session-client comment above. Same crash mode applies.
+        ws.on("error", (err: any) => {
+          log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
+          try { (ws as any).terminate?.(); } catch {}
+        });
         ws.on("close", () => {
           globalClients.delete(ws as any);
           checkAutoShutdown();
@@ -645,6 +677,14 @@ async function main() {
       }
 
       log(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
+    });
+
+    // II5 — listen at the wss level too. The 'wss.on("error")' fires for
+    // listening-side errors (EADDRINUSE in test fixtures, malformed upgrade
+    // frames the per-client handler never sees). Without this, the same
+    // unhandled-emit crash mode applies one level up.
+    wss.on("error", (err: any) => {
+      log(`[wss] server error: ${err?.code ?? err?.message ?? err}`);
     });
 
     // A2: write daemon.json on startup AND on a recurring heartbeat so a

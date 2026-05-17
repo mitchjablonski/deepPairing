@@ -219,8 +219,76 @@ function getMcpServerConfig(): { command: string; args: string[] } {
   return { command: "npx", args: ["@deeppairing/mcp-server"] };
 }
 
-async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: true }) {
-  console.log(bold("\n  deepPairing init\n"));
+/**
+ * II10 — minimal stub variant of the embedded protocol. Council UX
+ * reviewer flagged that the full ~150-line EMBEDDED_PROTOCOL injected
+ * into CLAUDE.md is intimidating on first sight and a cautious developer
+ * backs out of `init` once they see CLAUDE.md grew by 4KB of agent
+ * directives. The minimal stub gives the agent the load-bearing
+ * pointers (call deeppairing's MCP tools; respect the single review
+ * surface; read the full doc) without the wall-of-rules.
+ */
+const MINIMAL_PROTOCOL = `# deepPairing Collaboration Protocol (minimal)
+
+When deepPairing's MCP server is loaded, use it as the single review
+surface for findings, options, plans, code changes, and reasoning. Do
+NOT duplicate the same content as prose in chat — the human is reviewing
+in the companion UI at http://localhost:3847.
+
+After every \`present_*\` call, expect to receive feedback via
+\`check_feedback\` rather than continuing immediately. Re-run preflight
+context (read \`deeppairing://session/onboarding\`) at session start so
+you know what's already been rejected before proposing anything.
+
+For the full protocol (per-edit checkpoints, decision-revision
+semantics, comment-mirror via \`answer_question\`, Stop hook flow):
+run \`node packages/mcp-server/dist/cli/init.js init\` without
+\`--minimal\` to inject the full version, or read it inline in this
+repo's \`packages/mcp-server/src/cli/init.ts\` (EMBEDDED_PROTOCOL).
+`;
+
+async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean; minimal?: boolean } = { offerDemo: true }) {
+  const dryRun = opts.dryRun === true;
+  const minimal = opts.minimal === true;
+  console.log(bold("\n  deepPairing init" + (dryRun ? " — DRY RUN" : minimal ? " — minimal mode (CLAUDE.md gets a short stub)" : "") + "\n"));
+  if (dryRun) {
+    // II10 — the dry-run intercepts the two writes the UX reviewer
+    // flagged as scary on first install: .mcp.json and the CLAUDE.md
+    // protocol append. Helper-driven side effects under .deeppairing/
+    // and .claude/ still happen (gitignore entry, Stop hook,
+    // PostToolUse checkpoint hook) because those helpers are shared
+    // with the daemon's startup setup and are idempotent + small. The
+    // goal of --dry-run is "show me the scary changes before I commit"
+    // not "no I/O at all" — surface that explicitly so the user isn't
+    // surprised by the directory entries that DO land.
+    console.log(`  ${dim("(--dry-run skips .mcp.json + CLAUDE.md writes; .deeppairing/ + hook setup still run — those are idempotent and small)")}\n`);
+  }
+
+  // II10 — wrap every write so --dry-run skips it but prints what would
+  // have been written. Keeps the existing call-site shape so the four
+  // writeFileSync / appendFileSync / copyFileSync sites in this function
+  // don't have to be rearranged. Output describes the intent in the same
+  // voice the existing console.log lines use so the dry-run feels like a
+  // dress rehearsal, not a separate codepath.
+  const writeFile = (p: string, content: string, label: string): void => {
+    if (dryRun) {
+      console.log(`  ${yellow("→")} would write ${label} (${content.length} bytes)`);
+      return;
+    }
+    fs.writeFileSync(p, content);
+  };
+  const appendFile = (p: string, content: string, label: string): void => {
+    if (dryRun) {
+      console.log(`  ${yellow("→")} would append ${content.split("\n").length} lines to ${label}:`);
+      // Show first 8 lines so the user can see what's about to land.
+      const preview = content.split("\n").slice(0, 8).join("\n").trim();
+      console.log(preview.split("\n").map((l) => `    ${dim("│ " + l)}`).join("\n"));
+      const more = content.split("\n").length - 8;
+      if (more > 0) console.log(`    ${dim(`│ … (${more} more lines)`)}`);
+      return;
+    }
+    fs.appendFileSync(p, content);
+  };
 
   // 1. Create .mcp.json
   const mcpPath = path.join(cwd, ".mcp.json");
@@ -232,15 +300,15 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: 
       existing = JSON.parse(fs.readFileSync(mcpPath, "utf-8"));
     } catch {
       console.log(`  ${dim("⚠")} Existing .mcp.json has invalid JSON — backing up and creating new one`);
-      fs.copyFileSync(mcpPath, mcpPath + ".backup");
+      if (!dryRun) fs.copyFileSync(mcpPath, mcpPath + ".backup");
     }
     if (existing?.mcpServers?.deeppairing) {
       console.log(`  ${dim("✓")} .mcp.json already has deeppairing configured`);
     } else {
       existing.mcpServers = existing.mcpServers ?? {};
       existing.mcpServers.deeppairing = serverConfig;
-      fs.writeFileSync(mcpPath, JSON.stringify(existing, null, 2) + "\n");
-      console.log(`  ${green("✓")} Updated .mcp.json with deeppairing server`);
+      writeFile(mcpPath, JSON.stringify(existing, null, 2) + "\n", ".mcp.json (merged)");
+      if (!dryRun) console.log(`  ${green("✓")} Updated .mcp.json with deeppairing server`);
     }
   } else {
     const mcpConfig = {
@@ -248,8 +316,8 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: 
         deeppairing: serverConfig,
       },
     };
-    fs.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n");
-    console.log(`  ${green("✓")} Created .mcp.json`);
+    writeFile(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", ".mcp.json (new)");
+    if (!dryRun) console.log(`  ${green("✓")} Created .mcp.json`);
   }
 
   // 2. Update .gitignore (idempotent; shared with daemon startup setup)
@@ -280,27 +348,33 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean } = { offerDemo: 
   if (claudeMdHasDP) {
     console.log(`  ${dim("✓")} CLAUDE.md already has deepPairing instructions`);
   } else {
-    // Try to load full skill file from package, fall back to embedded template
-    const skillSources = [
-      path.join(__thisDir, "../../deeppairing.md"),
-      path.join(__thisDir, "../deeppairing.md"),
-    ];
+    // II10 — when --minimal is set, skip the full skill / EMBEDDED_PROTOCOL
+    // and write the short stub instead. Default (no flag) is the existing
+    // full-protocol behavior — opt-in conservatism, not a default switch.
     let skillContent = "";
-    for (const src of skillSources) {
-      if (fs.existsSync(src)) {
-        skillContent = fs.readFileSync(src, "utf-8");
-        break;
+    if (minimal) {
+      skillContent = MINIMAL_PROTOCOL;
+    } else {
+      // Try to load full skill file from package, fall back to embedded template.
+      const skillSources = [
+        path.join(__thisDir, "../../deeppairing.md"),
+        path.join(__thisDir, "../deeppairing.md"),
+      ];
+      for (const src of skillSources) {
+        if (fs.existsSync(src)) {
+          skillContent = fs.readFileSync(src, "utf-8");
+          break;
+        }
+      }
+      // Embedded fallback — always available even if deeppairing.md is missing from the package
+      if (!skillContent) {
+        skillContent = EMBEDDED_PROTOCOL;
       }
     }
 
-    // Embedded fallback — always available even if deeppairing.md is missing from the package
-    if (!skillContent) {
-      skillContent = EMBEDDED_PROTOCOL;
-    }
-
     const block = `\n\n${dpMarker}\n${skillContent}\n`;
-    fs.appendFileSync(claudeMdPath, block);
-    console.log(`  ${green("✓")} Added deepPairing protocol to CLAUDE.md`);
+    appendFile(claudeMdPath, block, `CLAUDE.md (${minimal ? "minimal stub" : "full protocol"})`);
+    if (!dryRun) console.log(`  ${green("✓")} Added deepPairing protocol to CLAUDE.md${minimal ? " (minimal stub)" : ""}`);
   }
 
   // 4. Create .deeppairing directory (idempotent; shared with daemon startup setup)
@@ -1035,7 +1109,11 @@ async function demoCmd(): Promise<void> {
   console.log(bold("\n  deepPairing demo"));
   console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
 
-  const port = await ensureDaemon(cwd);
+  // II1 — ensureDaemon now returns DaemonInfo (with authToken). demoCmd
+  // only hits public routes (/api/demo/run, /api/state) so we don't need
+  // the token here; just normalize to port for the existing fetch calls.
+  const daemonInfo = await ensureDaemon(cwd);
+  const port = daemonInfo.port;
   console.log(`  ${green("✓")} Daemon ready on port ${port}`);
 
   let data: { sessionId: string };
@@ -1322,8 +1400,11 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 
   ${bold("Usage:")}
     npx deeppairing                        Set up deepPairing in current project (interactive; offers demo)
-    npx deeppairing init [--no-demo] [-y]  Set up deepPairing in current project
+    npx deeppairing init [--no-demo] [-y] [--dry-run] [--minimal]
+                                           Set up deepPairing in current project
                                            --no-demo skips the "see it fire" prompt; -y auto-accepts
+                                           --dry-run previews CLAUDE.md + .mcp.json changes without writing
+                                           --minimal writes a short stub to CLAUDE.md instead of the full protocol
     npx deeppairing demo                   Watch the rejection-block fire in the companion UI (no Claude Code needed)
     npx deeppairing team init [--force]    Scaffold .deeppairing/team.json with example team conventions
     npx deeppairing philosophy export      Print your cross-project Philosophy Ledger as JSON to stdout
@@ -1346,7 +1427,13 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 } else if (cmd === "init") {
   const offerDemo = !args.includes("--no-demo");
   const yes = args.includes("--yes") || args.includes("-y");
-  main({ offerDemo, yes }).catch((err) => {
+  // II10 — preview-before-write flags. Dry-run prints what would happen
+  // without touching the filesystem; --minimal swaps the long embedded
+  // protocol for a short stub. Surfaces cautious-developer trust gap
+  // around "init silently appends 156 lines to my CLAUDE.md".
+  const dryRun = args.includes("--dry-run");
+  const minimal = args.includes("--minimal");
+  main({ offerDemo, yes, dryRun, minimal }).catch((err) => {
     console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`);
     process.exit(1);
   });

@@ -13,6 +13,17 @@ export interface DaemonInfo {
   pid: number;
   port: number;
   startedAt: string;
+  /**
+   * II1 — shared secret required by every `/api/internal/*` route. Optional
+   * because (a) older daemons running an older build won't have minted one
+   * yet, and (b) test fixtures sometimes construct DaemonInfo without it.
+   * When present, DaemonClient stamps `Authorization: Bearer <token>` on
+   * every internal call; absence means the wrapper can't authenticate and
+   * should refuse to proceed against that daemon.
+   */
+  authToken?: string;
+  /** Daemon's projectRoot — included for adoption checks; same value as projectHashOf source. */
+  projectRoot?: string;
 }
 
 const DAEMON_FILE = "daemon.json";
@@ -33,15 +44,10 @@ function readDaemonInfo(projectRoot: string): DaemonInfo | null {
   }
 }
 
-function writeDaemonInfo(projectRoot: string, info: DaemonInfo): void {
-  const infoPath = daemonInfoPath(projectRoot);
-  try {
-    fs.mkdirSync(path.dirname(infoPath), { recursive: true });
-    fs.writeFileSync(infoPath, JSON.stringify(info, null, 2));
-  } catch {
-    // Best-effort — daemon will rewrite on its heartbeat
-  }
-}
+// II1 — removed wrapper-side writeDaemonInfo: it was overwriting the
+// daemon's own daemon.json (which carries the authToken) with a salvage
+// record that had no token. The daemon writes the canonical file on
+// startup + every 30s heartbeat; wrappers only read.
 
 /** Probe a port to check if a deepPairing daemon is responding. */
 async function probeDaemon(port: number, timeoutMs = 1500): Promise<boolean> {
@@ -58,7 +64,10 @@ async function probeDaemon(port: number, timeoutMs = 1500): Promise<boolean> {
   }
 }
 
-/** Ask a running daemon who it is. Returns null if unreachable or not a deepPairing daemon. */
+/** Ask a running daemon who it is. Returns null if unreachable or not a deepPairing daemon.
+ *  II1 — /api/daemon-info does NOT include the authToken (that's the whole point —
+ *  the token is delivered via the file-system permission boundary, not over HTTP).
+ *  This probe is only for "is something there + what project does it serve". */
 export async function probeDaemonIdentity(port: number, timeoutMs = 1500): Promise<{ pid: number; projectRoot: string; startedAt: string } | null> {
   try {
     const controller = new AbortController();
@@ -146,12 +155,26 @@ export async function isDaemonRunning(
     const identity = await probeDaemonIdentity(port);
     if (!identity) continue;
     if (identity.projectRoot !== projectRoot) continue;
+    // II1 — the daemon's own writeDaemonInfo on startup + heartbeat is the
+    // source of truth for `authToken`. Re-read daemon.json after confirming
+    // a matching live daemon: it may have appeared between our first read
+    // and this point (race during daemon startup) and it carries the token
+    // we need to talk to /api/internal/*. Don't OVERWRITE the file from
+    // the wrapper side — pre-II1 we wrote a token-less salvage record back,
+    // which silently broke wrapper auth the next time it ran.
+    const fresh = readDaemonInfo(projectRoot);
+    if (fresh && fresh.pid === identity.pid && fresh.port === port) {
+      return fresh;
+    }
     const adopted: DaemonInfo = {
       pid: identity.pid,
       port,
       startedAt: identity.startedAt,
+      projectRoot: identity.projectRoot,
     };
-    writeDaemonInfo(projectRoot, adopted);
+    // No token available — the caller (waitForDaemon) will poll a few more
+    // times before timing out, giving the daemon's heartbeat a window to
+    // land daemon.json.
     return adopted;
   }
 
@@ -250,18 +273,20 @@ function spawnDaemon(projectRoot: string): { stderrTail: () => string } {
  * Ensure the daemon is running. If not, spawn it and wait for readiness.
  * Returns the daemon's port number.
  */
-export async function ensureDaemon(projectRoot: string): Promise<number> {
+export async function ensureDaemon(projectRoot: string): Promise<DaemonInfo> {
   // A1: probe before spawn — adopts a live daemon even if daemon.json is missing.
+  // II1 — returns DaemonInfo (not just port) so the caller can pick up
+  // the authToken needed to talk to /api/internal/*. Old `: number` return
+  // shape was a strict subset of what wrappers need now.
   const existing = await isDaemonRunning(projectRoot);
-  if (existing) return existing.port;
+  if (existing) return existing;
 
   // Spawn daemon
   const { stderrTail } = spawnDaemon(projectRoot);
 
   // Wait for it to be ready
   try {
-    const info = await waitForDaemon(projectRoot);
-    return info.port;
+    return await waitForDaemon(projectRoot);
   } catch (err: any) {
     const tail = stderrTail().trim();
     if (tail) {

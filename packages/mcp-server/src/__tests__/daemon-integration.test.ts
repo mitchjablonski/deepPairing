@@ -64,6 +64,73 @@ describe("Daemon Routes", () => {
     expect(sessions.has(SESSION)).toBe(true);
   });
 
+  // II1 — when createDaemonRoutes is given an authToken, every internal
+  // route requires `Authorization: Bearer <token>`. The default `app`
+  // fixture above intentionally omits the token so existing tests stay
+  // focused on route logic. This block builds a separately-gated app to
+  // pin the gate's wire contract.
+  describe("II1 — internal route auth gate", () => {
+    const TOKEN = "test-token-deadbeef";
+    let gatedApp: ReturnType<typeof createDaemonRoutes>;
+    let gatedSessions: Map<string, FileStore>;
+
+    beforeEach(() => {
+      gatedSessions = new Map();
+      const gatedMeta = new Map<string, SessionMeta>();
+      gatedApp = createDaemonRoutes(
+        gatedSessions,
+        gatedMeta,
+        (sid) => {
+          const s = new FileStore(tmpDir, sid);
+          gatedSessions.set(sid, s);
+          return s;
+        },
+        () => {},
+        undefined,
+        undefined,
+        TOKEN,
+      );
+    });
+
+    it("401s when Authorization header is absent", async () => {
+      const res = await gatedApp.request(`/api/internal/sessions/${SESSION}/register`, {
+        method: "POST",
+      });
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.code).toBe("daemon_auth_required");
+    });
+
+    it("401s when Authorization is present but the token is wrong", async () => {
+      const res = await gatedApp.request(`/api/internal/sessions/${SESSION}/register`, {
+        method: "POST",
+        headers: { Authorization: "Bearer wrong-token" },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("accepts the request when Authorization matches the daemon's token", async () => {
+      const res = await gatedApp.request(`/api/internal/sessions/${SESSION}/register`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("registered");
+    });
+
+    it("auth gate ONLY guards /api/internal/* (not public routes)", async () => {
+      // The gate is mounted on /api/internal/*; public routes like
+      // /api/daemon-info live in routes.ts and have their own posture.
+      // Pin that the gate doesn't bleed onto the daemon-routes-side mounts
+      // that aren't under /api/internal/ (none today, but the test
+      // prevents an accidental `app.use("*", ...)` regression).
+      const res = await gatedApp.request("/some-unrelated-path");
+      // 404 (not 401) — auth gate didn't fire on a non-/api/internal path.
+      expect(res.status).toBe(404);
+    });
+  });
+
   it("creates an artifact via the internal API", async () => {
     // Register first
     await app.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });

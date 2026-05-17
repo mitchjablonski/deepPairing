@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { writeJsonAtomic } from "./atomic-write.js";
 
 /**
  * GlobalStore — cross-project "philosophy ledger".
@@ -111,10 +112,11 @@ export class GlobalStore {
   private write(ledger: LedgerFile): void {
     try {
       fs.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
-      // Atomic write via tmp+rename so concurrent wrappers don't tear it.
-      const tmp = `${this.ledgerPath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2));
-      fs.renameSync(tmp, this.ledgerPath);
+      // II4 — was a fixed `.tmp` suffix; two daemons on two projects writing
+      // concurrently collided on the same temp path and one truncated the
+      // other's tmp before its rename. Use writeJsonAtomic which appends
+      // pid+ts+randomBytes so the temp filename is unique per write.
+      writeJsonAtomic(this.ledgerPath, ledger);
     } catch {
       // Silent — losing the ledger is non-fatal for the current session.
     }
@@ -123,12 +125,34 @@ export class GlobalStore {
   /**
    * Append a new instance to the ledger for `concept`. Creates the entry if
    * this concept hasn't been seen before.
+   *
+   * II6 — dedupe identical (project, sessionId, verdict) tuples that land
+   * within DEDUPE_WINDOW_MS. Failure mode this closes: DaemonClient's
+   * auto-recover replays the original POST after a 404
+   * session_not_registered. If the original POST already flushed to disk
+   * (the session FileStore's own dedupe-by-description catches that path),
+   * the global ledger still got an instance for the original call. The
+   * retry adds a SECOND instance with the same shape but a different
+   * timestamp. Over a flaky network this compounds into N copies of the
+   * same rejection in the cross-project ledger — which the agent then
+   * cites N times in preflight.
+   *
+   * Session FileStore deduplicates by `description` (permanent — same
+   * description never appended twice). The global ledger CAN'T dedupe by
+   * description because two genuine rejections of the same concept in
+   * different sessions are real data. So scope the window to a single
+   * (project, sessionId) — within one session, identical instances 5s
+   * apart are almost certainly a retry. Across sessions or after 5s,
+   * treat as genuine.
    */
+  private static readonly DEDUPE_WINDOW_MS = 5000;
+
   recordInstance(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
     if (!concept.trim()) return;
     const key = normalizeKey(concept);
     const ledger = this.read();
     const now = instance.at ?? new Date().toISOString();
+    const nowMs = Date.parse(now);
 
     const existing = ledger.concepts[key];
     const finalized: PhilosophyInstance = {
@@ -141,6 +165,16 @@ export class GlobalStore {
     };
 
     if (existing) {
+      // II6 — scan recent instances for a duplicate within the window.
+      const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
+        if (prior.project !== finalized.project) return false;
+        if (prior.sessionId !== finalized.sessionId) return false;
+        if (prior.verdict !== finalized.verdict) return false;
+        const priorMs = Date.parse(prior.at);
+        if (!Number.isFinite(priorMs)) return false;
+        return Math.abs(nowMs - priorMs) < GlobalStore.DEDUPE_WINDOW_MS;
+      });
+      if (isRetry) return;
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {

@@ -40,8 +40,18 @@ async function main() {
   log("MCP wrapper starting");
   log(`Project root: ${projectRoot} (resolved via ${projectRootSource})`);
 
-  // Ensure the shared daemon is running
-  const port = await ensureDaemon(projectRoot);
+  // Ensure the shared daemon is running.
+  // II1 — ensureDaemon now returns the full DaemonInfo (port + authToken)
+  // so we can stamp Authorization on every internal call. A daemon without
+  // an authToken is either pre-II1 or mid-startup (heartbeat hasn't landed
+  // daemon.json yet); we still proceed but every internal call will 401.
+  // Surface this loudly so the user reaches for doctor instead of a quiet
+  // "nothing works" experience.
+  const daemonInfo = await ensureDaemon(projectRoot);
+  const port = daemonInfo.port;
+  if (!daemonInfo.authToken) {
+    log(`WARN: daemon at port ${port} did not advertise authToken — internal calls will 401. Run \`npx deeppairing doctor\` to refresh daemon.json.`);
+  }
   log(`Daemon ready on port ${port}`);
 
   // U0.6 — deterministic sessionId per projectRoot. Previously every wrapper
@@ -61,7 +71,9 @@ async function main() {
   // request. Defends against the (currently latent) case where a public
   // route moves under a hashed mount; today the AA4 middleware already
   // gates everything but the header now travels with the wrapper either way.
-  const client = new DaemonClient(port, sessionId, projectRoot);
+  // II1 — also pass the authToken so internal calls authenticate. Without
+  // it the wrapper would 401 on every call after register().
+  const client = new DaemonClient(port, sessionId, projectRoot, daemonInfo.authToken);
   // Y3' — pass expectedProjectRoot so the daemon refuses (403) if we
   // accidentally adopted a daemon serving a different project (port
   // collision / failed spawn fallback).
