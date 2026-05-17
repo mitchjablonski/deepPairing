@@ -527,20 +527,63 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   const canListPast = typeof store.listPastSessions === "function";
   const canLoadPast = typeof store.loadPastSession === "function";
 
-  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  // II11 — paginate the resource list. Pre-II11 the handler returned every
+  // artifact in the active session + every past session unbounded; a long
+  // pairing session with 500 artifacts shipped a 500-resource payload on
+  // every list call. Strict MCP clients with hard caps (Cline, future
+  // Claude Code with stricter list limits) choke. Cap at LIST_PAGE_SIZE
+  // most-recent artifacts + expose a `nextCursor` so the agent can page if
+  // it really needs older entries. The session-index resources
+  // (deeppairing://sessions) and the current-session pointer are always
+  // included on page 1 — those are O(1).
+  const LIST_PAGE_SIZE = 100;
+  server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     const resources: Array<{ uri: string; name: string; description?: string; mimeType: string }> = [];
+    const rawCursor = (request as any)?.params?.cursor;
+    const cursorOffset = (() => {
+      if (typeof rawCursor !== "string") return 0;
+      const n = parseInt(rawCursor, 10);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    })();
+    const isFirstPage = cursorOffset === 0;
 
-    // Current session
-    resources.push({
-      uri: "deeppairing://session/current",
-      name: "Active session state",
-      description: "Full JSON snapshot of the active session — artifacts, comments, decisions, plan reviews, autonomy level, session memory.",
-      mimeType: "application/json",
+    if (isFirstPage) {
+      // II12 — onboarding resource. Carries the firstCallHint content
+      // (rejected approaches, approved patterns, ledger snapshot, team
+      // rules, autonomy hint). Pre-II12 this was spliced into the first
+      // tool result's text field, which corrupted the result for strict
+      // JSON-parsing clients. Now: read it once on session start, never
+      // again. The hint is also delivered as a separate text content
+      // block on the first write-tool result (see tool-result handler
+      // below) so agents that don't list resources still get bootstrapped.
+      resources.push({
+        uri: "deeppairing://session/onboarding",
+        name: "Session onboarding — read first",
+        description: "Rejected approaches, approved patterns, philosophy ledger snapshot, team rules, and autonomy hint. Read at session start so you know what's already off-limits before proposing anything.",
+        mimeType: "text/plain",
+      });
+
+      // Current session pointer — only on page 1 (it's a fixed URI; paging
+      // it would just duplicate the entry).
+      resources.push({
+        uri: "deeppairing://session/current",
+        name: "Active session state",
+        description: "Full JSON snapshot of the active session — artifacts, comments, decisions, plan reviews, autonomy level, session memory.",
+        mimeType: "application/json",
+      });
+    }
+
+    // Per-artifact resources — newest first (creation order is reverse
+    // chronological for the LLM's "what changed recently?" query). Sort by
+    // updatedAt when present so revisions float to the top of their page.
+    const allArtifacts = await store.getArtifacts();
+    const orderedArtifacts = [...allArtifacts].sort((a, b) => {
+      const at = (a as any).updatedAt ?? (a as any).createdAt ?? "";
+      const bt = (b as any).updatedAt ?? (b as any).createdAt ?? "";
+      return String(bt).localeCompare(String(at));
     });
-
-    // Per-artifact resources in the active session
-    const artifacts = await store.getArtifacts();
-    for (const a of artifacts) {
+    const pageArtifacts = orderedArtifacts.slice(cursorOffset, cursorOffset + LIST_PAGE_SIZE);
+    for (const a of pageArtifacts) {
       resources.push({
         uri: `deeppairing://artifact/${a.id}`,
         name: `${a.type}: ${a.title}`,
@@ -548,9 +591,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         mimeType: "application/json",
       });
     }
+    const hasMoreArtifacts = orderedArtifacts.length > cursorOffset + LIST_PAGE_SIZE;
 
-    // Past sessions index (only when the store supports it — DaemonClient does)
-    if (canListPast) {
+    // Past sessions index — only on page 1. The index resource itself is
+    // a single URI; agents who want individual past sessions read them on
+    // demand rather than enumerating every session in the project.
+    if (isFirstPage && canListPast) {
       resources.push({
         uri: "deeppairing://sessions",
         name: "Past sessions in this project",
@@ -559,8 +605,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       });
 
       try {
+        // Cap past-session resources at LIST_PAGE_SIZE too so a project with
+        // 1000 prior sessions doesn't blow the cap. The index resource above
+        // gives the agent the full list when it actually needs to browse.
         const past = (await store.listPastSessions?.()) ?? [];
-        for (const s of past) {
+        const pastPage = past.slice(0, LIST_PAGE_SIZE);
+        for (const s of pastPage) {
           if (s.id === store.getSessionId()) continue; // skip active
           resources.push({
             uri: `deeppairing://session/${s.id}`,
@@ -574,11 +624,30 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       }
     }
 
-    return { resources };
+    // MCP spec: omit nextCursor entirely when there's nothing left to page.
+    // Sending an empty/null cursor would tempt some clients to re-list
+    // forever.
+    const result: { resources: typeof resources; nextCursor?: string } = { resources };
+    if (hasMoreArtifacts) {
+      result.nextCursor = String(cursorOffset + LIST_PAGE_SIZE);
+    }
+    return result;
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
+
+    // II12 — onboarding resource. Rebuild the hint from current store
+    // state so clients that read it mid-session see the latest rejected
+    // approaches / autonomy level. The first-call splice path used a
+    // snapshot frozen at first-tool-call time; the resource is always
+    // fresh because it's computed on read.
+    if (uri === "deeppairing://session/onboarding") {
+      const text = await buildFirstCallHint(store, port);
+      return {
+        contents: [{ uri, mimeType: "text/plain", text: text || "(no onboarding context available yet)" }],
+      };
+    }
 
     if (uri === "deeppairing://session/current") {
       const state = await store.getFullState();
@@ -1384,16 +1453,22 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       "request_horizon_check",
       "answer_question",
     ]);
+    // II12 — was: `first.text = first.text + firstCallHint` (splice the
+    // hint into the same text field as the tool result). Strict MCP
+    // clients that parse tool result content[0].text as the tool's reply
+    // got onboarding context mixed into the message — a parsing footgun.
+    // Now: push the hint as a SEPARATE text content block. Lenient clients
+    // render both; strict parsers can pick content[0] for the tool reply
+    // and content[1+] for ambient context. The same hint is also exposed
+    // as a `deeppairing://session/onboarding` resource (added below) for
+    // clients that prefer the resource model.
     if (
       firstCallHint &&
       HINT_TOOLS.has(name) &&
       result?.content &&
       Array.isArray(result.content)
     ) {
-      const first = result.content[0] as any;
-      if (first?.type === "text" && typeof first.text === "string") {
-        first.text = `${first.text}${firstCallHint}`;
-      }
+      result.content.push({ type: "text", text: firstCallHint });
     }
     return result;
   });

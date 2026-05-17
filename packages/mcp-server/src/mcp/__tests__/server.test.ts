@@ -42,7 +42,17 @@ afterEach(() => {
 
 async function callTool(name: string, args: Record<string, any> = {}) {
   const result = await client.callTool({ name, arguments: args });
-  const text = (result.content as any[])?.[0]?.text ?? "";
+  // II12 — firstCallHint moved from "spliced into content[0].text" to "a
+  // separate content[1+] text block" so strict JSON-parsing clients see a
+  // clean tool reply in content[0]. Tests assert on the combined visible
+  // text the agent sees; concatenate every text content block so the
+  // existing assertions (which match against the joined string) still
+  // exercise the same surface.
+  const blocks = (result.content as any[]) ?? [];
+  const text = blocks
+    .filter((b) => b?.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("");
   return { text, isError: result.isError };
 }
 
@@ -238,7 +248,11 @@ describe("MCP Tool Handlers", () => {
         name: "present_findings",
         arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
       });
-      const text = (result.content as any[])?.[0]?.text ?? "";
+      // II12 — hint moved out of content[0]; join all text blocks.
+      const text = ((result.content as any[]) ?? [])
+        .filter((b) => b?.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("");
 
       expect(text).toContain("🚫 Team rules");
       expect(text).toContain("Required:");
@@ -287,7 +301,11 @@ describe("MCP Tool Handlers", () => {
         name: "present_findings",
         arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
       });
-      const text = (result.content as any[])?.[0]?.text ?? "";
+      // II12 — hint moved out of content[0]; join all text blocks.
+      const text = ((result.content as any[]) ?? [])
+        .filter((b) => b?.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("");
       // Hard rules block is the obligations-tier copy.
       expect(text).toContain("🚫 Team rules");
       expect(text).toMatch(/hard.*'require' as imperatives.*'avoid' as refusal triggers/i);
@@ -336,7 +354,11 @@ describe("MCP Tool Handlers", () => {
         name: "present_findings",
         arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
       });
-      const text = (result.content as any[])?.[0]?.text ?? "";
+      // II12 — hint moved out of content[0]; join all text blocks.
+      const text = ((result.content as any[]) ?? [])
+        .filter((b) => b?.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("");
       // The rule is present (concept name survives truncation).
       expect(text).toContain("HH6 oversize hard rule");
       // The truncation marker fires.
@@ -385,7 +407,11 @@ describe("MCP Tool Handlers", () => {
         name: "present_findings",
         arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
       });
-      const text = (result.content as any[])?.[0]?.text ?? "";
+      // II12 — hint moved out of content[0]; join all text blocks.
+      const text = ((result.content as any[]) ?? [])
+        .filter((b) => b?.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("");
       // Header survives.
       expect(text).toContain("🚫 Team rules");
       // At least one rule survives.
@@ -430,7 +456,11 @@ describe("MCP Tool Handlers", () => {
         name: "present_findings",
         arguments: { summary: "x", findings: [{ category: "x", detail: "x", significance: "low" }] },
       });
-      const text = (result.content as any[])?.[0]?.text ?? "";
+      // II12 — hint moved out of content[0]; join all text blocks.
+      const text = ((result.content as any[]) ?? [])
+        .filter((b) => b?.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("");
 
       expect(text).not.toContain("🚫 Team rules");
 
