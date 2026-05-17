@@ -18,6 +18,7 @@ import {
   preflightRejectedApproaches as preflightHelper,
   SessionNameLatch,
   getPassiveFeedback as getPassiveFeedbackHelper,
+  notifyResourcesListChanged,
 } from "./tool-helpers.js";
 import { handleLogReasoning } from "./tools/log-reasoning.js";
 import { handleExportSession } from "./tools/export-session.js";
@@ -60,7 +61,16 @@ type BroadcastFn = (event: any) => void;
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
     { name: "deeppairing", version: "0.1.0" },
-    { capabilities: { tools: {}, resources: {} } },
+    {
+      // HH10 — declare listChanged so MCP clients know to listen for
+      // notifications/resources/list_changed and re-call resources/list
+      // when fired. Pre-HH10 every present_* handler minted a new
+      // deeppairing://artifact/{id} resource, but the agent had no
+      // protocol-level signal that the list had moved — long-running
+      // sessions never saw new resources unless they speculatively
+      // re-listed.
+      capabilities: { tools: {}, resources: { listChanged: true } },
+    },
   );
 
   // --- List Tools ---
@@ -107,10 +117,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       {
         name: "present_options",
         description:
-          "Present 2–4 options with pros/cons/effort/risk for the human to choose. `stakes: \"high\"` offers prediction capture for hard-to-reverse decisions. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects in the philosophy ledger." +
+          "Present 2–4 options with pros/cons/effort/risk for the human to choose. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects via the philosophy ledger." +
           "\n\nSchema note: `options` is an array of 2–4 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
-          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human selects in the companion UI. Don't list options in chat. Call check_feedback for their selection." +
-          "\n\nFF9 — when stakes='high', the resolved decision returned by check_feedback MAY include `predictedOutcome` and `confidence` if the human opted in to prediction capture for that decision. Both fields are absent when the human skipped — handle as optional.",
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — human selects in the companion UI; don't list options in chat. Call check_feedback for the selection. FF9 — stakes='high' enables opt-in prediction capture; check_feedback MAY include optional `predictedOutcome` + `confidence`.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -1240,6 +1249,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
           broadcast({ type: "artifact_created", artifact: newArtifact });
           broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
+          // HH10 — supersede creates a new resource AND retires the old
+          // one's content. Both are list-changing events.
+          notifyResourcesListChanged(server);
 
           return {
             content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review.${await getPassiveFeedback()}` }],

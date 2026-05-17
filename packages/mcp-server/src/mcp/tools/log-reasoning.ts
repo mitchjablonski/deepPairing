@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { validateLogReasoningInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
+import { notifyResourcesListChanged } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -26,6 +27,7 @@ export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<T
     relatedArtifactIds: relatedIds,
   });
   ctx.broadcast({ type: "artifact_created", artifact });
+  notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   // Gentle nudge when the agent omits `concept` — the pairing value
   // hinges on the concept being surfaced, not the reasoning prose.
