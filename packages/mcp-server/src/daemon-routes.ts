@@ -68,11 +68,52 @@ export function createDaemonRoutes(
    * writes A's artifacts into B's store.
    */
   daemonProjectRoot?: string,
+  /**
+   * II1 — shared-secret token required on every `/api/internal/*` route.
+   * Pre-II1 the internal routes were completely unauthenticated. A malicious
+   * npm package run by the user's normal dev workflow could curl localhost
+   * and `POST /api/internal/sessions/{id}/register` then inject fake
+   * "human-approved" artifacts or poison the rejection memory. The
+   * X-Project-Hash gate fired on public routes only; internal was wide open.
+   *
+   * Daemon generates this on startup (`crypto.randomBytes(32).hex`), writes
+   * it into `.deeppairing/daemon.json` with mode 0600, and only the same
+   * uid can read it. Wrappers (DaemonClient) read it from the same file and
+   * send it as `Authorization: Bearer <token>`. Other local processes
+   * without read access to daemon.json get a 401 — closing the entire
+   * local-process-as-attacker class without adding any UX friction.
+   *
+   * Optional so test fixtures that don't care about auth (which is most of
+   * them — the auth concern is at the daemon boundary, not the route logic)
+   * skip the check by passing undefined.
+   */
+  authToken?: string,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
   const log: LogFn = logFn ?? (() => {});
   const app = new Hono();
+
+  // II1 — auth gate. Runs before any handler. When the route construction
+  // didn't supply an authToken (test fixtures), the gate is a no-op so the
+  // existing route tests don't have to thread the token.
+  if (authToken) {
+    app.use("/api/internal/*", async (c, next) => {
+      const auth = c.req.header("Authorization");
+      const expected = `Bearer ${authToken}`;
+      if (auth !== expected) {
+        log(`[internal-auth] 401 — bad/missing Authorization header path=${c.req.path}`);
+        return c.json(
+          {
+            error: "Missing or invalid Authorization header. Internal routes require the daemon's shared secret.",
+            code: "daemon_auth_required",
+          },
+          401,
+        );
+      }
+      await next();
+    });
+  }
 
   /**
    * Y3' — lookup helper. Returns the store or a 404 response. Only

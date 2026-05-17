@@ -39,11 +39,20 @@ export class DaemonClient implements IStore {
   // 403s. Optional so test fixtures that don't care about hashes still
   // work (`new DaemonClient(port, sid)` keeps its prior signature).
   private readonly projectHash: string | undefined;
+  // II1 — Bearer token the daemon minted on startup and wrote into
+  // .deeppairing/daemon.json (mode 0600). The wrapper picks it up via
+  // ensureDaemon and passes it in here. Stamped on every wire call to
+  // /api/internal/* as `Authorization: Bearer <token>` so a malicious
+  // local process without read access to daemon.json can't impersonate
+  // the wrapper. Optional for test fixtures that construct DaemonClient
+  // directly against a route harness with no auth gate.
+  private readonly authToken: string | undefined;
 
-  constructor(port: number, sessionId: string, expectedProjectRoot?: string) {
+  constructor(port: number, sessionId: string, expectedProjectRoot?: string, authToken?: string) {
     this.baseUrl = `http://localhost:${port}/api/internal/sessions/${sessionId}`;
     this.sessionId = sessionId;
     this.projectHash = expectedProjectRoot ? projectHashOf(expectedProjectRoot) : undefined;
+    this.authToken = authToken;
   }
 
   getSessionId(): string {
@@ -69,11 +78,17 @@ export class DaemonClient implements IStore {
     isRetry = false,
   ): Promise<T> {
     // CC6 — stamp X-Project-Hash on every wire call when the wrapper
-    // knows its projectRoot. Adds the header without disturbing
-    // anything the caller passed.
-    const initWithHash = this.projectHash
-      ? { ...init, headers: { ...(init.headers ?? {}), "X-Project-Hash": this.projectHash } }
-      : init;
+    // knows its projectRoot. II1 — also stamp Authorization with the
+    // daemon's bearer token when available, so /api/internal/* accepts
+    // the call. Headers merged additively so anything the caller passed
+    // (e.g. Content-Type from this.post) survives.
+    const extraHeaders: Record<string, string> = {};
+    if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
+    if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
+    const initWithHash = {
+      ...init,
+      headers: { ...(init.headers ?? {}), ...extraHeaders },
+    };
     const res = await fetch(`${this.baseUrl}${path}`, initWithHash);
     if (res.ok) return res.json();
 
@@ -146,8 +161,13 @@ export class DaemonClient implements IStore {
     // CC6 — register() bypasses request() (it has its own 403 handling)
     // so add the X-Project-Hash header here too. Without this, the very
     // first call from the wrapper would skip the gate.
+    // II1 — same story for the Bearer token: register() is itself an
+    // internal route and the auth middleware sees it first, so the token
+    // has to be on the very first call or the wrapper 401s before it
+    // ever gets a chance to register.
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.projectHash) headers["X-Project-Hash"] = this.projectHash;
+    if (this.authToken) headers["Authorization"] = `Bearer ${this.authToken}`;
     const res = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers,
