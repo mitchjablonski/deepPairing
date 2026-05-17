@@ -172,6 +172,26 @@ export async function persistPreflightTrace(
 }
 
 /**
+ * HH10 — fire-and-forget MCP notifications/resources/list_changed
+ * notification. Each present_* handler mints a new
+ * deeppairing://artifact/{id} resource; pre-HH10 the agent had no
+ * protocol-level signal that the resource list moved, so long-running
+ * Claude Code sessions never speculatively re-listed and missed
+ * mid-session artifacts.
+ *
+ * Wrap in try/catch — a buggy notification path must never break the
+ * tool return. The MCP SDK's notification() is async-noisy under
+ * adverse transports.
+ */
+export function notifyResourcesListChanged(server: any): void {
+  try {
+    server?.notification?.({ method: "notifications/resources/list_changed" });
+  } catch {
+    // Non-fatal; the next list call will still resolve correctly.
+  }
+}
+
+/**
  * BB5 — short, agent-facing summary of the preflight consult that just
  * fired. Couples to the trace persisted by persistPreflightTrace so the
  * tool's return text mentions the moat at the moment it bit (or didn't).

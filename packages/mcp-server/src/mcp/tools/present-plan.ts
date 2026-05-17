@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -39,6 +39,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({ type: "plan_review_request", artifactId: id, title });
 

@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentCodeChangeInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -26,6 +26,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
 
   // S7 — quick-approve via elicitation for small, confident edits.

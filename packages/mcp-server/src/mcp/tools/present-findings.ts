@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentFindingsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentFindings(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -43,6 +43,7 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   // was missing on a freshly-created artifact.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 

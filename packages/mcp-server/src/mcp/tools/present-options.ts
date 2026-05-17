@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -35,6 +35,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     stakes,
   } as any);
   ctx.broadcast({ type: "artifact_created", artifact });
+  notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({
     type: "decision_request",
