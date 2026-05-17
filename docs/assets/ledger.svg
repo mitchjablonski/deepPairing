@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 800" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fafbff"/>
+      <stop offset="1" stop-color="#eef0f6"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  <rect width="900" height="800" fill="url(#bg)"/>
+
+  <!-- drawer header -->
+  <g transform="translate(56, 56)">
+    <text font-size="13" fill="#7a8290" letter-spacing="2">PHILOSOPHY LEDGER · 47 STANCES · 6 PROJECTS</text>
+    <text y="36" font-size="32" font-weight="600" fill="#1d2129">Your taste, compounded</text>
+    <text y="68" font-size="15" fill="#4a5060">Every stance you've accumulated across every deepPairing project on this machine.</text>
+  </g>
+
+  <!-- filter chips -->
+  <g transform="translate(56, 156)" font-size="13">
+    <g>
+      <rect width="78" height="30" rx="15" fill="#1d2129"/>
+      <text x="39" y="20" text-anchor="middle" fill="#ffffff">All (47)</text>
+    </g>
+    <g transform="translate(90, 0)">
+      <rect width="90" height="30" rx="15" fill="#ffffff" stroke="#cdd2da"/>
+      <text x="45" y="20" text-anchor="middle" fill="#1d2129">Avoid (31)</text>
+    </g>
+    <g transform="translate(192, 0)">
+      <rect width="96" height="30" rx="15" fill="#ffffff" stroke="#cdd2da"/>
+      <text x="48" y="20" text-anchor="middle" fill="#1d2129">Prefer (12)</text>
+    </g>
+    <g transform="translate(300, 0)">
+      <rect width="90" height="30" rx="15" fill="#ffffff" stroke="#cdd2da"/>
+      <text x="45" y="20" text-anchor="middle" fill="#1d2129">Mixed (4)</text>
+    </g>
+  </g>
+
+  <!-- stance card 1 -->
+  <g transform="translate(56, 220)" filter="url(#softShadow)">
+    <rect width="788" height="148" rx="14" fill="#ffffff"/>
+    <rect width="6" height="148" rx="3" fill="#e85f5f"/>
+    <text x="28" y="36" font-size="13" fill="#9b2b2b" letter-spacing="1.5">AVOID · 4× CITED · 3 PROJECTS</text>
+    <text x="28" y="68" font-size="20" font-weight="600" fill="#1d2129">global mutable state for config</text>
+    <text x="28" y="98" font-size="14" fill="#4a5060">First rejected in api-platform · 2026-03-22 — "broke testability in 3 places"</text>
+    <text x="28" y="124" font-size="13" fill="#6b7280">Blocked 2 paraphrases this month: "global config cache", "module-level ConfigStore"</text>
+  </g>
+
+  <!-- stance card 2 -->
+  <g transform="translate(56, 388)" filter="url(#softShadow)">
+    <rect width="788" height="128" rx="14" fill="#ffffff"/>
+    <rect width="6" height="128" rx="3" fill="#e85f5f"/>
+    <text x="28" y="36" font-size="13" fill="#9b2b2b" letter-spacing="1.5">AVOID · 3× CITED · 2 PROJECTS</text>
+    <text x="28" y="68" font-size="20" font-weight="600" fill="#1d2129">platform-as-a-service for compute</text>
+    <text x="28" y="98" font-size="14" fill="#4a5060">First rejected in billing-svc · 2026-02-08 — "lock-in + cold-start latency"</text>
+  </g>
+
+  <!-- stance card 3 (prefer) -->
+  <g transform="translate(56, 536)" filter="url(#softShadow)">
+    <rect width="788" height="128" rx="14" fill="#ffffff"/>
+    <rect width="6" height="128" rx="3" fill="#3ea76d"/>
+    <text x="28" y="36" font-size="13" fill="#2c7449" letter-spacing="1.5">PREFER · 5× CITED · 4 PROJECTS</text>
+    <text x="28" y="68" font-size="20" font-weight="600" fill="#1d2129">request-scoped dependency injection</text>
+    <text x="28" y="98" font-size="14" fill="#4a5060">First approved in api-platform · 2026-01-14 — "the testable shape we keep landing on"</text>
+  </g>
+
+  <!-- footer -->
+  <g transform="translate(56, 712)">
+    <text font-size="13" fill="#5a6070">Ledger persists at ~/.deeppairing/philosophy/v1.json · portable across machines via export/import</text>
+  </g>
+</svg>

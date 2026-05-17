@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif">
+  <!-- backdrop: terminal-dark on left, companion-UI light on right -->
+  <defs>
+    <linearGradient id="termBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1d23"/>
+      <stop offset="1" stop-color="#0e1014"/>
+    </linearGradient>
+    <linearGradient id="uiBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fafbff"/>
+      <stop offset="1" stop-color="#eef0f6"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="640" height="720" fill="url(#termBg)"/>
+  <rect x="640" y="0" width="640" height="720" fill="url(#uiBg)"/>
+
+  <!-- terminal panel header -->
+  <g transform="translate(48, 56)">
+    <circle cx="8" cy="8" r="6" fill="#ff5f57"/>
+    <circle cx="28" cy="8" r="6" fill="#febc2e"/>
+    <circle cx="48" cy="8" r="6" fill="#28c840"/>
+    <text x="80" y="13" fill="#7a8290" font-size="14">claude — pair on auth refactor</text>
+  </g>
+
+  <!-- terminal transcript -->
+  <g transform="translate(48, 112)" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="15" fill="#c7cad1">
+    <text y="0">› Add a global config cache for hot</text>
+    <text y="22">  lookups (singleton on the module).</text>
+    <text y="64" fill="#e08adf">[deepPairing] preflight checking…</text>
+    <text y="100" fill="#ff7a7a">REJECTED_APPROACH_BLOCKED</text>
+    <text y="122" fill="#a4a8b0">"global mutable state for config"</text>
+    <text y="144" fill="#a4a8b0">matched a stance you rejected 3</text>
+    <text y="166" fill="#a4a8b0">days ago.</text>
+    <text y="208" fill="#7a8290">→ Revise or explain why this case</text>
+    <text y="230" fill="#7a8290">  differs.</text>
+    <text y="296" fill="#c7cad1">› Use a DI-scoped ConfigProvider</text>
+    <text y="318" fill="#c7cad1">  passed through the request</text>
+    <text y="340" fill="#c7cad1">  context instead.</text>
+    <text y="382" fill="#7eea9b">[deepPairing] preflight ok — surfacing</text>
+    <text y="404" fill="#7eea9b">to companion UI.</text>
+  </g>
+
+  <!-- companion UI panel: rejection toast card -->
+  <g transform="translate(688, 88)" filter="url(#softShadow)">
+    <rect x="0" y="0" width="540" height="186" rx="16" fill="#ffffff" stroke="#e6e8ee"/>
+    <rect x="0" y="0" width="6" height="186" rx="3" fill="#e85f5f"/>
+    <text x="32" y="44" font-size="13" fill="#9aa0aa" letter-spacing="2">BLOCKED BY YOUR TASTE</text>
+    <text x="32" y="80" font-size="22" font-weight="600" fill="#1d2129">🛡 "global mutable state for config"</text>
+    <text x="32" y="116" font-size="15" fill="#4a5060">You rejected this 3 days ago in</text>
+    <text x="32" y="138" font-size="15" fill="#4a5060">api-platform:</text>
+    <text x="32" y="166" font-size="14" font-style="italic" fill="#6b7280">"broke testability in 3 places"</text>
+  </g>
+
+  <!-- companion UI: ledger entry that fired -->
+  <g transform="translate(688, 304)" filter="url(#softShadow)">
+    <rect x="0" y="0" width="540" height="156" rx="16" fill="#ffffff" stroke="#e6e8ee"/>
+    <text x="24" y="40" font-size="13" fill="#9aa0aa" letter-spacing="2">LEDGER ENTRY · cross-project</text>
+    <text x="24" y="76" font-size="18" font-weight="600" fill="#1d2129">global state for config</text>
+    <text x="24" y="106" font-size="14" fill="#4a5060">stance: avoid · cited 4× across 3 projects</text>
+    <g transform="translate(24, 124)" font-size="12" fill="#7a8290">
+      <rect x="0" y="0" width="92" height="22" rx="11" fill="#fde8e8"/>
+      <text x="46" y="15" text-anchor="middle" fill="#9b2b2b">api-platform</text>
+      <rect x="100" y="0" width="86" height="22" rx="11" fill="#fde8e8"/>
+      <text x="143" y="15" text-anchor="middle" fill="#9b2b2b">billing-svc</text>
+      <rect x="194" y="0" width="62" height="22" rx="11" fill="#fde8e8"/>
+      <text x="225" y="15" text-anchor="middle" fill="#9b2b2b">deepPair</text>
+    </g>
+  </g>
+
+  <!-- pull quote at bottom -->
+  <g transform="translate(688, 492)">
+    <text x="0" y="24" font-size="14" fill="#7a8290" letter-spacing="1.5">WHAT JUST HAPPENED</text>
+    <text x="0" y="56" font-size="20" fill="#1d2129">The agent paraphrased a stance from</text>
+    <text x="0" y="84" font-size="20" fill="#1d2129">another project. deepPairing caught the</text>
+    <text x="0" y="112" font-size="20" fill="#1d2129">concept match before the artifact was</text>
+    <text x="0" y="140" font-size="20" fill="#1d2129">created. The agent revised on its own.</text>
+  </g>
+
+  <!-- footer brand -->
+  <g transform="translate(48, 656)">
+    <text font-size="14" fill="#5a6070" letter-spacing="2">deepPairing · live demo of the rejection-block toast</text>
+  </g>
+</svg>

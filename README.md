@@ -1,9 +1,13 @@
 # deepPairing
 
-**An MCP server + companion web UI that turns Claude Code into a pair-programming partner — and blocks the agent from paraphrasing past decisions you've already rejected, across every project.**
+**Claude Code can't paraphrase past you anymore. deepPairing remembers every decision you've rejected — across every project — and blocks the agent before it tries again.**
 
-![hero — rejection-block toast](docs/assets/hero.png)
-*🚧 Placeholder — the hero moment will land here pre-launch. The agent paraphrases a stance you rejected last week, deepPairing intercepts before the artifact is created. See [`docs/assets/README.md`](docs/assets/README.md) for the recording recipe.*
+*MCP server + companion web UI. Open-source. Runs inside Claude Code.*
+
+**Built for senior ICs and staff engineers** who context-switch across many repos and resent re-litigating the same taste decisions.
+
+![hero — rejection-block toast](docs/assets/hero.svg)
+*Concept-match in flight: the agent paraphrases a stance you rejected three days ago in another project, deepPairing intercepts before the artifact is created, the agent revises on its own. The above is a vector mockup of the live flow; a screen recording lands in the next release (see [`docs/assets/README.md`](docs/assets/README.md) for the recipe).*
 
 ---
 
@@ -17,20 +21,21 @@
 
 That refusal — and the cross-project taste it's drawing from — is what deepPairing exists to do.
 
-![Your taste drawer — Philosophy Ledger](docs/assets/ledger.png)
-*🚧 Placeholder — the Ledger view will land here pre-launch. Inside the companion UI: every stance you've accumulated, with citation counts here and across projects.*
+![Your taste drawer — Philosophy Ledger](docs/assets/ledger.svg)
+*The Ledger view inside the companion UI: every stance you've accumulated, with citation counts across projects. Vector mockup of the live drawer; recording in the next release.*
 
-## Try it in two minutes (no Claude Code yet)
+## Try the demo
 
 ```bash
 git clone https://github.com/deeppairing/deeppairing.git
-cd deeppairing && pnpm install && pnpm build
+cd deeppairing
+pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js demo
 ```
 
-> Requires Node 20+ and pnpm 10+. The full build takes ~6 seconds on a fresh clone.
+> Requires Node 20+ and pnpm 10+. Fresh-clone build takes ~6 seconds; the demo script runs another ~5. No Claude Code installation needed for this path.
 
-The companion UI auto-opens at `http://localhost:3847`. The hero rejection-block toast fires within ~5 seconds. That's the demo — the rest of the project is whether you'd want this in your daily Claude Code loop.
+The companion UI auto-opens at `http://localhost:3847`. The hero rejection-block toast fires within ~5 seconds. That's the proof. Everything below is whether you'd want this in your daily Claude Code loop.
 
 ## Use it in Claude Code
 
@@ -47,15 +52,18 @@ You: Let's analyze the auth module.
 
 Claude calls deepPairing's MCP tools instead of dumping findings as plain text. Findings, decisions, plans, and code changes land in the companion UI with structured evidence. You comment, approve, reject, ask "why" — and every rejection becomes part of your **cross-project Philosophy Ledger** that future sessions remember.
 
-## Why other tools can't catch this
+## How it compares
 
-Cursor 3 (April 2026) shipped *canvases* — durable artifacts with approve/reject diff review.
-Claude Code (Feb 2026, v2.1.59) shipped *auto-memory* — learns from your corrections, hierarchical project + global.
-Both look like deepPairing on the surface. **Neither catches the paraphrase.**
+| Tool | Decisions persist across projects? | Blocks paraphrase via concept match? | Human-in-loop ceremony |
+| :--- | :---: | :---: | :--- |
+| Cursor 3 *canvases* | No | No — presentation, not constraint | Approve/reject diff |
+| Continue | No | No | Inline review |
+| Aider | No | No | Approve/reject diff |
+| Claude Code *auto-memory* | Hierarchical text dump | No — model is encouraged to consult, not gated | None (autonomous by default) |
+| Vanilla Claude Code | None | No | None |
+| **deepPairing** | **Yes** — cross-project Philosophy Ledger | **Yes** — `runPreflight` hard gate at the tool call | Configurable Full / Light / Minimal |
 
-Auto-memory is a text dump the model is *encouraged* to consult. Canvases are presentation, not constraint. Reject "Railway" in either, and an hour later "Fly.io for pay-per-request hosting" sails through — because nothing intercepts the call before it's made.
-
-deepPairing's `runPreflight` ([packages/mcp-server/src/mcp/preflight-validator.ts](packages/mcp-server/src/mcp/preflight-validator.ts)) is a hard pre-flight gate. Every `present_findings` / `present_options` / `present_plan` / `present_code_change` call gets matched against your Philosophy Ledger via concept-token + scope-glob rules. Match → tool returns `REJECTED_APPROACH_BLOCKED` and the artifact is never created. The agent has to revise or escalate; it can't paraphrase past you.
+deepPairing's `runPreflight` ([packages/mcp-server/src/mcp/preflight-validator.ts](packages/mcp-server/src/mcp/preflight-validator.ts)) is the hard pre-flight gate. Every `present_findings` / `present_options` / `present_plan` / `present_code_change` call gets matched against your Philosophy Ledger via concept-token + scope-glob rules. Match → tool returns `REJECTED_APPROACH_BLOCKED` and the artifact is never created. The agent has to revise or escalate; it can't paraphrase past you.
 
 That's the moat. Everything below is the surface that makes it usable.
 
@@ -76,33 +84,37 @@ Concept-aware blocking is the moat. These are the affordances that compound on t
 - **Not an autonomous agent.** The Ceremony dial goes Full / Light / Minimal — even Minimal stops at architectural decisions.
 - **Not for junior education.** It assumes you already have taste; it makes that taste compound across projects and sessions.
 
-## Working with deepPairing
+## CLI
+
+Pre-1.0: there is no npm publish yet, so the `deeppairing` command isn't in your PATH out of the box. Either invoke the built CLI by path, or one-time pnpm-link it.
+
+**By path** (no setup, works after `pnpm build`):
 
 ```bash
-npx deeppairing demo                  # 5-second hook validator
-npx deeppairing init                  # Set up in this project (interactive)
-npx deeppairing doctor [--fix]        # Diagnose / heal install issues
-npx deeppairing team init             # Scaffold .deeppairing/team.json
-npx deeppairing philosophy export     # Dump cross-project ledger
-npx deeppairing philosophy import f --merge
-npx deeppairing post-pr-review <pr>   # Post pair findings as PR comments (gh CLI)
-npx deeppairing export <format>       # full | pr-comments | adr | replay | learnings
+node packages/mcp-server/dist/cli/init.js demo
+node packages/mcp-server/dist/cli/init.js init
+node packages/mcp-server/dist/cli/init.js doctor --fix
 ```
 
-> **Why `npx deeppairing` works without an npm publish:** the package isn't on
-> npm yet. To get the short `deeppairing` command in your PATH, link the cloned
-> package globally one time:
->
-> ```bash
-> # one-time setup (creates ~/.local/share/pnpm and adds it to your PATH)
-> pnpm setup
-> # then, from the deepPairing repo
-> cd packages/mcp-server && pnpm link --global
-> ```
->
-> Now `deeppairing demo` and friends resolve to your local checkout. If you'd
-> rather not globally link, just call the CLI by path:
-> `node /path/to/deepPairing/packages/mcp-server/dist/cli/init.js demo`.
+**Or, link once** (gets you the short `deeppairing` command everywhere):
+
+```bash
+pnpm setup                                    # one-time, adds pnpm bin dir to PATH
+cd packages/mcp-server && pnpm link --global  # one-time per clone
+```
+
+After linking:
+
+```bash
+deeppairing demo                       # 5-second hook validator
+deeppairing init                       # Set up in this project (interactive)
+deeppairing doctor [--fix]             # Diagnose / heal install issues
+deeppairing team init                  # Scaffold .deeppairing/team.json
+deeppairing philosophy export          # Dump cross-project ledger
+deeppairing philosophy import f --merge
+deeppairing post-pr-review <pr>        # Post pair findings as PR comments (gh CLI)
+deeppairing export <format>            # full | pr-comments | adr | replay | learnings
+```
 
 ## How it fits together
 
