@@ -7,7 +7,7 @@ them, "show me" instinct is unsatisfied and discovery suffers.
 
 ## Required (for launch)
 
-### `hero.png` — the rejection-block toast firing
+### `hero.svg / .png` — the rejection-block toast firing
 
 Capture the moment when the agent paraphrases a previously-rejected
 stance and deepPairing's preflight intercepts. Recommended setup:
@@ -21,7 +21,7 @@ stance and deepPairing's preflight intercepts. Recommended setup:
 
 Target: ~1200×700, PNG, ≤300 KB.
 
-### `ledger.png` — the Your Taste drawer / Ledger view
+### `ledger.svg / .png` — the Your Taste drawer / Ledger view
 
 Open the YourTasteDrawer (header button "Your taste") and switch to
 the Ledger tab. The screenshot should show:
@@ -45,3 +45,11 @@ once produced.
 The pre-launch readiness review flagged the absence of any visual
 assets as the #1 GitHub-discovery gap. The companion UI IS the value
 prop; a README with no screenshot can't sell a UI tool.
+
+## What ships today (II7)
+
+`hero.svg` and `ledger.svg` are hand-authored vector mockups that
+depict the live flow without a live screen capture. GitHub renders
+SVG inline so they appear in the README on every clone. They will be
+replaced with real PNG/GIF captures using the recipes above as soon
+as the next release ships.
