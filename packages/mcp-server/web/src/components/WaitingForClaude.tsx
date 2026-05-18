@@ -94,7 +94,9 @@ export function WaitingForClaude() {
             <span className="text-text-secondary font-mono">{info.projectRoot}</span>
           </div>
           <div className="text-text-muted">
-            Wrong project? Run <code className="bg-surface-elevated px-1 rounded text-[10px]">npx deeppairing doctor</code> from the right directory.
+            Wrong project? Run <code className="bg-surface-elevated px-1 rounded text-[10px]">deeppairing doctor</code> (or
+            <code className="bg-surface-elevated px-1 rounded text-[10px] ml-1">node packages/mcp-server/dist/cli/init.js doctor</code>)
+            from the right directory.
           </div>
         </div>
       )}

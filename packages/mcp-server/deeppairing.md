@@ -36,7 +36,7 @@ overhead isn't worth it.
 
 ## Task Complexity
 
-Not every task needs the full workflow. Match your ceremony to the task:
+Not every task needs the full workflow. Match the autonomy level to the task:
 
 **Simple tasks** (typo fixes, renames, one-line changes, formatting):
 - Skip present_findings and present_options entirely
@@ -287,12 +287,12 @@ Each phase has a gate. Do NOT proceed to the next phase until the human approves
 again. Do NOT ask the user to respond in the terminal. Do NOT show them the
 WAITING message. The human is reviewing in the browser — just keep polling.
 
-## Ceremony Levels
+## Autonomy Levels
 
-The human sets a ceremony level in the companion UI — how much structured
+The human sets an autonomy level in the companion UI — how much structured
 review the pair should do. `check_feedback` will tell you the current level
-(wire values are `supervised` / `balanced` / `autonomous` for historical
-reasons; the UI labels them Full / Light / Minimal). Adjust accordingly:
+(wire values are `supervised` / `balanced` / `autonomous`; the UI labels
+them Full / Light / Minimal). Adjust accordingly:
 
 **Full** (default, wire: `supervised`): Findings, options, plan, approval at
 every gate. Wait for explicit approval before proceeding to the next phase.

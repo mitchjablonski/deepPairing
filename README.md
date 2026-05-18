@@ -1,15 +1,10 @@
 # deepPairing
 
-**Claude Code can't paraphrase past you anymore. deepPairing remembers every decision you've rejected — across every project — and blocks the agent before it tries again.**
+**Claude Code can't paraphrase past you anymore. deepPairing blocks the agent when it tries.**
 
-*MCP server + companion web UI. Open-source. Runs inside Claude Code.*
+*MCP server + companion web UI. Runs inside Claude Code. MIT-licensed, no telemetry, no account — the ledger lives on your disk.*
 
 **Built for senior ICs and staff engineers** who context-switch across many repos and resent re-litigating the same taste decisions.
-
-![hero — rejection-block toast](docs/assets/hero.svg)
-*Concept-match in flight: the agent paraphrases a stance you rejected three days ago in another project, deepPairing intercepts before the artifact is created, the agent revises on its own. The above is a vector mockup of the live flow; a screen recording lands in the next release (see [`docs/assets/README.md`](docs/assets/README.md) for the recipe).*
-
----
 
 > The agent proposes "let's add a global mutable ConfigStore singleton."
 > You reject it: *"we tried global state for config last project — broke testability."*
@@ -21,8 +16,7 @@
 
 That refusal — and the cross-project taste it's drawing from — is what deepPairing exists to do.
 
-![Your taste drawer — Philosophy Ledger](docs/assets/ledger.svg)
-*The Ledger view inside the companion UI: every stance you've accumulated, with citation counts across projects. Vector mockup of the live drawer; recording in the next release.*
+> **See it for yourself in 90 seconds.** A scripted [demo command](#try-the-demo) fires the rejection-block toast against a real companion UI. Screen recordings of the live flow and the Ledger drawer ship with the next tagged release; vector mockups are checked into [`docs/assets/`](docs/assets/) in the meantime.
 
 ## Try the demo
 
@@ -33,7 +27,7 @@ pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js demo
 ```
 
-> Requires Node 20+ and pnpm 10+. Fresh-clone build takes ~6 seconds; the demo script runs another ~5. No Claude Code installation needed for this path.
+> Requires Node 20+ and pnpm 10+. Cold-clone wall time is around 60-90s on `pnpm install` (Turborepo + a few hundred deps), then ~10s for the monorepo build, then ~5s for the demo. No Claude Code installation needed for this path.
 
 The companion UI auto-opens at `http://localhost:3847`. The hero rejection-block toast fires within ~5 seconds. That's the proof. Everything below is whether you'd want this in your daily Claude Code loop.
 
@@ -54,24 +48,24 @@ Claude calls deepPairing's MCP tools instead of dumping findings as plain text. 
 
 ## How it compares
 
-| Tool | Decisions persist across projects? | Blocks paraphrase via concept match? | Human-in-loop ceremony |
+| Tool | Decisions persist across projects? | Concept-match blocks paraphrase? | Human-in-loop autonomy |
 | :--- | :---: | :---: | :--- |
-| Cursor 3 *canvases* | No | No — presentation, not constraint | Approve/reject diff |
+| Cursor 3 *canvases* | No | No | Approve/reject diff |
 | Continue | No | No | Inline review |
 | Aider | No | No | Approve/reject diff |
-| Claude Code *auto-memory* | Hierarchical text dump | No — model is encouraged to consult, not gated | None (autonomous by default) |
+| Claude Code *auto-memory* | Per-project + global, soft recall (model may consult) | No | None (autonomous by default) |
 | Vanilla Claude Code | None | No | None |
-| **deepPairing** | **Yes** — cross-project Philosophy Ledger | **Yes** — `runPreflight` hard gate at the tool call | Configurable Full / Light / Minimal |
+| **deepPairing** | **Yes** — cross-project Philosophy Ledger | **Yes** — hard pre-flight gate | Configurable Full / Light / Minimal |
+
+Cursor's canvases and Claude Code's auto-memory both look like deepPairing on the surface, but neither catches the paraphrase: canvases are a presentation surface (no gate on the tool call), and auto-memory is a context the model is *encouraged* to consult, not a constraint. Reject "Railway" in either and an hour later "Fly.io for pay-per-request hosting" sails through.
 
 deepPairing's `runPreflight` ([packages/mcp-server/src/mcp/preflight-validator.ts](packages/mcp-server/src/mcp/preflight-validator.ts)) is the hard pre-flight gate. Every `present_findings` / `present_options` / `present_plan` / `present_code_change` call gets matched against your Philosophy Ledger via concept-token + scope-glob rules. Match → tool returns `REJECTED_APPROACH_BLOCKED` and the artifact is never created. The agent has to revise or escalate; it can't paraphrase past you.
 
-That's the moat. Everything below is the surface that makes it usable.
-
 ## What makes this different
 
-Concept-aware blocking is the moat. These are the affordances that compound on top of it:
+The concept-match pre-flight is the moat. These are the affordances that compound on top of it:
 
-- **Cross-project Philosophy Ledger.** Stances accumulate at `~/.deeppairing/philosophy/v1.json` across every deepPairing project you touch. Portable via `npx deeppairing philosophy export | import --merge`.
+- **Cross-project Philosophy Ledger.** Stances accumulate at `~/.deeppairing/philosophy/v1.json` across every deepPairing project you've opted in to publish from (opt-in is one prompt at `init`). Portable via `deeppairing philosophy export | import --merge`.
 - **Three-layer memory model.** Filesystem-sensed guardrails (migrations, CI), team conventions (committable `.deeppairing/team.json`), personal philosophy. Surfaced separately to the agent. Never merged.
 - **Calibration loop.** High-stakes decisions capture your prediction + confidence. When a similar decision comes up later, the breadcrumb shows what you predicted before. ✓ / ✗ / ◐ retrospective affordance closes the loop.
 - **Concept-naming as the teaching lever.** Every `log_reasoning` call surfaces the pattern at play ("dependency inversion", "optimistic UI") so you learn the vocabulary, not just the fix.
@@ -81,7 +75,7 @@ Concept-aware blocking is the moat. These are the affordances that compound on t
 ## What it isn't
 
 - **Not a code review bot** like CodeRabbit or Greptile. It pairs *with* you on the diff; the PR is a surface to share what you paired on.
-- **Not an autonomous agent.** The Ceremony dial goes Full / Light / Minimal — even Minimal stops at architectural decisions.
+- **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal — even Minimal stops at architectural decisions.
 - **Not for junior education.** It assumes you already have taste; it makes that taste compound across projects and sessions.
 
 ## CLI
@@ -127,7 +121,7 @@ Claude Code  ←stdio→  deepPairing MCP Server  ←WebSocket→  Companion UI
 
 The MCP server runs inside Claude Code (it IS the agent — no separate orchestrator). The companion UI is read + steer; the terminal stays the primary chat surface. Sessions persist as JSON in `.deeppairing/`; the ledger persists at `~/.deeppairing/philosophy/v1.json`.
 
-For details: see [ARCHITECTURE.md](ARCHITECTURE.md).
+For details: see [ARCHITECTURE.md](ARCHITECTURE.md). If something isn't behaving, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) is keyed on the actual error strings the daemon and wrapper return.
 
 ## What's in the box
 
@@ -135,7 +129,7 @@ For details: see [ARCHITECTURE.md](ARCHITECTURE.md).
 - **`packages/shared/`** — Zod schemas + fixtures that both server and UI import.
 - **`claude-plugin/`** — Claude Code plugin: `.mcp.json`, slash commands (`/deeppairing:start`, `/deeppairing:review`, `/deeppairing:stance`, `/deeppairing:review-pr`, `/deeppairing:post-pr`), `pairing-protocol` skill.
 
-13 MCP tools: `present_findings`, `present_options`, `present_spec`, `present_plan`, `present_code_change`, `log_reasoning`, `recall` (mode: philosophy | sessions | any), `revise_artifact` (mode: supersede | retract), `request_horizon_check`, `answer_question`, `post_pr_review`, `export_session`, `check_feedback`.
+12 MCP tools: `present_findings`, `present_options`, `present_spec`, `present_plan`, `present_code_change`, `log_reasoning`, `recall` (mode: philosophy | sessions | any), `revise_artifact` (mode: supersede | retract), `answer_question`, `post_pr_review`, `export_session`, `check_feedback`. Plus a `recall` MCP prompt for user-invoked slash-style queries.
 
 ## Status
 

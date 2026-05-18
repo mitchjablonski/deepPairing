@@ -35,7 +35,10 @@ describe("WaitingForClaude", () => {
     await waitFor(() => expect(screen.getByText(/PID 12345/)).toBeInTheDocument());
     expect(screen.getByText(/\/home\/user\/important-project/)).toBeInTheDocument();
     expect(screen.getByText(/wrong project\?/i)).toBeInTheDocument();
-    expect(screen.getByText(/npx deeppairing doctor/)).toBeInTheDocument();
+    // III9 — npx-deeppairing was the broken-out-of-the-box command. The
+    // panel now points at the linked CLI (`deeppairing doctor`) with
+    // the by-path fallback inline.
+    expect(screen.getByText(/deeppairing doctor/i)).toBeInTheDocument();
   });
 
   it("doesn't surface the PID block when daemon-info fails", async () => {
