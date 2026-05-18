@@ -87,6 +87,27 @@ export function createHttpRoutes(
   projectRoot?: string,
   broadcastFn?: BroadcastFn,
   logFn?: LogFn,
+  /**
+   * III5 — daemon's shared secret (same value passed to createDaemonRoutes
+   * via II1). When set, mutation-bearing public routes that the browser
+   * UI calls (today: /api/prompts) require `Authorization: Bearer <token>`
+   * in addition to the X-Project-Hash check. The browser receives this
+   * token via the `window.__deepPairingToken` injection the daemon
+   * performs on index.html serves.
+   *
+   * Why bother when same-uid curl can also obtain the token (by reading
+   * daemon.json or by hitting GET / and scraping the injected script):
+   * the auth raises the bar above "any same-uid process with read access
+   * to .deeppairing/daemon.json" to "same-uid process with HTTP + sigh-
+   * the-bearer overhead". More importantly it forces a sandboxed worker
+   * (an npm subprocess with network but no filesystem) to additionally
+   * curl the daemon's own HTML — which a defender can future-proof with
+   * Origin/Referer checks, secure-cookie minting, or per-tab nonces.
+   *
+   * Optional so test fixtures that don't care about auth don't have to
+   * thread the token; the route gate is a no-op when undefined.
+   */
+  authToken?: string,
 ) {
   const getStore: StoreGetter = typeof storeOrGetter === "function"
     ? storeOrGetter as StoreGetter
@@ -104,6 +125,34 @@ export function createHttpRoutes(
   const daemonHash: string | undefined = projectRoot ? projectHashOf(projectRoot) : undefined;
 
   const app = new Hono();
+
+  // III6 — body-size cap for public mutation routes. Pre-III6 only
+  // /api/philosophy/seed had a (DD2) cap; every other POST accepted
+  // arbitrary bodies up to whatever the JSON parser would tolerate.
+  // One agent-side bug, one hostile script, or one frame-stamped
+  // 50MB comment from a misconfigured browser extension could fill
+  // .deeppairing/comments.json or .deeppairing/prompts/*.md until
+  // the disk ran out. Cap at 64 KiB — a normal artifact / comment
+  // / prompt is &lt; 4 KiB; the ceiling allows for verbose markdown
+  // pastes without permitting flood. Reads are uncapped (they're
+  // bounded by the on-disk state).
+  const MAX_BODY_BYTES = 64 * 1024;
+  app.use("*", async (c, next) => {
+    if (c.req.method === "OPTIONS" || c.req.method === "GET" || c.req.method === "HEAD") {
+      return next();
+    }
+    const lenHeader = c.req.header("content-length");
+    if (lenHeader) {
+      const len = parseInt(lenHeader, 10);
+      if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
+        return c.json(
+          { error: `Request body exceeds ${MAX_BODY_BYTES}-byte cap.`, code: "body_too_large" },
+          413,
+        );
+      }
+    }
+    return next();
+  });
 
   // AA4 — global middleware. Every route checks X-Project-Hash before
   // doing anything else. CORS preflight (OPTIONS) skips the check —
@@ -906,8 +955,26 @@ export function createHttpRoutes(
 
   // Save a re-pair prompt to .deeppairing/prompts/ so the developer can
   // reference it from their filesystem in a fresh Claude Code session.
+  //
+  // III5 — Bearer-gated. Pre-III5 this route accepted any X-Project-Hash-
+  // bearing call, which a same-uid attacker who scraped daemon.json
+  // for the hash could trivially impersonate to plant crafted markdown
+  // the user later pastes into Claude Code (a prompt-injection
+  // delivery vector). Now requires the daemon's bearer token; the
+  // browser UI gets it via window.__deepPairingToken injected into
+  // index.html (see daemon.ts).
   app.post("/api/prompts", async (c) => {
     if (!projectRoot) return c.json({ error: "No project root" }, 500);
+    if (authToken) {
+      const auth = c.req.header("Authorization");
+      if (auth !== `Bearer ${authToken}`) {
+        log(`[prompts-auth] 401 — bad/missing Authorization header`);
+        return c.json(
+          { error: "Authorization required for prompt save.", code: "daemon_auth_required" },
+          401,
+        );
+      }
+    }
     const body = await c.req.json();
     const content = typeof body?.content === "string" ? body.content : "";
     if (!content.trim()) return c.json({ error: "content required" }, 400);

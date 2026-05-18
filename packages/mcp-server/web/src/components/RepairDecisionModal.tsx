@@ -75,9 +75,19 @@ export function RepairDecisionModal({
     setSaving(true);
     setError(null);
     try {
+      // III5 — /api/prompts now requires the daemon's bearer token. The
+      // daemon injects it as `window.__deepPairingToken` into the served
+      // HTML, so it's available to every component without a bootstrap
+      // round-trip. If it's missing (older daemon, dev-mode standalone
+      // server), we still attempt the call without the header — the
+      // route's auth check is a no-op when the daemon didn't pass a
+      // token, so the dev/older paths keep working.
+      const token = (window as any).__deepPairingToken as string | undefined;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch(`${API_BASE}/api/prompts`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           content: promptMarkdown,
           decisionId,

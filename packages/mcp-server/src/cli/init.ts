@@ -407,6 +407,40 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
     console.log(`  ${dim("✓")} ${ckptResult.message}`);
   }
 
+  // III8 — one-time prompt for the cross-project ledger publish opt-in.
+  // Default is off. We surface this consciously so the user makes a real
+  // choice about whether this project's rejections / approvals get
+  // mirrored into ~/.deeppairing/philosophy/v1.json (where every other
+  // deepPairing project on the machine can cite them). Skip silently in
+  // dry-run, --yes, or non-TTY runs.
+  if (!dryRun && !opts.yes && process.stdin.isTTY) {
+    try {
+      const { FileStore } = await import("../store/file-store.js");
+      const crypto = await import("node:crypto");
+      const projectName = path.basename(cwd);
+      const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+      const projectHash = crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 8);
+      const seedSessionId = `session_${safeProjectName}_${projectHash}`;
+      const seedStore = new FileStore(cwd, seedSessionId);
+      const current = seedStore.getGlobalLedgerPublish();
+      if (!current) {
+        console.log(`\n  ${dim("Cross-project ledger:")} deepPairing keeps a per-machine philosophy ledger at`);
+        console.log(`  ${dim("~/.deeppairing/philosophy/v1.json. By default, this project's rejections /")}`);
+        console.log(`  ${dim("approvals do NOT publish there (only this project's preflight uses them).")}`);
+        console.log(`  ${dim("Publishing lets every other deepPairing project on this machine cite them —")}`);
+        console.log(`  ${dim("compounding taste, but also extending trust to any tool that runs in this")}`);
+        console.log(`  ${dim("project. You can flip this later: `deeppairing philosophy publish on|off`.\n")}`);
+        const publish = await confirmPrompt(`  Publish ${bold(projectName)}'s rejections to the cross-project ledger? [y/N] `, /* default */ false);
+        seedStore.setGlobalLedgerPublish(publish);
+        console.log(`  ${green("✓")} Cross-project publish: ${publish ? bold("on") : "off"}\n`);
+      }
+      seedStore.forceFlush();
+    } catch (err) {
+      // Non-fatal — user can flip it later via the CLI.
+      console.log(`  ${dim("(skipped ledger-publish prompt: " + (err as any)?.message + ")")}`);
+    }
+  }
+
   // Done
   console.log(`
   ${bold("Setup complete!")}

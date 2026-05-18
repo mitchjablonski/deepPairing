@@ -706,6 +706,45 @@ export class FileStore implements IStore {
    * Stored in .deeppairing/preferences.json under "rejectedApproaches".
    * Records are enriched objects; legacy string[] entries are migrated on next write.
    */
+  /**
+   * III8 — true when this project has opted in to PUBLISH its rejected /
+   * approved instances into the cross-project ~/.deeppairing/philosophy/
+   * ledger. Default is false (opt-in). Reads from the global ledger are
+   * always unfiltered — users still get cross-project context they've
+   * accumulated from any project they opted in for.
+   *
+   * Failure mode this closes: any project the user opens with deepPairing
+   * could previously seed avoid-stances ("validate untrusted input",
+   * "use parameterized queries") that every other project then cited.
+   * Single-write poisoning by a malicious dependency that triggers
+   * recordRejectedApproach via the agent. With opt-in publish, the
+   * malicious dep can only poison its own project's ledger, not the
+   * global one.
+   *
+   * Reads `globalLedgerPublish` from preferences.json. Set via the
+   * one-time `init` prompt (or `npx deeppairing philosophy publish on/off`).
+   */
+  private globalLedgerPublishEnabled(): boolean {
+    return this.readPreferences().globalLedgerPublish === true;
+  }
+
+  /**
+   * III8 — flip the per-project publish opt-in. Used by the `init`
+   * prompt, by the `npx deeppairing philosophy publish on/off` command,
+   * and by tests that want to exercise the cross-project mirror path.
+   * Idempotent. Persists to preferences.json.
+   */
+  setGlobalLedgerPublish(enabled: boolean): void {
+    const prefs = this.readPreferences();
+    if (prefs.globalLedgerPublish === enabled) return;
+    prefs.globalLedgerPublish = enabled;
+    this.writePreferences(prefs);
+  }
+
+  getGlobalLedgerPublish(): boolean {
+    return this.globalLedgerPublishEnabled();
+  }
+
   recordRejectedApproach(params: {
     description: string;
     reason?: string;
@@ -722,8 +761,11 @@ export class FileStore implements IStore {
     // as the concept arg, so the global ledger keyed on prose strings
     // and never compounded across projects. Typed-object signature here
     // makes the next refactor's regression visible.
+    // III8 — gate on the per-project publish opt-in. Reads still work,
+    // local preferences.json is still updated below; only the global
+    // mirror is gated.
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey) {
+    if (conceptKey && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -792,8 +834,9 @@ export class FileStore implements IStore {
     // raw description strings into the global ledger, so an "argon2id for
     // password hashing" approval in project A never bucketed with the
     // same approval in project B.
+    // III8 — same per-project publish opt-in gate as the rejected path.
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey) {
+    if (conceptKey && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,

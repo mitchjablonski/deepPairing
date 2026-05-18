@@ -469,6 +469,26 @@ export function createDaemonRoutes(
     return c.json({ status: "recorded" });
   });
 
+  // III8 — per-project opt-in to publish to the global ledger. The wrapper
+  // (or a future UI surface) calls these to flip the gate that controls
+  // whether recordRejectedApproach / recordApprovedPattern mirror into
+  // ~/.deeppairing/philosophy/v1.json. Default is off (opt-in).
+  app.post("/api/internal/sessions/:sessionId/memory/global-publish", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => ({}));
+    const enabled = body?.enabled === true;
+    r.store.setGlobalLedgerPublish?.(enabled);
+    return c.json({ status: "set", enabled });
+  });
+
+  app.get("/api/internal/sessions/:sessionId/memory/global-publish", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const enabled = r.store.getGlobalLedgerPublish?.() ?? false;
+    return c.json({ enabled });
+  });
+
   // --- Preflight traces (Z1 — daemon-mode persistence for Y1') ---
   // Pre-Z1, persistPreflightTrace silently no-op'd when called against
   // DaemonClient because the method wasn't on the daemon's wire surface
