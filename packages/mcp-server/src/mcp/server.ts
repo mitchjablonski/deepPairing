@@ -5,6 +5,8 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
@@ -69,7 +71,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       // protocol-level signal that the list had moved — long-running
       // sessions never saw new resources unless they speculatively
       // re-listed.
-      capabilities: { tools: {}, resources: { listChanged: true } },
+      // III12 — declare `prompts` capability. We ship one prompt
+      // (`recall`) as an agent-invocable slash-style query instead of a
+      // 13th tool. The `recall` tool stays for now (programmatic agent
+      // calls); the prompt is the surface a user types into the host
+      // chat ("/recall pay-per-request hosting"). This is the right
+      // shape for the use case and reclaims attention budget in MCP
+      // clients with hard tool-count caps.
+      capabilities: { tools: {}, resources: { listChanged: true }, prompts: {} },
     },
   );
 
@@ -434,27 +443,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           },
         },
       },
-      {
-        name: "request_horizon_check",
-        description:
-          "Ask the human to predict a failure mode for an architecturally-significant artifact on a 3mo / 1y / 2y horizon. The human's prediction is stored for later review; good signal for calibration. Use sparingly on schema, auth, caching, pipeline, or queue-semantics decisions.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            artifactId: { type: "string", description: "The artifact (plan, decision, code change) to anchor the horizon check to" },
-            horizon: {
-              type: "string",
-              enum: ["3mo", "1y", "2y"],
-              description: "How far out to project — shorter = operational risks, longer = scale/design risks",
-            },
-            prompt: {
-              type: "string",
-              description: "Optional concrete prompt. If omitted, a reasonable default is used based on the artifact type.",
-            },
-          },
-          required: ["artifactId", "horizon"],
-        },
-      },
+      // III12 — `request_horizon_check` was a 7-line wrapper around
+      // `addComment` with intent="question" and a templated prompt. It
+      // didn't earn a first-class tool slot. Removed; the workflow is
+      // now: agent calls `answer_question` (or just `addComment` with
+      // intent="question") with the horizon prompt as the question
+      // text. The `deeppairing.md` skill carries the template prompts.
       {
         name: "answer_question",
         description:
@@ -556,8 +550,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       // again. The hint is also delivered as a separate text content
       // block on the first write-tool result (see tool-result handler
       // below) so agents that don't list resources still get bootstrapped.
+      // III2 — was `deeppairing://session/onboarding`. That URI
+      // collided with the `session/{id}` regex below: a future past
+      // session whose id happened to be "onboarding" (or a typo'd
+      // cursor synthesizing one) would silently swallow the onboarding
+      // read. Move to a top-level URI so the namespace is clean and
+      // `session/` is exclusively for session ids.
       resources.push({
-        uri: "deeppairing://session/onboarding",
+        uri: "deeppairing://onboarding",
         name: "Session onboarding — read first",
         description: "Rejected approaches, approved patterns, philosophy ledger snapshot, team rules, and autonomy hint. Read at session start so you know what's already off-limits before proposing anything.",
         mimeType: "text/plain",
@@ -642,7 +642,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // approaches / autonomy level. The first-call splice path used a
     // snapshot frozen at first-tool-call time; the resource is always
     // fresh because it's computed on read.
-    if (uri === "deeppairing://session/onboarding") {
+    // III2 — top-level URI, not under session/. See ListResources for
+    // the collision history.
+    if (uri === "deeppairing://onboarding") {
       const text = await buildFirstCallHint(store, port);
       return {
         contents: [{ uri, mimeType: "text/plain", text: text || "(no onboarding context available yet)" }],
@@ -682,6 +684,20 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     const sessionMatch = uri.match(/^deeppairing:\/\/session\/(.+)$/);
     if (sessionMatch) {
       const sessionId = sessionMatch[1];
+      // III2 — defense-in-depth: even though we moved onboarding off
+      // session/ at the source, an old client cache or hand-typed URI
+      // could still hit session/onboarding. Reserved-name guard rejects
+      // any session id that shadows a top-level URI fragment so the
+      // collision the URI move was meant to prevent can't sneak back in
+      // via a path different from the resource list.
+      if (sessionId === "onboarding" || sessionId === "current") {
+        throw new Error(
+          `Reserved session id: '${sessionId}'. ` +
+          (sessionId === "onboarding"
+            ? "Read deeppairing://onboarding (top-level) for session onboarding."
+            : "Read deeppairing://session/current for the active session."),
+        );
+      }
       if (!canLoadPast) {
         throw new Error("Past session reads require a DaemonClient store.");
       }
@@ -692,6 +708,67 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     }
 
     throw new Error(`Unknown resource URI: ${uri}`);
+  });
+
+  // III12 — MCP prompts capability. We ship one prompt today (`recall`)
+  // as the user-invocable slash-style surface for querying the
+  // philosophy ledger. The `recall` tool stays for now (programmatic
+  // agent calls); the prompt is the surface a user types into the host
+  // chat ("/recall pay-per-request hosting" → returns a templated
+  // user-message asking the agent to call recall + summarize). MCP
+  // prompts are USER-driven (the host shows them in a / menu); MCP
+  // tools are AGENT-driven (the LLM decides when to call them). The
+  // architecture council flagged that `recall` is structurally a
+  // slash-query, not an agent action — this is the right surface for
+  // that use case and reclaims one tool-attention slot.
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    return {
+      prompts: [
+        {
+          name: "recall",
+          description: "Query your philosophy ledger (cross-project stances) and past sessions. Surfaces what you've accumulated across deepPairing projects without burning a tool-attention slot in the agent.",
+          arguments: [
+            {
+              name: "query",
+              description: "Concept or substring to look up (e.g. 'pay-per-request hosting', 'global state for config'). Omit to list everything.",
+              required: false,
+            },
+            {
+              name: "mode",
+              description: "Which surface to read: 'philosophy' (cross-project ledger), 'sessions' (past pairing sessions), or 'any' (both, merged). Defaults to 'any'.",
+              required: false,
+            },
+          ],
+        },
+      ],
+    };
+  });
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    const name = request.params.name;
+    if (name !== "recall") {
+      throw new Error(`Unknown prompt: ${name}`);
+    }
+    const query = String(request.params.arguments?.query ?? "").trim();
+    const mode = String(request.params.arguments?.mode ?? "any").trim();
+    const queryHint = query ? ` for "${query}"` : "";
+    const modeHint = mode && mode !== "any" ? ` (mode=${mode})` : "";
+    return {
+      description: `Recall philosophy + past-session context${queryHint}${modeHint}`,
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text:
+              `Call the deepPairing \`recall\` tool with mode=${JSON.stringify(mode || "any")}` +
+              (query ? ` and query=${JSON.stringify(query)}` : ` (no query — list everything)`) +
+              `. Summarize the top entries plain-text: name, stance (avoid / prefer / mixed), citation count, ` +
+              `the most representative reason. If nothing comes back, say so explicitly — don't fill the gap with speculation.`,
+          },
+        },
+      ],
+    };
   });
 
   // X4 — passive-feedback drain lives in tool-helpers.ts. The wrapper
@@ -1120,66 +1197,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         };
       }
 
-      case "request_horizon_check": {
-        const artifactId = String(args?.artifactId ?? "").trim();
-        const horizon = String(args?.horizon ?? "").trim();
-        if (!artifactId) {
-          return {
-            content: [{ type: "text", text: "request_horizon_check requires artifactId." }],
-            isError: true,
-          };
-        }
-        if (!["3mo", "1y", "2y"].includes(horizon)) {
-          return {
-            content: [{ type: "text", text: "request_horizon_check: horizon must be '3mo', '1y', or '2y'." }],
-            isError: true,
-          };
-        }
-        const artifacts = await store.getArtifacts();
-        const artifact = artifacts.find((a) => a.id === artifactId);
-        if (!artifact) {
-          return {
-            content: [{ type: "text", text: `request_horizon_check: no artifact with id ${artifactId}.` }],
-            isError: true,
-          };
-        }
-
-        const horizonLabel =
-          horizon === "3mo" ? "3 months" :
-          horizon === "1y" ? "1 year" :
-          "2 years";
-
-        const customPrompt = typeof args?.prompt === "string" ? args.prompt.trim() : "";
-        const defaultPrompt =
-          artifact.type === "decision"
-            ? `In ${horizonLabel}, what's most likely to make us regret this choice? What signals would tell us it was wrong?`
-            : artifact.type === "plan"
-              ? `In ${horizonLabel}, what assumption in this plan is most likely to break? Which step has the most hidden coupling?`
-              : artifact.type === "code_change"
-                ? `In ${horizonLabel}, which line in this change would I look at first if this system broke?`
-                : `In ${horizonLabel}, what's most likely to go wrong with this?`;
-
-        const content = customPrompt || defaultPrompt;
-
-        const horizonCommentId = `cmt_${nanoid(10)}`;
-        const horizonComment = await store.addComment({
-          id: horizonCommentId,
-          artifactId,
-          content,
-          author: "agent",
-          target: { artifactId, sectionId: `horizon_check:${horizon}` } as any,
-          intent: "question",
-        } as any);
-
-        broadcast({ type: "comment_added", comment: horizonComment });
-
-        return {
-          content: [{
-            type: "text",
-            text: `Horizon check (${horizonLabel}) posted on ${artifactId}: "${content}"\nThe human will answer in the companion UI. Pick their reply up via check_feedback and consider it when you proceed.${await getPassiveFeedback()}`,
-          }],
-        };
-      }
+      // III12 — case "request_horizon_check" removed. The workflow
+      // (post a question on an artifact with a templated horizon prompt)
+      // is now: call addComment / answer_question with the horizon
+      // template as the question text. The deeppairing.md skill carries
+      // the templates so the LLM still has them available.
 
       case "answer_question": {
         const commentId = String(args?.commentId ?? "").trim();
@@ -1437,10 +1459,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // The hint is meant for tools that WRITE (the agent is about to
     // create artifacts; rejected approaches matter). Read-only and
     // pull-style tools shouldn't carry it.
-    // AA6.1 — request_horizon_check + answer_question both write
-    // comments and motivate exactly the rejected-approach context the
-    // hint carries (the agent might re-introduce a stance in its answer
-    // text). Adding them to the allowlist closes a gap from Y2.
+    // AA6.1 — answer_question writes comments and motivates exactly the
+    // rejected-approach context the hint carries (the agent might
+    // re-introduce a stance in its answer text). III12 — dropped
+    // request_horizon_check from this allowlist when the tool itself
+    // was removed; the horizon-check workflow now flows through
+    // answer_question / addComment which are already covered.
     const HINT_TOOLS: ReadonlySet<string> = new Set([
       "present_findings",
       "present_options",
@@ -1450,7 +1474,6 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       "log_reasoning",
       "revise_artifact",
       "post_pr_review",
-      "request_horizon_check",
       "answer_question",
     ]);
     // II12 — was: `first.text = first.text + firstCallHint` (splice the
@@ -1460,13 +1483,21 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // Now: push the hint as a SEPARATE text content block. Lenient clients
     // render both; strict parsers can pick content[0] for the tool reply
     // and content[1+] for ambient context. The same hint is also exposed
-    // as a `deeppairing://session/onboarding` resource (added below) for
+    // as a `deeppairing://onboarding` resource (added below) for
     // clients that prefer the resource model.
+    // III1 — gate on !result.isError. Pre-III1 the push fired on every
+    // tool reply with a content[] array, including the ~17 isError:true
+    // validation/preflight-reject returns. That meant a malformed first
+    // write call got "INPUT_VALIDATION_FAILED: ..." followed by a 4KB
+    // onboarding dump — exactly the parsing footgun II12 was supposed to
+    // retire, just on the error branch. Tool errors must stay clean so
+    // the agent can decide what to do without paragraphs of distraction.
     if (
       firstCallHint &&
       HINT_TOOLS.has(name) &&
       result?.content &&
-      Array.isArray(result.content)
+      Array.isArray(result.content) &&
+      !result.isError
     ) {
       result.content.push({ type: "text", text: firstCallHint });
     }
