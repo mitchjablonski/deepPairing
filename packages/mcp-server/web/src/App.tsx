@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
+import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
@@ -352,14 +353,26 @@ function App() {
       {/* Pending decision/plan banner */}
       <PendingBanner />
 
-      {/* Main content */}
+      {/* Main content.
+          III10 — when the WS is connected but no wrapper has registered a
+          session, render WaitingForClaude (with explicit project root +
+          "try this" hint) instead of IdleHome's empty Ledger panel.
+          Pre-III10 a fresh-install user who ran `init` but hadn't yet
+          launched Claude saw an empty "Your Ledger" panel with zero
+          entries and no indication that the agent wasn't connected.
+          The session bar's "No active sessions" hint was below threshold.
+          Now the main surface is a directed "do this next" affordance. */}
       <div className="flex-1 min-h-0">
         <ErrorBoundary fallback={
           <div className="flex items-center justify-center h-full p-8 text-text-muted text-sm">
             Failed to render — try selecting a different artifact
           </div>
         }>
-          {hasArtifacts ? <ArtifactPanel /> : <IdleHome />}
+          {hasArtifacts
+            ? <ArtifactPanel />
+            : (connected && activeSessions.length === 0
+                ? <div className="p-5"><WaitingForClaude /></div>
+                : <IdleHome />)}
         </ErrorBoundary>
       </div>
 

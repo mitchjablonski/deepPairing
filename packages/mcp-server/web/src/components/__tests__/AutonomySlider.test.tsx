@@ -17,32 +17,37 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("AutonomySlider — Q6 Ceremony rename", () => {
-  it("renders the current ceremony label with 'Ceremony: Full' for wire value 'supervised'", async () => {
+describe("AutonomySlider — III9 Autonomy rename (was Q6 Ceremony)", () => {
+  // III9 — was labeled "Ceremony" per the Q6 rename. Council product
+  // review flagged "ceremony" as off-brand for the senior-IC audience
+  // (reads as overhead being sold). Renamed back to "Autonomy" which
+  // also matches the underlying wire values (supervised / balanced /
+  // autonomous). The level labels (Full / Light / Minimal) stay as-is.
+  it("renders the current autonomy label with 'Autonomy: Full' for wire value 'supervised'", async () => {
     vi.stubGlobal("fetch", mockStateAutonomy("supervised"));
     render(<AutonomySlider />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /ceremony:/i })).toHaveTextContent(/Ceremony: Full/i));
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toHaveTextContent(/Autonomy: Full/i));
   });
 
   it("maps 'balanced' wire value to 'Light'", async () => {
     vi.stubGlobal("fetch", mockStateAutonomy("balanced"));
     render(<AutonomySlider />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /ceremony:/i })).toHaveTextContent(/Ceremony: Light/i));
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toHaveTextContent(/Autonomy: Light/i));
   });
 
   it("maps 'autonomous' wire value to 'Minimal'", async () => {
     vi.stubGlobal("fetch", mockStateAutonomy("autonomous"));
     render(<AutonomySlider />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /ceremony:/i })).toHaveTextContent(/Ceremony: Minimal/i));
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toHaveTextContent(/Autonomy: Minimal/i));
   });
 
-  it("opens the tooltip with 'Ceremony level' heading and the 3 options", async () => {
+  it("opens the tooltip with 'Autonomy level' heading and the 3 options", async () => {
     vi.stubGlobal("fetch", mockStateAutonomy("supervised"));
     render(<AutonomySlider />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /ceremony:/i })).toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: /ceremony:/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
 
-    expect(screen.getByText(/^Ceremony level$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Autonomy level$/)).toBeInTheDocument();
     expect(screen.getByText(/how much structured review/i)).toBeInTheDocument();
     expect(screen.getAllByText("Full").length).toBeGreaterThan(0);
     expect(screen.getByText("Light")).toBeInTheDocument();
@@ -53,8 +58,8 @@ describe("AutonomySlider — Q6 Ceremony rename", () => {
     const fetchMock = mockStateAutonomy("supervised");
     vi.stubGlobal("fetch", fetchMock);
     render(<AutonomySlider />);
-    await waitFor(() => expect(screen.getByRole("button", { name: /ceremony:/i })).toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: /ceremony:/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
     await userEvent.click(screen.getByText("Light"));
 
     const postCall = fetchMock.mock.calls.find((c: any[]) => String(c[0]).includes("/api/preferences"));
