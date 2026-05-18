@@ -1753,71 +1753,55 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
-  describe("request_horizon_check (K3)", () => {
-    it("posts an agent-authored horizon-check comment on the artifact", async () => {
-      await callTool("present_plan", {
-        title: "Cache layer",
-        steps: [{ description: "Add Redis", reasoning: "latency" }],
-        estimatedChanges: 1,
-      });
-      const plan = store.getArtifacts()[0];
+  // III12 — request_horizon_check tool removed. It was a 7-line wrapper
+  // around addComment with intent="question" and a templated prompt;
+  // didn't earn a first-class tool slot. The horizon-check workflow now
+  // flows through answer_question / addComment with the horizon template
+  // (carried in the deeppairing.md skill) as the question text. The
+  // test below pins that the tool is gone from the tools/list response,
+  // so a future re-add has to be intentional.
+  describe("III12 — request_horizon_check removed from tool surface", () => {
+    it("tools/list no longer advertises request_horizon_check", async () => {
+      const list = await client.listTools();
+      const names = list.tools.map((t) => t.name);
+      expect(names).not.toContain("request_horizon_check");
+      // Sanity — other tools we expect to keep are still there.
+      expect(names).toContain("answer_question");
+      expect(names).toContain("present_findings");
+    });
+  });
 
-      const { text, isError } = await callTool("request_horizon_check", {
-        artifactId: plan.id,
-        horizon: "1y",
-      });
-      expect(isError).toBeFalsy();
-      expect(text).toContain("Horizon check (1 year)");
-
-      const comments = store.getCommentsForArtifact(plan.id);
-      const horizon = comments.find((c) => (c.target as any).sectionId?.startsWith("horizon_check:"));
-      expect(horizon).toBeDefined();
-      expect(horizon?.author).toBe("agent");
-      expect((horizon?.target as any).sectionId).toBe("horizon_check:1y");
+  describe("III12 — MCP prompts capability (recall as user-invocable slash query)", () => {
+    it("prompts/list advertises the `recall` prompt with query + mode args", async () => {
+      const list = await client.listPrompts();
+      const recall = list.prompts.find((p) => p.name === "recall");
+      expect(recall).toBeDefined();
+      expect(recall?.description).toMatch(/philosophy ledger/i);
+      const argNames = (recall?.arguments ?? []).map((a) => a.name);
+      expect(argNames).toContain("query");
+      expect(argNames).toContain("mode");
     });
 
-    it("uses a custom prompt when provided", async () => {
-      await callTool("present_plan", {
-        title: "x",
-        steps: [{ description: "y", reasoning: "z" }],
-        estimatedChanges: 1,
+    it("prompts/get materializes a user-message that asks the agent to call the recall tool", async () => {
+      const result = await client.getPrompt({
+        name: "recall",
+        arguments: { query: "pay-per-request hosting", mode: "philosophy" },
       });
-      const plan = store.getArtifacts()[0];
-
-      await callTool("request_horizon_check", {
-        artifactId: plan.id,
-        horizon: "3mo",
-        prompt: "What's the first thing that will break under load?",
-      });
-
-      const comments = store.getCommentsForArtifact(plan.id);
-      const horizon = comments.find((c) => (c.target as any).sectionId?.startsWith("horizon_check:"));
-      expect(horizon?.content).toBe("What's the first thing that will break under load?");
+      expect(result.messages).toHaveLength(1);
+      const msg = result.messages[0];
+      expect(msg.role).toBe("user");
+      expect((msg.content as any).type).toBe("text");
+      const text = (msg.content as any).text as string;
+      expect(text).toContain("recall");
+      expect(text).toContain("pay-per-request hosting");
+      expect(text).toContain("philosophy");
     });
 
-    it("rejects unknown artifactId", async () => {
-      const { isError, text } = await callTool("request_horizon_check", {
-        artifactId: "art_not_real",
-        horizon: "1y",
-      });
-      expect(isError).toBe(true);
-      expect(text).toContain("no artifact");
-    });
-
-    it("rejects invalid horizon values", async () => {
-      await callTool("present_plan", {
-        title: "x",
-        steps: [{ description: "y", reasoning: "z" }],
-        estimatedChanges: 1,
-      });
-      const plan = store.getArtifacts()[0];
-
-      const { isError, text } = await callTool("request_horizon_check", {
-        artifactId: plan.id,
-        horizon: "100y",
-      });
-      expect(isError).toBe(true);
-      expect(text).toContain("3mo");
+    it("prompts/get with no query asks for the full listing (and says so explicitly)", async () => {
+      const result = await client.getPrompt({ name: "recall", arguments: {} });
+      const text = (result.messages[0].content as any).text as string;
+      expect(text).toContain("no query");
+      expect(text).toContain("any");
     });
   });
 
@@ -1866,6 +1850,17 @@ describe("MCP Tool Handlers", () => {
   });
 
   describe("recall — unified memory tool (N4)", () => {
+    // III8 — recordRejectedApproach / recordApprovedPattern now require
+    // per-project opt-in to mirror into the global philosophy ledger.
+    // These tests exercise the ledger path so they opt in via
+    // setGlobalLedgerPublish before recording. Without the opt-in, the
+    // local rejected-approaches list still updates (so preflight still
+    // fires for THIS project) but the cross-project ledger doesn't see
+    // the entry — which is the intended default.
+    beforeEach(() => {
+      store.setGlobalLedgerPublish(true);
+    });
+
     it("mode='any' surfaces philosophy ledger entries by concept", async () => {
       store.recordRejectedApproach({ description: "Deploy: Railway", reason: "too expensive", concept: "pay-per-request hosting" });
       const { text } = await callTool("recall", { query: "pay-per-request", mode: "any" });
@@ -2427,6 +2422,23 @@ describe("MCP Tool Handlers", () => {
       // splattered with rejected-approach lists either.
       const { text } = await callTool("check_feedback", {});
       expect(text).not.toMatch(/\[First use this session\]/);
+    });
+
+    // III1 — gate also requires !result.isError. Pre-III1 the push
+    // fired on every tool reply with a content[] array, including the
+    // ~17 isError:true validation/preflight-reject returns. A malformed
+    // first write call got "INPUT_VALIDATION_FAILED: ..." followed by
+    // a 4KB onboarding dump — exactly the parsing footgun II12 was
+    // supposed to retire, just on the error branch.
+    it("III1 — first-call validation error does NOT carry the hint (errors stay clean)", async () => {
+      // present_findings with a malformed shape — findings array missing
+      // required fields. validate-tool-input.ts returns isError:true.
+      // The hint must NOT splatter on top of the error message.
+      const { text, isError } = await callTool("present_findings", { summary: "x" } /* no findings → invalid */);
+      expect(isError).toBe(true);
+      expect(text).not.toMatch(/\[First use this session\]/);
+      // And the agent still gets the validation error in content[0].
+      expect(text).toMatch(/INPUT_VALIDATION_FAILED|required|missing/i);
     });
 
     it("hint still fires on the first WRITE call even if a READ call ran first", async () => {

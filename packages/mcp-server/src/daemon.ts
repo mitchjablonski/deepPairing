@@ -65,10 +65,39 @@ const daemonAuthToken = crypto.randomBytes(32).toString("hex");
 
 // --- Logging ---
 
+// III7 — daemon.log rotation. Pre-III7 the log was an unbounded
+// appendFileSync that, on long-lived dev boxes, accumulated MB of
+// per-status-mutation breadcrumbs (header.sid, store.sid, artifactId,
+// fromStatus, toStatus, reason). Same-uid attackers (and accidental
+// `cat ~/.deeppairing/daemon.log` snapshots in screenshots/screencasts)
+// got a full trace of the user's review activity. Rotate at 1 MB with
+// 3 keep-files so the log stays useful for post-mortems without
+// growing unbounded. Pure janitorial — no behavior change.
+const LOG_MAX_BYTES = 1024 * 1024;
+const LOG_KEEP_FILES = 3;
+
+function maybeRotateLog(): void {
+  try {
+    const stat = fs.statSync(logFile);
+    if (stat.size < LOG_MAX_BYTES) return;
+    // Roll: daemon.log.2 → drop; daemon.log.1 → daemon.log.2; daemon.log → daemon.log.1
+    for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
+      const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
+      const dst = `${logFile}.${i}`;
+      try {
+        if (fs.existsSync(src)) fs.renameSync(src, dst);
+      } catch {}
+    }
+  } catch {
+    // statSync may ENOENT on first write — that's fine, nothing to rotate.
+  }
+}
+
 function log(msg: string): void {
   const line = `[${new Date().toISOString()}] [daemon] ${msg}\n`;
   try {
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    maybeRotateLog();
     fs.appendFileSync(logFile, line);
   } catch {}
 }
@@ -257,6 +286,11 @@ const publicRoutes = createHttpRoutes(
     }
   },
   log,
+  // III5 — pass the daemon's bearer token so /api/prompts requires
+  // Authorization. The browser receives this token via the
+  // window.__deepPairingToken injection in the index.html serve path
+  // (see static-serve block below).
+  daemonAuthToken,
 );
 app.route("/", publicRoutes);
 
@@ -431,7 +465,26 @@ if (fs.existsSync(webDistPath)) {
     }
     const indexPath = path.join(webDistPath, "index.html");
     if (fs.existsSync(indexPath)) {
-      return new Response(fs.readFileSync(indexPath), {
+      // III5 — inject the daemon's bearer token into the served HTML so
+      // the browser companion UI can authenticate against
+      // Bearer-gated public routes (today: /api/prompts). The injected
+      // snippet is a literal `window.__deepPairingToken = "..."` script
+      // placed just before </head>. The token already travels in
+      // daemon.json (file-system gate) and via /api/internal/* calls
+      // (Authorization header) — exposing it in the HTML reaches the
+      // browser without forcing it to do an Origin-checked bootstrap
+      // round-trip, and is no MORE exposed than the daemon.json file
+      // (a same-uid attacker who reads either has full access).
+      const html = fs.readFileSync(indexPath, "utf-8");
+      const tokenJson = JSON.stringify(daemonAuthToken);
+      const injection = `<script>window.__deepPairingToken = ${tokenJson};</script>`;
+      const injected = html.includes("</head>")
+        ? html.replace("</head>", `${injection}</head>`)
+        // Older builds may not have </head> in the bundled HTML; fall
+        // back to prepending the script so the token still lands. The
+        // browser app reads window.__deepPairingToken at startup.
+        : `${injection}${html}`;
+      return new Response(injected, {
         headers: { "Content-Type": "text/html" },
       });
     }
@@ -450,6 +503,14 @@ function cleanup(): void {
   try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
 }
 
+/** III3 — true when fs.chmod can establish 0600 permissions. False on
+ *  Windows (POSIX mode bits are advisory at best — the file's ACL is
+ *  the local equivalent and chmod is a no-op) so we don't fail-loud on
+ *  a platform where the assertion can't hold. */
+function platformEnforcesPosixMode(): boolean {
+  return process.platform !== "win32";
+}
+
 function writeDaemonInfo(port: number): void {
   // II1 — include authToken so DaemonClient can pick it up. The chmod
   // below is what actually defends the token; on Unix only the daemon's
@@ -459,19 +520,88 @@ function writeDaemonInfo(port: number): void {
   const info = { pid: process.pid, port, startedAt, projectRoot, authToken: daemonAuthToken };
   try {
     fs.mkdirSync(path.dirname(daemonInfoFile), { recursive: true });
-    fs.writeFileSync(daemonInfoFile, JSON.stringify(info, null, 2));
-    // II1 — mode 0600 (owner read/write only). On Windows fs.chmodSync is
-    // largely a no-op but the file inherits the user's ACL which is the
-    // local equivalent. Best-effort; failure logged but non-fatal.
-    try { fs.chmodSync(daemonInfoFile, 0o600); } catch {}
-  } catch (err) {
-    log(`Failed to write daemon.json: ${err}`);
+    // III3 — open with mode 0600 at creation, not chmod-after-write.
+    // Pre-III3 the sequence was writeFileSync (creates with mode &
+    // ~umask, usually 0644 on macOS default umask 0022) then
+    // chmodSync(0o600). Between those two calls the file is world-
+    // readable for ~1ms — long enough for a same-uid attacker polling
+    // .deeppairing/ to read the token. openSync with mode=0o600 sets
+    // the permission at create-time so the TOCTOU window never opens.
+    const fd = fs.openSync(daemonInfoFile, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify(info, null, 2));
+    } finally {
+      fs.closeSync(fd);
+    }
+    // III3 — chmod again defensively (some filesystems honor open()
+    // mode less reliably than chmod) and verify the result. If the
+    // verified mode still has group/other bits set, the token is
+    // effectively public to every same-machine reader. Fail-loud
+    // rather than silently leak — particularly important on
+    // NFS-mounted homes where chmod returns EPERM and we'd otherwise
+    // happily ship a world-readable daemon.json.
+    if (platformEnforcesPosixMode()) {
+      try { fs.chmodSync(daemonInfoFile, 0o600); } catch {}
+      const stat = fs.statSync(daemonInfoFile);
+      const leakedBits = stat.mode & 0o077;
+      if (leakedBits !== 0) {
+        throw new Error(
+          `daemon.json wrote with insecure mode ${(stat.mode & 0o777).toString(8)} ` +
+          `(expected 0600). This usually means the filesystem (NFS, SMB, or some FUSE mounts) ` +
+          `does not honor POSIX permission bits — the bearer token would be readable by any ` +
+          `process on this machine. Move .deeppairing/ to a local filesystem, or set ` +
+          `DEEPPAIRING_PROJECT_ROOT to a local path.`,
+        );
+      }
+    }
+  } catch (err: any) {
+    // III3 — was a silent log. The whole point of this function is to
+    // place the bearer token where ONLY the same uid can read it; if
+    // we can't, every internal route becomes effectively unauthed.
+    // Surface to stderr too so the wrapper's process-supervision sees
+    // the failure on cold start (where log() may not have made it to
+    // disk yet).
+    const msg = err?.message ?? String(err);
+    log(`FATAL: writeDaemonInfo failed: ${msg}`);
+    process.stderr.write(`[deepPairing daemon] FATAL: ${msg}\n`);
+    throw err;
   }
 }
 
 async function main() {
   log(`Daemon starting (PID ${process.pid})`);
   log(`Project root: ${projectRoot}`);
+
+  // III4 — process-level error guards. II5 added per-ws + wss error
+  // listeners, but the daemon process itself had zero global async-error
+  // safety net. A single rejected promise anywhere — `broadcastNewFires`
+  // when `fs.watch` callback throws on a macOS APFS rename, install-health
+  // ping fetch failures, the demo-script broadcast — exits the daemon
+  // with the same "daemon mysteriously died overnight" symptom II5 was
+  // supposed to close. The wrapper has no auto-respawn for that mode.
+  //
+  // unhandledRejection: log + continue. Most rejections we'd see here are
+  // best-effort fire-and-forget side effects (broadcast taps, fetch
+  // probes) where the user-visible work has already succeeded; killing
+  // the daemon over them would be worse than swallowing them. A future
+  // rate-limited counter could escalate to "if this fires 100x in a
+  // minute, something is structurally wrong and we should exit."
+  //
+  // uncaughtException: log + exit(1). These are programmer-error throws
+  // on the synchronous path; the daemon's invariants are no longer
+  // trustworthy. Better to die loudly so the wrapper sees the crash and
+  // the user reaches for `npx deeppairing doctor` than to limp on with
+  // half-updated state.
+  process.on("unhandledRejection", (reason: any) => {
+    const msg = reason?.stack ?? reason?.message ?? String(reason);
+    log(`[unhandledRejection] ${msg}`);
+  });
+  process.on("uncaughtException", (err) => {
+    log(`[uncaughtException] FATAL: ${err?.stack ?? err?.message ?? err}`);
+    // Flush daemon.log synchronously before exit so the post-mortem has
+    // the trace. We rely on log()'s appendFileSync being synchronous.
+    process.exit(1);
+  });
 
   // N2.2: plugin install path doesn't run `npx deeppairing init`, so the
   // daemon picks up the slack: ensure .deeppairing/, .gitignore entry, and
