@@ -1429,31 +1429,43 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   if (!cmd) {
     main().catch((err) => { console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`); process.exit(1); });
   } else {
+    // IV2 — was 14 `npx deeppairing` lines. Pre-1.0 the package isn't
+    // on npm, so `npx deeppairing` returns 404 and the user sees a
+    // command that doesn't work as their first impression. III9 fixed
+    // this in the README; the CLI help was missed. Now: leading `dp`
+    // placeholder = whichever invocation the user reached the help
+    // through (the linked `deeppairing` command after `pnpm link
+    // --global`, or the by-path `node packages/.../init.js`). A leading
+    // section makes the choice explicit. The grep guard test
+    // (cli/__tests__/no-npx-deeppairing.test.ts) keeps a future PR
+    // from putting them back.
     console.log(`
   ${bold("deepPairing")} — Human-AI collaborative development
 
-  ${bold("Usage:")}
-    npx deeppairing                        Set up deepPairing in current project (interactive; offers demo)
-    npx deeppairing init [--no-demo] [-y] [--dry-run] [--minimal]
+  ${bold("This CLI:")} pre-1.0, not on npm. Invoke as either:
+    ${dim("•")} ${bold("deeppairing <cmd>")}                                 (after \`cd packages/mcp-server && pnpm link --global\`)
+    ${dim("•")} ${bold("node packages/mcp-server/dist/cli/init.js <cmd>")}   (no setup; works after \`pnpm build\`)
+
+  ${bold("Commands")} (substitute one of the invocations above for \`dp\`):
+    dp                                     Set up deepPairing in current project (interactive; offers demo)
+    dp init [--no-demo] [-y] [--dry-run] [--minimal]
                                            Set up deepPairing in current project
                                            --no-demo skips the "see it fire" prompt; -y auto-accepts
                                            --dry-run previews CLAUDE.md + .mcp.json changes without writing
                                            --minimal writes a short stub to CLAUDE.md instead of the full protocol
-    npx deeppairing demo                   Watch the rejection-block fire in the companion UI (no Claude Code needed)
-    npx deeppairing team init [--force]    Scaffold .deeppairing/team.json with example team conventions
-    npx deeppairing philosophy export      Print your cross-project Philosophy Ledger as JSON to stdout
-    npx deeppairing philosophy import <f> --merge
-                                           Merge an exported ledger into your current one (idempotent)
-    npx deeppairing doctor [--fix] [--yes] Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
-    npx deeppairing sessions [list|prune]  List sessions for this project; prune removes empty stale ones
-    npx deeppairing sessions merge <from> <into> [-y]
-                                           Merge two sessions (rescues data split by old non-deterministic ids)
-    npx deeppairing export <format>        Print a session as markdown
+    dp demo                                Watch the rejection-block fire in the companion UI (no Claude Code needed)
+    dp team init [--force]                 Scaffold .deeppairing/team.json with example team conventions
+    dp philosophy export                   Print your cross-project Philosophy Ledger as JSON to stdout
+    dp philosophy import <f> --merge       Merge an exported ledger into your current one (idempotent)
+    dp doctor [--fix] [--yes]              Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
+    dp sessions [list|prune]               List sessions for this project; prune removes empty stale ones
+    dp sessions merge <from> <into> [-y]   Merge two sessions (rescues data split by old non-deterministic ids)
+    dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
-    npx deeppairing post-pr-review <pr>    Post the pairing session's findings as inline comments
+    dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
-    npx deeppairing --help                 Show this help message
-    npx deeppairing --version              Show version
+    dp --help                              Show this help message
+    dp --version                           Show version
 `);
   }
 } else if (cmd === "--version" || cmd === "-v") {

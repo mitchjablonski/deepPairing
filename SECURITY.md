@@ -76,7 +76,8 @@ model assumes:
     in the LedgerPanel.
   - The ledger file is plain JSON — inspect with
     `cat ~/.deeppairing/philosophy/v1.json` or use the
-    `npx deeppairing doctor --fix` command.
+    `deeppairing doctor --fix` command (`pnpm link --global`'d after
+    `pnpm build`; pre-1.0 the package is not on npm yet).
 
 ## Sensitive surfaces to be aware of
 

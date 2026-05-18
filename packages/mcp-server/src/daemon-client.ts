@@ -46,13 +46,59 @@ export class DaemonClient implements IStore {
   // local process without read access to daemon.json can't impersonate
   // the wrapper. Optional for test fixtures that construct DaemonClient
   // directly against a route harness with no auth gate.
-  private readonly authToken: string | undefined;
+  //
+  // IV1 — mutable (was readonly). The daemon re-mints its bearer token
+  // on every fresh spawn; if the daemon idle-shuts and respawns mid-
+  // conversation the wrapper's cached token is now stale. The 401
+  // recovery path below re-reads daemon.json and rotates this field
+  // so subsequent calls authenticate against the new daemon.
+  private authToken: string | undefined;
+  /**
+   * IV1 — projectRoot is the directory the daemon's daemon.json lives
+   * under. Held here (not just as a projectHash) so the 401 recovery
+   * path can re-read .deeppairing/daemon.json and pick up the new
+   * authToken after a daemon respawn.
+   */
+  private readonly projectRoot: string | undefined;
 
   constructor(port: number, sessionId: string, expectedProjectRoot?: string, authToken?: string) {
     this.baseUrl = `http://localhost:${port}/api/internal/sessions/${sessionId}`;
     this.sessionId = sessionId;
     this.projectHash = expectedProjectRoot ? projectHashOf(expectedProjectRoot) : undefined;
     this.authToken = authToken;
+    this.projectRoot = expectedProjectRoot;
+  }
+
+  /**
+   * IV1 — re-read .deeppairing/daemon.json and rotate the cached
+   * authToken if the file's token has changed. Returns true when the
+   * token was actually updated (so the caller knows a retry has a
+   * reason to succeed). Best-effort: if daemon.json is missing,
+   * unreadable, or token-less, returns false and the original 401
+   * propagates to the caller.
+   *
+   * Threat model: this read happens AFTER a 401 from a previously-
+   * working endpoint — the daemon has clearly respawned. The path
+   * the wrapper reads is the same path the daemon writes under the
+   * same uid (III3's 0600 mode), so there's no new auth-bypass
+   * surface introduced.
+   */
+  private async refreshAuthTokenFromDaemonInfo(): Promise<boolean> {
+    if (!this.projectRoot) return false;
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const infoPath = path.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs.existsSync(infoPath)) return false;
+      const raw = fs.readFileSync(infoPath, "utf-8");
+      const info = JSON.parse(raw) as { authToken?: string };
+      if (typeof info.authToken !== "string" || !info.authToken) return false;
+      if (info.authToken === this.authToken) return false;
+      this.authToken = info.authToken;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   getSessionId(): string {
@@ -95,6 +141,28 @@ export class DaemonClient implements IStore {
     // Try to parse the structured error body the daemon now returns.
     let body: any = {};
     try { body = await res.clone().json(); } catch {}
+
+    // IV1 — 401 recovery on stale token after daemon respawn. The
+    // daemon re-mints its bearer on every fresh spawn (daemon.ts);
+    // the wrapper's cached token is now wrong. Re-read daemon.json,
+    // rotate the cached token, retry once. Distinct from the 404
+    // path (which means "the SESSION is unknown"); a 401 means "the
+    // TOKEN is wrong" — both can happen in the same wall-clock
+    // second after a respawn (daemon writes daemon.json before its
+    // session map is populated). Guarded by isRetry so we never
+    // double-rotate; the SECOND 401 propagates so the caller sees
+    // an actionable error rather than an infinite loop.
+    if (
+      res.status === 401 &&
+      body?.code === "daemon_auth_required" &&
+      !isRetry
+    ) {
+      const rotated = await this.refreshAuthTokenFromDaemonInfo();
+      if (rotated) {
+        return this.request<T>(path, init, true);
+      }
+      // No new token available — fall through to the throw below.
+    }
 
     if (
       res.status === 404 &&
@@ -168,11 +236,28 @@ export class DaemonClient implements IStore {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.projectHash) headers["X-Project-Hash"] = this.projectHash;
     if (this.authToken) headers["Authorization"] = `Bearer ${this.authToken}`;
-    const res = await fetch(`${this.baseUrl}/register`, {
+    let res = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers,
       body: JSON.stringify(meta ?? {}),
     });
+    // IV1 — register() also needs 401 recovery. When the 404-recovery
+    // path in request() calls register() against a respawned daemon,
+    // the wrapper's cached token is still stale until the rotate
+    // succeeds — and register() is itself the first internal call
+    // after the rotate-trigger. Re-read daemon.json and retry once
+    // if we get 401 here; otherwise the recovery loop is incomplete.
+    if (res.status === 401) {
+      const rotated = await this.refreshAuthTokenFromDaemonInfo();
+      if (rotated) {
+        if (this.authToken) headers["Authorization"] = `Bearer ${this.authToken}`;
+        res = await fetch(`${this.baseUrl}/register`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(meta ?? {}),
+        });
+      }
+    }
     if (res.status === 403) {
       // AA2 — clear cached meta on project mismatch. Pre-AA2 the meta
       // was assigned BEFORE this throw, so a 403 cached the bad meta;
