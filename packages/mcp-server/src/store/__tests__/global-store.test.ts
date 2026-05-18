@@ -108,6 +108,78 @@ describe("GlobalStore — append-only instance log", () => {
   });
 });
 
+// III8 — per-project opt-in to PUBLISH to the global ledger. Pre-III8
+// every project's recordRejectedApproach mirrored into the global ledger
+// unconditionally, which meant any project the user opened could seed
+// avoid-stances ("validate untrusted input", "use parameterized queries")
+// that every other project would then cite. Single-write poisoning by a
+// malicious dependency. With opt-in publish, the malicious dep can only
+// poison its own project's local preferences.json — the global ledger
+// stays clean.
+describe("III8 — per-project ledger publish opt-in (gate at FileStore boundary)", () => {
+  let fileStoreTmp: string;
+  let fileStore: import("../file-store.js").FileStore;
+  let globalLedgerPath: string;
+
+  beforeEach(async () => {
+    fileStoreTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-iii8-"));
+    globalLedgerPath = path.join(fileStoreTmp, "philosophy.json");
+    const { setGlobalStoreForTests } = await import("../global-store.js");
+    setGlobalStoreForTests(globalLedgerPath);
+    const { FileStore } = await import("../file-store.js");
+    fileStore = new FileStore(fileStoreTmp, "iii8_session");
+  });
+
+  afterEach(async () => {
+    const { setGlobalStoreForTests } = await import("../global-store.js");
+    setGlobalStoreForTests(null);
+    fileStore.forceFlush();
+    fs.rmSync(fileStoreTmp, { recursive: true, force: true });
+  });
+
+  it("default is off — recordRejectedApproach does NOT mirror to the global ledger", () => {
+    fileStore.recordRejectedApproach({ description: "global state", concept: "global mutable state for config" });
+    // Local rejection is recorded — preflight for THIS project still fires.
+    const mem = fileStore.getSessionMemory();
+    expect(mem.rejectedApproaches.some((r) => r.description === "global state")).toBe(true);
+    // Global ledger stays clean — the malicious-dependency-in-some-project
+    // attack class can't poison the cross-project surface.
+    const ledger = JSON.parse(fs.existsSync(globalLedgerPath) ? fs.readFileSync(globalLedgerPath, "utf-8") : '{"concepts":{}}');
+    expect(Object.keys(ledger.concepts ?? {})).toHaveLength(0);
+  });
+
+  it("after setGlobalLedgerPublish(true), subsequent rejections DO mirror to the global ledger", () => {
+    fileStore.setGlobalLedgerPublish(true);
+    fileStore.recordRejectedApproach({ description: "pay-per-request hosting", concept: "platform-as-a-service for compute" });
+    const ledger = JSON.parse(fs.readFileSync(globalLedgerPath, "utf-8"));
+    const entry = ledger.concepts["platform-as-a-service for compute"];
+    expect(entry).toBeTruthy();
+    expect(entry.instances).toHaveLength(1);
+    expect(entry.instances[0].verdict).toBe("rejected");
+  });
+
+  it("setGlobalLedgerPublish(false) re-locks subsequent writes (toggle round-trip)", () => {
+    fileStore.setGlobalLedgerPublish(true);
+    fileStore.recordRejectedApproach({ description: "first", concept: "first-concept" });
+    fileStore.setGlobalLedgerPublish(false);
+    fileStore.recordRejectedApproach({ description: "second", concept: "second-concept" });
+    const ledger = JSON.parse(fs.readFileSync(globalLedgerPath, "utf-8"));
+    expect(ledger.concepts["first-concept"]).toBeTruthy();
+    expect(ledger.concepts["second-concept"]).toBeUndefined();
+  });
+
+  it("recordApprovedPattern honors the same gate (symmetric with rejected)", () => {
+    fileStore.recordApprovedPattern({ description: "DI for testability", concept: "request-scoped dependency injection" });
+    const beforeOptIn = JSON.parse(fs.existsSync(globalLedgerPath) ? fs.readFileSync(globalLedgerPath, "utf-8") : '{"concepts":{}}');
+    expect(beforeOptIn.concepts["request-scoped dependency injection"]).toBeUndefined();
+
+    fileStore.setGlobalLedgerPublish(true);
+    fileStore.recordApprovedPattern({ description: "DI for testability", concept: "request-scoped dependency injection" });
+    const afterOptIn = JSON.parse(fs.readFileSync(globalLedgerPath, "utf-8"));
+    expect(afterOptIn.concepts["request-scoped dependency injection"]).toBeTruthy();
+  });
+});
+
 describe("GlobalStore — derived stance", () => {
   it("returns 'avoid' when rejections dominate (>2x)", () => {
     store.recordInstance("x", { project: "r", sessionId: "s1", verdict: "rejected" });

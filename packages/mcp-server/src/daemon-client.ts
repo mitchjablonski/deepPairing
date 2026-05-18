@@ -372,6 +372,17 @@ export class DaemonClient implements IStore {
     return this.get("/memory");
   }
 
+  // III8 — cross-project ledger publish opt-in. Proxies to the daemon
+  // which delegates to the per-session FileStore.
+  async setGlobalLedgerPublish(enabled: boolean): Promise<void> {
+    await this.post("/memory/global-publish", { enabled });
+  }
+
+  async getGlobalLedgerPublish(): Promise<boolean> {
+    const data = await this.get<{ enabled: boolean }>("/memory/global-publish");
+    return data.enabled === true;
+  }
+
   // --- Project context (guardrails + team preferences) ---
 
   async getProjectGuardrails(): Promise<Array<{ category: string; paths: string[]; rationale: string }>> {

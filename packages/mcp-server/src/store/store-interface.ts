@@ -243,6 +243,16 @@ export interface IStore {
   }): MaybePromise<void>;
   getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
   /**
+   * III8 — per-project opt-in to PUBLISH this project's rejections /
+   * approvals into the cross-project ~/.deeppairing/philosophy ledger.
+   * Default is off (opt-in). Reads from the global ledger are always
+   * unfiltered — the gate is only on the WRITE path. Optional on the
+   * interface so impls that don't honor the gate (test fakes) still
+   * compile; real impls (FileStore + DaemonClient) must implement it.
+   */
+  setGlobalLedgerPublish?(enabled: boolean): MaybePromise<void>;
+  getGlobalLedgerPublish?(): MaybePromise<boolean>;
+  /**
    * BB4 — cross-project ledger digest, the moat surface AA5 added for the
    * UI. Optional because not every IStore impl can produce one (the
    * shape requires walking projectRoot's sessions dir). Both FileStore
