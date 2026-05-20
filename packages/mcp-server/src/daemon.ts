@@ -19,6 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { spawn } from "node:child_process";
+import { ERROR_CODES } from "./error-codes.js";
 import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
@@ -323,7 +324,7 @@ app.post("/api/evict", async (c) => {
   const confirmPid = c.req.header("X-DeepPairing-Confirm-Pid");
   if (confirmPid !== String(process.pid)) {
     return c.json(
-      { error: `Confirm-pid ${confirmPid ?? "(none)"} does not match daemon pid ${process.pid}`, code: "evict_pid_mismatch" },
+      { error: `Confirm-pid ${confirmPid ?? "(none)"} does not match daemon pid ${process.pid}`, code: ERROR_CODES.evict_pid_mismatch },
       403,
     );
   }
@@ -478,12 +479,31 @@ if (fs.existsSync(webDistPath)) {
       const html = fs.readFileSync(indexPath, "utf-8");
       const tokenJson = JSON.stringify(daemonAuthToken);
       const injection = `<script>window.__deepPairingToken = ${tokenJson};</script>`;
-      const injected = html.includes("</head>")
-        ? html.replace("</head>", `${injection}</head>`)
-        // Older builds may not have </head> in the bundled HTML; fall
-        // back to prepending the script so the token still lands. The
-        // browser app reads window.__deepPairingToken at startup.
-        : `${injection}${html}`;
+      // IV4 — ordering matters. Original III5 fallback prepended the
+      // script before whatever HTML came back; if that HTML started
+      // with `<!doctype html>` the prepend invalidated the doctype
+      // and the page rendered in quirks mode. Better cascade:
+      //   1. Prefer `</head>` injection (every Vite build emits one).
+      //   2. If no </head>, try after `<head>` (rare but possible).
+      //   3. If no <head> at all, try after `<html>` so the doctype
+      //      stays first.
+      //   4. Last resort, no token injected — return the raw HTML and
+      //      let the browser fall back to the (no-token-needed) UI.
+      //      Better to ship a working un-authed page than a quirks-mode
+      //      page with a stale token.
+      let injected: string;
+      if (html.includes("</head>")) {
+        injected = html.replace("</head>", `${injection}</head>`);
+      } else if (/<head\b[^>]*>/i.test(html)) {
+        injected = html.replace(/(<head\b[^>]*>)/i, `$1${injection}`);
+      } else if (/<html\b[^>]*>/i.test(html)) {
+        injected = html.replace(/(<html\b[^>]*>)/i, `$1${injection}`);
+      } else {
+        // Pathological — index.html has neither <head> nor <html>.
+        // Log and serve unmodified so the page at least renders.
+        log(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
+        injected = html;
+      }
       return new Response(injected, {
         headers: { "Content-Type": "text/html" },
       });
@@ -583,18 +603,35 @@ async function main() {
   // unhandledRejection: log + continue. Most rejections we'd see here are
   // best-effort fire-and-forget side effects (broadcast taps, fetch
   // probes) where the user-visible work has already succeeded; killing
-  // the daemon over them would be worse than swallowing them. A future
-  // rate-limited counter could escalate to "if this fires 100x in a
-  // minute, something is structurally wrong and we should exit."
+  // the daemon over them would be worse than swallowing them.
+  //
+  // IV5 — rate-limit counter. The III4 TODO landed here: if rejections
+  // fire >100/min, something is structurally wrong (probably a stuck
+  // fs.watch callback or a broadcast loop) and silent log-and-continue
+  // is doing more harm than good. Above threshold, exit(1) so the
+  // wrapper sees the crash and the user reaches for doctor.
   //
   // uncaughtException: log + exit(1). These are programmer-error throws
   // on the synchronous path; the daemon's invariants are no longer
-  // trustworthy. Better to die loudly so the wrapper sees the crash and
-  // the user reaches for `npx deeppairing doctor` than to limp on with
-  // half-updated state.
+  // trustworthy. Better to die loudly than to limp on with half-updated
+  // state.
+  const REJECTION_THRESHOLD = 100;
+  const REJECTION_WINDOW_MS = 60_000;
+  const rejectionTimes: number[] = [];
   process.on("unhandledRejection", (reason: any) => {
     const msg = reason?.stack ?? reason?.message ?? String(reason);
     log(`[unhandledRejection] ${msg}`);
+    const now = Date.now();
+    rejectionTimes.push(now);
+    // Trim out anything older than the window. O(n) trim is fine —
+    // n caps at the threshold so this is bounded.
+    while (rejectionTimes.length && now - rejectionTimes[0] > REJECTION_WINDOW_MS) {
+      rejectionTimes.shift();
+    }
+    if (rejectionTimes.length >= REJECTION_THRESHOLD) {
+      log(`[unhandledRejection] FATAL: ${REJECTION_THRESHOLD} rejections in ${REJECTION_WINDOW_MS}ms — structural error, exiting so the wrapper can respawn cleanly.`);
+      process.exit(1);
+    }
   });
   process.on("uncaughtException", (err) => {
     log(`[uncaughtException] FATAL: ${err?.stack ?? err?.message ?? err}`);

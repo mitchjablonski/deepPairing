@@ -34,6 +34,16 @@ import {
 export type ToolErrorResponse = {
   content: Array<{ type: "text"; text: string }>;
   isError: true;
+  /**
+   * IV10 — structured machine-readable error metadata. MCP clients can
+   * branch on `_meta.code` / `_meta.retryable` instead of string-matching
+   * the prose in content[0].text. Future-proofs the protocol surface
+   * without changing the existing agent-visible contract.
+   */
+  _meta?: {
+    code?: string;
+    retryable?: boolean;
+  };
 };
 
 export type ValidationResult<T> =
@@ -64,6 +74,10 @@ function formatValidationError(
   return {
     content: [{ type: "text", text }],
     isError: true as const,
+    // IV10 — machine-readable code for future MCP clients. Same string
+    // INPUT_VALIDATION_FAILED that's in the text body, but lifted into
+    // _meta so clients can branch without parsing prose.
+    _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true },
   };
 }
 

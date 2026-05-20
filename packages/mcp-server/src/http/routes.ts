@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { nanoid } from "nanoid";
 import fs from "node:fs";
 import path from "node:path";
+import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore } from "../store/file-store.js";
 import { broadcast as defaultBroadcast } from "./websocket.js";
@@ -58,7 +59,7 @@ function checkProjectHash(c: any, daemonHash: string | undefined): Response | nu
         // BB10 — message is fallback copy. The browser specializes the
         // toast on `code` and offers a one-click reload action.
         error: `Project hash mismatch — your tab is pointed at a daemon serving a different project. Reload the page to re-bind.`,
-        code: "project_hash_mismatch",
+        code: ERROR_CODES.project_hash_mismatch,
         expected: daemonHash,
       },
       403,
@@ -146,7 +147,7 @@ export function createHttpRoutes(
       const len = parseInt(lenHeader, 10);
       if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
         return c.json(
-          { error: `Request body exceeds ${MAX_BODY_BYTES}-byte cap.`, code: "body_too_large" },
+          { error: `Request body exceeds ${MAX_BODY_BYTES}-byte cap.`, code: ERROR_CODES.body_too_large },
           413,
         );
       }
@@ -190,7 +191,7 @@ export function createHttpRoutes(
   // surface a "start Claude Code with deepPairing" banner.
   const NO_SESSION_RESPONSE = {
     error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
-    code: "no_active_session",
+    code: ERROR_CODES.no_active_session,
   };
 
   // Full state for initial web UI hydration. Read route — gracefully returns
@@ -243,7 +244,14 @@ export function createHttpRoutes(
         intent: intent ?? "comment",
       }, sid);
     } else {
-      log(`[comment] DEDUPED — sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} content="${content.slice(0, 40)}"`);
+      // IV6 — was: ` content="${content.slice(0, 40)}"`. III7 added log
+      // rotation but rotation doesn't redact; 40 chars is enough for a
+      // leaked password prefix or an API-key fragment in the comment
+      // body. The diagnostic value (knowing WHICH dedupe fired) is
+      // preserved by the artifactId + reusedId — the content itself is
+      // unnecessary and the only user-content leak the rotated log
+      // was still writing.
+      log(`[comment] DEDUPED — sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
     }
     // R1: Q3's horizon-check trigger fires as a question-intent comment
     // with sectionId "horizon_check:request:<horizon>". The broadcast
@@ -473,7 +481,7 @@ export function createHttpRoutes(
   app.post("/api/philosophy/seed", async (c) => {
     let body: any;
     try { body = await c.req.json(); } catch {
-      return c.json({ error: "invalid JSON body", code: "validation_error" }, 400);
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
     }
     const raw = String(body?.concept ?? "");
     const verdict = body?.verdict === "rejected" ? "rejected" : "approved";
@@ -496,7 +504,7 @@ export function createHttpRoutes(
       return c.json(
         {
           error: `seed body exceeds ${MAX_BODY_BYTES} bytes — paste in smaller batches.`,
-          code: "validation_error",
+          code: ERROR_CODES.validation_error,
         },
         400,
       );
@@ -519,7 +527,7 @@ export function createHttpRoutes(
       return c.json(
         {
           error: `seed exceeds ${MAX_LINES} lines (got ${lines.length}) — paste in smaller batches.`,
-          code: "validation_error",
+          code: ERROR_CODES.validation_error,
         },
         400,
       );
@@ -533,7 +541,7 @@ export function createHttpRoutes(
     });
     if (concepts.length === 0) {
       return c.json(
-        { error: "concept is required (paste a rule, idea, or pattern name)", code: "validation_error" },
+        { error: "concept is required (paste a rule, idea, or pattern name)", code: ERROR_CODES.validation_error },
         400,
       );
     }
@@ -970,7 +978,7 @@ export function createHttpRoutes(
       if (auth !== `Bearer ${authToken}`) {
         log(`[prompts-auth] 401 — bad/missing Authorization header`);
         return c.json(
-          { error: "Authorization required for prompt save.", code: "daemon_auth_required" },
+          { error: "Authorization required for prompt save.", code: ERROR_CODES.daemon_auth_required },
           401,
         );
       }

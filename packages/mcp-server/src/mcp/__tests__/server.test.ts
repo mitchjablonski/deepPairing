@@ -53,10 +53,63 @@ async function callTool(name: string, args: Record<string, any> = {}) {
     .filter((b) => b?.type === "text" && typeof b.text === "string")
     .map((b) => b.text)
     .join("");
-  return { text, isError: result.isError };
+  // IV10 — surface _meta so tests can assert on the new structured
+  // error-code contract without breaking the existing { text, isError }
+  // call-site shape.
+  return { text, isError: result.isError, _meta: (result as any)._meta };
 }
 
 describe("MCP Tool Handlers", () => {
+  describe("IV10 — _meta.code on isError returns", () => {
+    // Pre-IV10 every isError:true return had prose-only error text;
+    // future MCP clients (or our own retry heuristics) could only
+    // string-match. Now: structured _meta.code + _meta.retryable lift
+    // the machine-readable contract above the prose without changing
+    // the agent-visible message.
+    it("validation failure carries _meta.code=INPUT_VALIDATION_FAILED + retryable=true", async () => {
+      // present_findings without the required `findings` array trips
+      // validate-tool-input.
+      const r = await callTool("present_findings", { summary: "x" });
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/INPUT_VALIDATION_FAILED/);
+      expect(r._meta?.code).toBe("INPUT_VALIDATION_FAILED");
+      expect(r._meta?.retryable).toBe(true);
+    });
+
+    it("preflight block carries _meta.code=REJECTED_APPROACH_BLOCKED + retryable=false", async () => {
+      // Seed a rejected approach, then propose the same thing back —
+      // preflight will block.
+      store.recordRejectedApproach({
+        description: "Deploy: Railway",
+        reason: "vendor lock-in",
+        concept: "platform-as-a-service for compute",
+      });
+      const r = await callTool("present_findings", {
+        summary: "platform-as-a-service for compute is a great idea",
+        findings: [{
+          category: "infra",
+          detail: "Let's adopt platform-as-a-service for compute via Railway.",
+          significance: "high",
+        }],
+      });
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/REJECTED_APPROACH_BLOCKED|previously rejected/i);
+      expect(r._meta?.code).toBe("REJECTED_APPROACH_BLOCKED");
+      // Retry with the same content hits the same gate — not retryable.
+      expect(r._meta?.retryable).toBe(false);
+    });
+
+    it("successful tool calls have no _meta.code (only error paths carry it)", async () => {
+      const r = await callTool("present_findings", {
+        summary: "ok",
+        findings: [{ category: "x", detail: "harmless", significance: "low" }],
+      });
+      expect(r.isError).toBeFalsy();
+      // _meta may be absent or present without `code` — both fine.
+      expect(r._meta?.code).toBeUndefined();
+    });
+  });
+
   describe("HH10 — resources/listChanged notifications", () => {
     it("present_findings emits notifications/resources/list_changed after artifact_created", async () => {
       // Pre-HH10 the daemon broadcast artifact_created on its WS but

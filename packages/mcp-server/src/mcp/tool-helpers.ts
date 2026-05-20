@@ -67,7 +67,14 @@ export type PreflightHelperResult =
   | { ok: true; trace: PreflightTracePartial }
   | {
       ok: false;
-      response: { content: Array<{ type: "text"; text: string }>; isError: true };
+      response: {
+        content: Array<{ type: "text"; text: string }>;
+        isError: true;
+        // IV10 — structured error metadata; preflight blocks are
+        // explicitly NOT retryable (the agent must revise the
+        // approach, not the call shape).
+        _meta?: { code?: string; retryable?: boolean };
+      };
       trace: PreflightTracePartial;
     };
 
@@ -113,6 +120,13 @@ export async function preflightRejectedApproaches(
     response: {
       content: [{ type: "text", text: result.block.message + blockSummary }],
       isError: true as const,
+      // IV10 — REJECTED_APPROACH_BLOCKED is the headline machine code
+      // the agent (and any downstream tooling) should branch on. The
+      // same string is in result.block.message text — _meta lifts it
+      // so strict clients can read it without prose-parsing. Not
+      // retryable: re-issuing the same call hits the same gate; the
+      // agent has to revise the approach.
+      _meta: { code: "REJECTED_APPROACH_BLOCKED", retryable: false },
     },
   };
 }
