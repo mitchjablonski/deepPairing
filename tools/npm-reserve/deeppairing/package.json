@@ -1,6 +1,6 @@
 {
   "name": "deeppairing",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Placeholder reservation. The real deepPairing project lives at https://github.com/deeppairing/deeppairing — install from source while we're pre-1.0.",
   "main": "index.js",
   "bin": {
