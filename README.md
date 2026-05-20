@@ -1,10 +1,8 @@
 # deepPairing
 
-**Claude Code can't paraphrase past you anymore. deepPairing blocks the agent when it tries.**
+**Claude Code paraphrases past your rejections. deepPairing remembers them across projects and refuses on your behalf.**
 
 *MCP server + companion web UI. Runs inside Claude Code. MIT-licensed, no telemetry, no account — the ledger lives on your disk.*
-
-**Built for senior ICs and staff engineers** who context-switch across many repos and resent re-litigating the same taste decisions.
 
 > The agent proposes "let's add a global mutable ConfigStore singleton."
 > You reject it: *"we tried global state for config last project — broke testability."*
@@ -16,7 +14,9 @@
 
 That refusal — and the cross-project taste it's drawing from — is what deepPairing exists to do.
 
-> **See it for yourself in 90 seconds.** A scripted [demo command](#try-the-demo) fires the rejection-block toast against a real companion UI. Screen recordings of the live flow and the Ledger drawer ship with the next tagged release; vector mockups are checked into [`docs/assets/`](docs/assets/) in the meantime.
+> **Reads are global, writes are opt-in.** Every project benefits from your accumulated cross-project taste on day one. Whether *this* project's rejections get published to the global ledger is one prompt at `init` — default off — so a malicious dependency in one project can't poison the others.
+
+> **See it for yourself in 90 seconds.** A scripted [demo command](#try-the-demo) fires the rejection-block toast against a real companion UI. Screen recordings of the live flow ship with the next tagged release.
 
 ## Try the demo
 
@@ -46,6 +46,12 @@ You: Let's analyze the auth module.
 
 Claude calls deepPairing's MCP tools instead of dumping findings as plain text. Findings, decisions, plans, and code changes land in the companion UI with structured evidence. You comment, approve, reject, ask "why" — and every rejection becomes part of your **cross-project Philosophy Ledger** that future sessions remember.
 
+## What it isn't
+
+- **Not a code review bot** like CodeRabbit or Greptile. It pairs *with* you on the diff; the PR is a surface to share what you paired on.
+- **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal — even Minimal stops at architectural decisions.
+- **Built for senior ICs and staff engineers** who context-switch across many repos and resent re-litigating the same taste decisions. The pre-flight gate assumes you already have taste; deepPairing makes that taste compound. (If you're learning the craft, the rejection-block fires on patterns you may not have opinions about yet — start with the auto-memory in Claude Code instead.)
+
 ## How it compares
 
 | Tool | Decisions persist across projects? | Concept-match blocks paraphrase? | Human-in-loop autonomy |
@@ -56,6 +62,8 @@ Claude calls deepPairing's MCP tools instead of dumping findings as plain text. 
 | Claude Code *auto-memory* | Per-project + global, soft recall (model may consult) | No | None (autonomous by default) |
 | Vanilla Claude Code | None | No | None |
 | **deepPairing** | **Yes** — cross-project Philosophy Ledger | **Yes** — hard pre-flight gate | Configurable Full / Light / Minimal |
+
+> **False positives happen.** Concept-match is fuzzy by design (it has to be, to catch paraphrases). Every block is one-click overridable from the companion UI; the override updates the ledger so the same shape doesn't trip again on similar wording.
 
 Cursor's canvases and Claude Code's auto-memory both look like deepPairing on the surface, but neither catches the paraphrase: canvases are a presentation surface (no gate on the tool call), and auto-memory is a context the model is *encouraged* to consult, not a constraint. Reject "Railway" in either and an hour later "Fly.io for pay-per-request hosting" sails through.
 
@@ -71,12 +79,6 @@ The concept-match pre-flight is the moat. These are the affordances that compoun
 - **Concept-naming as the teaching lever.** Every `log_reasoning` call surfaces the pattern at play ("dependency inversion", "optimistic UI") so you learn the vocabulary, not just the fix.
 - **Structured artifacts the human reviews, not skims.** Findings, decisions, plans, code changes land in the companion UI — but they're table stakes (Cursor canvases ship a similar surface). The reason they matter here is that they give the rejection ledger something to gate on. No artifacts → nothing for `runPreflight` to match against.
 - **Pair-tempo signals.** "I see you" toast on every comment, ❓ N questions waiting badge, ledger-write toast on every stance added. The compounding is *felt*, not just stored.
-
-## What it isn't
-
-- **Not a code review bot** like CodeRabbit or Greptile. It pairs *with* you on the diff; the PR is a surface to share what you paired on.
-- **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal — even Minimal stops at architectural decisions.
-- **Not for junior education.** It assumes you already have taste; it makes that taste compound across projects and sessions.
 
 ## CLI
 

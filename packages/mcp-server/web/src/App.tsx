@@ -362,6 +362,24 @@ function App() {
           entries and no indication that the agent wasn't connected.
           The session bar's "No active sessions" hint was below threshold.
           Now the main surface is a directed "do this next" affordance. */}
+      {/* IV9 — demo session "next step" CTA. When the active session is
+          a scripted demo (sessionId starts with `demo_` per daemon.ts:407),
+          surface a one-line card pointing the user at the Claude Code
+          plugin install command. The demo fires the rejection-block toast
+          in ~5s and then leaves the user with a populated companion UI
+          but no obvious "what's next." This card closes the loop. Only
+          renders when a demo session is active AND has at least one
+          artifact — i.e., the demo has actually fired. */}
+      {connected && sessionId?.startsWith("demo_") && hasArtifacts && (
+        <div className="px-3 py-2 bg-accent-blue-dim/30 border-b border-accent-blue/20 text-2xs flex items-center gap-2 shrink-0">
+          <span className="text-accent-blue font-medium">✓ Demo fired.</span>
+          <span className="text-text-secondary">Next: connect Claude Code in your real project →</span>
+          <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
+            claude --plugin-dir /path/to/deeppairing/claude-plugin
+          </code>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0">
         <ErrorBoundary fallback={
           <div className="flex items-center justify-center h-full p-8 text-text-muted text-sm">
