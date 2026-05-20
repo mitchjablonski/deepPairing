@@ -1,0 +1,15 @@
+{
+  "name": "deeppairing-cli",
+  "version": "0.0.1",
+  "description": "Placeholder reservation — typosquat defense. The CLI is bundled in the main `deeppairing` package, not a separate -cli sub-package.",
+  "main": "index.js",
+  "bin": {
+    "deeppairing-cli": "./index.js"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deeppairing/deeppairing.git"
+  },
+  "deprecated": "Typosquat-defense placeholder. The CLI ships inside the `deeppairing` package; there is no separate -cli sub-package. Real project: https://github.com/deeppairing/deeppairing"
+}
