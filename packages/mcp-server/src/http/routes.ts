@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { nanoid } from "nanoid";
 import fs from "node:fs";
@@ -28,8 +29,13 @@ type StoreGetter = (sessionId?: string) => IStore | null;
 type BroadcastFn = (event: any, sessionId?: string) => void;
 type LogFn = (msg: string) => void;
 
+/** V3 — DPContext is the typed Hono Context this module uses. No
+ *  per-request Variables today, but the alias gives one place to add
+ *  them in a future refactor without re-finding every call site. */
+type DPContext = Context;
+
 /** Extract sessionId from X-Session-Id header */
-function getSessionId(c: any): string | undefined {
+function getSessionId(c: DPContext): string | undefined {
   return c.req.header("X-Session-Id") ?? undefined;
 }
 
@@ -50,7 +56,7 @@ function getSessionId(c: any): string | undefined {
  * a malicious local process can omit the header and hit the default
  * store. Flip to fail-closed.
  */
-function checkProjectHash(c: any, daemonHash: string | undefined): Response | null {
+function checkProjectHash(c: DPContext, daemonHash: string | undefined): Response | null {
   if (!daemonHash) return null;
   const sentHash = c.req.header("X-Project-Hash");
   if (!sentHash || sentHash !== daemonHash) {

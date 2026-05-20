@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { validatePresentFindingsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
+import { scanManyForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentFindings(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -43,6 +44,33 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   // was missing on a freshly-created artifact.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  // V4 — non-blocking secret-shape scan. Flags vendor-prefixed API
+  // keys + PEM blocks the agent may have pasted into evidence
+  // snippets, detail text, or recommendations. Doesn't redact (the
+  // user may have a legitimate reason to quote the key — e.g.,
+  // reviewing a secret-scanner finding); broadcasts a warning so the
+  // companion UI can surface a toast and the disk write is loud-not-
+  // silent.
+  const secretBlobs = [
+    validated.data.summary,
+    ...findings.flatMap((f) => [
+      f?.title ?? "",
+      f?.detail ?? "",
+      f?.recommendation ?? "",
+      ...(Array.isArray(f?.evidence)
+        ? f.evidence.map((e: any) => (typeof e === "object" && e?.snippet) || "")
+        : []),
+    ]),
+  ];
+  const secretMatches = scanManyForSecrets(secretBlobs);
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label),
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
