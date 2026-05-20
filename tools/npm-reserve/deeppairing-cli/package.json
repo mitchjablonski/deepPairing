@@ -1,6 +1,6 @@
 {
   "name": "deeppairing-cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Placeholder reservation — typosquat defense. The CLI is bundled in the main `deeppairing` package, not a separate -cli sub-package.",
   "main": "index.js",
   "bin": {
