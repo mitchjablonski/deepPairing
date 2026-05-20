@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { validatePresentCodeChangeInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
+import { scanManyForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -26,6 +27,19 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  // V4 — code-change before/after snippets are the highest-risk
+  // surface for leaked vendor-prefixed API keys; a refactor near
+  // auth code or a finding that quotes a config block is exactly
+  // where the agent might paste a real secret. See secret-scan.ts.
+  const secretMatches = scanManyForSecrets([before, after, reasoning]);
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label),
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
 
