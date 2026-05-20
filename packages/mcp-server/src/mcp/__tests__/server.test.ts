@@ -1856,6 +1856,40 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("no query");
       expect(text).toContain("any");
     });
+
+    // V2 — second MCP prompt. Mirrors the SeedAffordance UI so users
+    // can encode a stance without going through the agent. Single
+    // required arg (concept); optional reason. Materializes a
+    // user-message asking the agent to POST to /api/philosophy/seed.
+    it("V2 — prompts/list also advertises `seed` with concept (required) + reason (optional)", async () => {
+      const list = await client.listPrompts();
+      const seed = list.prompts.find((p) => p.name === "seed");
+      expect(seed).toBeDefined();
+      expect(seed?.description).toMatch(/cross-project ledger|future preflights/i);
+      const args = seed?.arguments ?? [];
+      const concept = args.find((a) => a.name === "concept");
+      expect(concept?.required).toBe(true);
+      const reason = args.find((a) => a.name === "reason");
+      expect(reason?.required).toBeFalsy();
+    });
+
+    it("V2 — prompts/get for seed materializes a POST /api/philosophy/seed message with the concept + reason", async () => {
+      const result = await client.getPrompt({
+        name: "seed",
+        arguments: { concept: "global state for config", reason: "broke testability in 3 places" },
+      });
+      const text = (result.messages[0].content as any).text as string;
+      expect(text).toContain("/api/philosophy/seed");
+      expect(text).toContain("global state for config");
+      expect(text).toContain("broke testability");
+      expect(text).toContain('"verdict": "rejected"');
+    });
+
+    it("V2 — prompts/get for seed throws when concept is missing (required arg)", async () => {
+      await expect(
+        client.getPrompt({ name: "seed", arguments: {} }),
+      ).rejects.toThrow(/concept/);
+    });
   });
 
   describe("post_pr_review tool (M2)", () => {

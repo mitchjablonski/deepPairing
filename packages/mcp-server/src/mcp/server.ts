@@ -531,15 +531,35 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   // (deeppairing://sessions) and the current-session pointer are always
   // included on page 1 — those are O(1).
   const LIST_PAGE_SIZE = 100;
+  // V1 — opaque (updatedAt|id) cursor. Pre-V1 the cursor was a
+  // stringified offset over a sorted slice; if a new artifact landed
+  // (or `revise_artifact` bumped `updatedAt`) between page reads, the
+  // item that was at index N slid to N+1 and the next page would
+  // skip it. Inverse on retracts/deletes. Now the cursor encodes the
+  // last item's `(updatedAt, id)`; resume by filtering for entries
+  // strictly older-or-tied-with-lower-id, which is monotonic under
+  // insertions. Opaque base64 so clients can't accidentally depend
+  // on the format and constrain a future migration.
+  function encodeCursor(at: string, id: string): string {
+    return Buffer.from(`${at}|${id}`, "utf-8").toString("base64");
+  }
+  function decodeCursor(cursor: string | undefined): { at: string; id: string } | null {
+    if (typeof cursor !== "string" || !cursor) return null;
+    try {
+      const decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      const sep = decoded.indexOf("|");
+      if (sep < 0) return null;
+      return { at: decoded.slice(0, sep), id: decoded.slice(sep + 1) };
+    } catch {
+      return null;
+    }
+  }
+
   server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
     const resources: Array<{ uri: string; name: string; description?: string; mimeType: string }> = [];
     const rawCursor = (request as any)?.params?.cursor;
-    const cursorOffset = (() => {
-      if (typeof rawCursor !== "string") return 0;
-      const n = parseInt(rawCursor, 10);
-      return Number.isFinite(n) && n >= 0 ? n : 0;
-    })();
-    const isFirstPage = cursorOffset === 0;
+    const cursor = decodeCursor(rawCursor);
+    const isFirstPage = cursor === null;
 
     if (isFirstPage) {
       // II12 — onboarding resource. Carries the firstCallHint content
@@ -575,15 +595,31 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
     // Per-artifact resources — newest first (creation order is reverse
     // chronological for the LLM's "what changed recently?" query). Sort by
-    // updatedAt when present so revisions float to the top of their page.
+    // (updatedAt, id) so revisions float to the top of their page and
+    // ties are deterministically ordered for the cursor compare.
     const allArtifacts = await store.getArtifacts();
-    const orderedArtifacts = [...allArtifacts].sort((a, b) => {
-      const at = (a as any).updatedAt ?? (a as any).createdAt ?? "";
-      const bt = (b as any).updatedAt ?? (b as any).createdAt ?? "";
-      return String(bt).localeCompare(String(at));
-    });
-    const pageArtifacts = orderedArtifacts.slice(cursorOffset, cursorOffset + LIST_PAGE_SIZE);
-    for (const a of pageArtifacts) {
+    const orderedArtifacts = [...allArtifacts]
+      .map((a) => ({ a, at: String((a as any).updatedAt ?? (a as any).createdAt ?? "") }))
+      .sort((x, y) => {
+        const cmp = y.at.localeCompare(x.at);
+        return cmp !== 0 ? cmp : y.a.id.localeCompare(x.a.id);
+      });
+
+    // V1 — resume position: skip entries newer than (or tied at, with
+    // a higher id than) the cursor. Older artifacts sort lower in our
+    // newest-first order, so "still to read" = strictly older OR tied
+    // with strictly-lower id. Filtering instead of slicing-by-offset
+    // is what makes the cursor insertion-stable.
+    const remaining = cursor
+      ? orderedArtifacts.filter(({ a, at }) => {
+          if (at < cursor.at) return true;
+          if (at > cursor.at) return false;
+          return a.id < cursor.id;
+        })
+      : orderedArtifacts;
+
+    const pageArtifacts = remaining.slice(0, LIST_PAGE_SIZE);
+    for (const { a } of pageArtifacts) {
       resources.push({
         uri: `deeppairing://artifact/${a.id}`,
         name: `${a.type}: ${a.title}`,
@@ -591,7 +627,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         mimeType: "application/json",
       });
     }
-    const hasMoreArtifacts = orderedArtifacts.length > cursorOffset + LIST_PAGE_SIZE;
+    const hasMoreArtifacts = remaining.length > LIST_PAGE_SIZE;
+    const lastOnPage = pageArtifacts[pageArtifacts.length - 1];
 
     // Past sessions index — only on page 1. The index resource itself is
     // a single URI; agents who want individual past sessions read them on
@@ -628,8 +665,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // Sending an empty/null cursor would tempt some clients to re-list
     // forever.
     const result: { resources: typeof resources; nextCursor?: string } = { resources };
-    if (hasMoreArtifacts) {
-      result.nextCursor = String(cursorOffset + LIST_PAGE_SIZE);
+    if (hasMoreArtifacts && lastOnPage) {
+      result.nextCursor = encodeCursor(lastOnPage.at, lastOnPage.a.id);
     }
     return result;
   });
@@ -740,35 +777,88 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             },
           ],
         },
+        // V2 — second MCP prompt. Mirrors the SeedAffordance UI: the
+        // user names a stance they want to encode without going through
+        // the agent + the present_options round-trip. Materialized as a
+        // user-message that asks the agent to call the philosophy-seed
+        // route with the right shape. Doesn't accept verdict because the
+        // common case is rejection (the only direction we ship a UI for);
+        // an "approve this pattern" prompt would dilute the meaning.
+        {
+          name: "seed",
+          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future preflights catch paraphrases of this stance across every deepPairing project on this machine.",
+          arguments: [
+            {
+              name: "concept",
+              description: "Short name for the pattern you're rejecting (e.g. 'global state for config', 'pay-per-request hosting'). This is the ledger key — keep it concept-shaped, not prose.",
+              required: true,
+            },
+            {
+              name: "reason",
+              description: "Why you're rejecting it. One sentence is fine — the agent surfaces this in future preflight blocks so the future-you remembers the WHY.",
+              required: false,
+            },
+          ],
+        },
       ],
     };
   });
 
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const name = request.params.name;
-    if (name !== "recall") {
-      throw new Error(`Unknown prompt: ${name}`);
-    }
-    const query = String(request.params.arguments?.query ?? "").trim();
-    const mode = String(request.params.arguments?.mode ?? "any").trim();
-    const queryHint = query ? ` for "${query}"` : "";
-    const modeHint = mode && mode !== "any" ? ` (mode=${mode})` : "";
-    return {
-      description: `Recall philosophy + past-session context${queryHint}${modeHint}`,
-      messages: [
-        {
-          role: "user" as const,
-          content: {
-            type: "text" as const,
-            text:
-              `Call the deepPairing \`recall\` tool with mode=${JSON.stringify(mode || "any")}` +
-              (query ? ` and query=${JSON.stringify(query)}` : ` (no query — list everything)`) +
-              `. Summarize the top entries plain-text: name, stance (avoid / prefer / mixed), citation count, ` +
-              `the most representative reason. If nothing comes back, say so explicitly — don't fill the gap with speculation.`,
+    if (name === "recall") {
+      const query = String(request.params.arguments?.query ?? "").trim();
+      const mode = String(request.params.arguments?.mode ?? "any").trim();
+      const queryHint = query ? ` for "${query}"` : "";
+      const modeHint = mode && mode !== "any" ? ` (mode=${mode})` : "";
+      return {
+        description: `Recall philosophy + past-session context${queryHint}${modeHint}`,
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text:
+                `Call the deepPairing \`recall\` tool with mode=${JSON.stringify(mode || "any")}` +
+                (query ? ` and query=${JSON.stringify(query)}` : ` (no query — list everything)`) +
+                `. Summarize the top entries plain-text: name, stance (avoid / prefer / mixed), citation count, ` +
+                `the most representative reason. If nothing comes back, say so explicitly — don't fill the gap with speculation.`,
+            },
           },
-        },
-      ],
-    };
+        ],
+      };
+    }
+    if (name === "seed") {
+      // V2 — concept is required; reason is optional but strongly
+      // preferred (future preflight blocks read better with a reason).
+      const concept = String(request.params.arguments?.concept ?? "").trim();
+      if (!concept) {
+        throw new Error("seed prompt requires a `concept` argument — the short name of the pattern you want to encode.");
+      }
+      const reason = String(request.params.arguments?.reason ?? "").trim();
+      const reasonClause = reason
+        ? `Reason: ${JSON.stringify(reason)}.`
+        : `(No reason supplied — record it as a bare rejection; the user can amend later from the LedgerPanel.)`;
+      return {
+        description: `Seed philosophy stance: ${concept}`,
+        messages: [
+          {
+            role: "user" as const,
+            content: {
+              type: "text" as const,
+              text:
+                `POST to /api/philosophy/seed with body {"verdict": "rejected", "concept": ${JSON.stringify(concept)}` +
+                (reason ? `, "reason": ${JSON.stringify(reason)}` : ``) +
+                `} so the cross-project ledger records the stance. ` +
+                reasonClause +
+                ` After the POST succeeds, confirm to the user: "Seeded — future preflights across every deepPairing project will catch paraphrases of this." ` +
+                `If the POST fails (validation error or daemon unreachable), surface the exact error rather than retrying silently.`,
+            },
+          },
+        ],
+      };
+    }
+    throw new Error(`Unknown prompt: ${name}`);
   });
 
   // X4 — passive-feedback drain lives in tool-helpers.ts. The wrapper
