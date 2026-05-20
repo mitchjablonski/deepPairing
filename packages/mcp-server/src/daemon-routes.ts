@@ -7,6 +7,7 @@ import type { Context } from "hono";
 import { z } from "zod";
 import type { FileStore } from "./store/file-store.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
+import { ERROR_CODES } from "./error-codes.js";
 
 // BB8 — wire-input validation for the typed-object signatures AA1
 // introduced. AA1's typing protected only in-process callers; routes
@@ -35,7 +36,7 @@ type LogFn = (msg: string) => void;
  * Y3' — sentinel returned by `requireStore()` when the session isn't
  * registered. The caller pattern is `const r = requireStore(c, sid); if
  * (!r.ok) return r.response;` — same shape across every route. 404 with
- * a structured `code: "session_not_registered"` so DaemonClient (or any
+ * a structured code field (ERROR_CODES.session_not_registered) so DaemonClient (or any
  * future caller) can act on it without parsing prose.
  *
  * Pre-Y3' the helper silently `createSession()`-d on miss, which reopened
@@ -106,7 +107,7 @@ export function createDaemonRoutes(
         return c.json(
           {
             error: "Missing or invalid Authorization header. Internal routes require the daemon's shared secret.",
-            code: "daemon_auth_required",
+            code: ERROR_CODES.daemon_auth_required,
           },
           401,
         );
@@ -128,7 +129,7 @@ export function createDaemonRoutes(
         response: c.json(
           {
             error: `Session ${sessionId} is not registered. The wrapper must POST /api/internal/sessions/:sessionId/register before any other call.`,
-            code: "session_not_registered",
+            code: ERROR_CODES.session_not_registered,
           },
           404,
         ),
@@ -158,7 +159,7 @@ export function createDaemonRoutes(
       return c.json(
         {
           error: `Daemon serves ${daemonProjectRoot}, not ${body.expectedProjectRoot}. The wrapper likely adopted the wrong daemon (port collision); restart it.`,
-          code: "project_mismatch",
+          code: ERROR_CODES.project_mismatch,
           projectRoot: daemonProjectRoot,
         },
         403,
@@ -449,7 +450,7 @@ export function createDaemonRoutes(
       parsed = RecordRejectedBody.parse(await c.req.json());
     } catch (err) {
       const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
-      return c.json({ error: message, code: "validation_error" }, 400);
+      return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
     r.store.recordRejectedApproach(parsed);
     return c.json({ status: "recorded" });
@@ -463,7 +464,7 @@ export function createDaemonRoutes(
       parsed = RecordApprovedBody.parse(await c.req.json());
     } catch (err) {
       const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
-      return c.json({ error: message, code: "validation_error" }, 400);
+      return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
     r.store.recordApprovedPattern(parsed);
     return c.json({ status: "recorded" });
