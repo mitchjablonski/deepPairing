@@ -123,7 +123,7 @@ Claude Code  ←stdio→  deepPairing MCP Server  ←WebSocket→  Companion UI
 
 The MCP server runs inside Claude Code (it IS the agent — no separate orchestrator). The companion UI is read + steer; the terminal stays the primary chat surface. Sessions persist as JSON in `.deeppairing/`; the ledger persists at `~/.deeppairing/philosophy/v1.json`.
 
-For details: see [ARCHITECTURE.md](ARCHITECTURE.md). If something isn't behaving, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) is keyed on the actual error strings the daemon and wrapper return.
+For details: see [ARCHITECTURE.md](ARCHITECTURE.md). If something isn't behaving, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) is keyed on the actual error strings the daemon and wrapper return. Common questions and the cases we deliberately don't handle yet live in [FAQ.md](FAQ.md).
 
 ## What's in the box
 
