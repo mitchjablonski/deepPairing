@@ -28,6 +28,12 @@ import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
 import { recordMetricEvent } from "./store/metrics-store.js";
 import { buildPingPayload, decidePing, sendPing } from "./ping.js";
+import {
+  fsHonorsPosixMode,
+  tokenPlacement,
+  writeTokenSidecar,
+  unlinkTokenSidecar,
+} from "./daemon-token.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -521,66 +527,73 @@ function cleanup(): void {
   }
   // Remove daemon info file
   try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
+  // III9 — and the token sidecar, if we relocated the token off a non-POSIX
+  // project dir (no-op when the token lived in daemon.json).
+  try { unlinkTokenSidecar(projectRoot); } catch {}
 }
 
-/** III3 — true when fs.chmod can establish 0600 permissions. False on
- *  Windows (POSIX mode bits are advisory at best — the file's ACL is
- *  the local equivalent and chmod is a no-op) so we don't fail-loud on
- *  a platform where the assertion can't hold. */
-function platformEnforcesPosixMode(): boolean {
-  return process.platform !== "win32";
+/** III3 — write `obj` to `file`, opening at mode 0600 so the TOCTOU window
+ *  a chmod-after-write would leave never opens, then chmod defensively. Does
+ *  NOT verify/throw on leaked bits — the caller decides where the secret-
+ *  bearing file goes based on a measured FS-capability probe (III9). */
+function writeFile0600(file: string, obj: unknown): void {
+  const fd = fs.openSync(file, "w", 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(obj, null, 2));
+  } finally {
+    fs.closeSync(fd);
+  }
+  try { fs.chmodSync(file, 0o600); } catch {}
+}
+
+// III9 — token placement is decided once (the project dir's FS capability
+// can't change mid-process) and reused by every heartbeat write, so the
+// chmod probe runs a single time rather than every 30s.
+let tokenPlacementCached: "in-repo" | "sidecar" | null = null;
+function resolveTokenPlacement(): "in-repo" | "sidecar" {
+  if (tokenPlacementCached) return tokenPlacementCached;
+  tokenPlacementCached = tokenPlacement({
+    platform: process.platform,
+    // Windows mode bits are advisory; skip the probe and treat as in-repo.
+    dirHonorsMode: process.platform === "win32" ? true : fsHonorsPosixMode(dpDir),
+  });
+  return tokenPlacementCached;
 }
 
 function writeDaemonInfo(port: number): void {
-  // II1 — include authToken so DaemonClient can pick it up. The chmod
-  // below is what actually defends the token; on Unix only the daemon's
-  // uid can read it, which is exactly the boundary we want (the same uid
-  // already owns the dev environment, and a different uid is a different
-  // attacker class entirely).
-  const info = { pid: process.pid, port, startedAt, projectRoot, authToken: daemonAuthToken };
+  // II1 — the bearer token lets DaemonClient call /api/internal/*. It must
+  // land in a file only the same uid can read. III9 — WHERE that file lives
+  // depends on whether the project's .deeppairing/ filesystem honors 0600.
+  const discovery = { pid: process.pid, port, startedAt, projectRoot };
   try {
-    fs.mkdirSync(path.dirname(daemonInfoFile), { recursive: true });
-    // III3 — open with mode 0600 at creation, not chmod-after-write.
-    // Pre-III3 the sequence was writeFileSync (creates with mode &
-    // ~umask, usually 0644 on macOS default umask 0022) then
-    // chmodSync(0o600). Between those two calls the file is world-
-    // readable for ~1ms — long enough for a same-uid attacker polling
-    // .deeppairing/ to read the token. openSync with mode=0o600 sets
-    // the permission at create-time so the TOCTOU window never opens.
-    const fd = fs.openSync(daemonInfoFile, "w", 0o600);
-    try {
-      fs.writeFileSync(fd, JSON.stringify(info, null, 2));
-    } finally {
-      fs.closeSync(fd);
+    fs.mkdirSync(dpDir, { recursive: true });
+
+    if (resolveTokenPlacement() === "in-repo") {
+      // ext4/APFS/Windows — original path: token lives in daemon.json @0600.
+      writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken });
+      return;
     }
-    // III3 — chmod again defensively (some filesystems honor open()
-    // mode less reliably than chmod) and verify the result. If the
-    // verified mode still has group/other bits set, the token is
-    // effectively public to every same-machine reader. Fail-loud
-    // rather than silently leak — particularly important on
-    // NFS-mounted homes where chmod returns EPERM and we'd otherwise
-    // happily ship a world-readable daemon.json.
-    if (platformEnforcesPosixMode()) {
-      try { fs.chmodSync(daemonInfoFile, 0o600); } catch {}
-      const stat = fs.statSync(daemonInfoFile);
-      const leakedBits = stat.mode & 0o077;
-      if (leakedBits !== 0) {
-        throw new Error(
-          `daemon.json wrote with insecure mode ${(stat.mode & 0o777).toString(8)} ` +
-          `(expected 0600). This usually means the filesystem (NFS, SMB, or some FUSE mounts) ` +
-          `does not honor POSIX permission bits — the bearer token would be readable by any ` +
-          `process on this machine. Move .deeppairing/ to a local filesystem, or set ` +
-          `DEEPPAIRING_PROJECT_ROOT to a local path.`,
-        );
-      }
+
+    // III9 — the project dir is non-POSIX (WSL /mnt/c v9fs, NFS, SMB, FUSE):
+    // chmod won't stick, so daemon.json can't safely hold the token. Split
+    // discovery (non-sensitive — pid/port/projectRoot, no secret) from the
+    // secret, and relocate the token to a guaranteed-POSIX per-user runtime
+    // file. The daemon now STARTS here instead of dying, and the token still
+    // lands somewhere only this uid can read.
+    writeFile0600(daemonInfoFile, discovery); // token-less; world-readable is fine
+    const sidecar = writeTokenSidecar(projectRoot, { authToken: daemonAuthToken, pid: process.pid, port });
+    if (sidecar.honored) {
+      // Log once (placement is decided once; heartbeats re-enter here but the
+      // path doesn't change). Cheap and useful for `doctor` post-mortems.
+      log(`[token] .deeppairing is non-POSIX (chmod 0600 ignored) — bearer token relocated to ${sidecar.path} (mode 0600). Discovery (pid/port) stays in .deeppairing/daemon.json.`);
+    } else {
+      // Even the runtime dir couldn't enforce 0600 (very unusual). Degrade,
+      // don't die: same-uid is the whole trust boundary on a single-dev box.
+      log(`[token] WARN: no filesystem here honors 0600 (token file ${sidecar.path} = mode ${sidecar.mode.toString(8)}). Continuing — the bearer token is readable by same-uid processes on this machine.`);
     }
   } catch (err: any) {
-    // III3 — was a silent log. The whole point of this function is to
-    // place the bearer token where ONLY the same uid can read it; if
-    // we can't, every internal route becomes effectively unauthed.
-    // Surface to stderr too so the wrapper's process-supervision sees
-    // the failure on cold start (where log() may not have made it to
-    // disk yet).
+    // A genuine write failure (unwritable dir, full disk) — surface to stderr
+    // too so the wrapper's process-supervision sees it on cold start.
     const msg = err?.message ?? String(err);
     log(`FATAL: writeDaemonInfo failed: ${msg}`);
     process.stderr.write(`[deepPairing daemon] FATAL: ${msg}\n`);
