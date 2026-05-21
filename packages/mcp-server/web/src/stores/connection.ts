@@ -379,7 +379,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connected: false,
     sessionId: null,
     projectRoot: null,
-    projectHash: null,
+    // II2.2 — seed projectHash from the daemon's HTML injection
+    // (window.__dpProjectHash) so the VERY FIRST WS connect URL and mutation
+    // fetch carry X-Project-Hash. Otherwise the fail-closed gate 403s the
+    // first WS upgrade, the `connected` payload that would populate this
+    // never arrives, and the tab is deadlocked. The WS `connected` handler
+    // still overwrites this if the daemon reports a different hash.
+    projectHash:
+      typeof window !== "undefined" && typeof (window as any).__dpProjectHash === "string"
+        ? (window as any).__dpProjectHash
+        : null,
     autonomyLevel: "supervised",
     adapter: null,
     activeSessions: [],

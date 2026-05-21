@@ -484,7 +484,15 @@ if (fs.existsSync(webDistPath)) {
       // (a same-uid attacker who reads either has full access).
       const html = fs.readFileSync(indexPath, "utf-8");
       const tokenJson = JSON.stringify(daemonAuthToken);
-      const injection = `<script>window.__deepPairingToken = ${tokenJson};</script>`;
+      // II2.2 — inject the daemon's projectHash too, so the SPA knows it
+      // BEFORE its first WS connect / mutation fetch. Without this the store
+      // hash starts null → the first WS upgrade carries no projectHash → the
+      // fail-closed gate 403s it → no `connected` payload ever arrives to
+      // populate the hash → mutation fetches also go out hashless → 403.
+      // The hash is derived from projectRoot (not a secret) and is already
+      // public on /api/daemon-info, so injecting it leaks nothing new.
+      const hashJson = JSON.stringify(daemonProjectHash);
+      const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
       // IV4 — ordering matters. Original III5 fallback prepended the
       // script before whatever HTML came back; if that HTML started
       // with `<!doctype html>` the prepend invalidated the doctype
