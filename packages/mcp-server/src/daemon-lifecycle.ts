@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readTokenSidecar } from "./daemon-token.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -38,7 +39,19 @@ function readDaemonInfo(projectRoot: string): DaemonInfo | null {
   const infoPath = daemonInfoPath(projectRoot);
   try {
     if (!fs.existsSync(infoPath)) return null;
-    return JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+    const info: DaemonInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+    // III9 — on a non-POSIX project dir (WSL /mnt/c, NFS, SMB) the daemon
+    // writes daemon.json WITHOUT the token (it can't hold 0600 there) and
+    // stashes the token in a 0600 per-user runtime sidecar. Merge it back so
+    // the wrapper can authenticate against /api/internal/*. The pid guard
+    // rejects a stale sidecar left by a dead daemon of the same project.
+    if (!info.authToken) {
+      const sidecar = readTokenSidecar(projectRoot);
+      if (sidecar?.authToken && (sidecar.pid === undefined || sidecar.pid === info.pid)) {
+        info.authToken = sidecar.authToken;
+      }
+    }
+    return info;
   } catch {
     return null;
   }

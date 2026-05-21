@@ -701,12 +701,30 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   }
 
   // 5. Log tail
+  // III9 — reconcile the verdict against fatal daemon deaths recorded in the
+  // log. A leftover/older daemon answering /api/state can make the verdict
+  // read "healthy" while every freshly-spawned daemon dies (the pre-III9
+  // insecure-mode throw on a WSL /mnt/c v9fs mount is the canonical case).
+  // Surface that instead of masking it behind a stale "healthy".
+  let daemonFatalHint: string | null = null;
   if (fs.existsSync(logFile)) {
     try {
       const content = fs.readFileSync(logFile, "utf-8");
-      const lines = content.trim().split("\n").slice(-10);
+      const allLines = content.trim().split("\n");
+      const lines = allLines.slice(-10);
       console.log(`\n  ${bold("Log tail")} ${dim("(last 10 lines of .deeppairing/daemon.log):")}`);
       for (const line of lines) console.log(`  ${dim(line)}`);
+
+      const insecureModeDeaths = allLines.filter(
+        (l) => l.includes("writeDaemonInfo failed") || l.includes("insecure mode"),
+      ).length;
+      if (insecureModeDeaths > 0) {
+        daemonFatalHint =
+          `${insecureModeDeaths} fatal daemon death${insecureModeDeaths === 1 ? "" : "s"} from an insecure-mode token write — ` +
+          `this project's .deeppairing/ is on a filesystem that ignores chmod (WSL /mnt/c v9fs, NFS, or SMB). ` +
+          `Upgrade to a deepPairing build with the token-relocation fix (III9), or move the repo onto a local Linux filesystem. ` +
+          `Note: DEEPPAIRING_PROJECT_ROOT does NOT help under Claude Code — CLAUDE_PROJECT_DIR outranks it.`;
+      }
     } catch (err) {
       console.log(`  ${red("✗")} Could not read daemon.log: ${err}`);
     }
@@ -864,8 +882,17 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
 
   // 7. Overall verdict
   console.log();
-  if (probeOk) {
+  if (probeOk && daemonFatalHint) {
+    // A daemon is answering, but the log shows fresh daemons dying — the
+    // responder is almost certainly a leftover/older process. Refusing to
+    // call this "healthy" is the whole point of the III9 doctor fix.
+    console.log(`  ${yellow(bold("Daemon answering, but unhealthy"))} on port ${port}`);
+    console.log(`  ${dim(daemonFatalHint)}`);
+  } else if (probeOk) {
     console.log(`  ${green(bold("Daemon healthy"))} on port ${port}`);
+  } else if (daemonFatalHint) {
+    console.log(`  ${red(bold("Daemon failing to start"))} on port ${port}`);
+    console.log(`  ${dim(daemonFatalHint)}`);
   } else if (info?.pid) {
     console.log(`  ${red(bold("Daemon unhealthy"))} — daemon.json points at PID ${info.pid} but port ${port} is not responding`);
     console.log(`  ${dim("Try: kill ") + info.pid + dim(" && rm .deeppairing/daemon.json — or re-run with --fix")}`);
