@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTokenSidecar } from "./daemon-token.js";
+import { projectHashOf } from "./project-root.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -62,13 +63,33 @@ function readDaemonInfo(projectRoot: string): DaemonInfo | null {
 // record that had no token. The daemon writes the canonical file on
 // startup + every 30s heartbeat; wrappers only read.
 
-/** Probe a port to check if a deepPairing daemon is responding. */
-async function probeDaemon(port: number, timeoutMs = 1500): Promise<boolean> {
+/**
+ * III9 follow-up — headers required to call the AA4-gated public daemon
+ * surface (`/api/state` and friends). The `X-Project-Hash` is what the AA4
+ * middleware actually checks; the bearer token is added when readable
+ * (sidecar-aware, via readDaemonInfo) so the same headers also satisfy the
+ * III5 Bearer-gated routes. Sending these lets a caller tell "alive but
+ * auth-gated" (200/401/403 — a real HTTP response) apart from a refused
+ * connection (the daemon is actually down).
+ */
+export function daemonAuthHeaders(projectRoot: string): Record<string, string> {
+  const headers: Record<string, string> = { "X-Project-Hash": projectHashOf(projectRoot) };
+  const info = readDaemonInfo(projectRoot);
+  if (info?.authToken) headers.Authorization = `Bearer ${info.authToken}`;
+  return headers;
+}
+
+/** Probe a port to check if a deepPairing daemon is responding.
+ *  III9 — `/api/state` is gated by the AA4 X-Project-Hash middleware, so the
+ *  probe must send the project-hash header; otherwise a healthy secured
+ *  daemon answers 403 and we'd wrongly conclude it's dead. */
+async function probeDaemon(port: number, projectRoot: string, timeoutMs = 1500): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`http://localhost:${port}/api/state`, {
       signal: controller.signal,
+      headers: daemonAuthHeaders(projectRoot),
     });
     clearTimeout(timer);
     return res.ok;
@@ -157,7 +178,7 @@ export async function isDaemonRunning(
   if (info) {
     let pidAlive = false;
     try { process.kill(info.pid, 0); pidAlive = true; } catch {}
-    if (pidAlive && await probeDaemon(info.port)) return info;
+    if (pidAlive && await probeDaemon(info.port, projectRoot)) return info;
   }
 
   // Slow path: daemon.json missing or stale. Sweep the candidate port range
