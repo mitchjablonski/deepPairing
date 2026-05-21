@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon } from "../daemon-lifecycle.js";
+import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders } from "../daemon-lifecycle.js";
 import {
   ensureDeepPairingDir,
   ensureGitignoreEntry,
@@ -669,18 +669,30 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   }
 
   let probeOk = false;
+  // III9 follow-up — a non-200 HTTP response still means the port is ALIVE.
+  // Distinguishing that from a refused connection is what stops doctor from
+  // recommending the destructive kill+rm on a working-but-auth-gated daemon.
+  let probeReachable = false;
   let probeStatus: number | string = "no-response";
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`http://localhost:${port}/api/state`, { signal: controller.signal });
+    // III9 follow-up — /api/state is gated by the AA4 X-Project-Hash
+    // middleware (no longer a public route). Probe WITH the daemon auth
+    // headers so a healthy secured daemon returns 200 instead of a 403 we'd
+    // misread as "not responding".
+    const res = await fetch(`http://localhost:${port}/api/state`, {
+      signal: controller.signal,
+      headers: daemonAuthHeaders(cwd),
+    });
     clearTimeout(timer);
+    probeReachable = true;
     probeStatus = res.status;
     probeOk = res.ok;
   } catch (err: any) {
     probeStatus = err?.message ?? String(err);
   }
-  console.log(`  ${probeOk ? green("✓") : red("✗")} GET http://localhost:${port}/api/state → ${probeStatus}`);
+  console.log(`  ${probeOk ? green("✓") : probeReachable ? yellow("!") : red("✗")} GET http://localhost:${port}/api/state → ${probeStatus}`);
 
   // 4. Active sessions
   if (probeOk) {
@@ -893,6 +905,13 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   } else if (daemonFatalHint) {
     console.log(`  ${red(bold("Daemon failing to start"))} on port ${port}`);
     console.log(`  ${dim(daemonFatalHint)}`);
+  } else if (probeReachable) {
+    // III9 follow-up — the port answered with a non-200 (typically a 403 from
+    // the AA4 project-hash gate, or 401). The process is ALIVE, so this is an
+    // auth/project mismatch — NOT a dead daemon. Crucially, do NOT emit the
+    // destructive kill+rm remedy the "not responding" branch below uses.
+    console.log(`  ${yellow(bold("Daemon alive but auth-gated"))} on port ${port} ${dim(`(HTTP ${probeStatus})`)}`);
+    console.log(`  ${dim("The port is responding, so the daemon is up — this is a project-hash/auth mismatch, not a dead process. If a different project's daemon holds this port, see the mismatch note above; otherwise reload any open companion tab. Do NOT kill the daemon.")}`);
   } else if (info?.pid) {
     console.log(`  ${red(bold("Daemon unhealthy"))} — daemon.json points at PID ${info.pid} but port ${port} is not responding`);
     console.log(`  ${dim("Try: kill ") + info.pid + dim(" && rm .deeppairing/daemon.json — or re-run with --fix")}`);
@@ -1170,9 +1189,12 @@ async function demoCmd(): Promise<void> {
   console.log(bold("\n  deepPairing demo"));
   console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
 
-  // II1 — ensureDaemon now returns DaemonInfo (with authToken). demoCmd
-  // only hits public routes (/api/demo/run, /api/state) so we don't need
-  // the token here; just normalize to port for the existing fetch calls.
+  // II1 — ensureDaemon now returns DaemonInfo (with authToken). demoCmd only
+  // POSTs to /api/demo/run, which is a top-level daemon route NOT behind the
+  // AA4 X-Project-Hash / III5 Bearer gate (those guard the createHttpRoutes
+  // surface, e.g. /api/state). So no token is needed here; normalize to port
+  // for the fetch below. (Earlier this comment wrongly listed /api/state as
+  // public — it is gated; demoCmd just never calls it.)
   const daemonInfo = await ensureDaemon(cwd);
   const port = daemonInfo.port;
   console.log(`  ${green("✓")} Daemon ready on port ${port}`);
