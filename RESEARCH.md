@@ -27,7 +27,7 @@ Current tools operate in a 0/1-shot paradigm: the human provides a prompt, the A
 
 | Problem | Evidence | Opportunity |
 |---------|----------|-------------|
-| **Agents go off in wrong direction** | Devin ~15-30% real-world success rate; yak-shaving is the #1 complaint | Human steering at decision points catches wrong turns early |
+| **Agents go off in wrong direction** | Fully autonomous agents can drift off-task; getting stuck on tangents ("yak-shaving") is a common complaint | Human steering at decision points catches wrong turns early |
 | **500 lines to review** | Code review effectiveness drops sharply after 200-400 LOC (Microsoft Research) | Present changes with reasoning, at decision-level granularity |
 | **No shared mental model** | AI doesn't externalize its understanding; human can't see or correct it | Make AI's understanding visible and correctable |
 | **Context loss in long sessions** | Performance degrades after 30+ turns; "lost in the middle" problem | Decision-centric context (structured records, not conversation history) |
@@ -75,15 +75,15 @@ This is deepPairing's core design challenge: **more collaboration = more interru
 
 ### Key Competitor Insights
 
-**Cursor** — The market leader. Diff-review UX is table stakes. Rules files show users want to pre-configure AI behavior. But Agent mode is increasingly autonomous (20+ tool calls before showing results). No information gathering phase. No option presentation.
+**Cursor** — The market leader. Diff-review UX is table stakes, and rules files show users want to pre-configure AI behavior. Its Agent mode leans autonomous — often many tool calls before surfacing results — with limited dedicated information-gathering or option-presentation phases.
 
 **Cline** — Proves demand for human-in-the-loop, but wrong granularity (approve file reads, not decisions). Approval fatigue is a documented problem.
 
 **Aider** — Architect/editor split validates separating thinking from doing. Git-native workflow is essential. But terminal-only limits UX richness. Plans are chat text, not interactive artifacts.
 
-**Copilot Workspace** — Three-phase model (spec → plan → code) is sound but **pivoted/folded** because plans were too disconnected from implementation. Key lesson: plans must be living documents.
+**Copilot Workspace** — Three-phase model (spec → plan → code) is sound. It was later wound down, with one widely-noted lesson being that plans drifted too far from implementation. Takeaway: plans must be living documents.
 
-**Devin** — The anti-pattern. Demonstrates exactly why full autonomy fails: yak-shaving, confident incorrectness, context loss. Session replay is useful but insufficient — humans need to steer in real-time.
+**Devin** — A cautionary case for full autonomy: off-task tangents, confident-but-incorrect output, and context loss are recurring challenges. Session replay helps with hindsight but doesn't replace real-time human steering.
 
 **v0 by Vercel** — **Presenting 2-3 options with tradeoffs** is their killer insight. This is the interaction pattern deepPairing should adopt for architectural decisions.
 
@@ -286,27 +286,7 @@ By using **Claude Code Agent SDK** as the AI layer, we collapse the Python/LangG
 
 ---
 
-## 6. Go-to-Market
-
-### Pricing Model
-
-Target the **$20/mo individual / $40/seat team** sweet spot established by Cursor. Consider:
-- Free tier with limited sessions/decisions per month
-- Pro $20/mo (unlimited, all models)
-- Team $40/seat/mo (shared context, collaboration, admin)
-- Enterprise custom (SSO, audit logs, on-prem)
-
-### GTM Strategy
-
-1. **"See the difference" demos** — side-by-side videos: autonomous tool fails (yak-shaving) vs. deepPairing catches the issue early
-2. **Developer education content** — "How to pair program with AI effectively" — establish the methodology, then offer the tool
-3. **Open-source core** — build trust and community; the collaboration methodology should be transparent
-4. **Target persona: senior devs and tech leads** who WANT to stay involved but find current tools too autonomous or too tedious
-5. **YouTube/content creator partnerships** — visual demos sell coding tools (Cursor and Bolt.new proved this)
-
----
-
-## 7. Key Risks
+## 6. Key Risks
 
 | Risk | Mitigation |
 |------|------------|
@@ -319,7 +299,7 @@ Target the **$20/mo individual / $40/seat team** sweet spot established by Curso
 
 ---
 
-## 8. What "10x Better" Looks Like
+## 7. What "10x Better" Looks Like
 
 1. **Shared mental model** — AI articulates its understanding; human can correct it
 2. **Adaptive autonomy** — learns when to ask vs. proceed based on your patterns
