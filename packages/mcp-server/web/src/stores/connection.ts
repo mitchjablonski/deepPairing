@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
+import { apiGet, sessionHeaders } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 
 /** Request notification permission and send a notification when tab is unfocused */
@@ -291,7 +292,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // optimistic state may be stale; the daemon broadcasts this so
           // we can refetch full state + toast the user.
           fetch(`http://${window.location.host}/api/state`, {
-            headers: { "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
+            headers: { ...sessionHeaders(), "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
           })
             .then((r) => (r.ok ? r.json() : null))
             .then((fresh) => {
@@ -442,7 +443,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     },
 
     refreshSessions: () => {
-      fetch(`http://${window.location.host}/api/active-sessions`)
+      apiGet(`http://${window.location.host}/api/active-sessions`)
         .then((r) => r.json())
         .then((data) => set({ activeSessions: data.sessions ?? [] }))
         .catch(() => {});

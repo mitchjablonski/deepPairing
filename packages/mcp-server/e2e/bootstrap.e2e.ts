@@ -72,6 +72,16 @@ test.afterAll(async () => {
 });
 
 test("companion UI boots: served HTML injects the hash, the WS connects, and the ledger loads", async ({ page }) => {
+  // Collect any fail-closed 403s on /api/* — the read-hash regression class
+  // (every SPA read must carry X-Project-Hash, else the gate 403s it).
+  const forbidden: string[] = [];
+  page.on("response", (r) => {
+    if (r.status() === 403) {
+      const p = new URL(r.url()).pathname;
+      if (p.startsWith("/api/")) forbidden.push(p);
+    }
+  });
+
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
 
   // II2.3 — the document served on the top-level navigation carries the hash.
@@ -109,4 +119,9 @@ test("companion UI boots: served HTML injects the hash, the WS connects, and the
     return (await fetch("/api/ledger/digest", { headers })).status;
   });
   expect(ledgerStatus, "ledger digest must not be gate-403'd once the hash is bound").toBe(200);
+
+  // Give late-mounting panels (skill banner, hook status, metrics, sessions)
+  // a moment to fire their reads, then assert none hit the fail-closed gate.
+  await page.waitForTimeout(1500);
+  expect(forbidden, "no /api read should 403 — every SPA fetch must carry X-Project-Hash").toEqual([]);
 });

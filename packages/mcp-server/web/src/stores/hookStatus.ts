@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { API_BASE } from "../lib/api";
+import { API_BASE, apiGet } from "../lib/api";
 
 /**
  * X7 — hook fire history surfaced to the companion UI.
@@ -36,7 +36,7 @@ export const useHookStatusStore = create<HookStatusState>((set, get) => ({
 
   load: async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/hook-state`);
+      const res = await apiGet(`${API_BASE}/api/hook-state`);
       if (!res.ok) {
         set({ loaded: true });
         return;
