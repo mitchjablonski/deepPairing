@@ -32,6 +32,8 @@
     "build": "tsc && cd web && npx vite build && cd .. && node scripts/bundle-plugin.mjs",
     "start": "tsx src/standalone.ts",
     "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build"
   },
@@ -50,6 +52,7 @@
   "devDependencies": {
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/vite": "^4.2.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
