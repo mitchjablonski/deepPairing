@@ -1,1 +1,6 @@
 .deeppairing/
+
+# Playwright e2e run artifacts
+test-results/
+playwright-report/
+.playwright/
