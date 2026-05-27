@@ -1,10 +1,11 @@
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, Comment } from "@deeppairing/shared";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { ConceptBadge } from "../ConceptBadge";
 import { useState, useMemo } from "react";
-import { computeLineDiff, type DiffLine } from "../../lib/diff";
+import { useArtifactStore } from "../../stores/artifact";
+import { computeLineDiff, collapseDiff, type DiffLine, type DiffRow } from "../../lib/diff";
 
 interface CodeChangeContent {
   filePath: string;
@@ -17,50 +18,78 @@ interface CodeChangeContent {
   concept?: { name: string; oneLineExplanation?: string };
 }
 
-function UnifiedDiffView({ diff, filePath, artifactId }: { diff: DiffLine[]; filePath: string; artifactId: string }) {
+function UnifiedDiffView({ diff }: { diff: DiffLine[] }) {
+  // Collapse long unchanged runs into gap markers so an incremental edit to an
+  // already-approved file shows just the changed hunks (+ context), not the
+  // whole file. "Show all lines" / clicking a gap reveals everything.
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = useMemo(() => collapseDiff(diff), [diff]);
+  const hidesLines = useMemo(() => collapsed.some((r) => r.type === "gap"), [collapsed]);
+  const rows: DiffRow[] = expanded ? diff : collapsed;
+
   return (
     <div className="font-mono text-[13px] leading-[20px] bg-surface-code rounded overflow-hidden">
-      {diff.map((line, i) => (
-        <div
-          key={i}
-          className={`flex ${
-            line.type === "removed"
-              ? "bg-accent-red-dim/30"
-              : line.type === "added"
-                ? "bg-accent-green-dim/30"
-                : ""
-          }`}
+      {hidesLines && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="w-full text-left px-2 py-1 text-2xs text-text-muted hover:text-text-secondary bg-surface-elevated border-b border-border-subtle select-none"
         >
-          {/* Old line number */}
-          <span className="w-8 shrink-0 text-right pr-1 py-0.5 text-[11px] text-text-muted select-none">
-            {line.oldLineNum ?? ""}
-          </span>
-          {/* New line number */}
-          <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-[11px] text-text-muted select-none border-r border-border-subtle">
-            {line.newLineNum ?? ""}
-          </span>
-          {/* Diff marker */}
-          <span className={`w-5 shrink-0 text-center py-0.5 select-none font-bold ${
-            line.type === "removed"
-              ? "text-accent-red"
-              : line.type === "added"
-                ? "text-accent-green"
-                : "text-text-muted"
-          }`}>
-            {line.type === "removed" ? "-" : line.type === "added" ? "+" : " "}
-          </span>
-          {/* Code content */}
-          <span className={`px-2 py-0.5 whitespace-pre flex-1 overflow-x-auto ${
-            line.type === "removed"
-              ? "text-accent-red line-through opacity-70"
-              : line.type === "added"
-                ? "text-text-primary"
-                : "text-text-secondary"
-          }`}>
-            {line.content || " "}
-          </span>
-        </div>
-      ))}
+          {expanded ? "Collapse unchanged lines" : "Show all lines"}
+        </button>
+      )}
+      {rows.map((row, i) =>
+        row.type === "gap" ? (
+          <button
+            key={i}
+            onClick={() => setExpanded(true)}
+            title="Click to expand"
+            className="flex w-full items-center px-0 py-0.5 text-[11px] text-text-muted hover:bg-surface-hover select-none"
+          >
+            <span className="w-[68px] shrink-0 text-center border-r border-border-subtle">⋯</span>
+            <span className="px-2 italic">{row.count} unchanged line{row.count === 1 ? "" : "s"}</span>
+          </button>
+        ) : (
+          <div
+            key={i}
+            className={`flex ${
+              row.type === "removed"
+                ? "bg-accent-red-dim/30"
+                : row.type === "added"
+                  ? "bg-accent-green-dim/30"
+                  : ""
+            }`}
+          >
+            {/* Old line number */}
+            <span className="w-8 shrink-0 text-right pr-1 py-0.5 text-[11px] text-text-muted select-none">
+              {row.oldLineNum ?? ""}
+            </span>
+            {/* New line number */}
+            <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-[11px] text-text-muted select-none border-r border-border-subtle">
+              {row.newLineNum ?? ""}
+            </span>
+            {/* Diff marker */}
+            <span className={`w-5 shrink-0 text-center py-0.5 select-none font-bold ${
+              row.type === "removed"
+                ? "text-accent-red"
+                : row.type === "added"
+                  ? "text-accent-green"
+                  : "text-text-muted"
+            }`}>
+              {row.type === "removed" ? "-" : row.type === "added" ? "+" : " "}
+            </span>
+            {/* Code content */}
+            <span className={`px-2 py-0.5 whitespace-pre flex-1 overflow-x-auto ${
+              row.type === "removed"
+                ? "text-accent-red line-through opacity-70"
+                : row.type === "added"
+                  ? "text-text-primary"
+                  : "text-text-secondary"
+            }`}>
+              {row.content || " "}
+            </span>
+          </div>
+        ),
+      )}
     </div>
   );
 }
@@ -76,6 +105,34 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
     if (!content.before || !content.after) return null;
     return computeLineDiff(content.before, content.after);
   }, [content.before, content.after]);
+
+  // Show the human's line comments inline on the code (GitHub-style), keyed by
+  // line number — mirrors ResearchArtifact. Code_change comments target a line
+  // directly (no finding/step/evidence index).
+  const allComments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  const commentsByLine = useMemo(() => {
+    const map = new Map<number, Comment[]>();
+    for (const c of allComments) {
+      try {
+        const t = c.target as any;
+        if (t?.lineStart == null || t?.findingIndex != null || t?.stepIndex != null || t?.evidenceIndex != null) continue;
+        const startN = Number(t.lineStart);
+        const endN = t.lineEnd == null ? startN : Number(t.lineEnd);
+        if (!Number.isFinite(startN) || !Number.isFinite(endN)) continue;
+        const start = Math.max(0, Math.floor(startN));
+        const end = Math.max(start, Math.floor(endN));
+        const safeEnd = Math.min(end, start + 200);
+        for (let line = start; line <= safeEnd; line++) {
+          const existing = map.get(line) ?? [];
+          existing.push(c);
+          map.set(line, existing);
+        }
+      } catch {
+        // skip one malformed comment, keep rendering the rest
+      }
+    }
+    return map;
+  }, [allComments]);
 
   const changeTypeColors = {
     create: "bg-accent-green-dim text-accent-green",
@@ -159,7 +216,7 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
 
       {/* Code view */}
       {viewMode === "unified" && diff ? (
-        <UnifiedDiffView diff={diff} filePath={content.filePath} artifactId={artifact.id} />
+        <UnifiedDiffView diff={diff} />
       ) : viewMode === "split" && content.before ? (
         <div className="grid grid-cols-2 gap-2">
           <div>
@@ -181,6 +238,7 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
                 lineStart={1}
                 filePath={content.filePath}
                 artifactId={artifact.id}
+                commentsByLine={commentsByLine}
               />
             </div>
           </div>
@@ -191,6 +249,7 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
           lineStart={1}
           filePath={content.filePath}
           artifactId={artifact.id}
+          commentsByLine={commentsByLine}
         />
       )}
 
