@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { apiGet } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { WaitingForClaude } from "./components/WaitingForClaude";
@@ -53,7 +54,7 @@ function App() {
       refreshSessions();
       const requested = new URLSearchParams(window.location.search).get("session");
       try {
-        const res = await fetch(`http://${window.location.host}/api/active-sessions`);
+        const res = await apiGet(`http://${window.location.host}/api/active-sessions`);
         const data = await res.json();
         const sessions = data.sessions ?? [];
         if (requested && sessions.some((s: any) => s.sessionId === requested)) {

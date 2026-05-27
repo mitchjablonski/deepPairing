@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { apiGet } from "../lib/api";
 import { type Artifact, type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore } from "../stores/preferences";
@@ -481,7 +482,7 @@ function MultiAgentSync() {
 
     const sync = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/active-sessions`);
+        const res = await apiGet(`${API_BASE}/api/active-sessions`);
         const data = await res.json();
         const sessions: ActiveSession[] = data.sessions ?? [];
 
@@ -490,7 +491,7 @@ function MultiAgentSync() {
 
           // Load this session's artifacts from disk via the API
           try {
-            const sRes = await fetch(`${API_BASE}/api/live-session/${session.sessionId}`);
+            const sRes = await apiGet(`${API_BASE}/api/live-session/${session.sessionId}`);
             if (!sRes.ok) continue;
             const state = await sRes.json();
             if (cancelled) return;

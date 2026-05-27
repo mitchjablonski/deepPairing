@@ -32,6 +32,21 @@ export function sessionHeaders(): Record<string, string> {
 }
 
 /**
+ * Read a daemon route with the session + project headers attached. The II2
+ * fail-closed gate 403s any /api/* request without X-Project-Hash, so every
+ * read MUST carry it (stores/ledger.ts is the template). Accepts an absolute
+ * URL or a path. Returns the raw Response WITHOUT throwing — read paths often
+ * treat a 404 / empty body as meaningful, unlike safeFetch (use that for
+ * mutations). Any caller-supplied headers override the session ones.
+ */
+export async function apiGet(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    headers: { ...sessionHeaders(), ...(init?.headers as Record<string, string> | undefined) },
+  });
+}
+
+/**
  * U3 — typed error thrown by safeFetch when a request fails. Carries enough
  * to render an actionable toast: HTTP status, the daemon's structured error
  * code (when present), and a human-readable message.

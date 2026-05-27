@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { apiGet } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
@@ -54,7 +55,7 @@ export function SessionBrowser() {
   };
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/sessions`)
+    apiGet(`${API_BASE}/api/sessions`)
       .then((res) => res.json())
       .then((data) => setSessions(data.sessions ?? []))
       .catch(() => {})
@@ -64,7 +65,7 @@ export function SessionBrowser() {
   const loadSession = async (sessionId: string, focusArtifactId?: string) => {
     setLoadingSession(sessionId);
     try {
-      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`);
+      const res = await apiGet(`${API_BASE}/api/sessions/${sessionId}`);
       const state = await res.json();
 
       reset();
@@ -110,7 +111,7 @@ export function SessionBrowser() {
       setSearching(true);
       setSearchError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`);
+        const res = await apiGet(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`);
         if (!res.ok) throw new Error(`Search failed: ${res.status}`);
         const data = await res.json();
         setResults(data.results ?? []);
