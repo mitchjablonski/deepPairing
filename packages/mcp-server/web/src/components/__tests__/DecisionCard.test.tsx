@@ -37,6 +37,22 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
 });
 
+describe("DecisionCard — resolved options disclosure", () => {
+  it("reveals each option's full detail in place via Show options (no re-pair needed)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_abc" initialResolved={{ optionId: "o1" }} />);
+    // Collapsed by default: a rejected option's description is not shown.
+    expect(screen.queryByText("Just the edge")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /show options/i }));
+    // Expanded: both options' full detail render in place, read-only.
+    expect(screen.getByText("In-memory store")).toBeInTheDocument(); // chosen
+    expect(screen.getByText("Just the edge")).toBeInTheDocument(); // rejected
+    expect(screen.getByText("✓ Chosen")).toBeInTheDocument();
+    expect(screen.getByText("Not chosen")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /hide options/i })).toBeInTheDocument();
+  });
+});
+
 describe("DecisionCard — draft state", () => {
   it("renders every option with its title", () => {
     render(<DecisionCard event={event} />);
