@@ -22,6 +22,7 @@ import { spawn } from "node:child_process";
 import { ERROR_CODES } from "./error-codes.js";
 import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
+import { mountStaticUi } from "./http/static-ui.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
@@ -445,86 +446,19 @@ app.get("/api/live-session/:sessionId", (c) => {
 });
 
 // --- Serve static web UI ---
+// Extracted to http/static-ui.ts so the bootstrap-injection contract (the
+// II2.2/II2.3 seam) is testable without booting this server. Registered after
+// the /api routes so they win the match.
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 const webDistPath = path.join(__thisDir, "../dist/web");
 
-if (fs.existsSync(webDistPath)) {
-  app.get("/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/")) return next();
-    const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path.join(webDistPath, filePath);
-    const resolvedPath = path.resolve(fullPath);
-    const resolvedBase = path.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path.sep) && resolvedPath !== resolvedBase) {
-      return c.notFound();
-    }
-    if (fs.existsSync(fullPath)) {
-      const content = fs.readFileSync(fullPath);
-      const ext = path.extname(filePath).slice(1);
-      const mimeTypes: Record<string, string> = {
-        html: "text/html", js: "application/javascript", css: "text/css",
-        json: "application/json", svg: "image/svg+xml", woff2: "font/woff2", png: "image/png",
-      };
-      return new Response(content, {
-        headers: { "Content-Type": mimeTypes[ext] ?? "application/octet-stream" },
-      });
-    }
-    const indexPath = path.join(webDistPath, "index.html");
-    if (fs.existsSync(indexPath)) {
-      // III5 — inject the daemon's bearer token into the served HTML so
-      // the browser companion UI can authenticate against
-      // Bearer-gated public routes (today: /api/prompts). The injected
-      // snippet is a literal `window.__deepPairingToken = "..."` script
-      // placed just before </head>. The token already travels in
-      // daemon.json (file-system gate) and via /api/internal/* calls
-      // (Authorization header) — exposing it in the HTML reaches the
-      // browser without forcing it to do an Origin-checked bootstrap
-      // round-trip, and is no MORE exposed than the daemon.json file
-      // (a same-uid attacker who reads either has full access).
-      const html = fs.readFileSync(indexPath, "utf-8");
-      const tokenJson = JSON.stringify(daemonAuthToken);
-      // II2.2 — inject the daemon's projectHash too, so the SPA knows it
-      // BEFORE its first WS connect / mutation fetch. Without this the store
-      // hash starts null → the first WS upgrade carries no projectHash → the
-      // fail-closed gate 403s it → no `connected` payload ever arrives to
-      // populate the hash → mutation fetches also go out hashless → 403.
-      // The hash is derived from projectRoot (not a secret) and is already
-      // public on /api/daemon-info, so injecting it leaks nothing new.
-      const hashJson = JSON.stringify(daemonProjectHash);
-      const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
-      // IV4 — ordering matters. Original III5 fallback prepended the
-      // script before whatever HTML came back; if that HTML started
-      // with `<!doctype html>` the prepend invalidated the doctype
-      // and the page rendered in quirks mode. Better cascade:
-      //   1. Prefer `</head>` injection (every Vite build emits one).
-      //   2. If no </head>, try after `<head>` (rare but possible).
-      //   3. If no <head> at all, try after `<html>` so the doctype
-      //      stays first.
-      //   4. Last resort, no token injected — return the raw HTML and
-      //      let the browser fall back to the (no-token-needed) UI.
-      //      Better to ship a working un-authed page than a quirks-mode
-      //      page with a stale token.
-      let injected: string;
-      if (html.includes("</head>")) {
-        injected = html.replace("</head>", `${injection}</head>`);
-      } else if (/<head\b[^>]*>/i.test(html)) {
-        injected = html.replace(/(<head\b[^>]*>)/i, `$1${injection}`);
-      } else if (/<html\b[^>]*>/i.test(html)) {
-        injected = html.replace(/(<html\b[^>]*>)/i, `$1${injection}`);
-      } else {
-        // Pathological — index.html has neither <head> nor <html>.
-        // Log and serve unmodified so the page at least renders.
-        log(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
-        injected = html;
-      }
-      return new Response(injected, {
-        headers: { "Content-Type": "text/html" },
-      });
-    }
-    return c.notFound();
-  });
-}
+mountStaticUi(app, {
+  webDistPath,
+  authToken: daemonAuthToken,
+  projectHash: daemonProjectHash,
+  log,
+});
 
 // --- Start server ---
 
