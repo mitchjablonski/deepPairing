@@ -1,7 +1,10 @@
 import { create } from "zustand";
 
 type Theme = "dark" | "light" | "system";
-type FontSize = "compact" | "default" | "large" | "xlarge";
+// "auto" = fluid, viewport-scaled (the default; see the index.css clamp). The
+// rest pin a fixed root size and override auto. "xxlarge"/"huge" lift the
+// manual ceiling past the old 18px for large/high-DPI displays.
+type FontSize = "auto" | "compact" | "default" | "large" | "xlarge" | "xxlarge" | "huge";
 
 export const EDITOR_PRESETS: Record<string, { label: string; template: string }> = {
   vscode: { label: "VS Code", template: "vscode://file/{path}:{line}:{column}" },
@@ -41,8 +44,8 @@ function getStoredEditor(): string {
 }
 
 function getStoredFontSize(): FontSize {
-  if (typeof window === "undefined") return "default";
-  return (localStorage.getItem("dp-font-size") as FontSize) ?? "default";
+  if (typeof window === "undefined") return "auto";
+  return (localStorage.getItem("dp-font-size") as FontSize) ?? "auto";
 }
 
 /** Safe localStorage wrappers so the store loads in non-browser contexts. */

@@ -72,20 +72,36 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
               Font size
             </div>
-            <div className="flex items-center gap-1 bg-surface-secondary rounded p-1 border border-border-default">
-              {([["compact", 10], ["default", 12], ["large", 14], ["xlarge", 16]] as const).map(
-                ([size, px]) => (
+            {/* Auto (fluid) — the default; the root size scales with the
+                window/screen so large & high-DPI displays get bigger text. */}
+            <button
+              onClick={() => setFontSize("auto")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs mb-1.5 border transition-colors ${
+                fontSize === "auto"
+                  ? "bg-accent-blue-dim text-accent-blue border-accent-blue/30"
+                  : "bg-surface-secondary text-text-secondary border-border-default hover:bg-surface-hover"
+              }`}
+            >
+              <span className="font-medium">Auto</span>
+              <span className="text-2xs opacity-70">scales with your screen</span>
+            </button>
+            {/* Fixed sizes — pin a root px, overriding Auto. Labels are the
+                real root px so the choice is unambiguous on any display. */}
+            <div className="flex flex-wrap items-end gap-1 bg-surface-secondary rounded p-1 border border-border-default">
+              {([["compact", 11, "12"], ["default", 12, "14"], ["large", 13, "16"], ["xlarge", 15, "18"], ["xxlarge", 17, "20"], ["huge", 19, "24"]] as const).map(
+                ([size, previewPx, label]) => (
                   <button
                     key={size}
                     onClick={() => setFontSize(size)}
-                    className={`flex-1 px-2 py-1.5 rounded text-xs transition-colors ${
+                    title={`${label}px`}
+                    className={`flex-1 min-w-[44px] flex flex-col items-center gap-0.5 px-1 py-1.5 rounded transition-colors ${
                       fontSize === size
                         ? "bg-surface-hover text-text-primary"
                         : "text-text-muted hover:text-text-secondary"
                     }`}
                   >
-                    <span style={{ fontSize: px, lineHeight: 1 }}>A</span>
-                    <span className="ml-1 text-2xs opacity-70">{size}</span>
+                    <span style={{ fontSize: previewPx, lineHeight: 1 }}>A</span>
+                    <span className="text-2xs opacity-70">{label}</span>
                   </button>
                 ),
               )}
