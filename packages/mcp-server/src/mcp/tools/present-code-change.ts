@@ -9,6 +9,23 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   const validated = validatePresentCodeChangeInput(args);
   if (!validated.ok) return validated.error;
   const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
+
+  // #3 — when the agent presents an incremental change to a file it already
+  // showed this session but omits `before`, reconstruct `before` from the most
+  // recent prior code_change for the same file. Without it the UI has nothing
+  // to diff against and re-renders the whole file the user already approved.
+  let effectiveBefore = before;
+  if (!effectiveBefore && changeType !== "create") {
+    try {
+      const prior = (await ctx.store.getArtifacts())
+        .filter((a) => a.type === "code_change" && (a.content as any)?.filePath === filePath && typeof (a.content as any)?.after === "string")
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+      if (prior) effectiveBefore = (prior.content as any).after as string;
+    } catch {
+      // best-effort; fall back to the empty before (full-file view)
+    }
+  }
+
   const proposals: string[] = [filePath, reasoning].filter(Boolean);
   const proposalPaths: string[] = [filePath];
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
@@ -19,7 +36,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     id,
     type: "code_change",
     title: `${changeType} ${filePath}`,
-    content: { filePath, changeType, before, after, reasoning, confidence, concept },
+    content: { filePath, changeType, before: effectiveBefore, after, reasoning, confidence, concept },
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
   });
@@ -31,7 +48,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // surface for leaked vendor-prefixed API keys; a refactor near
   // auth code or a finding that quotes a config block is exactly
   // where the agent might paste a real secret. See secret-scan.ts.
-  const secretMatches = scanManyForSecrets([before, after, reasoning]);
+  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
   if (secretMatches.length > 0) {
     ctx.broadcast({
       type: "secret_warning",
@@ -49,7 +66,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // reasoning + linked findings render in full. Threshold is intentionally
   // conservative — terminal accept is a great escape hatch for tiny edits,
   // a footgun for sprawling ones.
-  const changedLines = before.split("\n").length + after.split("\n").length;
+  const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
   const isSmallEdit = changedLines <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
   if (isSmallEdit && isConfident) {
