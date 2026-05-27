@@ -85,6 +85,13 @@ describe("preferences store — simple setters", () => {
     expect(usePreferencesStore.getState().fontSize).toBe("large");
   });
 
+  it("setFontSize accepts 'auto' (fluid default) and the larger presets", () => {
+    for (const size of ["auto", "xxlarge", "huge"] as const) {
+      usePreferencesStore.getState().setFontSize(size);
+      expect(usePreferencesStore.getState().fontSize).toBe(size);
+    }
+  });
+
   it("toggleContentWidth flips full <-> constrained", () => {
     usePreferencesStore.setState({ contentWidth: "full" });
     usePreferencesStore.getState().toggleContentWidth();

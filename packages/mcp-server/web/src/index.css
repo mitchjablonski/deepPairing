@@ -66,16 +66,32 @@ html {
   background: var(--color-surface-primary);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: var(--text-base);
+  /* Fluid default so the page is responsive before JS sets data-font-size;
+     the [data-font-size] attribute selectors (higher specificity) override
+     this once the preferences store hydrates. */
+  font-size: clamp(15px, 0.4vw + 10.5px, 24px);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Font size scaling — applied to root, cascades to all rem/em values */
+/* Font size scaling — applied to root, cascades to all rem/em values.
+ *
+ * "auto" (the default) is fluid typography: the root size tracks viewport
+ * width so a big/high-DPI display gets larger text without the user touching
+ * anything. A fixed 18px ceiling reads as physically small on a 3440px-wide
+ * ultrawide at 100% OS scaling (CSS px ≈ device px there); the clamp lifts the
+ * base to ~24px on those panels while keeping a laptop comfortable (~16px).
+ *   clamp(min, 0.4vw + 10.5px, max):
+ *     1440px → ~16px   1920px → ~18px   2560px → ~21px   3440px+ → 24px (cap)
+ * 1vw is live, so this re-scales on window resize with no JS listener.
+ * The fixed presets below override "auto" when the user pins a size. */
+[data-font-size="auto"]    { font-size: clamp(15px, 0.4vw + 10.5px, 24px); }
 [data-font-size="compact"] { font-size: 12px; }
 [data-font-size="default"] { font-size: 14px; }
-[data-font-size="large"] { font-size: 16px; }
-[data-font-size="xlarge"] { font-size: 18px; }
+[data-font-size="large"]   { font-size: 16px; }
+[data-font-size="xlarge"]  { font-size: 18px; }
+[data-font-size="xxlarge"] { font-size: 20px; }
+[data-font-size="huge"]    { font-size: 24px; }
 
 /* Selection */
 ::selection {
