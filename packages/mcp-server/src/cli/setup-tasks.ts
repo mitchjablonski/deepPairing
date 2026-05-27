@@ -237,8 +237,10 @@ try {
       return true;
     });
     if (blocking) {
-      process.stdout.write("deepPairing: pending artifacts need review — call check_feedback\\n");
-      exit(2, "pending artifacts in " + id);
+      process.stderr.write("deepPairing: pending artifacts need review — call check_feedback\\n");
+      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
+      // exit 2 showed Claude only an empty-stderr "Stop hook error".
+      exit(0, "pending artifacts in " + id);
     }
   }
   exit(0, "pass: no blocking drafts");
@@ -484,14 +486,16 @@ process.stdin.on("end", () => {
     const FRESH_MS = 60 * 1000;
     const ageMs = Date.now() - mostRecentCheckpoint;
     if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
-      process.stdout.write(
+      process.stderr.write(
         "deepPairing: " + tool + " on " + filePath +
         " without an intervening present_code_change. " +
         "Call present_code_change BEFORE the next edit so the human can react. " +
         "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section. " +
         "Config / generated files like .gitignore are auto-skipped.)\\n"
       );
-      exit(2, "nag: " + tool + " on " + filePath);
+      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
+      // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
+      exit(0, "nag: " + tool + " on " + filePath);
     }
     exit(0, "pass: fresh checkpoint covers " + filePath);
   } catch (err) {
