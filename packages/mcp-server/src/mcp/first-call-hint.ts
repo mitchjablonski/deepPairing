@@ -28,6 +28,24 @@ const HINT_BUDGET_CHARS = 1500;
 // list can't push Q4 follow-ups out of mind.
 const POLICY_BUDGET_CHARS = 600;
 
+// The pairing-protocol preamble. Always-on orientation so consuming projects
+// that wire ONLY the MCP server (no pairing-protocol skill, no
+// `npx deeppairing init`) still get the choreography — the happy-path sequence
+// plus the two rules that keep the dialogue in the companion UI. It's
+// fixed-size and essential, so it rides in the uncapped prefix and is NOT
+// charged against the contextual budget below. Faithful to SKILL.md.
+const PROTOCOL_PREAMBLE = [
+  "[deepPairing protocol] Route findings/options/plans/answers through the MCP tools into the companion UI — never as plain terminal text. Happy path, in order:",
+  "  1. recall (mode='any') — check prior stances/decisions before proposing.",
+  "  2. present_findings — after researching; structured Evidence (filePath, lineStart, lineEnd, snippet). Not plain-text bullets.",
+  "  3. check_feedback — poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
+  "  4. present_options — at a fork with 2-4 approaches; stakes='high' for hard-to-reverse calls (schema/auth/infra).",
+  "  5. present_spec, then present_plan — for non-trivial features (spec before the multi-file plan).",
+  "  6. present_code_change + log_reasoning (name the concept) — per change.",
+  "  7. check_feedback again — for the human's review of every artifact.",
+  "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach.",
+].join("\n");
+
 export async function buildFirstCallHint(store: IStore, port: number): Promise<string> {
   // EE1 — three-tier ordering for assembly:
   //   1. obligationsParts: real this-turn obligations (Q4 follow-ups,
@@ -420,7 +438,7 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   //   1. headerLine + obligationsParts (uncapped)
   //   2. policyParts capped at POLICY_BUDGET_CHARS
   //   3. contextualParts fills the remaining HINT_BUDGET_CHARS budget
-  const assembled: string[] = [headerLine, ...obligationsParts];
+  const assembled: string[] = [headerLine, PROTOCOL_PREAMBLE, ...obligationsParts];
   let droppedContextual = 0;
   let droppedPolicy = 0;
 
@@ -439,8 +457,11 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // above (header + obligations + accepted policy).
   const baselineLen = assembled.join("\n").length;
   let runningLen = baselineLen;
+  // The fixed protocol preamble rides in the uncapped prefix; don't let it eat
+  // into the contextual budget so memory/guardrails keep their full allowance.
+  const contextualCap = HINT_BUDGET_CHARS + PROTOCOL_PREAMBLE.length + 1;
   for (const part of contextualParts) {
-    if (runningLen + part.length + 1 <= HINT_BUDGET_CHARS) {
+    if (runningLen + part.length + 1 <= contextualCap) {
       assembled.push(part);
       runningLen += part.length + 1;
     } else {

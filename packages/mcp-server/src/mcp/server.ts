@@ -867,6 +867,22 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
   // --- Call Tool ---
   let firstToolCall = true;
+  // Tools that carry the first-call hint (the write/present tools). Defined in
+  // the factory scope so the latch is consumed only when one of THESE is called
+  // — a leading read (recall/check_feedback) must not burn the first-call hint
+  // before the agent's first present_* gets it (the protocol preamble itself
+  // tells the agent to `recall` first).
+  const HINT_TOOLS: ReadonlySet<string> = new Set([
+    "present_findings",
+    "present_options",
+    "present_spec",
+    "present_plan",
+    "present_code_change",
+    "log_reasoning",
+    "revise_artifact",
+    "post_pr_review",
+    "answer_question",
+  ]);
   // X4 — session-name latch encapsulates the once-only "rename the session
   // to the first artifact's title" behavior the closure used to handle.
   const sessionNameLatch = new SessionNameLatch(store);
@@ -882,7 +898,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // warning" ambiguity where the agent couldn't tell whether to keep polling
     // or retract a proposal.
     let firstCallHint = "";
-    if (firstToolCall) {
+    // II12.1 — consume the latch only on the first HINT_TOOL call. Previously
+    // it flipped on the first call of ANY tool, so a leading read
+    // (recall/check_feedback) discarded the built hint and the agent's first
+    // present_* got nothing — which would routinely drop the protocol preamble.
+    if (firstToolCall && HINT_TOOLS.has(name)) {
       firstToolCall = false;
       // X4 — full assembly lives in mcp/first-call-hint.ts; the BLOCKING +
       // CONTEXTUAL tiering, the HINT_BUDGET_CHARS cap, and the recall
@@ -1555,17 +1575,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // request_horizon_check from this allowlist when the tool itself
     // was removed; the horizon-check workflow now flows through
     // answer_question / addComment which are already covered.
-    const HINT_TOOLS: ReadonlySet<string> = new Set([
-      "present_findings",
-      "present_options",
-      "present_spec",
-      "present_plan",
-      "present_code_change",
-      "log_reasoning",
-      "revise_artifact",
-      "post_pr_review",
-      "answer_question",
-    ]);
+    // HINT_TOOLS is defined in the factory scope above (the latch is consumed
+    // only on these tools, so a leading read doesn't drop the hint).
     // II12 — was: `first.text = first.text + firstCallHint` (splice the
     // hint into the same text field as the tool result). Strict MCP
     // clients that parse tool result content[0].text as the tool's reply
