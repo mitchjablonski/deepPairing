@@ -2490,6 +2490,19 @@ describe("MCP Tool Handlers", () => {
       expect(text).toMatch(/\[First use this session\]/);
     });
 
+    it("first-call hint includes the pairing-protocol preamble (for bare-MCP consumers)", async () => {
+      // #1 — projects wired with only the MCP server (no skill / no init) must
+      // still receive the choreography on the first write tool's response.
+      const { text } = await callTool("present_findings", {
+        summary: "trigger",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).toMatch(/\[deepPairing protocol\]/);
+      expect(text).toMatch(/present_findings/);
+      expect(text).toMatch(/check_feedback/);
+      expect(text).toMatch(/never as plain terminal text/i);
+    });
+
     it("recall (read) — first call does NOT carry the hint", async () => {
       const { text } = await callTool("recall", { query: "anything", mode: "any" });
       expect(text).not.toMatch(/\[First use this session\]/);
@@ -2529,27 +2542,18 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("hint still fires on the first WRITE call even if a READ call ran first", async () => {
-      // Per-server `firstToolCall` flag flips on ANY first call, including
-      // reads. Y2's gate is on whether to *append* the hint, not whether
-      // to *compute* it. This pins that the hint is computed once but is
-      // attached only to the first qualifying write — so a read-then-write
-      // sequence still surfaces the hint on the write.
-      //
-      // Note: the current implementation flips firstToolCall on first
-      // dispatch regardless of tool, which means a leading read still
-      // "burns" the computed hint. This test documents the ACTUAL
-      // current behavior so a future change is intentional.
+      // II12.1 — the latch is consumed only on the first HINT_TOOL (write)
+      // call, so a leading read (recall/check_feedback) no longer burns the
+      // hint. This matters because the protocol preamble itself tells the agent
+      // to `recall` first — dropping the hint on a read-then-write sequence
+      // would routinely lose the onboarding/protocol context.
       await callTool("recall", { query: "x", mode: "any" });
       const { text } = await callTool("present_findings", {
         summary: "trigger",
         findings: [{ category: "x", detail: "x", significance: "low" }],
       });
-      // After the leading recall, firstCallHint has been computed +
-      // discarded; the next present_findings does NOT carry it. This is
-      // a known quirk; if a future PR wants the hint to attach to the
-      // first WRITE rather than the first ANY, flip firstToolCall inside
-      // the gate and remove the .not below.
-      expect(text).not.toMatch(/\[First use this session\]/);
+      // The first WRITE after the leading read DOES carry the hint.
+      expect(text).toMatch(/\[First use this session\]/);
     });
   });
 });
