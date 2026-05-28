@@ -149,6 +149,15 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     );
   }
 
+  if (artifact.status === "obsolete") {
+    return (
+      <div className="flex items-center gap-2 pt-2 border-t border-border-default">
+        <span className="text-text-muted text-sm">⊘</span>
+        <span className="text-xs text-text-muted font-medium">Overcome by new information</span>
+      </div>
+    );
+  }
+
   const handleAction = async (action: "approved" | "revised" | "rejected") => {
     cancelCountdown();
     setSubmitting(true);
@@ -177,6 +186,20 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     cancelCountdown();
     setSubmitting(true);
     await submitComment(artifact.id, trimmedComment);
+    setSubmitting(false);
+    setComment("");
+  };
+
+  /**
+   * "Dismiss — overcome by new information": close a still-open artifact that
+   * the discussion moved past, without approving or rejecting it. Mirrors the
+   * agent's `revise_artifact mode="obsolete"` so it leaves the review queue.
+   * Any typed comment rides along as the reason.
+   */
+  const handleDismissObsolete = async () => {
+    cancelCountdown();
+    setSubmitting(true);
+    await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
     setSubmitting(false);
     setComment("");
   };
@@ -277,6 +300,18 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
           </button>
         </div>
       </div>
+
+      {/* Tertiary — close as overcome by new information (neither approve nor
+          reject). Mirrors the agent's revise_artifact mode="obsolete". */}
+      <button
+        onClick={handleDismissObsolete}
+        disabled={submitting}
+        className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
+        title="This was valid but the discussion moved past it — close it without approving or rejecting"
+      >
+        Dismiss — overcome by new information
+      </button>
+
       {!comment.trim() && (
         <div className="text-2xs text-text-muted">
           ⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)

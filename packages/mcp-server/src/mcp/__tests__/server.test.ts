@@ -1192,6 +1192,47 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("revise_artifact — mode: obsolete", () => {
+    it("marks the artifact obsolete (overcome by new info) so it leaves the review queue", async () => {
+      await callTool("present_findings", {
+        summary: "early analysis",
+        findings: [{ category: "other", detail: "x", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+
+      const { text, isError } = await callTool("revise_artifact", {
+        artifactId: artifact.id,
+        mode: "obsolete",
+        reason: "the spec changed; this no longer applies",
+      });
+
+      expect(isError).toBeFalsy();
+      expect(text.toLowerCase()).toContain("obsolete");
+      expect(store.getArtifacts()[0].status).toBe("obsolete");
+      // Neutral agent comment records why (not "Retracted").
+      const comments = store.getCommentsForArtifact(artifact.id);
+      expect(
+        comments.some((c) => c.author === "agent" && c.content.includes("Overcome by new information")),
+      ).toBe(true);
+    });
+
+    it("errors when trying to obsolete an already-approved artifact", async () => {
+      await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "other", detail: "y", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      store.updateArtifactStatus(artifact.id, "approved");
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: artifact.id,
+        mode: "obsolete",
+        reason: "too late",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("too late to obsolete");
+    });
+  });
+
   describe("revise_artifact — mode: retract (N4)", () => {
     it("transitions the artifact to retracted and records the reason", async () => {
       await callTool("present_findings", {

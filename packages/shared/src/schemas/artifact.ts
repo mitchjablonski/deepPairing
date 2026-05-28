@@ -19,6 +19,11 @@ export const ArtifactStatusSchema = z.enum([
   "rejected",
   "superseded",
   "retracted",
+  // "obsolete" — the agent moved on / the work was overcome by new information.
+  // Distinct from rejected (human declined) and retracted (agent mistake): the
+  // artifact was valid but the discussion overtook it. A terminal state, so it
+  // drops out of "waiting for review".
+  "obsolete",
 ]);
 
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>;

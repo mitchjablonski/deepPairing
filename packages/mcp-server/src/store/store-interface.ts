@@ -26,6 +26,8 @@ export type StatusTransitionReason =
   | "agent_revise"
   | "agent_retract"
   | "agent_supersede"
+  | "agent_obsolete"
+  | "ui_dismiss_obsolete"
   | "demo_script"
   | "comment_side_effect"
   | "unspecified";
