@@ -486,8 +486,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             artifactId: { type: "string", description: "Id of the artifact being revised (art_...)." },
             mode: {
               type: "string",
-              enum: ["supersede", "retract"],
-              description: "'supersede' to replace with a v(N+1) draft; 'retract' to mark as retracted.",
+              enum: ["supersede", "retract", "obsolete"],
+              description: "'supersede' to replace with a v(N+1) draft; 'retract' to mark retracted (shouldn't have presented it); 'obsolete' to mark overcome by new information (it was valid but the discussion moved past it — use when you've moved on so it leaves the human's review queue).",
             },
             reason: { type: "string", description: "Brief explanation — shown to the human." },
             title: { type: "string", description: "(supersede only) Updated title. Defaults to the original title when omitted." },
@@ -1383,11 +1383,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
       case "revise_artifact": {
         const artifactId = String(args?.artifactId ?? "").trim();
-        const mode = args?.mode as "supersede" | "retract" | undefined;
+        const mode = args?.mode as "supersede" | "retract" | "obsolete" | undefined;
         const reason = String(args?.reason ?? "").trim();
-        if (!artifactId || !reason || (mode !== "supersede" && mode !== "retract")) {
+        if (!artifactId || !reason || (mode !== "supersede" && mode !== "retract" && mode !== "obsolete")) {
           return {
-            content: [{ type: "text", text: "revise_artifact requires artifactId, mode ('supersede' | 'retract'), and reason." }],
+            content: [{ type: "text", text: "revise_artifact requires artifactId, mode ('supersede' | 'retract' | 'obsolete'), and reason." }],
             isError: true,
           };
         }
@@ -1459,7 +1459,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           };
         }
 
-        // mode === "retract"
+        // mode === "retract" | "obsolete" — both close a still-open artifact
+        // with no replacement. retract = "shouldn't have presented it";
+        // obsolete = "valid, but overcome by new information / I've moved on".
         const artifacts = await store.getArtifacts();
         const artifact = artifacts.find((a) => a.id === artifactId);
         if (!artifact) {
@@ -1470,21 +1472,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
         if (artifact.status !== "draft" && artifact.status !== "reviewing") {
           return {
-            content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to retract. Use check_feedback instead.` }],
+            content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` }],
             isError: true,
           };
         }
-        await store.updateArtifactStatus(artifactId, "retracted", "agent_retract");
+        const isObsolete = mode === "obsolete";
+        const newStatus = isObsolete ? "obsolete" : "retracted";
+        await store.updateArtifactStatus(artifactId, newStatus, isObsolete ? "agent_obsolete" : "agent_retract");
         await maybeUpdateTaskStatus(server, artifactId, store);
         await store.addComment({
           id: `cmt_${nanoid(10)}`,
           artifactId,
-          content: `Retracted: ${reason}`,
+          content: `${isObsolete ? "Overcome by new information" : "Retracted"}: ${reason}`,
           author: "agent",
         });
-        broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+        broadcast({ type: "artifact_updated", artifactId, status: newStatus });
         return {
-          content: [{ type: "text", text: `Retracted ${artifactId}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
+          content: [{ type: "text", text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) — it's off the human's review queue` : `Retracted ${artifactId}`}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
         };
       }
 

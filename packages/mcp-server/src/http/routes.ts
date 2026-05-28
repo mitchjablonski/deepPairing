@@ -350,6 +350,7 @@ export function createHttpRoutes(
     const reason =
       status === "approved" ? "ui_approve_button" :
       status === "revised" ? "ui_revise_button" :
+      status === "obsolete" ? "ui_dismiss_obsolete" :
       "ui_reject_button";
     log(
       `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} ` +
@@ -357,7 +358,11 @@ export function createHttpRoutes(
     );
 
     await store.updateArtifactStatus(artifactId, status, reason as any);
-    await store.resolvePlanReview(artifactId, status, feedback);
+    // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
+    // plan review with it (and it narrows status to the three verdicts).
+    if (status !== "obsolete") {
+      await store.resolvePlanReview(artifactId, status, feedback);
+    }
     // X6 — see comment above; HTTP-side mutations pass null for `server`.
     await maybeUpdateTaskStatus(null, artifactId, store);
 
