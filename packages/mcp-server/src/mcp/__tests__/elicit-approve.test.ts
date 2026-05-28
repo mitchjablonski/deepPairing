@@ -16,6 +16,21 @@
  */
 import { describe, it, expect } from "vitest";
 import { decideElicitResponse, ELICIT_APPROVE_SCHEMA } from "../server.js";
+import { terminalApproveEnabled } from "../tool-helpers.js";
+
+describe("terminalApproveEnabled — terminal quick-approve is opt-in (off by default)", () => {
+  it("is OFF when the env var is unset or not a truthy flag", () => {
+    expect(terminalApproveEnabled({})).toBe(false);
+    expect(terminalApproveEnabled({ DEEPPAIRING_TERMINAL_APPROVE: "" })).toBe(false);
+    expect(terminalApproveEnabled({ DEEPPAIRING_TERMINAL_APPROVE: "0" })).toBe(false);
+    expect(terminalApproveEnabled({ DEEPPAIRING_TERMINAL_APPROVE: "off" })).toBe(false);
+  });
+  it("is ON only when explicitly opted in (1/true/yes, case-insensitive)", () => {
+    for (const v of ["1", "true", "yes", "YES", "True"]) {
+      expect(terminalApproveEnabled({ DEEPPAIRING_TERMINAL_APPROVE: v })).toBe(true);
+    }
+  });
+});
 
 describe("decideElicitResponse (U0.2)", () => {
   it("returns 'approve' only when action=accept AND content.approve === true", () => {
