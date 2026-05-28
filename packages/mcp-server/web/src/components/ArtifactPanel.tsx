@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { apiGet } from "../lib/api";
 import { type Artifact, type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
-import { usePreferencesStore } from "../stores/preferences";
+import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
@@ -325,6 +325,7 @@ function ArtifactSidebar({
   selectedArtifactId,
   unreadIds,
   collapsed,
+  width,
   onToggle,
 }: {
   typeGroups: Map<string, Artifact[]>;
@@ -332,6 +333,7 @@ function ArtifactSidebar({
   selectedArtifactId: string | null;
   unreadIds: string[];
   collapsed: boolean;
+  width: number;
   onToggle: () => void;
 }) {
   const { selectArtifact } = useArtifactStore();
@@ -350,8 +352,9 @@ function ArtifactSidebar({
   return (
     <div
       className={`shrink-0 border-r border-border-default bg-surface-secondary overflow-y-auto transition-all duration-[180ms] ease-out ${
-        collapsed ? "w-12" : "w-[220px]"
+        collapsed ? "w-12" : ""
       }`}
+      style={collapsed ? undefined : { width }}
     >
       {/* Collapse toggle + grouping selector */}
       <div className="flex items-center justify-between">
@@ -517,7 +520,7 @@ function MultiAgentSync() {
 
 export function ArtifactPanel() {
   const { artifacts, selectedArtifactId, selectArtifact, unreadIds } = useArtifactStore();
-  const { sidebarCollapsed, toggleSidebar } = usePreferencesStore();
+  const { sidebarCollapsed, toggleSidebar, sidebarWidth } = usePreferencesStore();
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
   const [sessionFilter, setSessionFilter] = useState<string | "all">("all");
@@ -611,6 +614,7 @@ export function ArtifactPanel() {
         selectedArtifactId={selectedArtifactId}
         unreadIds={unreadIds}
         collapsed={effectiveCollapsed}
+        width={SIDEBAR_WIDTHS[sidebarWidth]}
         onToggle={toggleSidebar}
       />
 
