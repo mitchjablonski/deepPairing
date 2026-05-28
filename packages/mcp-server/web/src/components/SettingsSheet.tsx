@@ -13,7 +13,7 @@ import { SessionMetrics } from "./SessionMetrics";
  * Invoked with Cmd/Ctrl+, or the ⚙ button in the header.
  */
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
-  const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth } = usePreferencesStore();
+  const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth, sidebarWidth, setSidebarWidth } = usePreferencesStore();
   const panelRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap(panelRef, true);
@@ -120,6 +120,31 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               <span>{contentWidth === "full" ? "Full width" : "Constrained (max-w-4xl)"}</span>
               <span className="text-2xs text-text-muted">click to toggle</span>
             </button>
+          </section>
+
+          {/* Sidebar width */}
+          <section>
+            <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
+              Sidebar width
+            </div>
+            <div className="flex items-center gap-1 bg-surface-secondary rounded p-1 border border-border-default">
+              {(["compact", "default", "wide", "xwide"] as const).map((w) => (
+                <button
+                  key={w}
+                  onClick={() => setSidebarWidth(w)}
+                  className={`flex-1 px-2 py-1.5 rounded text-2xs transition-colors ${
+                    sidebarWidth === w
+                      ? "bg-surface-hover text-text-primary"
+                      : "text-text-muted hover:text-text-secondary"
+                  }`}
+                >
+                  {w === "xwide" ? "X-wide" : w[0].toUpperCase() + w.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="text-2xs text-text-muted mt-1.5">
+              Wider sidebars show more of each artifact title.
+            </div>
           </section>
 
           {/* Editor */}
