@@ -124,6 +124,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             for (const comment of data.state.comments ?? []) {
               store.addComment(comment);
             }
+            // QOL — return to the artifact you were last on, now that the
+            // session has hydrated (overrides addArtifact's first-artifact pick).
+            store.restoreSelection();
           }
 
           if (daemonRestarted) {
