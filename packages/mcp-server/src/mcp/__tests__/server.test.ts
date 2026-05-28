@@ -262,6 +262,39 @@ describe("MCP Tool Handlers", () => {
       expect(art.type).toBe("code_change");
       expect((art.content as any).confidence).toBe("high");
     });
+
+    it("reclassifies a mislabeled 'create' to 'modify' and reconstructs `before` from history", async () => {
+      // The file is genuinely created first.
+      await callTool("present_code_change", {
+        filePath: "/src/feature.ts",
+        changeType: "create",
+        after: "line1\nline2\nline3",
+        reasoning: "initial",
+      });
+      // Then the agent edits it but (wrongly) labels it 'create' again, omitting before.
+      await callTool("present_code_change", {
+        filePath: "/src/feature.ts",
+        changeType: "create",
+        after: "line1\nCHANGED\nline3",
+        reasoning: "tweak line 2",
+      });
+      const arts = store.getArtifacts();
+      const latest = arts[arts.length - 1];
+      expect((latest.content as any).changeType).toBe("modify"); // corrected label → diff renders
+      expect((latest.content as any).before).toBe("line1\nline2\nline3"); // reconstructed from prior
+    });
+
+    it("leaves a genuine first creation as 'create' with no before", async () => {
+      await callTool("present_code_change", {
+        filePath: "/src/brand-new.ts",
+        changeType: "create",
+        after: "hello",
+        reasoning: "new file",
+      });
+      const art = store.getArtifacts()[0];
+      expect((art.content as any).changeType).toBe("create");
+      expect((art.content as any).before).toBe("");
+    });
   });
 
   describe("firstCallHint — team conventions (N6.3)", () => {
