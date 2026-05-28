@@ -337,7 +337,10 @@ function ArtifactSidebar({
   onToggle: () => void;
 }) {
   const { selectArtifact } = useArtifactStore();
-  const [grouping, setGrouping] = useState<SidebarGrouping>("type");
+  // Default to "flow" (causal chain) — once a project is deep, grouping by
+  // type scatters related artifacts across buckets and reads as a flat dump;
+  // the flow grouping keeps a finding → plan → change thread together.
+  const [grouping, setGrouping] = useState<SidebarGrouping>("flow");
 
   // Build groups based on selected mode
   const groups = useMemo((): Map<string, Artifact[]> => {
