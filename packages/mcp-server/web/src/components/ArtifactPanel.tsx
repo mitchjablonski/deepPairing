@@ -265,6 +265,20 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
 
 type SidebarGrouping = "type" | "timeline" | "flow";
 
+// Persist the picked grouping across reloads (Flow is the fresh-tab default).
+const GROUPING_KEY = "dp-sidebar-grouping";
+function readGrouping(): SidebarGrouping {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return "flow";
+  try {
+    const v = localStorage.getItem(GROUPING_KEY);
+    return v === "type" || v === "timeline" || v === "flow" ? v : "flow";
+  } catch { return "flow"; }
+}
+function writeGrouping(g: SidebarGrouping): void {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  try { localStorage.setItem(GROUPING_KEY, g); } catch { /* best-effort */ }
+}
+
 /** Build causal-chain groups from relatedArtifactIds */
 function buildFlowGroups(artifacts: Artifact[]): Map<string, Artifact[]> {
   const groups = new Map<string, Artifact[]>();
@@ -337,10 +351,11 @@ function ArtifactSidebar({
   onToggle: () => void;
 }) {
   const { selectArtifact } = useArtifactStore();
-  // Default to "flow" (causal chain) — once a project is deep, grouping by
-  // type scatters related artifacts across buckets and reads as a flat dump;
-  // the flow grouping keeps a finding → plan → change thread together.
-  const [grouping, setGrouping] = useState<SidebarGrouping>("flow");
+  // Flow (causal chain) is the fresh-tab default — once a project is deep,
+  // grouping by type scatters a finding → plan → change thread across buckets.
+  // The user's pick persists across reloads.
+  const [grouping, setGroupingState] = useState<SidebarGrouping>(() => readGrouping());
+  const setGrouping = (g: SidebarGrouping) => { writeGrouping(g); setGroupingState(g); };
 
   // Build groups based on selected mode
   const groups = useMemo((): Map<string, Artifact[]> => {
