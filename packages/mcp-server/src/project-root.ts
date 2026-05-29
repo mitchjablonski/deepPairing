@@ -47,6 +47,22 @@ export function projectHashOf(projectRoot: string): string {
   return crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
 }
 
+// Deterministic per-project port. Pre-this, daemons bound the first free port
+// from 3847 (first-to-bind-wins), so a bookmarked URL mapped to whichever
+// project started first and a stale tab could cross-bind to another project's
+// daemon on a recycled port. Map projectHash → a stable PREFERRED port so a
+// project always lands on the same port. It's a preferred *start*, not a
+// guarantee: the bind loop probes onward and records the ACTUAL bound port in
+// daemon.json, so a collision (two projects hashing to the same slot) or a
+// squatter degrades gracefully and discovery still works. The AA4
+// X-Project-Hash gate remains the safety net against cross-project writes.
+export const BASE_PORT = 3847;
+export const PORT_SPAN = 128; // deterministic slots: 3847..3974
+export function preferredPortFor(projectRoot: string): number {
+  // projectHashOf is 8 hex chars = a 32-bit value; mod it into the span.
+  return BASE_PORT + (parseInt(projectHashOf(projectRoot), 16) % PORT_SPAN);
+}
+
 export type ProjectRootSource = "CLAUDE_PROJECT_DIR" | "DEEPPAIRING_PROJECT_ROOT" | "cwd";
 
 export interface ResolvedProjectRoot {

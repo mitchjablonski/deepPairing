@@ -2,7 +2,27 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveProjectRoot } from "../project-root.js";
+import { resolveProjectRoot, preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
+
+describe("preferredPortFor — deterministic per-project port", () => {
+  it("is deterministic: same projectRoot → same port", () => {
+    expect(preferredPortFor("/home/me/projectA")).toBe(preferredPortFor("/home/me/projectA"));
+  });
+  it("always lands within [BASE_PORT, BASE_PORT+PORT_SPAN)", () => {
+    for (const p of ["/a", "/b/c", "/home/me/projectA", "/home/me/projectB", "/mnt/x/y/z"]) {
+      const port = preferredPortFor(p);
+      expect(port).toBeGreaterThanOrEqual(BASE_PORT);
+      expect(port).toBeLessThan(BASE_PORT + PORT_SPAN);
+    }
+  });
+  it("distributes distinct projects across slots (not all on the base)", () => {
+    const ports = new Set(
+      Array.from({ length: 20 }, (_, i) => preferredPortFor(`/home/me/project-${i}`)),
+    );
+    // 20 distinct roots should spread over several slots, not collapse to one.
+    expect(ports.size).toBeGreaterThan(5);
+  });
+});
 
 let realDir: string;
 let altDir: string;
