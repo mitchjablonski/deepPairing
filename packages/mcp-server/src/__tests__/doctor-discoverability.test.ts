@@ -39,7 +39,7 @@ describe("`deeppairing doctor --fix` surfaces (U6)", () => {
 
   it("daemon.ts no-free-port FATAL stderr mentions doctor --fix", () => {
     const daemon = read("daemon.ts");
-    expect(daemon).toMatch(/No free port in range[\s\S]+?npx deeppairing doctor --fix/);
+    expect(daemon).toMatch(/No free port[\s\S]+?npx deeppairing doctor --fix/);
   });
 
   it("standalone.ts top-level catch stderr mentions doctor --fix", () => {

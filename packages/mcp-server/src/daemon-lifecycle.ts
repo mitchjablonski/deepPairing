@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTokenSidecar } from "./daemon-token.js";
-import { projectHashOf } from "./project-root.js";
+import { projectHashOf, preferredPortFor } from "./project-root.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -169,8 +169,10 @@ export async function evictDaemon(
  */
 export async function isDaemonRunning(
   projectRoot: string,
-  /** Optional port range override — primarily for tests so we don't hit 3847 in CI. */
-  range: { start: number; count: number } = { start: DEFAULT_PORT, count: MAX_PORT_ATTEMPTS },
+  /** Optional port range override — primarily for tests so we don't hit 3847 in CI.
+   *  Default sweep starts at this project's deterministic preferred port (so the
+   *  cold sweep finds our own daemon in ~one probe), not the shared 3847 base. */
+  range: { start: number; count: number } = { start: preferredPortFor(projectRoot), count: MAX_PORT_ATTEMPTS },
 ): Promise<DaemonInfo | null> {
   const info = readDaemonInfo(projectRoot);
 

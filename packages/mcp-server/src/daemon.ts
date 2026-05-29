@@ -58,7 +58,7 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // /api/daemon-info + the WS `connected` event. The browser echoes it
 // back in `X-Project-Hash` and any per-session route 403s on mismatch,
 // closing the stale-tab-after-port-recycling write hole.
-import { projectHashOf } from "./project-root.js";
+import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "./project-root.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
@@ -611,11 +611,16 @@ async function main() {
     // concurrent daemons (project A on 3847, project B on 3848, …). The bound
     // port is then written into daemon.json so each project's wrapper connects
     // to the right daemon.
-    let port = DEFAULT_PORT;
+    const preferredPort = preferredPortFor(projectRoot);
+    let port = preferredPort;
     let server: ReturnType<typeof serve> | null = null;
     let lastBindErr: any = null;
     for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-      const candidate = DEFAULT_PORT + attempt;
+      // Start at this project's deterministic preferred port, then probe
+      // forward within the [BASE_PORT, BASE_PORT+PORT_SPAN) window (wrapping)
+      // so a collision/squatter degrades to the next free slot without
+      // escaping the reserved range.
+      const candidate = BASE_PORT + (((preferredPort - BASE_PORT) + attempt) % PORT_SPAN);
       // GG1 — bind 127.0.0.1 explicitly. Pre-GG1 the call omitted
       // `hostname` and the underlying @hono/node-server passed undefined
       // to server.listen, which Node interprets as "all interfaces"
@@ -647,7 +652,7 @@ async function main() {
       if (result.ok) {
         server = candidateServer;
         port = candidate;
-        if (attempt > 0) log(`Port ${DEFAULT_PORT} through ${candidate - 1} busy — bound to ${candidate} instead.`);
+        if (attempt > 0) log(`Preferred port ${preferredPort} busy — bound to ${candidate} instead (recorded in daemon.json).`);
         break;
       }
       lastBindErr = result.err;
@@ -666,7 +671,7 @@ async function main() {
 
     if (!server) {
       // U6 — `--fix` so the user gets the heal-it path, not just the diagnose-it one.
-      const msg = `No free port in range ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}. Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
+      const msg = `No free port in ${MAX_PORT_ATTEMPTS} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}–${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
       log(`FATAL: ${msg}`);
       process.stderr.write(`deepPairing daemon: ${msg}\n`);
       process.exit(2);
