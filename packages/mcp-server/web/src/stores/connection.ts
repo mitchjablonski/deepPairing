@@ -422,6 +422,34 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         set({ connected: false });
       });
 
+      // II3 — the WS adapter detected (via /api/daemon-info) that the
+      // daemon on this port now serves a DIFFERENT project than the one
+      // this tab is bound to. Pre-II3 the adapter silently rebound the
+      // tab to the live daemon's hash — switching the tab to another
+      // project so comments/approvals could land in the wrong place.
+      // Now it stops the reconnect loop and fires this; we surface a
+      // sticky "reload to re-bind" toast mirroring the BB10 REST-side
+      // guard (see stores/artifact.ts toastApiError). Reload is the only
+      // safe recovery: it refetches the live daemon's hash and rebinds
+      // the tab deliberately.
+      adapter.onFatalMismatch?.(() => {
+        set({ connected: false });
+        import("./toast").then(({ useToastStore }) => {
+          useToastStore.getState().push({
+            kind: "error",
+            title: "Tab is bound to a stale daemon",
+            body: "This project's daemon was replaced by a different project's daemon on the same port. Reload the page to re-bind.",
+            ttl: 0,
+            action: {
+              label: "Reload to re-bind",
+              onClick: () => {
+                if (typeof window !== "undefined") window.location.reload();
+              },
+            },
+          });
+        });
+      });
+
       adapter.connect();
     },
 
