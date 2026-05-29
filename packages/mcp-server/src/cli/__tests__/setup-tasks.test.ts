@@ -320,7 +320,7 @@ describe("Stop hook command — executable behavior (Part C)", () => {
   function runHook(): { exitCode: number; stdout: string } {
     const cmd = getHookCommand();
     try {
-      const stdout = execSync(cmd + " 2>&1", { cwd: tmpDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      const stdout = execSync(cmd + " 2>&1", { cwd: tmpDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir } });
       return { exitCode: 0, stdout };
     } catch (err: any) {
       return { exitCode: err.status ?? 1, stdout: err.stdout?.toString() ?? "" };
@@ -505,6 +505,7 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
         input: JSON.stringify(input),
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir },
       });
       return { exitCode: 0, stdout, stderr: "" };
     } catch (err: any) {
