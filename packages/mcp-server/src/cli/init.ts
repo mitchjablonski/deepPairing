@@ -22,6 +22,8 @@ import {
   HOOK_MARKERS,
 } from "./setup-tasks.js";
 import readline from "node:readline";
+import { spawn } from "node:child_process";
+import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 
 const cwd = process.cwd();
 
@@ -1473,6 +1475,75 @@ function humanAge(iso: string): string {
 const args = process.argv.slice(2);
 const cmd = args[0];
 
+// Cross-platform "open URL". Inline so the CLI doesn't import daemon.ts
+// (which runs setup at module load).
+function openUrl(url: string): void {
+  const bin = process.platform === "darwin" ? "open"
+    : process.platform === "win32" ? "cmd"
+    : "xdg-open";
+  const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  const child = spawn(bin, argv, { stdio: "ignore", detached: true });
+  child.on("error", () => {}); // swallow (no GUI / no binary)
+  child.unref();
+}
+
+/** Print the companion UI URL for THIS project. With a running daemon it
+ *  prints the actual bound port from daemon.json; otherwise the deterministic
+ *  preferred port the daemon will bind next time it starts. URL → stdout
+ *  (pipeable: `xdg-open $(deeppairing url)`); diagnostic notes → stderr. */
+async function urlCmd(opts: { open?: boolean } = {}): Promise<void> {
+  const projectRoot = cwd;
+  const preferred = preferredPortFor(projectRoot);
+
+  const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
+  let actualPort: number | null = null;
+  if (fs.existsSync(infoPath)) {
+    try {
+      const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+      if (typeof info?.port === "number") {
+        const probed = await probeDaemonIdentity(info.port, 500);
+        if (probed && probed.projectRoot === projectRoot) {
+          actualPort = info.port;
+        }
+      }
+    } catch { /* fall through to preferred */ }
+  }
+
+  const url = `http://localhost:${actualPort ?? preferred}`;
+  console.log(url);
+  if (actualPort === null) {
+    console.error(`  ${dim("(preferred port — daemon not running yet; next startup binds it if free)")}`);
+  }
+  if (opts.open) openUrl(url);
+}
+
+/** List every live deepPairing daemon in the deterministic port window —
+ *  project ↔ URL, so a multi-project user can see all their open projects at
+ *  a glance. */
+async function listCmd(): Promise<void> {
+  type Probe = { port: number; identity: { projectRoot: string; pid: number; startedAt: string } | null };
+  const probes: Array<Promise<Probe>> = [];
+  for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
+    probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
+  }
+  const results = await Promise.all(probes);
+  const live = results.filter(
+    (r): r is { port: number; identity: { projectRoot: string; pid: number; startedAt: string } } => r.identity !== null,
+  );
+
+  if (live.length === 0) {
+    console.log(`  ${dim("No deepPairing daemons currently running.")}`);
+    console.error(`  ${dim("(daemons auto-shut after 60s idle; start Claude Code in a project to spawn one)")}`);
+    return;
+  }
+  console.log(`  ${bold("Live deepPairing daemons:")}`);
+  for (const r of live) {
+    const segments = r.identity.projectRoot.split(/[\\/]/).filter(Boolean);
+    const name = segments[segments.length - 1] ?? "(unknown)";
+    console.log(`    ${name.padEnd(28)} http://localhost:${r.port}   ${dim(r.identity.projectRoot)}`);
+  }
+}
+
 if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   // With no arguments, default to init (most common use case from npx)
   if (!cmd) {
@@ -1509,6 +1580,8 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     dp doctor [--fix] [--yes]              Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     dp sessions [list|prune]               List sessions for this project; prune removes empty stale ones
     dp sessions merge <from> <into> [-y]   Merge two sessions (rescues data split by old non-deterministic ids)
+    dp url [--open]                        Print this project's companion UI URL (--open launches it)
+    dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
     dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
@@ -1579,6 +1652,17 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const sub = args[1];
   sessionsCmd(sub, args.slice(2)).catch((err) => {
     console.error(`  ${red("✗")} sessions ${sub ?? ""} failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "url") {
+  const open = args.includes("--open");
+  urlCmd({ open }).catch((err) => {
+    console.error(`  ${red("✗")} url failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "list") {
+  listCmd().catch((err) => {
+    console.error(`  ${red("✗")} list failed: ${err?.message ?? err}`);
     process.exit(1);
   });
 } else if (cmd === "post-pr-review") {
