@@ -20,6 +20,26 @@ On your first tool call, the response includes:
   deepPairing project they've used. 'Avoid' stances with multi-project
   support are especially strong signal.
 
+## Voice — write to your pair, not about them
+
+You're pairing with the human. Write artifacts in **second person**, addressed
+to them. Not in third person, narrating about them — that reads as an audit
+log, not a conversation.
+
+Avoid:
+- "User asked how to handle X."
+- "Incorporate the human's new constraint."
+- "User wants Y; we should consider Z."
+
+Prefer:
+- "You flagged X — here are two ways to handle it."
+- "Folding in your new constraint (the noise channel)."
+- "Two options for handling Y — which fits your serving setup?"
+
+This applies everywhere prose lands in front of the human: the `context` of
+`present_options`, the `detail` of a finding, the `reasoning` of a code change,
+the `reason` on `revise_artifact`. It's pairing, not narration.
+
 ## When to use which tool
 
 - **`present_findings`** — after researching the codebase. Rich evidence
