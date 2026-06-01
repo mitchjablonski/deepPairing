@@ -86,6 +86,47 @@ describe("CodeChangeArtifact — frontend reconstruction of `before`", () => {
     expect(screen.queryByText("diff reconstructed")).not.toBeInTheDocument();
   });
 
+  it("split view (default) renders Before/After column headers", () => {
+    useArtifactStore.getState().addArtifact(
+      mkArt({
+        id: "a1",
+        content: { filePath: "foo.ts", changeType: "create", before: "", after: "hello", reasoning: "init" },
+        createdAt: "2026-05-31T00:00:00.000Z",
+      }),
+    );
+    const a2 = mkArt({
+      id: "a2",
+      content: { filePath: "foo.ts", changeType: "create", before: "", after: "hi", reasoning: "tweak" },
+      createdAt: "2026-05-31T00:00:30.000Z",
+    });
+
+    render(<CodeChangeArtifact artifact={a2} />);
+
+    expect(screen.getByText("Before")).toBeInTheDocument();
+    expect(screen.getByText("After")).toBeInTheDocument();
+  });
+
+  it("pairs a removed/added run side-by-side (old line on the left, new on the right)", () => {
+    useArtifactStore.getState().addArtifact(
+      mkArt({
+        id: "a1",
+        content: { filePath: "foo.ts", changeType: "create", before: "", after: "OLD_VALUE", reasoning: "init" },
+        createdAt: "2026-05-31T00:00:00.000Z",
+      }),
+    );
+    const a2 = mkArt({
+      id: "a2",
+      content: { filePath: "foo.ts", changeType: "create", before: "", after: "NEW_VALUE", reasoning: "tweak" },
+      createdAt: "2026-05-31T00:00:30.000Z",
+    });
+
+    render(<CodeChangeArtifact artifact={a2} />);
+
+    // Both halves of the paired removed/added row render.
+    expect(screen.getByText("OLD_VALUE")).toBeInTheDocument();
+    expect(screen.getByText("NEW_VALUE")).toBeInTheDocument();
+  });
+
   it("does NOT use a later same-file artifact as the prior (createdAt ordering)", () => {
     // A later artifact in the store mustn't become a "prior" for an earlier one.
     useArtifactStore.getState().addArtifact(
