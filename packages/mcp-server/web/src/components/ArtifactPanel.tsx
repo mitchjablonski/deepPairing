@@ -442,7 +442,7 @@ function ArtifactSidebar({
       </div>
 
       {/* Grouped artifact list */}
-      {Array.from(groups.entries()).map(([label, items]) => (
+      {Array.from(visibleGroups.entries()).map(([label, items]) => (
         <div key={label}>
           {/* Section header */}
           {!collapsed && (
@@ -512,6 +512,14 @@ function ArtifactSidebar({
           })}
         </div>
       ))}
+      {!collapsed && olderCount > 0 && (
+        <button
+          onClick={() => setShowAllOlder((v) => !v)}
+          className="w-full text-left px-3 py-1.5 mt-1 text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors select-none"
+        >
+          {showAllOlder ? "▴ Show fewer" : `▾ Show ${olderCount} older`}
+        </button>
+      )}
     </div>
   );
 }
