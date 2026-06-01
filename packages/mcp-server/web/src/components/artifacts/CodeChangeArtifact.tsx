@@ -94,6 +94,155 @@ function UnifiedDiffView({ diff }: { diff: DiffLine[] }) {
   );
 }
 
+// --- Split (side-by-side) diff ---
+//
+// A real git-style side-by-side: for each visible row, the left column shows
+// the old line (or a blank when the change only added on the right) and the
+// right column shows the new line (or blank). Adjacent removed/added runs are
+// paired so a 1-line change shows as one row with red on the left and green on
+// the right, not two stacked rows. Same hunked collapse + "Show all lines"
+// toggle as the unified view, so a long file doesn't drown a small change.
+type SplitCell =
+  | { kind: "empty" }
+  | { kind: "unchanged" | "removed" | "added"; lineNum: number; content: string };
+
+type SplitRow =
+  | { type: "row"; left: SplitCell; right: SplitCell }
+  | { type: "gap"; count: number };
+
+function toSplitRows(rows: DiffRow[]): SplitRow[] {
+  const out: SplitRow[] = [];
+  let pendingRemoved: DiffLine[] = [];
+  let pendingAdded: DiffLine[] = [];
+
+  const flush = () => {
+    // Pair consecutive removed/added by index; the longer side spills into
+    // half-empty rows so additions and removals stay on their own sides.
+    const max = Math.max(pendingRemoved.length, pendingAdded.length);
+    for (let i = 0; i < max; i++) {
+      const r = pendingRemoved[i];
+      const a = pendingAdded[i];
+      out.push({
+        type: "row",
+        left: r
+          ? { kind: "removed", lineNum: r.oldLineNum ?? 0, content: r.content }
+          : { kind: "empty" },
+        right: a
+          ? { kind: "added", lineNum: a.newLineNum ?? 0, content: a.content }
+          : { kind: "empty" },
+      });
+    }
+    pendingRemoved = [];
+    pendingAdded = [];
+  };
+
+  for (const row of rows) {
+    if (row.type === "gap") {
+      flush();
+      out.push({ type: "gap", count: row.count });
+    } else if (row.type === "unchanged") {
+      flush();
+      out.push({
+        type: "row",
+        left: { kind: "unchanged", lineNum: row.oldLineNum ?? 0, content: row.content },
+        right: { kind: "unchanged", lineNum: row.newLineNum ?? 0, content: row.content },
+      });
+    } else if (row.type === "removed") {
+      pendingRemoved.push(row);
+    } else if (row.type === "added") {
+      pendingAdded.push(row);
+    }
+  }
+  flush();
+  return out;
+}
+
+function SplitCellView({ cell }: { cell: SplitCell }) {
+  if (cell.kind === "empty") {
+    return <div className="flex bg-surface-elevated/20 min-h-[20px]" />;
+  }
+  const bg =
+    cell.kind === "removed"
+      ? "bg-accent-red-dim/30"
+      : cell.kind === "added"
+        ? "bg-accent-green-dim/30"
+        : "";
+  const markerColor =
+    cell.kind === "removed"
+      ? "text-accent-red"
+      : cell.kind === "added"
+        ? "text-accent-green"
+        : "text-text-muted";
+  const marker = cell.kind === "removed" ? "-" : cell.kind === "added" ? "+" : " ";
+  const contentColor =
+    cell.kind === "removed"
+      ? "text-accent-red"
+      : cell.kind === "added"
+        ? "text-text-primary"
+        : "text-text-secondary";
+  return (
+    <div className={`flex min-w-0 ${bg}`}>
+      <span className="w-8 shrink-0 text-right pr-1 py-0.5 text-[11px] text-text-muted select-none border-r border-border-subtle">
+        {cell.lineNum || ""}
+      </span>
+      <span className={`w-4 shrink-0 text-center py-0.5 select-none font-bold ${markerColor}`}>
+        {marker}
+      </span>
+      <span className={`px-1 py-0.5 whitespace-pre flex-1 overflow-x-auto ${contentColor}`}>
+        {cell.content || " "}
+      </span>
+    </div>
+  );
+}
+
+function SplitDiffView({ diff }: { diff: DiffLine[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = useMemo(() => collapseDiff(diff), [diff]);
+  const hidesLines = useMemo(() => collapsed.some((r) => r.type === "gap"), [collapsed]);
+  const sourceRows: DiffRow[] = expanded ? diff : collapsed;
+  const splitRows = useMemo(() => toSplitRows(sourceRows), [sourceRows]);
+
+  return (
+    <div className="font-mono text-[13px] leading-[20px] bg-surface-code rounded overflow-hidden">
+      {hidesLines && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="w-full text-left px-2 py-1 text-2xs text-text-muted hover:text-text-secondary bg-surface-elevated border-b border-border-subtle select-none"
+        >
+          {expanded ? "Collapse unchanged lines" : "Show all lines"}
+        </button>
+      )}
+      <div className="grid grid-cols-2 divide-x divide-border-subtle">
+        <div className="text-2xs font-semibold text-accent-red px-2 py-1 bg-surface-elevated border-b border-border-subtle">
+          Before
+        </div>
+        <div className="text-2xs font-semibold text-accent-green px-2 py-1 bg-surface-elevated border-b border-border-subtle">
+          After
+        </div>
+      </div>
+      {splitRows.map((row, i) =>
+        row.type === "gap" ? (
+          <button
+            key={i}
+            onClick={() => setExpanded(true)}
+            title="Click to expand"
+            className="flex w-full items-center px-0 py-0.5 text-[11px] text-text-muted hover:bg-surface-hover select-none border-y border-border-subtle"
+          >
+            <span className="w-full text-center italic">
+              ⋯ {row.count} unchanged line{row.count === 1 ? "" : "s"}
+            </span>
+          </button>
+        ) : (
+          <div key={i} className="grid grid-cols-2 divide-x divide-border-subtle">
+            <SplitCellView cell={row.left} />
+            <SplitCellView cell={row.right} />
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
 export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
   const content = artifact.content as CodeChangeContent;
 
@@ -132,8 +281,11 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
   const wasReconstructed = !content.before && !!reconstructed;
   const hasBefore = Boolean(effectiveBefore);
 
+  // Default to split (side-by-side) when there's something to diff against —
+  // side-by-side reads as a git-style review surface and is what most users
+  // reach for first. Unified and Result are one click away.
   const [viewMode, setViewMode] = useState<"unified" | "split" | "result">(
-    hasBefore ? "unified" : "result",
+    hasBefore ? "split" : "result",
   );
 
   const diff = useMemo(() => {
@@ -260,32 +412,8 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
       {/* Code view */}
       {viewMode === "unified" && diff ? (
         <UnifiedDiffView diff={diff} />
-      ) : viewMode === "split" && effectiveBefore ? (
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <div className="text-2xs font-semibold text-accent-red mb-1">Before</div>
-            <div className="opacity-40">
-              <CommentableCode
-                code={effectiveBefore}
-                lineStart={1}
-                filePath={content.filePath}
-                artifactId={artifact.id}
-              />
-            </div>
-          </div>
-          <div>
-            <div className="text-2xs font-semibold text-accent-green mb-1">After</div>
-            <div className="border-l-2 border-accent-green rounded-l">
-              <CommentableCode
-                code={content.after}
-                lineStart={1}
-                filePath={content.filePath}
-                artifactId={artifact.id}
-                commentsByLine={commentsByLine}
-              />
-            </div>
-          </div>
-        </div>
+      ) : viewMode === "split" && diff ? (
+        <SplitDiffView diff={diff} />
       ) : (
         <CommentableCode
           code={content.after || effectiveBefore}
