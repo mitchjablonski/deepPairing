@@ -332,6 +332,10 @@ function buildFlowGroups(artifacts: Artifact[]): Map<string, Artifact[]> {
   return groups;
 }
 
+/** How many most-recent artifacts the sidebar shows before collapsing the
+ *  rest behind a "Show N older" toggle (keeps a deep session scannable). */
+const SIDEBAR_RECENT_LIMIT = 10;
+
 /** Sidebar artifact list with grouping modes */
 function ArtifactSidebar({
   typeGroups,
@@ -366,6 +370,32 @@ function ArtifactSidebar({
     }
     return buildFlowGroups(artifacts);
   }, [grouping, typeGroups, artifacts]);
+
+  // Keep the sidebar from becoming a wall of scroll on a deep session: show
+  // only the most-recent N artifacts by default, collapse the rest behind a
+  // "Show N older" toggle. The currently-selected artifact is always kept
+  // visible even if it's old, so the list never hides where you are.
+  const [showAllOlder, setShowAllOlder] = useState(false);
+  const recentIds = useMemo(() => {
+    const ids = new Set(
+      [...artifacts]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, SIDEBAR_RECENT_LIMIT)
+        .map((a) => a.id),
+    );
+    if (selectedArtifactId) ids.add(selectedArtifactId);
+    return ids;
+  }, [artifacts, selectedArtifactId]);
+  const olderCount = artifacts.filter((a) => !recentIds.has(a.id)).length;
+  const visibleGroups = useMemo(() => {
+    if (showAllOlder || olderCount === 0) return groups;
+    const filtered = new Map<string, Artifact[]>();
+    for (const [label, items] of groups) {
+      const kept = items.filter((a) => recentIds.has(a.id));
+      if (kept.length) filtered.set(label, kept);
+    }
+    return filtered;
+  }, [groups, showAllOlder, olderCount, recentIds]);
 
   return (
     <div
