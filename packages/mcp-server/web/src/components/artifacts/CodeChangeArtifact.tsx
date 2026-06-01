@@ -96,15 +96,50 @@ function UnifiedDiffView({ diff }: { diff: DiffLine[] }) {
 
 export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
   const content = artifact.content as CodeChangeContent;
-  const hasBefore = Boolean(content.before);
+
+  // Reconstruct `before` from session history when the agent omitted it
+  // (commonly: a re-edit mislabeled as changeType="create" with empty before).
+  // Without this, a real modification renders as a full-file dump under a
+  // "create" banner. The backend present_code_change handler now does the same
+  // reconstruction at creation time, but (a) it only applies after an MCP
+  // restart, and (b) it can't retroactively heal artifacts already stored. This
+  // render-time fallback closes both gaps. In replay mode the artifact store
+  // only holds artifacts up to the cursor, so the "most recent prior" is
+  // naturally bounded by the replay timeline.
+  const allArtifacts = useArtifactStore((s) => s.artifacts);
+  const reconstructed = useMemo(() => {
+    if (content.before) return null;
+    const prior = allArtifacts
+      .filter((a) =>
+        a.id !== artifact.id &&
+        a.type === "code_change" &&
+        (a.content as any)?.filePath === content.filePath &&
+        typeof (a.content as any)?.after === "string" &&
+        (a.content as any).after.length > 0 &&
+        a.createdAt < artifact.createdAt,
+      )
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    return prior ? { before: (prior.content as any).after as string, fromId: prior.id as string } : null;
+  }, [content.before, content.filePath, artifact.id, artifact.createdAt, allArtifacts]);
+
+  const effectiveBefore = content.before || reconstructed?.before || "";
+  // If we synthesized a before, the artifact's "create" label is wrong — it's
+  // actually a modification. Reflect that in the banner pill too.
+  const effectiveChangeType: "create" | "modify" | "delete" =
+    !content.before && reconstructed && content.changeType === "create"
+      ? "modify"
+      : content.changeType;
+  const wasReconstructed = !content.before && !!reconstructed;
+  const hasBefore = Boolean(effectiveBefore);
+
   const [viewMode, setViewMode] = useState<"unified" | "split" | "result">(
     hasBefore ? "unified" : "result",
   );
 
   const diff = useMemo(() => {
-    if (!content.before || !content.after) return null;
-    return computeLineDiff(content.before, content.after);
-  }, [content.before, content.after]);
+    if (!effectiveBefore || !content.after) return null;
+    return computeLineDiff(effectiveBefore, content.after);
+  }, [effectiveBefore, content.after]);
 
   // Show the human's line comments inline on the code (GitHub-style), keyed by
   // line number — mirrors ResearchArtifact. Code_change comments target a line
@@ -152,9 +187,17 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
       {/* File header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className={`px-1.5 py-0.5 text-2xs font-medium rounded ${changeTypeColors[content.changeType]}`}>
-            {content.changeType}
+          <span className={`px-1.5 py-0.5 text-2xs font-medium rounded ${changeTypeColors[effectiveChangeType]}`}>
+            {effectiveChangeType}
           </span>
+          {wasReconstructed && (
+            <span
+              className="px-1.5 py-0.5 text-2xs rounded bg-accent-violet-dim/40 text-accent-violet"
+              title="The agent omitted `before`; the diff was reconstructed from a prior code_change for the same file in this session."
+            >
+              diff reconstructed
+            </span>
+          )}
           <span className="text-sm font-mono text-text-primary">{content.filePath}</span>
           <OpenInEditorLink filePath={content.filePath} line={1} />
           {diffStats && (
@@ -217,13 +260,13 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
       {/* Code view */}
       {viewMode === "unified" && diff ? (
         <UnifiedDiffView diff={diff} />
-      ) : viewMode === "split" && content.before ? (
+      ) : viewMode === "split" && effectiveBefore ? (
         <div className="grid grid-cols-2 gap-2">
           <div>
             <div className="text-2xs font-semibold text-accent-red mb-1">Before</div>
             <div className="opacity-40">
               <CommentableCode
-                code={content.before}
+                code={effectiveBefore}
                 lineStart={1}
                 filePath={content.filePath}
                 artifactId={artifact.id}
@@ -245,7 +288,7 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
         </div>
       ) : (
         <CommentableCode
-          code={content.after || content.before}
+          code={content.after || effectiveBefore}
           lineStart={1}
           filePath={content.filePath}
           artifactId={artifact.id}
