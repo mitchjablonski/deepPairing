@@ -18,11 +18,18 @@ function MotivatedByBadges({ labels }: { labels: string[] }) {
         // Try to find matching research artifact by title
         const match = artifacts.find(
           (a) => a.type === "research" && a.title.toLowerCase().includes(label.toLowerCase()),
-        ) ?? artifacts.find(
-          (a) => a.type === "research" && (a.content as any)?.findings?.some(
-            (f: any) => f.title?.toLowerCase().includes(label.toLowerCase()),
-          ),
-        );
+        ) ?? artifacts.find((a) => {
+          // Defensive: `?.findings?.some` only guards null/undefined — a
+          // research artifact whose `findings` is a non-array (string, etc.)
+          // would throw "some is not a function" and crash the whole plan
+          // detail view. A plan step's `motivatedBy` also legitimately carries
+          // non-artifact-id labels (e.g. "REQ-1"), so no-match must degrade to
+          // a plain badge, never throw.
+          if (a.type !== "research") return false;
+          const findings = (a.content as any)?.findings;
+          if (!Array.isArray(findings)) return false;
+          return findings.some((f: any) => f?.title?.toLowerCase?.().includes(label.toLowerCase()));
+        });
 
         if (match) {
           return (
