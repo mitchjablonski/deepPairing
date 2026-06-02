@@ -493,10 +493,13 @@ process.stdin.on("end", () => {
     if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
       process.stderr.write(
         "deepPairing: " + tool + " on " + filePath +
-        " without an intervening present_code_change. " +
-        "Call present_code_change BEFORE the next edit so the human can react. " +
-        "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section. " +
-        "Config / generated files like .gitignore are auto-skipped.)\\n"
+        " with no present_code_change for it. Present EVERY code change BEFORE " +
+        "the Write/Edit — including small follow-on edits, new files (tests, " +
+        "configs), and each file of a multi-file change, not just the 'main' " +
+        "one. A write straight to disk never reaches the human's review surface; " +
+        "they can't see or comment on it. If you skipped this for prior edits " +
+        "this session, backfill them now with present_code_change. " +
+        "(Per-Edit Checkpoint rule. Config / generated files like .gitignore are auto-skipped.)\\n"
       );
       // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
       // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
