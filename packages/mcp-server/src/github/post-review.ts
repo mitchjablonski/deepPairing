@@ -45,7 +45,15 @@ export function parsePrRef(ref: string): { owner?: string; repo?: string; number
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
 }
 
-/** Run a command, capture stdout/stderr, return exit + both streams. */
+/** A gh call (network round-trip to GitHub) that hasn't returned in this long
+ *  is treated as a failure rather than hanging the caller. Overridable via
+ *  DEEPPAIRING_GH_TIMEOUT_MS (tests set it low). */
+const GH_TIMEOUT_MS = Number(process.env.DEEPPAIRING_GH_TIMEOUT_MS) || 20000;
+
+/** Run a command, capture stdout/stderr, return exit + both streams. Kills the
+ *  child and rejects if it exceeds GH_TIMEOUT_MS — `gh` makes real network
+ *  calls (token refresh, API), and a hung one must not wall-clock-hang the
+ *  agent (or a test). */
 function run(
   cmd: string,
   args: string[],
@@ -55,17 +63,22 @@ function run(
     const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      finish(() => reject(new Error(`gh ${args[0] ?? ""} timed out after ${GH_TIMEOUT_MS}ms`)));
+    }, GH_TIMEOUT_MS);
     child.stdout.on("data", (d) => { stdout += d.toString(); });
     child.stderr.on("data", (d) => { stderr += d.toString(); });
     child.on("error", (err: any) => {
-      if (err?.code === "ENOENT") {
-        reject(new GhMissingError());
-        return;
-      }
-      reject(err);
+      finish(() => {
+        if (err?.code === "ENOENT") { reject(new GhMissingError()); return; }
+        reject(err);
+      });
     });
     child.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout, stderr });
+      finish(() => resolve({ code: code ?? 1, stdout, stderr }));
     });
     if (stdin) {
       child.stdin.write(stdin);

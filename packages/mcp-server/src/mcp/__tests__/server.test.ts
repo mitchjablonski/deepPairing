@@ -1993,20 +1993,29 @@ describe("MCP Tool Handlers", () => {
         }],
       });
 
-      // The actual gh spawn may fail with ENOENT on test runners without gh.
-      // If it does, we expect the GhMissingError message to surface. If gh is
-      // installed but not authed, we expect GhNotAuthedError. Either path is
-      // acceptable — we just can't post from a test environment.
-      const { text, isError } = await callTool("post_pr_review", { pr: "42" });
-      // Either a clear gh-related error, or a wrapped failure — all isError
-      expect(isError).toBe(true);
-      const lower = text.toLowerCase();
-      const isClean =
-        lower.includes("gh") ||
-        lower.includes("cli") ||
-        lower.includes("authenticated") ||
-        lower.includes("failed");
-      expect(isClean).toBe(true);
+      // Force the gh-MISSING path deterministically rather than depending on the
+      // runner: a CI box HAS gh installed + authed (GITHUB_TOKEN), so the real
+      // spawn would make a live API call for PR #42 and time out (this test was
+      // flaking on CI for exactly that reason). Point PATH at an empty dir so
+      // the `gh` spawn ENOENTs immediately, exercising the gh-unavailable path
+      // the test name promises. Restored in finally.
+      const origPath = process.env.PATH;
+      const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-no-gh-"));
+      process.env.PATH = emptyDir;
+      try {
+        const { text, isError } = await callTool("post_pr_review", { pr: "42" });
+        expect(isError).toBe(true);
+        const lower = text.toLowerCase();
+        const isClean =
+          lower.includes("gh") ||
+          lower.includes("cli") ||
+          lower.includes("authenticated") ||
+          lower.includes("failed");
+        expect(isClean).toBe(true);
+      } finally {
+        process.env.PATH = origPath;
+        fs.rmSync(emptyDir, { recursive: true, force: true });
+      }
     });
   });
 
