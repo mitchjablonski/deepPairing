@@ -39,9 +39,10 @@ export const DecisionResolveBodySchema = z.object({
 });
 export type DecisionResolveBody = z.infer<typeof DecisionResolveBodySchema>;
 
-// POST /api/artifacts/:artifactId/status — approve / revise / reject.
+// POST /api/artifacts/:artifactId/status — approve / revise / reject / obsolete
+// ("obsolete" = dismissed as overcome by new information).
 export const StatusUpdateBodySchema = z.object({
-  status: z.enum(["approved", "revised", "rejected"]),
+  status: z.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: z.string().optional(),
 });
 export type StatusUpdateBody = z.infer<typeof StatusUpdateBodySchema>;

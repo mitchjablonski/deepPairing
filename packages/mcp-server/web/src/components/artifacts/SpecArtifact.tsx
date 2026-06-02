@@ -36,6 +36,10 @@ const estimateStyles: Record<string, string> = {
  */
 export function SpecArtifact({ artifact }: Props) {
   const spec = getTypedContent<SpecContent>(artifact);
+  // Defensive: agents ship specs with inconsistent shapes — a spec missing
+  // `requirements` would crash on `.length`/`.map` and take down the whole
+  // artifact view. (`tasks`/`openQuestions` are already guarded below.)
+  const requirements = spec.requirements ?? [];
 
   return (
     <div className="space-y-4">
@@ -63,14 +67,14 @@ export function SpecArtifact({ artifact }: Props) {
       <div>
         <div className="flex items-center justify-between mb-2">
           <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide">
-            Requirements ({spec.requirements.length})
+            Requirements ({requirements.length})
           </div>
           <div className="text-[9px] text-text-muted italic">
             Challenge rationales · verify acceptance criteria
           </div>
         </div>
         <div className="space-y-2">
-          {spec.requirements.map((req, i) => (
+          {requirements.map((req, i) => (
             <RequirementRow key={req.id ?? i} requirement={req} index={i} artifact={artifact} />
           ))}
         </div>
@@ -161,13 +165,13 @@ function RequirementRow({
         <span className="font-semibold text-text-secondary">Why:</span> {requirement.rationale}
       </div>
 
-      {requirement.acceptanceCriteria.length > 0 && (
+      {(requirement.acceptanceCriteria?.length ?? 0) > 0 && (
         <div>
           <div className="text-[9px] font-semibold text-text-muted uppercase tracking-wide mb-1">
             Acceptance criteria
           </div>
           <ul className="space-y-0.5">
-            {requirement.acceptanceCriteria.map((ac, i) => (
+            {requirement.acceptanceCriteria!.map((ac, i) => (
               <li key={i} className="flex items-start gap-1.5 text-xs text-text-secondary">
                 <span className="text-accent-blue shrink-0 mt-0.5">☐</span>
                 <span>{ac}</span>

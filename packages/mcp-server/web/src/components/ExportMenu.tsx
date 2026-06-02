@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { apiGet } from "../lib/api";
 
 const API_BASE = `http://${window.location.host}`;
 
@@ -17,7 +18,7 @@ export function ExportMenu() {
 
   const handleExport = async (format: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/export?format=${format}`);
+      const res = await apiGet(`${API_BASE}/api/export?format=${format}`);
       const markdown = await res.text();
 
       await navigator.clipboard.writeText(markdown);

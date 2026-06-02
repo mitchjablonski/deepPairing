@@ -13,7 +13,7 @@ import { SessionMetrics } from "./SessionMetrics";
  * Invoked with Cmd/Ctrl+, or the ⚙ button in the header.
  */
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
-  const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth } = usePreferencesStore();
+  const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth, sidebarWidth, setSidebarWidth } = usePreferencesStore();
   const panelRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap(panelRef, true);
@@ -72,20 +72,36 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
               Font size
             </div>
-            <div className="flex items-center gap-1 bg-surface-secondary rounded p-1 border border-border-default">
-              {([["compact", 10], ["default", 12], ["large", 14], ["xlarge", 16]] as const).map(
-                ([size, px]) => (
+            {/* Auto (fluid) — the default; the root size scales with the
+                window/screen so large & high-DPI displays get bigger text. */}
+            <button
+              onClick={() => setFontSize("auto")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs mb-1.5 border transition-colors ${
+                fontSize === "auto"
+                  ? "bg-accent-blue-dim text-accent-blue border-accent-blue/30"
+                  : "bg-surface-secondary text-text-secondary border-border-default hover:bg-surface-hover"
+              }`}
+            >
+              <span className="font-medium">Auto</span>
+              <span className="text-2xs opacity-70">scales with your screen</span>
+            </button>
+            {/* Fixed sizes — pin a root px, overriding Auto. Labels are the
+                real root px so the choice is unambiguous on any display. */}
+            <div className="flex flex-wrap items-end gap-1 bg-surface-secondary rounded p-1 border border-border-default">
+              {([["compact", 11, "12"], ["default", 12, "14"], ["large", 13, "16"], ["xlarge", 15, "18"], ["xxlarge", 17, "20"], ["huge", 19, "24"]] as const).map(
+                ([size, previewPx, label]) => (
                   <button
                     key={size}
                     onClick={() => setFontSize(size)}
-                    className={`flex-1 px-2 py-1.5 rounded text-xs transition-colors ${
+                    title={`${label}px`}
+                    className={`flex-1 min-w-[44px] flex flex-col items-center gap-0.5 px-1 py-1.5 rounded transition-colors ${
                       fontSize === size
                         ? "bg-surface-hover text-text-primary"
                         : "text-text-muted hover:text-text-secondary"
                     }`}
                   >
-                    <span style={{ fontSize: px, lineHeight: 1 }}>A</span>
-                    <span className="ml-1 text-2xs opacity-70">{size}</span>
+                    <span style={{ fontSize: previewPx, lineHeight: 1 }}>A</span>
+                    <span className="text-2xs opacity-70">{label}</span>
                   </button>
                 ),
               )}
@@ -104,6 +120,31 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               <span>{contentWidth === "full" ? "Full width" : "Constrained (max-w-4xl)"}</span>
               <span className="text-2xs text-text-muted">click to toggle</span>
             </button>
+          </section>
+
+          {/* Sidebar width */}
+          <section>
+            <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
+              Sidebar width
+            </div>
+            <div className="flex items-center gap-1 bg-surface-secondary rounded p-1 border border-border-default">
+              {(["compact", "default", "wide", "xwide"] as const).map((w) => (
+                <button
+                  key={w}
+                  onClick={() => setSidebarWidth(w)}
+                  className={`flex-1 px-2 py-1.5 rounded text-2xs transition-colors ${
+                    sidebarWidth === w
+                      ? "bg-surface-hover text-text-primary"
+                      : "text-text-muted hover:text-text-secondary"
+                  }`}
+                >
+                  {w === "xwide" ? "X-wide" : w[0].toUpperCase() + w.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="text-2xs text-text-muted mt-1.5">
+              Wider sidebars show more of each artifact title.
+            </div>
           </section>
 
           {/* Editor */}

@@ -486,8 +486,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             artifactId: { type: "string", description: "Id of the artifact being revised (art_...)." },
             mode: {
               type: "string",
-              enum: ["supersede", "retract"],
-              description: "'supersede' to replace with a v(N+1) draft; 'retract' to mark as retracted.",
+              enum: ["supersede", "retract", "obsolete"],
+              description: "'supersede' to replace with a v(N+1) draft; 'retract' to mark retracted (shouldn't have presented it); 'obsolete' to mark overcome by new information (it was valid but the discussion moved past it — use when you've moved on so it leaves the human's review queue).",
             },
             reason: { type: "string", description: "Brief explanation — shown to the human." },
             title: { type: "string", description: "(supersede only) Updated title. Defaults to the original title when omitted." },
@@ -867,6 +867,22 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
   // --- Call Tool ---
   let firstToolCall = true;
+  // Tools that carry the first-call hint (the write/present tools). Defined in
+  // the factory scope so the latch is consumed only when one of THESE is called
+  // — a leading read (recall/check_feedback) must not burn the first-call hint
+  // before the agent's first present_* gets it (the protocol preamble itself
+  // tells the agent to `recall` first).
+  const HINT_TOOLS: ReadonlySet<string> = new Set([
+    "present_findings",
+    "present_options",
+    "present_spec",
+    "present_plan",
+    "present_code_change",
+    "log_reasoning",
+    "revise_artifact",
+    "post_pr_review",
+    "answer_question",
+  ]);
   // X4 — session-name latch encapsulates the once-only "rename the session
   // to the first artifact's title" behavior the closure used to handle.
   const sessionNameLatch = new SessionNameLatch(store);
@@ -882,7 +898,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // warning" ambiguity where the agent couldn't tell whether to keep polling
     // or retract a proposal.
     let firstCallHint = "";
-    if (firstToolCall) {
+    // II12.1 — consume the latch only on the first HINT_TOOL call. Previously
+    // it flipped on the first call of ANY tool, so a leading read
+    // (recall/check_feedback) discarded the built hint and the agent's first
+    // present_* got nothing — which would routinely drop the protocol preamble.
+    if (firstToolCall && HINT_TOOLS.has(name)) {
       firstToolCall = false;
       // X4 — full assembly lives in mcp/first-call-hint.ts; the BLOCKING +
       // CONTEXTUAL tiering, the HINT_BUDGET_CHARS cap, and the recall
@@ -1363,11 +1383,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
       case "revise_artifact": {
         const artifactId = String(args?.artifactId ?? "").trim();
-        const mode = args?.mode as "supersede" | "retract" | undefined;
+        const mode = args?.mode as "supersede" | "retract" | "obsolete" | undefined;
         const reason = String(args?.reason ?? "").trim();
-        if (!artifactId || !reason || (mode !== "supersede" && mode !== "retract")) {
+        if (!artifactId || !reason || (mode !== "supersede" && mode !== "retract" && mode !== "obsolete")) {
           return {
-            content: [{ type: "text", text: "revise_artifact requires artifactId, mode ('supersede' | 'retract'), and reason." }],
+            content: [{ type: "text", text: "revise_artifact requires artifactId, mode ('supersede' | 'retract' | 'obsolete'), and reason." }],
             isError: true,
           };
         }
@@ -1439,7 +1459,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           };
         }
 
-        // mode === "retract"
+        // mode === "retract" | "obsolete" — both close a still-open artifact
+        // with no replacement. retract = "shouldn't have presented it";
+        // obsolete = "valid, but overcome by new information / I've moved on".
         const artifacts = await store.getArtifacts();
         const artifact = artifacts.find((a) => a.id === artifactId);
         if (!artifact) {
@@ -1450,21 +1472,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         }
         if (artifact.status !== "draft" && artifact.status !== "reviewing") {
           return {
-            content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to retract. Use check_feedback instead.` }],
+            content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` }],
             isError: true,
           };
         }
-        await store.updateArtifactStatus(artifactId, "retracted", "agent_retract");
+        const isObsolete = mode === "obsolete";
+        const newStatus = isObsolete ? "obsolete" : "retracted";
+        await store.updateArtifactStatus(artifactId, newStatus, isObsolete ? "agent_obsolete" : "agent_retract");
         await maybeUpdateTaskStatus(server, artifactId, store);
         await store.addComment({
           id: `cmt_${nanoid(10)}`,
           artifactId,
-          content: `Retracted: ${reason}`,
+          content: `${isObsolete ? "Overcome by new information" : "Retracted"}: ${reason}`,
           author: "agent",
         });
-        broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+        broadcast({ type: "artifact_updated", artifactId, status: newStatus });
         return {
-          content: [{ type: "text", text: `Retracted ${artifactId}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
+          content: [{ type: "text", text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) — it's off the human's review queue` : `Retracted ${artifactId}`}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
         };
       }
 
@@ -1555,17 +1579,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     // request_horizon_check from this allowlist when the tool itself
     // was removed; the horizon-check workflow now flows through
     // answer_question / addComment which are already covered.
-    const HINT_TOOLS: ReadonlySet<string> = new Set([
-      "present_findings",
-      "present_options",
-      "present_spec",
-      "present_plan",
-      "present_code_change",
-      "log_reasoning",
-      "revise_artifact",
-      "post_pr_review",
-      "answer_question",
-    ]);
+    // HINT_TOOLS is defined in the factory scope above (the latch is consumed
+    // only on these tools, so a leading read doesn't drop the hint).
     // II12 — was: `first.text = first.text + firstCallHint` (splice the
     // hint into the same text field as the tool result). Strict MCP
     // clients that parse tool result content[0].text as the tool's reply

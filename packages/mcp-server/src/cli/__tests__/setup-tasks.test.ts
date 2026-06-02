@@ -314,10 +314,13 @@ describe("Stop hook command — executable behavior (Part C)", () => {
     return settings.hooks.Stop[0].hooks[0].command as string;
   }
 
+  // The hook is non-blocking now (exit 0) and writes its reminder to stderr,
+  // so fold stderr into stdout (2>&1) to assert on the message regardless of
+  // which stream it lands on.
   function runHook(): { exitCode: number; stdout: string } {
     const cmd = getHookCommand();
     try {
-      const stdout = execSync(cmd, { cwd: tmpDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      const stdout = execSync(cmd + " 2>&1", { cwd: tmpDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir } });
       return { exitCode: 0, stdout };
     } catch (err: any) {
       return { exitCode: err.status ?? 1, stdout: err.stdout?.toString() ?? "" };
@@ -344,22 +347,22 @@ describe("Stop hook command — executable behavior (Part C)", () => {
     expect(exitCode).toBe(0);
   });
 
-  it("exits 2 when a draft research artifact exists", () => {
+  it("fires a non-blocking reminder when a draft research artifact exists", () => {
     writeArtifacts("s1", [{ id: "a1", type: "research", status: "draft" }]);
     const { exitCode, stdout } = runHook();
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0); // non-blocking; reminder goes to stderr
     expect(stdout).toContain("deepPairing");
     expect(stdout).toContain("check_feedback");
   });
 
-  it("exits 2 for any of: research, spec, plan, decision, code_change in draft", () => {
+  it("fires a reminder for any of: research, spec, plan, decision, code_change in draft", () => {
     for (const type of ["research", "spec", "plan", "decision", "code_change"]) {
       // Clean slate per type
       const sessionsDir = path.join(tmpDir, ".deeppairing", "sessions");
       if (fs.existsSync(sessionsDir)) fs.rmSync(sessionsDir, { recursive: true, force: true });
       writeArtifacts("s1", [{ id: "a1", type, status: "draft" }]);
       const { exitCode } = runHook();
-      expect(exitCode, `type=${type} should block stop`).toBe(2);
+      expect(exitCode, `type=${type} should fire a reminder (non-blocking)`).toBe(0);
     }
   });
 
@@ -369,11 +372,11 @@ describe("Stop hook command — executable behavior (Part C)", () => {
     expect(exitCode).toBe(0);
   });
 
-  it("exits 2 if ANY session has a draft artifact (multi-session)", () => {
+  it("fires a reminder if ANY session has a draft artifact (multi-session)", () => {
     writeArtifacts("s1", [{ id: "a1", type: "research", status: "approved" }]);
     writeArtifacts("s2", [{ id: "a2", type: "plan", status: "draft" }]);
     const { exitCode } = runHook();
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0); // non-blocking; reminder goes to stderr
   });
 
   it("exits 0 when a draft artifact is older than 30 minutes (abandoned, U0.4 age guard)", () => {
@@ -383,17 +386,17 @@ describe("Stop hook command — executable behavior (Part C)", () => {
     expect(exitCode).toBe(0);
   });
 
-  it("exits 2 when a draft artifact is recent (≤30 minutes, U0.4 age guard)", () => {
+  it("fires a reminder when a draft artifact is recent (≤30 minutes, U0.4 age guard)", () => {
     const recentIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     writeArtifacts("s1", [{ id: "a1", type: "plan", status: "draft", createdAt: recentIso }]);
     const { exitCode } = runHook();
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0); // non-blocking; reminder goes to stderr
   });
 
-  it("exits 2 on draft with no createdAt (backward-compat: pre-U0.4 fixtures still block)", () => {
+  it("fires a reminder on draft with no createdAt (backward-compat: pre-U0.4 fixtures)", () => {
     writeArtifacts("s1", [{ id: "a1", type: "plan", status: "draft" }]);
     const { exitCode } = runHook();
-    expect(exitCode).toBe(2);
+    expect(exitCode).toBe(0); // non-blocking; reminder goes to stderr
   });
 
   it("exits 0 when artifacts.json is malformed (degrade gracefully, do not block forever)", () => {
@@ -495,11 +498,14 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     ensureCheckpointHook(tmpDir);
     const scriptPath = path.join(tmpDir, ".deeppairing", "hooks", "checkpoint.mjs");
     try {
-      const stdout = execSync(`node ${scriptPath}`, {
+      // 2>&1 — the nag now goes to stderr (non-blocking, exit 0); fold it into
+      // stdout so the message assertions below hold regardless of stream.
+      const stdout = execSync(`node ${scriptPath} 2>&1`, {
         cwd: tmpDir,
         input: JSON.stringify(input),
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir },
       });
       return { exitCode: 0, stdout, stderr: "" };
     } catch (err: any) {
@@ -522,12 +528,12 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  it("exits 2 nagging the agent on a Write with NO code_change artifact at all", () => {
+  it("nags (non-blocking) on a Write with NO code_change artifact at all", () => {
     writeArtifacts("s1", [
       { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
     ]);
     const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "src/new.ts" } });
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
     expect(r.stdout).toContain("present_code_change");
     expect(r.stdout).toContain("src/new.ts");
   });
@@ -540,13 +546,13 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  it("exits 2 when the most-recent code_change is older than the freshness window", () => {
+  it("nags when the most-recent code_change is older than the freshness window", () => {
     const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     writeArtifacts("s1", [
       { id: "art_cc", type: "code_change", status: "approved", createdAt: stale },
     ]);
     const r = runHookWith({ tool_name: "MultiEdit", tool_input: { file_path: "src/y.ts" } });
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
     expect(r.stdout).toMatch(/Per-Edit Checkpoint/i);
   });
 
@@ -590,7 +596,7 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
       { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
     ]);
     const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/.gitignore" } });
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
     expect(r.stdout).toContain("present_code_change");
   });
 
@@ -599,7 +605,7 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
       { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
     ]);
     const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/.github/workflows/ci.yml" } });
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
   });
 
   it("V2.1 (Option C) — DOES nag on package.json (manifest IS the decision; lockfile is mechanical)", () => {
@@ -607,7 +613,7 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
       { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
     ]);
     const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/package.json" } });
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
   });
 
   it("V2.1 — does NOT skip real source files", () => {
@@ -615,7 +621,7 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
       { id: "art_old", type: "research", status: "approved", createdAt: "2026-04-25T10:00:00Z" },
     ]);
     const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "/repo/src/foo.ts" } });
-    expect(r.exitCode).toBe(2);
+    expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
     expect(r.stdout).toContain("present_code_change");
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { usePreferencesStore, EDITOR_PRESETS } from "../preferences";
+import { usePreferencesStore, EDITOR_PRESETS, SIDEBAR_WIDTHS } from "../preferences";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -83,6 +83,21 @@ describe("preferences store — simple setters", () => {
   it("setFontSize updates state", () => {
     usePreferencesStore.getState().setFontSize("large");
     expect(usePreferencesStore.getState().fontSize).toBe("large");
+  });
+
+  it("setFontSize accepts 'auto' (fluid default) and the larger presets", () => {
+    for (const size of ["auto", "xxlarge", "huge"] as const) {
+      usePreferencesStore.getState().setFontSize(size);
+      expect(usePreferencesStore.getState().fontSize).toBe(size);
+    }
+  });
+
+  it("setSidebarWidth updates state; presets ascend compact→xwide", () => {
+    usePreferencesStore.getState().setSidebarWidth("wide");
+    expect(usePreferencesStore.getState().sidebarWidth).toBe("wide");
+    expect(SIDEBAR_WIDTHS.compact).toBeLessThan(SIDEBAR_WIDTHS.default);
+    expect(SIDEBAR_WIDTHS.default).toBeLessThan(SIDEBAR_WIDTHS.wide);
+    expect(SIDEBAR_WIDTHS.wide).toBeLessThan(SIDEBAR_WIDTHS.xwide);
   });
 
   it("toggleContentWidth flips full <-> constrained", () => {

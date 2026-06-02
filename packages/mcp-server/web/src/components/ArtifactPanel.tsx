@@ -1,8 +1,9 @@
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { apiGet } from "../lib/api";
 import { type Artifact, type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
-import { usePreferencesStore } from "../stores/preferences";
+import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
@@ -264,6 +265,20 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
 
 type SidebarGrouping = "type" | "timeline" | "flow";
 
+// Persist the picked grouping across reloads (Flow is the fresh-tab default).
+const GROUPING_KEY = "dp-sidebar-grouping";
+function readGrouping(): SidebarGrouping {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return "flow";
+  try {
+    const v = localStorage.getItem(GROUPING_KEY);
+    return v === "type" || v === "timeline" || v === "flow" ? v : "flow";
+  } catch { return "flow"; }
+}
+function writeGrouping(g: SidebarGrouping): void {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  try { localStorage.setItem(GROUPING_KEY, g); } catch { /* best-effort */ }
+}
+
 /** Build causal-chain groups from relatedArtifactIds */
 function buildFlowGroups(artifacts: Artifact[]): Map<string, Artifact[]> {
   const groups = new Map<string, Artifact[]>();
@@ -317,6 +332,10 @@ function buildFlowGroups(artifacts: Artifact[]): Map<string, Artifact[]> {
   return groups;
 }
 
+/** How many most-recent artifacts the sidebar shows before collapsing the
+ *  rest behind a "Show N older" toggle (keeps a deep session scannable). */
+const SIDEBAR_RECENT_LIMIT = 10;
+
 /** Sidebar artifact list with grouping modes */
 function ArtifactSidebar({
   typeGroups,
@@ -324,6 +343,7 @@ function ArtifactSidebar({
   selectedArtifactId,
   unreadIds,
   collapsed,
+  width,
   onToggle,
 }: {
   typeGroups: Map<string, Artifact[]>;
@@ -331,10 +351,15 @@ function ArtifactSidebar({
   selectedArtifactId: string | null;
   unreadIds: string[];
   collapsed: boolean;
+  width: number;
   onToggle: () => void;
 }) {
   const { selectArtifact } = useArtifactStore();
-  const [grouping, setGrouping] = useState<SidebarGrouping>("type");
+  // Flow (causal chain) is the fresh-tab default — once a project is deep,
+  // grouping by type scatters a finding → plan → change thread across buckets.
+  // The user's pick persists across reloads.
+  const [grouping, setGroupingState] = useState<SidebarGrouping>(() => readGrouping());
+  const setGrouping = (g: SidebarGrouping) => { writeGrouping(g); setGroupingState(g); };
 
   // Build groups based on selected mode
   const groups = useMemo((): Map<string, Artifact[]> => {
@@ -346,11 +371,38 @@ function ArtifactSidebar({
     return buildFlowGroups(artifacts);
   }, [grouping, typeGroups, artifacts]);
 
+  // Keep the sidebar from becoming a wall of scroll on a deep session: show
+  // only the most-recent N artifacts by default, collapse the rest behind a
+  // "Show N older" toggle. The currently-selected artifact is always kept
+  // visible even if it's old, so the list never hides where you are.
+  const [showAllOlder, setShowAllOlder] = useState(false);
+  const recentIds = useMemo(() => {
+    const ids = new Set(
+      [...artifacts]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, SIDEBAR_RECENT_LIMIT)
+        .map((a) => a.id),
+    );
+    if (selectedArtifactId) ids.add(selectedArtifactId);
+    return ids;
+  }, [artifacts, selectedArtifactId]);
+  const olderCount = artifacts.filter((a) => !recentIds.has(a.id)).length;
+  const visibleGroups = useMemo(() => {
+    if (showAllOlder || olderCount === 0) return groups;
+    const filtered = new Map<string, Artifact[]>();
+    for (const [label, items] of groups) {
+      const kept = items.filter((a) => recentIds.has(a.id));
+      if (kept.length) filtered.set(label, kept);
+    }
+    return filtered;
+  }, [groups, showAllOlder, olderCount, recentIds]);
+
   return (
     <div
       className={`shrink-0 border-r border-border-default bg-surface-secondary overflow-y-auto transition-all duration-[180ms] ease-out ${
-        collapsed ? "w-12" : "w-[220px]"
+        collapsed ? "w-12" : ""
       }`}
+      style={collapsed ? undefined : { width }}
     >
       {/* Collapse toggle + grouping selector */}
       <div className="flex items-center justify-between">
@@ -389,8 +441,19 @@ function ArtifactSidebar({
         )}
       </div>
 
+      {/* "Show older" sits at the TOP so the recent items below it stay the
+          focus — you scan down to the latest, not past a wall of old ones. */}
+      {!collapsed && olderCount > 0 && (
+        <button
+          onClick={() => setShowAllOlder((v) => !v)}
+          className="w-full text-left px-3 py-1.5 text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors select-none border-b border-border-subtle"
+        >
+          {showAllOlder ? "▴ Show fewer" : `▾ Show ${olderCount} older`}
+        </button>
+      )}
+
       {/* Grouped artifact list */}
-      {Array.from(groups.entries()).map(([label, items]) => (
+      {Array.from(visibleGroups.entries()).map(([label, items]) => (
         <div key={label}>
           {/* Section header */}
           {!collapsed && (
@@ -481,7 +544,7 @@ function MultiAgentSync() {
 
     const sync = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/active-sessions`);
+        const res = await apiGet(`${API_BASE}/api/active-sessions`);
         const data = await res.json();
         const sessions: ActiveSession[] = data.sessions ?? [];
 
@@ -490,7 +553,7 @@ function MultiAgentSync() {
 
           // Load this session's artifacts from disk via the API
           try {
-            const sRes = await fetch(`${API_BASE}/api/live-session/${session.sessionId}`);
+            const sRes = await apiGet(`${API_BASE}/api/live-session/${session.sessionId}`);
             if (!sRes.ok) continue;
             const state = await sRes.json();
             if (cancelled) return;
@@ -516,7 +579,7 @@ function MultiAgentSync() {
 
 export function ArtifactPanel() {
   const { artifacts, selectedArtifactId, selectArtifact, unreadIds } = useArtifactStore();
-  const { sidebarCollapsed, toggleSidebar } = usePreferencesStore();
+  const { sidebarCollapsed, toggleSidebar, sidebarWidth } = usePreferencesStore();
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
   const [sessionFilter, setSessionFilter] = useState<string | "all">("all");
@@ -610,6 +673,7 @@ export function ArtifactPanel() {
         selectedArtifactId={selectedArtifactId}
         unreadIds={unreadIds}
         collapsed={effectiveCollapsed}
+        width={SIDEBAR_WIDTHS[sidebarWidth]}
         onToggle={toggleSidebar}
       />
 

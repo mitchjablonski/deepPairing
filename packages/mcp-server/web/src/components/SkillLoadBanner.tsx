@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { apiGet } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
 
 /**
@@ -32,7 +33,7 @@ export function SkillLoadBanner() {
     let cancelled = false;
     const fetchStatus = async () => {
       try {
-        const res = await fetch(`http://${window.location.host}/api/skill-status`);
+        const res = await apiGet(`http://${window.location.host}/api/skill-status`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setStatus(data);

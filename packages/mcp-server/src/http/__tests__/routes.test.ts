@@ -50,6 +50,54 @@ describe("HTTP Routes", () => {
     expect(body.artifacts).toEqual([]);
   });
 
+  // II2.2 — the global X-Project-Hash gate must NOT block the browser's
+  // bootstrap surface (the document/asset GETs and /api/daemon-info, loaded
+  // via plain navigation with no custom headers), while still gating session
+  // state + mutations. Uses UNWRAPPED apps so no X-Project-Hash is injected.
+  describe("II2.2 — bootstrap-surface gate exemption", () => {
+    it("403s a hashless GET /api/state (session route stays gated)", async () => {
+      const bare = createHttpRoutes(store, tmpDir);
+      const res = await bare.request("/api/state");
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe("project_hash_mismatch");
+    });
+
+    it("does NOT 403 a hashless GET /api/daemon-info (discovery endpoint is exempt)", async () => {
+      const bare = createHttpRoutes(store, tmpDir);
+      const res = await bare.request("/api/daemon-info");
+      // createHttpRoutes doesn't define /api/daemon-info (the daemon mounts it
+      // top-level), so a 404 — not a 403 — proves the gate let it through.
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(404);
+    });
+
+    it("does NOT 403 a hashless non-/api GET (SPA document + /assets/*)", async () => {
+      const bare = createHttpRoutes(store, tmpDir);
+      for (const p of ["/", "/assets/index-abc123.js", "/favicon.ico"]) {
+        const res = await bare.request(p);
+        expect(res.status, `path ${p} should not be gate-blocked`).not.toBe(403);
+      }
+    });
+
+    it("still 403s a hashless POST mutation (mutations stay gated)", async () => {
+      const bare = createHttpRoutes(store, tmpDir);
+      const res = await bare.request("/api/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifactId: "a", content: "hi" }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("serves GET /api/state when the correct X-Project-Hash is present", async () => {
+      const bare = createHttpRoutes(store, tmpDir);
+      const res = await bare.request("/api/state", {
+        headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+      });
+      expect(res.status).toBe(200);
+    });
+  });
+
   it("POST /api/comments requires artifactId and content", async () => {
     const res = await app.request("/api/comments", {
       method: "POST",

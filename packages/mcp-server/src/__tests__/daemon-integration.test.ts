@@ -623,6 +623,17 @@ describe("DaemonClient", () => {
     expect(artifacts[0].id).toBe("art_c1");
   });
 
+  it("Phase 3 — a severed connection with no recovery binding throws the clear sleep message, not a raw fetch error", async () => {
+    // Nothing listening on this port → fetch rejects (ECONNREFUSED), mimicking
+    // a sleep-severed socket. No expectedProjectRoot → recovery is refused
+    // (AA6.4), so the wrapper should surface the actionable message rather than
+    // the raw "fetch failed / socket connection closed unexpectedly".
+    const dead = new DaemonClient(59999, "s_dead");
+    await expect(
+      dead.createArtifact({ id: "art_dead", type: "research", title: "x", content: { summary: "x" } }),
+    ).rejects.toThrow(/daemon connection lost \(likely after host sleep\)/);
+  });
+
   it("adds and retrieves comments", async () => {
     const comment = await client.addComment({
       id: "cmt_c1",

@@ -27,6 +27,14 @@ export async function tryElicit(
   server: Server,
   message: string,
 ): Promise<"approve" | "review" | null> {
+  // OFF by default. Terminal elicitation (a) contradicts deepPairing's
+  // "review in the companion UI, not the terminal" model, and (b) competes
+  // with Claude Code's own permission prompts in the same terminal — a
+  // deepPairing approve prompt can sit on top of (and block) a real permission
+  // request. Returning null routes the artifact to the UI for review, which is
+  // what every caller already falls back to. Opt back into the terminal
+  // quick-accept with DEEPPAIRING_TERMINAL_APPROVE=1.
+  if (!terminalApproveEnabled(process.env)) return null;
   try {
     const result = await server.elicitInput({
       message,
@@ -37,6 +45,14 @@ export async function tryElicit(
     // Client doesn't support elicitation — fall back to polling
     return null;
   }
+}
+
+/** Terminal quick-approve via MCP elicitation is opt-in: it bypasses the
+ *  companion-UI review surface and collides with Claude Code's permission
+ *  prompts. Enabled only via DEEPPAIRING_TERMINAL_APPROVE=1/true/yes. */
+export function terminalApproveEnabled(env: NodeJS.ProcessEnv): boolean {
+  const v = (env.DEEPPAIRING_TERMINAL_APPROVE ?? "").toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
 }
 
 /**

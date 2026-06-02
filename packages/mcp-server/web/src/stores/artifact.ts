@@ -49,6 +49,9 @@ export interface ArtifactState {
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
   addComment: (comment: Comment) => void;
   selectArtifact: (id: string | null) => void;
+  /** Re-select the artifact you were last on (persisted across reloads), if
+   *  it's present in the freshly-hydrated session. Called after hydration. */
+  restoreSelection: () => void;
 
   submitComment: (
     artifactId: string,
@@ -73,6 +76,21 @@ export interface ArtifactState {
   renameArtifact: (artifactId: string, title: string) => Promise<void>;
 
   reset: () => void;
+}
+
+// QOL — remember which artifact you were on so a reload returns you there
+// instead of snapping to the first artifact. Guarded for non-browser contexts.
+const SELECTION_KEY = "dp-selected-artifact";
+function lsGetSelection(): string | null {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
+  try { return localStorage.getItem(SELECTION_KEY); } catch { return null; }
+}
+function lsSetSelection(id: string | null): void {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  try {
+    if (id) localStorage.setItem(SELECTION_KEY, id);
+    else localStorage.removeItem(SELECTION_KEY);
+  } catch { /* private mode / quota — selection persistence is best-effort */ }
 }
 
 export const useArtifactStore = create<ArtifactState>((set) => ({
@@ -123,10 +141,26 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       };
     }),
 
-  selectArtifact: (id) => set((state) => ({
-    selectedArtifactId: id,
-    unreadIds: state.unreadIds.filter((uid) => uid !== id),
-  })),
+  selectArtifact: (id) => set((state) => {
+    lsSetSelection(id);
+    return {
+      selectedArtifactId: id,
+      unreadIds: state.unreadIds.filter((uid) => uid !== id),
+    };
+  }),
+
+  restoreSelection: () => set((state) => {
+    const saved = lsGetSelection();
+    // Only restore if it's still in the session; otherwise leave the default
+    // (first artifact) that addArtifact picked during hydration.
+    if (saved && state.artifacts.some((a) => a.id === saved)) {
+      return {
+        selectedArtifactId: saved,
+        unreadIds: state.unreadIds.filter((uid) => uid !== saved),
+      };
+    }
+    return {};
+  }),
 
   // U3 — every mutation goes through safeFetch and toasts on failure.
   // Pre-U3 these dropped the response on the floor: a 4xx or 5xx (or a

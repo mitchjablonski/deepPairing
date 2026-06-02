@@ -1,0 +1,19 @@
+# GitGuardian / ggshield configuration
+# https://docs.gitguardian.com/ggshield-docs/reference/config/overview
+#
+# The "secrets" matched below are intentional FAKE credentials — test
+# fixtures and documentation placeholders for deepPairing's OWN secret
+# scanner (packages/mcp-server/src/secret-scan.ts). They are not live
+# credentials. Ignored here so they don't raise false-positive alerts.
+#
+# Note: ggshield (CLI / CI / pre-commit) honors this file directly.
+# GitGuardian's dashboard "Internal Monitoring" incidents may still need a
+# one-time "Ignore / mark as false positive" in the GitGuardian UI.
+version: 2
+
+secret:
+  ignored-paths:
+    # Test fixtures: fake ghp_/gho_ tokens, AWS example key, dummy RSA key
+    - "packages/mcp-server/src/__tests__/secret-scan.test.ts"
+    # Placeholder ANTHROPIC_API_KEY=sk-ant-... (not a real key)
+    - ".env.example"

@@ -20,9 +20,17 @@ class FakeAdapter implements ConnectionAdapter {
   onDisconnect(h: () => void) { this.disconnectHandler = h; }
   refreshUrl() { this.refreshUrlCalls++; }
 
+  fatalMismatchHandler: ((info: { liveProjectRoot?: string; liveHash: string }) => void) | null = null;
+  onFatalMismatch(h: (info: { liveProjectRoot?: string; liveHash: string }) => void) { this.fatalMismatchHandler = h; }
+
   /** Test helper: deliver a message to the connection store. */
   emit(data: any) {
     this.messageHandler?.(data);
+  }
+
+  /** Test helper: simulate the adapter detecting a cross-project daemon (II3). */
+  triggerFatalMismatch(info: { liveProjectRoot?: string; liveHash: string } = { liveHash: "other-hash" }) {
+    this.fatalMismatchHandler?.(info);
   }
 }
 
@@ -244,6 +252,19 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0].hero?.source).toBe("team");
       expect(toasts[0].hero?.concept).toBe("global state");
       expect(toasts[0].hero?.addedBy).toBe("alex");
+    });
+
+    it("II3 — pushes a sticky 'reload to re-bind' toast on a fatal project mismatch (no silent rebind)", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect("s1");
+      activeAdapter.triggerFatalMismatch({ liveHash: "different-project-hash", liveProjectRoot: "/other/project" });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts.some((t) => t.kind === "error" && t.ttl === 0 && /re-bind/i.test(t.body ?? ""))).toBe(true);
+      expect(useConnectionStore.getState().connected).toBe(false);
     });
 
     it("pushes an info toast on `ledger_write` with the truncated description", async () => {
