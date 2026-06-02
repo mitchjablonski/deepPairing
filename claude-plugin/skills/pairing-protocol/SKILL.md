@@ -54,7 +54,13 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   optional design + tasks. "Think together before building."
 - **`present_plan`** — before multi-file changes. Steps with before/after
   previews, motivated by findings / requirements.
-- **`present_code_change`** — to review a single change with diff + reasoning.
+- **`present_code_change`** — call this BEFORE the Write/Edit, for **every**
+  code change you make, with diff + reasoning. No exceptions: this includes
+  small follow-on edits, new files (tests, configs), and each file of a
+  multi-file change — not just the "main" file. A change written straight to
+  disk without a present_code_change never reaches the human's review surface;
+  they can't see or comment on it. If you make five edits, that's five
+  present_code_change calls. It's the per-change record, not optional ceremony.
 - **`log_reasoning`** — BEFORE every Edit or Write. **Name the underlying
   concept** in the `concept` field (e.g. "dependency inversion",
   "optimistic UI"). This is the pairing-learning lever — surface the

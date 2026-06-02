@@ -43,7 +43,7 @@ const PROTOCOL_PREAMBLE = [
   "  3. check_feedback — poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
   "  4. present_options — at a fork with 2-4 approaches; stakes='high' for hard-to-reverse calls (schema/auth/infra).",
   "  5. present_spec, then present_plan — for non-trivial features (spec before the multi-file plan).",
-  "  6. present_code_change + log_reasoning (name the concept) — per change.",
+  "  6. present_code_change BEFORE every Write/Edit — EVERY change, incl. small follow-ons, new files, and each file of a multi-file change (5 edits = 5 calls). A write straight to disk never reaches the human's review surface. + log_reasoning (name the concept).",
   "  7. check_feedback again — let your pair review each artifact in the UI.",
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach.",
 ].join("\n");
