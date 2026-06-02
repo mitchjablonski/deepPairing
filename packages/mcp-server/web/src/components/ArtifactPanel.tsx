@@ -441,6 +441,17 @@ function ArtifactSidebar({
         )}
       </div>
 
+      {/* "Show older" sits at the TOP so the recent items below it stay the
+          focus — you scan down to the latest, not past a wall of old ones. */}
+      {!collapsed && olderCount > 0 && (
+        <button
+          onClick={() => setShowAllOlder((v) => !v)}
+          className="w-full text-left px-3 py-1.5 text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors select-none border-b border-border-subtle"
+        >
+          {showAllOlder ? "▴ Show fewer" : `▾ Show ${olderCount} older`}
+        </button>
+      )}
+
       {/* Grouped artifact list */}
       {Array.from(visibleGroups.entries()).map(([label, items]) => (
         <div key={label}>
@@ -512,14 +523,6 @@ function ArtifactSidebar({
           })}
         </div>
       ))}
-      {!collapsed && olderCount > 0 && (
-        <button
-          onClick={() => setShowAllOlder((v) => !v)}
-          className="w-full text-left px-3 py-1.5 mt-1 text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors select-none"
-        >
-          {showAllOlder ? "▴ Show fewer" : `▾ Show ${olderCount} older`}
-        </button>
-      )}
     </div>
   );
 }
