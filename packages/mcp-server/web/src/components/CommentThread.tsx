@@ -98,13 +98,44 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
     setSubmitting(false);
   };
 
-  const rootComments = comments.filter((c) => !c.parentCommentId);
+  // Render the full thread: root comments plus their replies nested beneath.
+  // Pre-this, CommentThread rendered ONLY roots, so an agent reply (which
+  // carries parentCommentId) was invisible on the artifact even though the
+  // conversation rail showed it — a question would appear with no answer.
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  const repliesByParent = new Map<string, Comment[]>();
+  for (const c of comments) {
+    if (c.parentCommentId && byId.has(c.parentCommentId)) {
+      const arr = repliesByParent.get(c.parentCommentId) ?? [];
+      arr.push(c);
+      repliesByParent.set(c.parentCommentId, arr);
+    }
+  }
+  // Roots = no parent, OR a parent that isn't in this filtered set (so an
+  // orphaned reply still shows rather than vanishing).
+  const rootComments = comments.filter(
+    (c) => !c.parentCommentId || !byId.has(c.parentCommentId),
+  );
+  const sortByTime = (a: Comment, b: Comment) =>
+    (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
 
   return (
     <div className="space-y-3">
-      {rootComments.map((comment) => (
-        <CommentBubble key={comment.id} comment={comment} />
-      ))}
+      {[...rootComments].sort(sortByTime).map((comment) => {
+        const replies = (repliesByParent.get(comment.id) ?? []).sort(sortByTime);
+        return (
+          <div key={comment.id} className="space-y-2">
+            <CommentBubble comment={comment} />
+            {replies.length > 0 && (
+              <div className="ml-7 space-y-2 border-l border-border-subtle pl-3">
+                {replies.map((reply) => (
+                  <CommentBubble key={reply.id} comment={reply} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       <div className="flex gap-1.5 items-end">
         <textarea
