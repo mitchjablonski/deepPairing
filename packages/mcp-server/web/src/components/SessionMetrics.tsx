@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { apiGet } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
 
 /** R1: cumulative metrics from /api/metrics — proves the moat is compounding. */
@@ -23,7 +24,7 @@ export function SessionMetrics() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`http://${window.location.host}/api/metrics`);
+        const res = await apiGet(`http://${window.location.host}/api/metrics`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setMetrics(data);

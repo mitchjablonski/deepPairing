@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
+import { apiGet, sessionHeaders } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 
 /** Request notification permission and send a notification when tab is unfocused */
@@ -123,6 +124,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             for (const comment of data.state.comments ?? []) {
               store.addComment(comment);
             }
+            // QOL — return to the artifact you were last on, now that the
+            // session has hydrated (overrides addArtifact's first-artifact pick).
+            store.restoreSelection();
           }
 
           if (daemonRestarted) {
@@ -291,7 +295,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // optimistic state may be stale; the daemon broadcasts this so
           // we can refetch full state + toast the user.
           fetch(`http://${window.location.host}/api/state`, {
-            headers: { "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
+            headers: { ...sessionHeaders(), "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
           })
             .then((r) => (r.ok ? r.json() : null))
             .then((fresh) => {
@@ -379,7 +383,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connected: false,
     sessionId: null,
     projectRoot: null,
-    projectHash: null,
+    // II2.2 — seed projectHash from the daemon's HTML injection
+    // (window.__dpProjectHash) so the VERY FIRST WS connect URL and mutation
+    // fetch carry X-Project-Hash. Otherwise the fail-closed gate 403s the
+    // first WS upgrade, the `connected` payload that would populate this
+    // never arrives, and the tab is deadlocked. The WS `connected` handler
+    // still overwrites this if the daemon reports a different hash.
+    projectHash:
+      typeof window !== "undefined" && typeof (window as any).__dpProjectHash === "string"
+        ? (window as any).__dpProjectHash
+        : null,
     autonomyLevel: "supervised",
     adapter: null,
     activeSessions: [],
@@ -409,6 +422,34 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         set({ connected: false });
       });
 
+      // II3 — the WS adapter detected (via /api/daemon-info) that the
+      // daemon on this port now serves a DIFFERENT project than the one
+      // this tab is bound to. Pre-II3 the adapter silently rebound the
+      // tab to the live daemon's hash — switching the tab to another
+      // project so comments/approvals could land in the wrong place.
+      // Now it stops the reconnect loop and fires this; we surface a
+      // sticky "reload to re-bind" toast mirroring the BB10 REST-side
+      // guard (see stores/artifact.ts toastApiError). Reload is the only
+      // safe recovery: it refetches the live daemon's hash and rebinds
+      // the tab deliberately.
+      adapter.onFatalMismatch?.(() => {
+        set({ connected: false });
+        import("./toast").then(({ useToastStore }) => {
+          useToastStore.getState().push({
+            kind: "error",
+            title: "Tab is bound to a stale daemon",
+            body: "This project's daemon was replaced by a different project's daemon on the same port. Reload the page to re-bind.",
+            ttl: 0,
+            action: {
+              label: "Reload to re-bind",
+              onClick: () => {
+                if (typeof window !== "undefined") window.location.reload();
+              },
+            },
+          });
+        });
+      });
+
       adapter.connect();
     },
 
@@ -433,7 +474,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     },
 
     refreshSessions: () => {
-      fetch(`http://${window.location.host}/api/active-sessions`)
+      apiGet(`http://${window.location.host}/api/active-sessions`)
         .then((r) => r.json())
         .then((data) => set({ activeSessions: data.sessions ?? [] }))
         .catch(() => {});

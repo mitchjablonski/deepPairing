@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { SessionAnnotation } from "@deeppairing/shared";
 import { buildTimeline, type TimelineEvent, annotationsByEventId } from "../lib/timeline";
-import { API_BASE } from "../lib/api";
+import { API_BASE, apiGet, sessionHeaders } from "../lib/api";
 
 /**
  * Replay mode state — active when the user opens a past session from
@@ -86,7 +86,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     // Fetch annotations for this session (best-effort)
     let annotations: SessionAnnotation[] = [];
     try {
-      const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/annotations`);
+      const res = await apiGet(`${API_BASE}/api/sessions/${sessionId}/annotations`);
       if (res.ok) {
         const data = await res.json();
         annotations = data.annotations ?? [];
@@ -167,7 +167,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     try {
       const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/annotations`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: sessionHeaders(),
         body: JSON.stringify({ targetEventId, note, tags }),
       });
       if (res.ok) {
@@ -185,6 +185,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     try {
       await fetch(`${API_BASE}/api/sessions/${sessionId}/annotations/${annotationId}`, {
         method: "DELETE",
+        headers: sessionHeaders(),
       });
       set({ annotations: annotations.filter((a) => a.id !== annotationId) });
     } catch {}

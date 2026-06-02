@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeLineDiff } from "../diff";
+import { computeLineDiff, collapseDiff } from "../diff";
 
 describe("computeLineDiff", () => {
   it("returns empty array for two empty strings", () => {
@@ -50,5 +50,45 @@ describe("computeLineDiff", () => {
     const result = computeLineDiff("a\nb", "x\ny");
     expect(result.filter((l) => l.type === "removed")).toHaveLength(2);
     expect(result.filter((l) => l.type === "added")).toHaveLength(2);
+  });
+});
+
+describe("collapseDiff — focused hunks for incremental changes (#3)", () => {
+  it("collapses a long unchanged run far from any change into one gap", () => {
+    // 30 unchanged lines, then one changed line at the end.
+    const before = Array.from({ length: 30 }, (_, i) => `line${i}`).join("\n");
+    const after = before + "\nNEW";
+    const rows = collapseDiff(computeLineDiff(before, after), 3);
+    const gaps = rows.filter((r) => r.type === "gap");
+    expect(gaps).toHaveLength(1);
+    // The gap stands in for the unchanged lines beyond the 3-line context.
+    expect((gaps[0] as any).count).toBeGreaterThan(20);
+    // The added line survives.
+    expect(rows.some((r) => r.type === "added" && (r as any).content === "NEW")).toBe(true);
+  });
+
+  it("keeps `context` unchanged lines around each change", () => {
+    const before = Array.from({ length: 20 }, (_, i) => `l${i}`).join("\n");
+    const after = before.replace("l10", "CHANGED");
+    const rows = collapseDiff(computeLineDiff(before, after), 2);
+    // Lines l8,l9 (before) and l11,l12 (after) are within 2 of the change.
+    const kept = rows.filter((r) => r.type !== "gap").map((r) => (r as any).content);
+    expect(kept).toContain("l8");
+    expect(kept).toContain("l9");
+    expect(kept).toContain("l11");
+    expect(kept).toContain("l12");
+    expect(kept).toContain("CHANGED");
+  });
+
+  it("does not collapse a tiny unchanged run (a 1-line marker saves nothing)", () => {
+    const rows = collapseDiff(computeLineDiff("a\nb\nc", "X\nb\nY"), 0);
+    // With context 0, the single unchanged 'b' is a 1-line run → kept, not gapped.
+    expect(rows.some((r) => r.type === "gap")).toBe(false);
+    expect(rows.some((r) => r.type === "unchanged" && (r as any).content === "b")).toBe(true);
+  });
+
+  it("returns no gaps when everything changed", () => {
+    const rows = collapseDiff(computeLineDiff("a\nb", "x\ny"), 3);
+    expect(rows.some((r) => r.type === "gap")).toBe(false);
   });
 });

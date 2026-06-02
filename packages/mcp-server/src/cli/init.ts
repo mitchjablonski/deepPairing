@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon } from "../daemon-lifecycle.js";
+import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders } from "../daemon-lifecycle.js";
 import {
   ensureDeepPairingDir,
   ensureGitignoreEntry,
@@ -22,6 +22,8 @@ import {
   HOOK_MARKERS,
 } from "./setup-tasks.js";
 import readline from "node:readline";
+import { spawn } from "node:child_process";
+import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 
 const cwd = process.cwd();
 
@@ -669,18 +671,30 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   }
 
   let probeOk = false;
+  // III9 follow-up — a non-200 HTTP response still means the port is ALIVE.
+  // Distinguishing that from a refused connection is what stops doctor from
+  // recommending the destructive kill+rm on a working-but-auth-gated daemon.
+  let probeReachable = false;
   let probeStatus: number | string = "no-response";
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`http://localhost:${port}/api/state`, { signal: controller.signal });
+    // III9 follow-up — /api/state is gated by the AA4 X-Project-Hash
+    // middleware (no longer a public route). Probe WITH the daemon auth
+    // headers so a healthy secured daemon returns 200 instead of a 403 we'd
+    // misread as "not responding".
+    const res = await fetch(`http://localhost:${port}/api/state`, {
+      signal: controller.signal,
+      headers: daemonAuthHeaders(cwd),
+    });
     clearTimeout(timer);
+    probeReachable = true;
     probeStatus = res.status;
     probeOk = res.ok;
   } catch (err: any) {
     probeStatus = err?.message ?? String(err);
   }
-  console.log(`  ${probeOk ? green("✓") : red("✗")} GET http://localhost:${port}/api/state → ${probeStatus}`);
+  console.log(`  ${probeOk ? green("✓") : probeReachable ? yellow("!") : red("✗")} GET http://localhost:${port}/api/state → ${probeStatus}`);
 
   // 4. Active sessions
   if (probeOk) {
@@ -701,12 +715,30 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   }
 
   // 5. Log tail
+  // III9 — reconcile the verdict against fatal daemon deaths recorded in the
+  // log. A leftover/older daemon answering /api/state can make the verdict
+  // read "healthy" while every freshly-spawned daemon dies (the pre-III9
+  // insecure-mode throw on a WSL /mnt/c v9fs mount is the canonical case).
+  // Surface that instead of masking it behind a stale "healthy".
+  let daemonFatalHint: string | null = null;
   if (fs.existsSync(logFile)) {
     try {
       const content = fs.readFileSync(logFile, "utf-8");
-      const lines = content.trim().split("\n").slice(-10);
+      const allLines = content.trim().split("\n");
+      const lines = allLines.slice(-10);
       console.log(`\n  ${bold("Log tail")} ${dim("(last 10 lines of .deeppairing/daemon.log):")}`);
       for (const line of lines) console.log(`  ${dim(line)}`);
+
+      const insecureModeDeaths = allLines.filter(
+        (l) => l.includes("writeDaemonInfo failed") || l.includes("insecure mode"),
+      ).length;
+      if (insecureModeDeaths > 0) {
+        daemonFatalHint =
+          `${insecureModeDeaths} fatal daemon death${insecureModeDeaths === 1 ? "" : "s"} from an insecure-mode token write — ` +
+          `this project's .deeppairing/ is on a filesystem that ignores chmod (WSL /mnt/c v9fs, NFS, or SMB). ` +
+          `Upgrade to a deepPairing build with the token-relocation fix (III9), or move the repo onto a local Linux filesystem. ` +
+          `Note: DEEPPAIRING_PROJECT_ROOT does NOT help under Claude Code — CLAUDE_PROJECT_DIR outranks it.`;
+      }
     } catch (err) {
       console.log(`  ${red("✗")} Could not read daemon.log: ${err}`);
     }
@@ -864,8 +896,24 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
 
   // 7. Overall verdict
   console.log();
-  if (probeOk) {
+  if (probeOk && daemonFatalHint) {
+    // A daemon is answering, but the log shows fresh daemons dying — the
+    // responder is almost certainly a leftover/older process. Refusing to
+    // call this "healthy" is the whole point of the III9 doctor fix.
+    console.log(`  ${yellow(bold("Daemon answering, but unhealthy"))} on port ${port}`);
+    console.log(`  ${dim(daemonFatalHint)}`);
+  } else if (probeOk) {
     console.log(`  ${green(bold("Daemon healthy"))} on port ${port}`);
+  } else if (daemonFatalHint) {
+    console.log(`  ${red(bold("Daemon failing to start"))} on port ${port}`);
+    console.log(`  ${dim(daemonFatalHint)}`);
+  } else if (probeReachable) {
+    // III9 follow-up — the port answered with a non-200 (typically a 403 from
+    // the AA4 project-hash gate, or 401). The process is ALIVE, so this is an
+    // auth/project mismatch — NOT a dead daemon. Crucially, do NOT emit the
+    // destructive kill+rm remedy the "not responding" branch below uses.
+    console.log(`  ${yellow(bold("Daemon alive but auth-gated"))} on port ${port} ${dim(`(HTTP ${probeStatus})`)}`);
+    console.log(`  ${dim("The port is responding, so the daemon is up — this is a project-hash/auth mismatch, not a dead process. If a different project's daemon holds this port, see the mismatch note above; otherwise reload any open companion tab. Do NOT kill the daemon.")}`);
   } else if (info?.pid) {
     console.log(`  ${red(bold("Daemon unhealthy"))} — daemon.json points at PID ${info.pid} but port ${port} is not responding`);
     console.log(`  ${dim("Try: kill ") + info.pid + dim(" && rm .deeppairing/daemon.json — or re-run with --fix")}`);
@@ -1143,9 +1191,12 @@ async function demoCmd(): Promise<void> {
   console.log(bold("\n  deepPairing demo"));
   console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
 
-  // II1 — ensureDaemon now returns DaemonInfo (with authToken). demoCmd
-  // only hits public routes (/api/demo/run, /api/state) so we don't need
-  // the token here; just normalize to port for the existing fetch calls.
+  // II1 — ensureDaemon now returns DaemonInfo (with authToken). demoCmd only
+  // POSTs to /api/demo/run, which is a top-level daemon route NOT behind the
+  // AA4 X-Project-Hash / III5 Bearer gate (those guard the createHttpRoutes
+  // surface, e.g. /api/state). So no token is needed here; normalize to port
+  // for the fetch below. (Earlier this comment wrongly listed /api/state as
+  // public — it is gated; demoCmd just never calls it.)
   const daemonInfo = await ensureDaemon(cwd);
   const port = daemonInfo.port;
   console.log(`  ${green("✓")} Daemon ready on port ${port}`);
@@ -1424,6 +1475,75 @@ function humanAge(iso: string): string {
 const args = process.argv.slice(2);
 const cmd = args[0];
 
+// Cross-platform "open URL". Inline so the CLI doesn't import daemon.ts
+// (which runs setup at module load).
+function openUrl(url: string): void {
+  const bin = process.platform === "darwin" ? "open"
+    : process.platform === "win32" ? "cmd"
+    : "xdg-open";
+  const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  const child = spawn(bin, argv, { stdio: "ignore", detached: true });
+  child.on("error", () => {}); // swallow (no GUI / no binary)
+  child.unref();
+}
+
+/** Print the companion UI URL for THIS project. With a running daemon it
+ *  prints the actual bound port from daemon.json; otherwise the deterministic
+ *  preferred port the daemon will bind next time it starts. URL → stdout
+ *  (pipeable: `xdg-open $(deeppairing url)`); diagnostic notes → stderr. */
+async function urlCmd(opts: { open?: boolean } = {}): Promise<void> {
+  const projectRoot = cwd;
+  const preferred = preferredPortFor(projectRoot);
+
+  const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
+  let actualPort: number | null = null;
+  if (fs.existsSync(infoPath)) {
+    try {
+      const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+      if (typeof info?.port === "number") {
+        const probed = await probeDaemonIdentity(info.port, 500);
+        if (probed && probed.projectRoot === projectRoot) {
+          actualPort = info.port;
+        }
+      }
+    } catch { /* fall through to preferred */ }
+  }
+
+  const url = `http://localhost:${actualPort ?? preferred}`;
+  console.log(url);
+  if (actualPort === null) {
+    console.error(`  ${dim("(preferred port — daemon not running yet; next startup binds it if free)")}`);
+  }
+  if (opts.open) openUrl(url);
+}
+
+/** List every live deepPairing daemon in the deterministic port window —
+ *  project ↔ URL, so a multi-project user can see all their open projects at
+ *  a glance. */
+async function listCmd(): Promise<void> {
+  type Probe = { port: number; identity: { projectRoot: string; pid: number; startedAt: string } | null };
+  const probes: Array<Promise<Probe>> = [];
+  for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
+    probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
+  }
+  const results = await Promise.all(probes);
+  const live = results.filter(
+    (r): r is { port: number; identity: { projectRoot: string; pid: number; startedAt: string } } => r.identity !== null,
+  );
+
+  if (live.length === 0) {
+    console.log(`  ${dim("No deepPairing daemons currently running.")}`);
+    console.error(`  ${dim("(daemons auto-shut after 60s idle; start Claude Code in a project to spawn one)")}`);
+    return;
+  }
+  console.log(`  ${bold("Live deepPairing daemons:")}`);
+  for (const r of live) {
+    const segments = r.identity.projectRoot.split(/[\\/]/).filter(Boolean);
+    const name = segments[segments.length - 1] ?? "(unknown)";
+    console.log(`    ${name.padEnd(28)} http://localhost:${r.port}   ${dim(r.identity.projectRoot)}`);
+  }
+}
+
 if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   // With no arguments, default to init (most common use case from npx)
   if (!cmd) {
@@ -1460,6 +1580,8 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     dp doctor [--fix] [--yes]              Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     dp sessions [list|prune]               List sessions for this project; prune removes empty stale ones
     dp sessions merge <from> <into> [-y]   Merge two sessions (rescues data split by old non-deterministic ids)
+    dp url [--open]                        Print this project's companion UI URL (--open launches it)
+    dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
     dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
@@ -1530,6 +1652,17 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const sub = args[1];
   sessionsCmd(sub, args.slice(2)).catch((err) => {
     console.error(`  ${red("✗")} sessions ${sub ?? ""} failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "url") {
+  const open = args.includes("--open");
+  urlCmd({ open }).catch((err) => {
+    console.error(`  ${red("✗")} url failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "list") {
+  listCmd().catch((err) => {
+    console.error(`  ${red("✗")} list failed: ${err?.message ?? err}`);
     process.exit(1);
   });
 } else if (cmd === "post-pr-review") {

@@ -6,6 +6,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readTokenSidecar } from "./daemon-token.js";
+import { projectHashOf, preferredPortFor } from "./project-root.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -38,7 +40,19 @@ function readDaemonInfo(projectRoot: string): DaemonInfo | null {
   const infoPath = daemonInfoPath(projectRoot);
   try {
     if (!fs.existsSync(infoPath)) return null;
-    return JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+    const info: DaemonInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+    // III9 — on a non-POSIX project dir (WSL /mnt/c, NFS, SMB) the daemon
+    // writes daemon.json WITHOUT the token (it can't hold 0600 there) and
+    // stashes the token in a 0600 per-user runtime sidecar. Merge it back so
+    // the wrapper can authenticate against /api/internal/*. The pid guard
+    // rejects a stale sidecar left by a dead daemon of the same project.
+    if (!info.authToken) {
+      const sidecar = readTokenSidecar(projectRoot);
+      if (sidecar?.authToken && (sidecar.pid === undefined || sidecar.pid === info.pid)) {
+        info.authToken = sidecar.authToken;
+      }
+    }
+    return info;
   } catch {
     return null;
   }
@@ -49,13 +63,33 @@ function readDaemonInfo(projectRoot: string): DaemonInfo | null {
 // record that had no token. The daemon writes the canonical file on
 // startup + every 30s heartbeat; wrappers only read.
 
-/** Probe a port to check if a deepPairing daemon is responding. */
-async function probeDaemon(port: number, timeoutMs = 1500): Promise<boolean> {
+/**
+ * III9 follow-up — headers required to call the AA4-gated public daemon
+ * surface (`/api/state` and friends). The `X-Project-Hash` is what the AA4
+ * middleware actually checks; the bearer token is added when readable
+ * (sidecar-aware, via readDaemonInfo) so the same headers also satisfy the
+ * III5 Bearer-gated routes. Sending these lets a caller tell "alive but
+ * auth-gated" (200/401/403 — a real HTTP response) apart from a refused
+ * connection (the daemon is actually down).
+ */
+export function daemonAuthHeaders(projectRoot: string): Record<string, string> {
+  const headers: Record<string, string> = { "X-Project-Hash": projectHashOf(projectRoot) };
+  const info = readDaemonInfo(projectRoot);
+  if (info?.authToken) headers.Authorization = `Bearer ${info.authToken}`;
+  return headers;
+}
+
+/** Probe a port to check if a deepPairing daemon is responding.
+ *  III9 — `/api/state` is gated by the AA4 X-Project-Hash middleware, so the
+ *  probe must send the project-hash header; otherwise a healthy secured
+ *  daemon answers 403 and we'd wrongly conclude it's dead. */
+async function probeDaemon(port: number, projectRoot: string, timeoutMs = 1500): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`http://localhost:${port}/api/state`, {
       signal: controller.signal,
+      headers: daemonAuthHeaders(projectRoot),
     });
     clearTimeout(timer);
     return res.ok;
@@ -135,8 +169,10 @@ export async function evictDaemon(
  */
 export async function isDaemonRunning(
   projectRoot: string,
-  /** Optional port range override — primarily for tests so we don't hit 3847 in CI. */
-  range: { start: number; count: number } = { start: DEFAULT_PORT, count: MAX_PORT_ATTEMPTS },
+  /** Optional port range override — primarily for tests so we don't hit 3847 in CI.
+   *  Default sweep starts at this project's deterministic preferred port (so the
+   *  cold sweep finds our own daemon in ~one probe), not the shared 3847 base. */
+  range: { start: number; count: number } = { start: preferredPortFor(projectRoot), count: MAX_PORT_ATTEMPTS },
 ): Promise<DaemonInfo | null> {
   const info = readDaemonInfo(projectRoot);
 
@@ -144,7 +180,7 @@ export async function isDaemonRunning(
   if (info) {
     let pidAlive = false;
     try { process.kill(info.pid, 0); pidAlive = true; } catch {}
-    if (pidAlive && await probeDaemon(info.port)) return info;
+    if (pidAlive && await probeDaemon(info.port, projectRoot)) return info;
   }
 
   // Slow path: daemon.json missing or stale. Sweep the candidate port range

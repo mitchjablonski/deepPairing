@@ -262,6 +262,39 @@ describe("MCP Tool Handlers", () => {
       expect(art.type).toBe("code_change");
       expect((art.content as any).confidence).toBe("high");
     });
+
+    it("reclassifies a mislabeled 'create' to 'modify' and reconstructs `before` from history", async () => {
+      // The file is genuinely created first.
+      await callTool("present_code_change", {
+        filePath: "/src/feature.ts",
+        changeType: "create",
+        after: "line1\nline2\nline3",
+        reasoning: "initial",
+      });
+      // Then the agent edits it but (wrongly) labels it 'create' again, omitting before.
+      await callTool("present_code_change", {
+        filePath: "/src/feature.ts",
+        changeType: "create",
+        after: "line1\nCHANGED\nline3",
+        reasoning: "tweak line 2",
+      });
+      const arts = store.getArtifacts();
+      const latest = arts[arts.length - 1];
+      expect((latest.content as any).changeType).toBe("modify"); // corrected label → diff renders
+      expect((latest.content as any).before).toBe("line1\nline2\nline3"); // reconstructed from prior
+    });
+
+    it("leaves a genuine first creation as 'create' with no before", async () => {
+      await callTool("present_code_change", {
+        filePath: "/src/brand-new.ts",
+        changeType: "create",
+        after: "hello",
+        reasoning: "new file",
+      });
+      const art = store.getArtifacts()[0];
+      expect((art.content as any).changeType).toBe("create");
+      expect((art.content as any).before).toBe("");
+    });
   });
 
   describe("firstCallHint — team conventions (N6.3)", () => {
@@ -1189,6 +1222,47 @@ describe("MCP Tool Handlers", () => {
       expect(rejected).toBeDefined();
       // Without concept, falls back to the prose description.
       expect(rejected?.concept).toBe("in-memory queue with persistence");
+    });
+  });
+
+  describe("revise_artifact — mode: obsolete", () => {
+    it("marks the artifact obsolete (overcome by new info) so it leaves the review queue", async () => {
+      await callTool("present_findings", {
+        summary: "early analysis",
+        findings: [{ category: "other", detail: "x", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+
+      const { text, isError } = await callTool("revise_artifact", {
+        artifactId: artifact.id,
+        mode: "obsolete",
+        reason: "the spec changed; this no longer applies",
+      });
+
+      expect(isError).toBeFalsy();
+      expect(text.toLowerCase()).toContain("obsolete");
+      expect(store.getArtifacts()[0].status).toBe("obsolete");
+      // Neutral agent comment records why (not "Retracted").
+      const comments = store.getCommentsForArtifact(artifact.id);
+      expect(
+        comments.some((c) => c.author === "agent" && c.content.includes("Overcome by new information")),
+      ).toBe(true);
+    });
+
+    it("errors when trying to obsolete an already-approved artifact", async () => {
+      await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "other", detail: "y", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      store.updateArtifactStatus(artifact.id, "approved");
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: artifact.id,
+        mode: "obsolete",
+        reason: "too late",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("too late to obsolete");
     });
   });
 
@@ -2490,6 +2564,19 @@ describe("MCP Tool Handlers", () => {
       expect(text).toMatch(/\[First use this session\]/);
     });
 
+    it("first-call hint includes the pairing-protocol preamble (for bare-MCP consumers)", async () => {
+      // #1 — projects wired with only the MCP server (no skill / no init) must
+      // still receive the choreography on the first write tool's response.
+      const { text } = await callTool("present_findings", {
+        summary: "trigger",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).toMatch(/\[deepPairing protocol\]/);
+      expect(text).toMatch(/present_findings/);
+      expect(text).toMatch(/check_feedback/);
+      expect(text).toMatch(/never as plain terminal text/i);
+    });
+
     it("recall (read) — first call does NOT carry the hint", async () => {
       const { text } = await callTool("recall", { query: "anything", mode: "any" });
       expect(text).not.toMatch(/\[First use this session\]/);
@@ -2529,27 +2616,18 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("hint still fires on the first WRITE call even if a READ call ran first", async () => {
-      // Per-server `firstToolCall` flag flips on ANY first call, including
-      // reads. Y2's gate is on whether to *append* the hint, not whether
-      // to *compute* it. This pins that the hint is computed once but is
-      // attached only to the first qualifying write — so a read-then-write
-      // sequence still surfaces the hint on the write.
-      //
-      // Note: the current implementation flips firstToolCall on first
-      // dispatch regardless of tool, which means a leading read still
-      // "burns" the computed hint. This test documents the ACTUAL
-      // current behavior so a future change is intentional.
+      // II12.1 — the latch is consumed only on the first HINT_TOOL (write)
+      // call, so a leading read (recall/check_feedback) no longer burns the
+      // hint. This matters because the protocol preamble itself tells the agent
+      // to `recall` first — dropping the hint on a read-then-write sequence
+      // would routinely lose the onboarding/protocol context.
       await callTool("recall", { query: "x", mode: "any" });
       const { text } = await callTool("present_findings", {
         summary: "trigger",
         findings: [{ category: "x", detail: "x", significance: "low" }],
       });
-      // After the leading recall, firstCallHint has been computed +
-      // discarded; the next present_findings does NOT carry it. This is
-      // a known quirk; if a future PR wants the hint to attach to the
-      // first WRITE rather than the first ANY, flip firstToolCall inside
-      // the gate and remove the .not below.
-      expect(text).not.toMatch(/\[First use this session\]/);
+      // The first WRITE after the leading read DOES carry the hint.
+      expect(text).toMatch(/\[First use this session\]/);
     });
   });
 });

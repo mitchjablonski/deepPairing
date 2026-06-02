@@ -22,12 +22,19 @@ import { spawn } from "node:child_process";
 import { ERROR_CODES } from "./error-codes.js";
 import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
+import { mountStaticUi } from "./http/static-ui.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
 import { recordMetricEvent } from "./store/metrics-store.js";
 import { buildPingPayload, decidePing, sendPing } from "./ping.js";
+import {
+  fsHonorsPosixMode,
+  tokenPlacement,
+  writeTokenSidecar,
+  unlinkTokenSidecar,
+} from "./daemon-token.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -51,7 +58,7 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // /api/daemon-info + the WS `connected` event. The browser echoes it
 // back in `X-Project-Hash` and any per-session route 403s on mismatch,
 // closing the stale-tab-after-port-recycling write hole.
-import { projectHashOf } from "./project-root.js";
+import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "./project-root.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
@@ -439,78 +446,19 @@ app.get("/api/live-session/:sessionId", (c) => {
 });
 
 // --- Serve static web UI ---
+// Extracted to http/static-ui.ts so the bootstrap-injection contract (the
+// II2.2/II2.3 seam) is testable without booting this server. Registered after
+// the /api routes so they win the match.
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 const webDistPath = path.join(__thisDir, "../dist/web");
 
-if (fs.existsSync(webDistPath)) {
-  app.get("/*", async (c, next) => {
-    if (c.req.path.startsWith("/api/")) return next();
-    const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path.join(webDistPath, filePath);
-    const resolvedPath = path.resolve(fullPath);
-    const resolvedBase = path.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path.sep) && resolvedPath !== resolvedBase) {
-      return c.notFound();
-    }
-    if (fs.existsSync(fullPath)) {
-      const content = fs.readFileSync(fullPath);
-      const ext = path.extname(filePath).slice(1);
-      const mimeTypes: Record<string, string> = {
-        html: "text/html", js: "application/javascript", css: "text/css",
-        json: "application/json", svg: "image/svg+xml", woff2: "font/woff2", png: "image/png",
-      };
-      return new Response(content, {
-        headers: { "Content-Type": mimeTypes[ext] ?? "application/octet-stream" },
-      });
-    }
-    const indexPath = path.join(webDistPath, "index.html");
-    if (fs.existsSync(indexPath)) {
-      // III5 — inject the daemon's bearer token into the served HTML so
-      // the browser companion UI can authenticate against
-      // Bearer-gated public routes (today: /api/prompts). The injected
-      // snippet is a literal `window.__deepPairingToken = "..."` script
-      // placed just before </head>. The token already travels in
-      // daemon.json (file-system gate) and via /api/internal/* calls
-      // (Authorization header) — exposing it in the HTML reaches the
-      // browser without forcing it to do an Origin-checked bootstrap
-      // round-trip, and is no MORE exposed than the daemon.json file
-      // (a same-uid attacker who reads either has full access).
-      const html = fs.readFileSync(indexPath, "utf-8");
-      const tokenJson = JSON.stringify(daemonAuthToken);
-      const injection = `<script>window.__deepPairingToken = ${tokenJson};</script>`;
-      // IV4 — ordering matters. Original III5 fallback prepended the
-      // script before whatever HTML came back; if that HTML started
-      // with `<!doctype html>` the prepend invalidated the doctype
-      // and the page rendered in quirks mode. Better cascade:
-      //   1. Prefer `</head>` injection (every Vite build emits one).
-      //   2. If no </head>, try after `<head>` (rare but possible).
-      //   3. If no <head> at all, try after `<html>` so the doctype
-      //      stays first.
-      //   4. Last resort, no token injected — return the raw HTML and
-      //      let the browser fall back to the (no-token-needed) UI.
-      //      Better to ship a working un-authed page than a quirks-mode
-      //      page with a stale token.
-      let injected: string;
-      if (html.includes("</head>")) {
-        injected = html.replace("</head>", `${injection}</head>`);
-      } else if (/<head\b[^>]*>/i.test(html)) {
-        injected = html.replace(/(<head\b[^>]*>)/i, `$1${injection}`);
-      } else if (/<html\b[^>]*>/i.test(html)) {
-        injected = html.replace(/(<html\b[^>]*>)/i, `$1${injection}`);
-      } else {
-        // Pathological — index.html has neither <head> nor <html>.
-        // Log and serve unmodified so the page at least renders.
-        log(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
-        injected = html;
-      }
-      return new Response(injected, {
-        headers: { "Content-Type": "text/html" },
-      });
-    }
-    return c.notFound();
-  });
-}
+mountStaticUi(app, {
+  webDistPath,
+  authToken: daemonAuthToken,
+  projectHash: daemonProjectHash,
+  log,
+});
 
 // --- Start server ---
 
@@ -521,66 +469,73 @@ function cleanup(): void {
   }
   // Remove daemon info file
   try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
+  // III9 — and the token sidecar, if we relocated the token off a non-POSIX
+  // project dir (no-op when the token lived in daemon.json).
+  try { unlinkTokenSidecar(projectRoot); } catch {}
 }
 
-/** III3 — true when fs.chmod can establish 0600 permissions. False on
- *  Windows (POSIX mode bits are advisory at best — the file's ACL is
- *  the local equivalent and chmod is a no-op) so we don't fail-loud on
- *  a platform where the assertion can't hold. */
-function platformEnforcesPosixMode(): boolean {
-  return process.platform !== "win32";
+/** III3 — write `obj` to `file`, opening at mode 0600 so the TOCTOU window
+ *  a chmod-after-write would leave never opens, then chmod defensively. Does
+ *  NOT verify/throw on leaked bits — the caller decides where the secret-
+ *  bearing file goes based on a measured FS-capability probe (III9). */
+function writeFile0600(file: string, obj: unknown): void {
+  const fd = fs.openSync(file, "w", 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(obj, null, 2));
+  } finally {
+    fs.closeSync(fd);
+  }
+  try { fs.chmodSync(file, 0o600); } catch {}
+}
+
+// III9 — token placement is decided once (the project dir's FS capability
+// can't change mid-process) and reused by every heartbeat write, so the
+// chmod probe runs a single time rather than every 30s.
+let tokenPlacementCached: "in-repo" | "sidecar" | null = null;
+function resolveTokenPlacement(): "in-repo" | "sidecar" {
+  if (tokenPlacementCached) return tokenPlacementCached;
+  tokenPlacementCached = tokenPlacement({
+    platform: process.platform,
+    // Windows mode bits are advisory; skip the probe and treat as in-repo.
+    dirHonorsMode: process.platform === "win32" ? true : fsHonorsPosixMode(dpDir),
+  });
+  return tokenPlacementCached;
 }
 
 function writeDaemonInfo(port: number): void {
-  // II1 — include authToken so DaemonClient can pick it up. The chmod
-  // below is what actually defends the token; on Unix only the daemon's
-  // uid can read it, which is exactly the boundary we want (the same uid
-  // already owns the dev environment, and a different uid is a different
-  // attacker class entirely).
-  const info = { pid: process.pid, port, startedAt, projectRoot, authToken: daemonAuthToken };
+  // II1 — the bearer token lets DaemonClient call /api/internal/*. It must
+  // land in a file only the same uid can read. III9 — WHERE that file lives
+  // depends on whether the project's .deeppairing/ filesystem honors 0600.
+  const discovery = { pid: process.pid, port, startedAt, projectRoot };
   try {
-    fs.mkdirSync(path.dirname(daemonInfoFile), { recursive: true });
-    // III3 — open with mode 0600 at creation, not chmod-after-write.
-    // Pre-III3 the sequence was writeFileSync (creates with mode &
-    // ~umask, usually 0644 on macOS default umask 0022) then
-    // chmodSync(0o600). Between those two calls the file is world-
-    // readable for ~1ms — long enough for a same-uid attacker polling
-    // .deeppairing/ to read the token. openSync with mode=0o600 sets
-    // the permission at create-time so the TOCTOU window never opens.
-    const fd = fs.openSync(daemonInfoFile, "w", 0o600);
-    try {
-      fs.writeFileSync(fd, JSON.stringify(info, null, 2));
-    } finally {
-      fs.closeSync(fd);
+    fs.mkdirSync(dpDir, { recursive: true });
+
+    if (resolveTokenPlacement() === "in-repo") {
+      // ext4/APFS/Windows — original path: token lives in daemon.json @0600.
+      writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken });
+      return;
     }
-    // III3 — chmod again defensively (some filesystems honor open()
-    // mode less reliably than chmod) and verify the result. If the
-    // verified mode still has group/other bits set, the token is
-    // effectively public to every same-machine reader. Fail-loud
-    // rather than silently leak — particularly important on
-    // NFS-mounted homes where chmod returns EPERM and we'd otherwise
-    // happily ship a world-readable daemon.json.
-    if (platformEnforcesPosixMode()) {
-      try { fs.chmodSync(daemonInfoFile, 0o600); } catch {}
-      const stat = fs.statSync(daemonInfoFile);
-      const leakedBits = stat.mode & 0o077;
-      if (leakedBits !== 0) {
-        throw new Error(
-          `daemon.json wrote with insecure mode ${(stat.mode & 0o777).toString(8)} ` +
-          `(expected 0600). This usually means the filesystem (NFS, SMB, or some FUSE mounts) ` +
-          `does not honor POSIX permission bits — the bearer token would be readable by any ` +
-          `process on this machine. Move .deeppairing/ to a local filesystem, or set ` +
-          `DEEPPAIRING_PROJECT_ROOT to a local path.`,
-        );
-      }
+
+    // III9 — the project dir is non-POSIX (WSL /mnt/c v9fs, NFS, SMB, FUSE):
+    // chmod won't stick, so daemon.json can't safely hold the token. Split
+    // discovery (non-sensitive — pid/port/projectRoot, no secret) from the
+    // secret, and relocate the token to a guaranteed-POSIX per-user runtime
+    // file. The daemon now STARTS here instead of dying, and the token still
+    // lands somewhere only this uid can read.
+    writeFile0600(daemonInfoFile, discovery); // token-less; world-readable is fine
+    const sidecar = writeTokenSidecar(projectRoot, { authToken: daemonAuthToken, pid: process.pid, port });
+    if (sidecar.honored) {
+      // Log once (placement is decided once; heartbeats re-enter here but the
+      // path doesn't change). Cheap and useful for `doctor` post-mortems.
+      log(`[token] .deeppairing is non-POSIX (chmod 0600 ignored) — bearer token relocated to ${sidecar.path} (mode 0600). Discovery (pid/port) stays in .deeppairing/daemon.json.`);
+    } else {
+      // Even the runtime dir couldn't enforce 0600 (very unusual). Degrade,
+      // don't die: same-uid is the whole trust boundary on a single-dev box.
+      log(`[token] WARN: no filesystem here honors 0600 (token file ${sidecar.path} = mode ${sidecar.mode.toString(8)}). Continuing — the bearer token is readable by same-uid processes on this machine.`);
     }
   } catch (err: any) {
-    // III3 — was a silent log. The whole point of this function is to
-    // place the bearer token where ONLY the same uid can read it; if
-    // we can't, every internal route becomes effectively unauthed.
-    // Surface to stderr too so the wrapper's process-supervision sees
-    // the failure on cold start (where log() may not have made it to
-    // disk yet).
+    // A genuine write failure (unwritable dir, full disk) — surface to stderr
+    // too so the wrapper's process-supervision sees it on cold start.
     const msg = err?.message ?? String(err);
     log(`FATAL: writeDaemonInfo failed: ${msg}`);
     process.stderr.write(`[deepPairing daemon] FATAL: ${msg}\n`);
@@ -656,11 +611,16 @@ async function main() {
     // concurrent daemons (project A on 3847, project B on 3848, …). The bound
     // port is then written into daemon.json so each project's wrapper connects
     // to the right daemon.
-    let port = DEFAULT_PORT;
+    const preferredPort = preferredPortFor(projectRoot);
+    let port = preferredPort;
     let server: ReturnType<typeof serve> | null = null;
     let lastBindErr: any = null;
     for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-      const candidate = DEFAULT_PORT + attempt;
+      // Start at this project's deterministic preferred port, then probe
+      // forward within the [BASE_PORT, BASE_PORT+PORT_SPAN) window (wrapping)
+      // so a collision/squatter degrades to the next free slot without
+      // escaping the reserved range.
+      const candidate = BASE_PORT + (((preferredPort - BASE_PORT) + attempt) % PORT_SPAN);
       // GG1 — bind 127.0.0.1 explicitly. Pre-GG1 the call omitted
       // `hostname` and the underlying @hono/node-server passed undefined
       // to server.listen, which Node interprets as "all interfaces"
@@ -692,7 +652,7 @@ async function main() {
       if (result.ok) {
         server = candidateServer;
         port = candidate;
-        if (attempt > 0) log(`Port ${DEFAULT_PORT} through ${candidate - 1} busy — bound to ${candidate} instead.`);
+        if (attempt > 0) log(`Preferred port ${preferredPort} busy — bound to ${candidate} instead (recorded in daemon.json).`);
         break;
       }
       lastBindErr = result.err;
@@ -711,7 +671,7 @@ async function main() {
 
     if (!server) {
       // U6 — `--fix` so the user gets the heal-it path, not just the diagnose-it one.
-      const msg = `No free port in range ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}. Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
+      const msg = `No free port in ${MAX_PORT_ATTEMPTS} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}–${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
       log(`FATAL: ${msg}`);
       process.stderr.write(`deepPairing daemon: ${msg}\n`);
       process.exit(2);

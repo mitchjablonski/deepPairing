@@ -55,6 +55,10 @@ export async function taskHandleForArtifact(
     status = "failed";
   } else if (artifact.status === "superseded") {
     status = "cancelled";
+  } else if (artifact.status === "obsolete") {
+    // Overcome by new information — the agent moved on; resolve the handle so
+    // it doesn't linger as input_required.
+    status = "cancelled";
   } else if (artifact.type === "reasoning") {
     // log_reasoning artifacts have no review cycle; they're "completed"
     // the moment the agent records them.

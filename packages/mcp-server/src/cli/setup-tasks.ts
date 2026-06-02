@@ -192,7 +192,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const HOOK_NAME = "stop";
-const STATE_PATH = path.join(process.cwd(), ".deeppairing", "hooks-state.json");
+const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
 const STATE_CAP = 50;
 function recordFire(exitCode, reason) {
   try {
@@ -219,7 +219,7 @@ function exit(code, reason) {
 }
 
 try {
-  const sessionsDir = path.join(process.cwd(), ".deeppairing", "sessions");
+  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "sessions");
   if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
 
   const MAX_AGE_MS = 30 * 60 * 1000;
@@ -237,8 +237,10 @@ try {
       return true;
     });
     if (blocking) {
-      process.stdout.write("deepPairing: pending artifacts need review — call check_feedback\\n");
-      exit(2, "pending artifacts in " + id);
+      process.stderr.write("deepPairing: pending artifacts need review — call check_feedback\\n");
+      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
+      // exit 2 showed Claude only an empty-stderr "Stop hook error".
+      exit(0, "pending artifacts in " + id);
     }
   }
   exit(0, "pass: no blocking drafts");
@@ -247,7 +249,12 @@ try {
 }
 `;
 const STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
-const STOP_HOOK_COMMAND = `node ${STOP_SCRIPT_REL_PATH}`;
+// Anchor the command at $CLAUDE_PROJECT_DIR, NOT a bare relative path: Claude
+// Code runs hooks with whatever cwd the session is in, which is not guaranteed
+// to be the repo root (e.g. after a `cd` into a subdir for a build), so a
+// relative `node .deeppairing/hooks/stop.mjs` resolves to <cwd>/.deeppairing/…
+// and fails with MODULE_NOT_FOUND. $CLAUDE_PROJECT_DIR is cwd-independent.
+const STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
 
 export function ensureStopHook(projectRoot: string): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");
@@ -428,7 +435,7 @@ function isTrivialFile(filePath) {
 
 // X7 — record every fire to .deeppairing/hooks-state.json so the
 // companion UI's HookStatus can show "hook stack working" feedback.
-const STATE_PATH = path.join(process.cwd(), ".deeppairing", "hooks-state.json");
+const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
 function recordFire(exitCode, reason) {
   try {
     let state = {};
@@ -462,7 +469,7 @@ process.stdin.on("end", () => {
     // V2.1 — trivial files (gitignore, lockfiles, generated paths) auto-pass.
     if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
 
-    const sessionsDir = path.join(process.cwd(), ".deeppairing", "sessions");
+    const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "sessions");
     if (!fs.existsSync(sessionsDir)) exit(0, "skip: no sessions dir");
 
     let mostRecentCheckpoint = 0;
@@ -484,14 +491,16 @@ process.stdin.on("end", () => {
     const FRESH_MS = 60 * 1000;
     const ageMs = Date.now() - mostRecentCheckpoint;
     if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
-      process.stdout.write(
+      process.stderr.write(
         "deepPairing: " + tool + " on " + filePath +
         " without an intervening present_code_change. " +
         "Call present_code_change BEFORE the next edit so the human can react. " +
         "(Per-Edit Checkpoint rule — see the CLAUDE.md 'Per-Edit Checkpoint' section. " +
         "Config / generated files like .gitignore are auto-skipped.)\\n"
       );
-      exit(2, "nag: " + tool + " on " + filePath);
+      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
+      // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
+      exit(0, "nag: " + tool + " on " + filePath);
     }
     exit(0, "pass: fresh checkpoint covers " + filePath);
   } catch (err) {
@@ -531,7 +540,9 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     // version) gets dropped and replaced with the canonical current
     // entry. Prevents accumulation of stale duplicates as the hook
     // command evolves.
-    const CANONICAL_CMD = `node ${CHECKPOINT_SCRIPT_REL_PATH}`;
+    // $CLAUDE_PROJECT_DIR-anchored (not relative) so the hook resolves
+    // regardless of the session cwd — see STOP_HOOK_COMMAND for the rationale.
+    const CANONICAL_CMD = `node "$CLAUDE_PROJECT_DIR/${CHECKPOINT_SCRIPT_REL_PATH}"`;
     const isDpCheckpointEntry = (entry: any) => {
       if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
       if (Array.isArray(entry?.hooks)) {

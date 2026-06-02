@@ -9,6 +9,36 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   const validated = validatePresentCodeChangeInput(args);
   if (!validated.ok) return validated.error;
   const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
+
+  // #3 — when `before` is omitted, reconstruct it from the most recent prior
+  // code_change for the same file so the UI renders a focused diff instead of
+  // the whole file. Do this REGARDLESS of the agent's changeType: agents
+  // routinely mislabel a real modification as "create", which (empty before)
+  // suppresses the diff and shows the file under a "create" banner. History is
+  // the source of truth, not the label.
+  let effectiveBefore = before;
+  let effectiveChangeType = changeType;
+  if (!effectiveBefore) {
+    try {
+      const prior = (await ctx.store.getArtifacts())
+        .filter((a) =>
+          a.type === "code_change" &&
+          (a.content as any)?.filePath === filePath &&
+          typeof (a.content as any)?.after === "string" &&
+          (a.content as any).after.length > 0,
+        )
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+      if (prior) effectiveBefore = (prior.content as any).after as string;
+    } catch {
+      // best-effort; fall back to the empty before (full-file view)
+    }
+  }
+  // A change with real prior content is a modification, not a creation —
+  // correct the label so the diff renders and the banner is accurate.
+  if (effectiveBefore && effectiveChangeType === "create") {
+    effectiveChangeType = "modify";
+  }
+
   const proposals: string[] = [filePath, reasoning].filter(Boolean);
   const proposalPaths: string[] = [filePath];
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
@@ -18,8 +48,8 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   const artifact = await ctx.store.createArtifact({
     id,
     type: "code_change",
-    title: `${changeType} ${filePath}`,
-    content: { filePath, changeType, before, after, reasoning, confidence, concept },
+    title: `${effectiveChangeType} ${filePath}`,
+    content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
   });
@@ -31,7 +61,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // surface for leaked vendor-prefixed API keys; a refactor near
   // auth code or a finding that quotes a config block is exactly
   // where the agent might paste a real secret. See secret-scan.ts.
-  const secretMatches = scanManyForSecrets([before, after, reasoning]);
+  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
   if (secretMatches.length > 0) {
     ctx.broadcast({
       type: "secret_warning",
@@ -49,7 +79,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // reasoning + linked findings render in full. Threshold is intentionally
   // conservative — terminal accept is a great escape hatch for tiny edits,
   // a footgun for sprawling ones.
-  const changedLines = before.split("\n").length + after.split("\n").length;
+  const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
   const isSmallEdit = changedLines <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
   if (isSmallEdit && isConfident) {
@@ -62,12 +92,12 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
       await ctx.store.updateArtifactStatus(id, "approved");
       await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
       return {
-        content: [{ type: "text", text: `Code change approved (${id}): ${args?.changeType} ${args?.filePath}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
       };
     }
   }
 
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${args?.changeType} ${args?.filePath}. Human can review at localhost:${ctx.port}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

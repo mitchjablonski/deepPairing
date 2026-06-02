@@ -68,8 +68,11 @@ describe("replay store — enterReplay", () => {
 
   it("fetches annotations for the session (best-effort)", async () => {
     await useReplayStore.getState().enterReplay("past_session", sessionState);
+    // Now routed through apiGet, so the read carries session+project headers
+    // (X-Project-Hash) instead of going out bare.
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/sessions/past_session/annotations"),
+      expect.objectContaining({ headers: expect.anything() }),
     );
   });
 

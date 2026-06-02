@@ -101,6 +101,34 @@ export class DaemonClient implements IStore {
     }
   }
 
+  /**
+   * Phase 3 — recover from a severed socket (a host sleep killed the
+   * connection, and the daemon may have idle-shut and respawned on a
+   * DIFFERENT port). Re-adopt our project's daemon via ensureDaemon
+   * (probe → projectRoot-matched adopt → spawn), rotate the token + port,
+   * and re-register the session. Returns false (so the caller surfaces a
+   * clear error) when there's no projectRoot to recover against, when the
+   * register binding lacks expectedProjectRoot (AA6.4 — never silently
+   * rebind to a possibly-wrong project), or when re-adoption fails.
+   */
+  private async recoverDaemonConnection(): Promise<boolean> {
+    if (!this.projectRoot) return false;
+    if (this.lastRegisterMeta && !this.lastRegisterMeta.expectedProjectRoot) return false;
+    try {
+      // Dynamic import — avoids any static cycle with daemon-lifecycle.
+      const { ensureDaemon } = await import("./daemon-lifecycle.js");
+      const info = await ensureDaemon(this.projectRoot);
+      if (!info) return false;
+      if (info.authToken) this.authToken = info.authToken;
+      // The daemon may have respawned on a new port — rebuild baseUrl.
+      this.baseUrl = `http://localhost:${info.port}/api/internal/sessions/${this.sessionId}`;
+      await this.register(this.lastRegisterMeta);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   getSessionId(): string {
     return this.sessionId;
   }
@@ -135,7 +163,27 @@ export class DaemonClient implements IStore {
       ...init,
       headers: { ...(init.headers ?? {}), ...extraHeaders },
     };
-    const res = await fetch(`${this.baseUrl}${path}`, initWithHash);
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, initWithHash);
+    } catch (err: any) {
+      // AbortError/TimeoutError are the expected long-poll end shape
+      // (waitForFeedback relies on it) — propagate unchanged.
+      if (err?.name === "AbortError" || err?.name === "TimeoutError") throw err;
+      // A network-level throw means the socket to the daemon died — classically
+      // a host sleep severed it (the daemon may also have idle-shut and
+      // respawned on a different port). Transparently re-adopt + retry once
+      // before surfacing anything, so a tool call doesn't fail with a raw
+      // "socket connection closed unexpectedly".
+      if (!isRetry) {
+        const recovered = await this.recoverDaemonConnection();
+        if (recovered) return this.request<T>(path, init, true);
+      }
+      throw new Error(
+        `[deepPairing] daemon connection lost (likely after host sleep). ` +
+        `Reconnect failed — run \`npx deeppairing doctor\` to diagnose, or restart Claude Code.`,
+      );
+    }
     if (res.ok) return res.json();
 
     // Try to parse the structured error body the daemon now returns.

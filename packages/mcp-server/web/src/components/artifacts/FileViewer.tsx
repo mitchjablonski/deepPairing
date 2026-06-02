@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { apiGet } from "../../lib/api";
 import { useArtifactStore } from "../../stores/artifact";
 
 interface FileViewerProps {
@@ -34,7 +35,7 @@ export function FileViewer({
   useEffect(() => {
     setLoading(true);
     // In the companion UI, files are read by Claude Code — no server-side file cache
-    fetch(`/api/files?path=${encodeURIComponent(filePath)}`)
+    apiGet(`/api/files?path=${encodeURIComponent(filePath)}`)
       .then((res) => {
         if (!res.ok) throw new Error("File not cached");
         return res.json();

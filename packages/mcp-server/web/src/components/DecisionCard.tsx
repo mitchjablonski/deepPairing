@@ -79,6 +79,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   );
   const inFlightRef = useRef(false);  // sync race-guard
   const [showRepair, setShowRepair] = useState(false);
+  // Resolved-card disclosure: review each option's full detail (description,
+  // concept, pros/cons) in place, without the heavyweight Re-pair flow.
+  const [showOptions, setShowOptions] = useState(false);
   /** Q3: horizon-check request state — one request per artifact view. */
   const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
@@ -299,6 +302,92 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               </span>
             </div>
           )}
+
+          {/* Read-only review of every option, so you can see what each one
+              entailed (description, concept, pros/cons, effort/risk) without
+              hitting Re-pair. Collapsed by default to keep the resolved card
+              compact; Re-pair stays for actually re-deciding in a new session. */}
+          <div className="mt-2 pt-2 border-t border-accent-green/15">
+            <button
+              onClick={() => setShowOptions((v) => !v)}
+              aria-expanded={showOptions}
+              className="text-2xs font-medium text-text-muted hover:text-text-primary transition-colors"
+            >
+              {showOptions ? "Hide options ▴" : "Show options ▾"}
+            </button>
+            {showOptions && (
+              <div className="mt-2 space-y-2">
+                {event.options.map((option) => {
+                  const isChosen = option.id === selectedId;
+                  return (
+                    <div
+                      key={option.id}
+                      className={`p-3 rounded-lg border ${
+                        isChosen
+                          ? "border-accent-green/40 bg-accent-green-dim/20"
+                          : "border-white/[0.06] bg-surface-elevated/60 opacity-80"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+                        <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
+                        {isChosen ? (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-green text-white rounded">
+                            ✓ Chosen
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 text-2xs font-medium text-text-muted bg-surface-elevated rounded">
+                            Not chosen
+                          </span>
+                        )}
+                        {option.recommendation && (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet text-white rounded"
+                            title="Agent recommended this option"
+                          >
+                            ★ Recommended
+                          </span>
+                        )}
+                      </div>
+                      <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
+                      {option.concept?.name && (
+                        <div className="mb-2">
+                          <ConceptBadge name={option.concept.name} explanation={option.concept.oneLineExplanation} />
+                        </div>
+                      )}
+                      {option.pros.length > 0 && (
+                        <div className="space-y-0.5 mb-1.5">
+                          {option.pros.map((pro, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-xs">
+                              <span className="text-accent-green shrink-0 mt-0.5">✓</span>
+                              <span className="text-text-secondary">{pro}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {option.cons.length > 0 && (
+                        <div className="space-y-0.5 mb-2">
+                          {option.cons.map((con, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-xs">
+                              <span className="text-accent-red shrink-0 mt-0.5">✗</span>
+                              <span className="text-text-secondary">{con}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-1">
+                        <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>
+                          {option.effort}
+                        </span>
+                        <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>
+                          {option.risk} risk
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {/* Q3: horizon-check trigger — only on high-stakes decisions.
               Fires a question-intent comment telling the agent to call

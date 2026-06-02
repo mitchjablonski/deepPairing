@@ -1,7 +1,21 @@
 import { create } from "zustand";
 
 type Theme = "dark" | "light" | "system";
-type FontSize = "compact" | "default" | "large" | "xlarge";
+// "auto" = fluid, viewport-scaled (the default; see the index.css clamp). The
+// rest pin a fixed root size and override auto. "xxlarge"/"huge" lift the
+// manual ceiling past the old 18px for large/high-DPI displays.
+type FontSize = "auto" | "compact" | "default" | "large" | "xlarge" | "xxlarge" | "huge";
+
+// Artifact-list sidebar width presets (px). The sidebar truncates titles hard,
+// so wider presets give more descriptive labels (10 chars isn't enough on the
+// default for many artifact names).
+type SidebarWidth = "compact" | "default" | "wide" | "xwide";
+export const SIDEBAR_WIDTHS: Record<SidebarWidth, number> = {
+  compact: 200,
+  default: 260,
+  wide: 340,
+  xwide: 440,
+};
 
 export const EDITOR_PRESETS: Record<string, { label: string; template: string }> = {
   vscode: { label: "VS Code", template: "vscode://file/{path}:{line}:{column}" },
@@ -18,6 +32,7 @@ interface PreferencesState {
   fontSize: FontSize;
   contentWidth: "full" | "constrained";
   sidebarCollapsed: boolean;
+  sidebarWidth: SidebarWidth;
   focusedPanel: "activity" | "artifact" | null;
   editorScheme: string;
 
@@ -25,6 +40,7 @@ interface PreferencesState {
   setFontSize: (size: FontSize) => void;
   toggleContentWidth: () => void;
   toggleSidebar: () => void;
+  setSidebarWidth: (w: SidebarWidth) => void;
   setFocusedPanel: (panel: "activity" | "artifact" | null) => void;
   setEditorScheme: (scheme: string) => void;
   buildEditorLink: (filePath: string, line: number, column?: number) => string | null;
@@ -41,8 +57,14 @@ function getStoredEditor(): string {
 }
 
 function getStoredFontSize(): FontSize {
+  if (typeof window === "undefined") return "auto";
+  return (localStorage.getItem("dp-font-size") as FontSize) ?? "auto";
+}
+
+function getStoredSidebarWidth(): SidebarWidth {
   if (typeof window === "undefined") return "default";
-  return (localStorage.getItem("dp-font-size") as FontSize) ?? "default";
+  const v = localStorage.getItem("dp-sidebar-width") as SidebarWidth | null;
+  return v && v in SIDEBAR_WIDTHS ? v : "default";
 }
 
 /** Safe localStorage wrappers so the store loads in non-browser contexts. */
@@ -88,6 +110,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
     fontSize: initialFontSize,
     contentWidth: (lsGet("dp-content-width") as "full" | "constrained") ?? "full",
     sidebarCollapsed: false,
+    sidebarWidth: getStoredSidebarWidth(),
     focusedPanel: null,
     editorScheme,
 
@@ -101,6 +124,11 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
       lsSet("dp-font-size", size);
       applyFontSize(size);
       set({ fontSize: size });
+    },
+
+    setSidebarWidth: (w) => {
+      lsSet("dp-sidebar-width", w);
+      set({ sidebarWidth: w });
     },
 
     toggleContentWidth: () =>

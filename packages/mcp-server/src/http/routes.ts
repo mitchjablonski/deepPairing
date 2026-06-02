@@ -164,8 +164,24 @@ export function createHttpRoutes(
   // AA4 — global middleware. Every route checks X-Project-Hash before
   // doing anything else. CORS preflight (OPTIONS) skips the check —
   // browsers don't send our custom headers on preflight.
+  //
+  // II2.2 — exempt the browser BOOTSTRAP surface. The II2 fail-closed flip
+  // (missing hash → 403) is correct for session state + mutations, where JS
+  // sets X-Project-Hash on the fetch/XHR/WS. But it ALSO fired on the
+  // requests the browser makes via plain NAVIGATION, which cannot carry
+  // custom headers — 403'ing the page out of existence before any JS runs:
+  //   - GET / and any non-/api GET → the SPA document + /assets/* bundle
+  //   - GET /api/daemon-info → the read-only discovery endpoint the SPA and
+  //     the HH4 stale-tab self-heal use to LEARN the hash (gating it is a
+  //     chicken-and-egg: you need the daemon's hash to ask it for its hash)
+  // None of these touch a session store, so the AA4 wrong-store threat model
+  // doesn't apply. Everything else (session state + mutations) stays gated.
   app.use("*", async (c, next) => {
     if (c.req.method === "OPTIONS") return next();
+    const p = c.req.path;
+    const isBootstrap =
+      c.req.method === "GET" && (!p.startsWith("/api/") || p === "/api/daemon-info");
+    if (isBootstrap) return next();
     const hashFail = checkProjectHash(c, daemonHash);
     if (hashFail) return hashFail;
     return next();
@@ -334,6 +350,7 @@ export function createHttpRoutes(
     const reason =
       status === "approved" ? "ui_approve_button" :
       status === "revised" ? "ui_revise_button" :
+      status === "obsolete" ? "ui_dismiss_obsolete" :
       "ui_reject_button";
     log(
       `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} ` +
@@ -341,7 +358,11 @@ export function createHttpRoutes(
     );
 
     await store.updateArtifactStatus(artifactId, status, reason as any);
-    await store.resolvePlanReview(artifactId, status, feedback);
+    // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
+    // plan review with it (and it narrows status to the three verdicts).
+    if (status !== "obsolete") {
+      await store.resolvePlanReview(artifactId, status, feedback);
+    }
     // X6 — see comment above; HTTP-side mutations pass null for `server`.
     await maybeUpdateTaskStatus(null, artifactId, store);
 
