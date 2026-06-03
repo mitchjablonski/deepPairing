@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
-import { apiGet, sessionHeaders } from "../lib/api";
+import { apiGet, sessionHeaders, setCurrentHost, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 
 /** Request notification permission and send a notification when tab is unfocused */
@@ -47,6 +47,8 @@ interface ConnectionState {
   disconnect: () => void;
   switchSession: (sessionId: string) => void;
   refreshSessions: () => void;
+  /** MP1 — repoint the whole SPA at another project's daemon (host:port). */
+  switchProject: (host: string) => Promise<void>;
 }
 
 export const useConnectionStore = create<ConnectionState>((set, get) => {
@@ -474,10 +476,42 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     },
 
     refreshSessions: () => {
-      apiGet(`http://${window.location.host}/api/active-sessions`)
+      // MP1 — use the switchable base so this reflects the SELECTED project.
+      apiGet(`${apiBase()}/api/active-sessions`)
         .then((r) => r.json())
         .then((data) => set({ activeSessions: data.sessions ?? [] }))
         .catch(() => {});
+    },
+
+    // MP1 (multi-project spike) — repoint the entire SPA at another project's
+    // daemon (a different localhost port). Tears down the current connection,
+    // switches the shared base, re-seeds projectHash from the target daemon's
+    // /api/daemon-info, clears the artifact store, and reconnects. Cross-origin
+    // is already permitted (CORS + WS guard are hostname-only).
+    switchProject: async (host: string) => {
+      // 1. Learn the target daemon's projectHash BEFORE reconnecting, so the
+      //    first WS upgrade + fetches carry the right X-Project-Hash.
+      let hash: string | null = null;
+      try {
+        const res = await fetch(`http://${host}/api/daemon-info`);
+        if (res.ok) hash = (await res.json())?.projectHash ?? null;
+      } catch { /* fall through; connected payload will populate it */ }
+
+      // 2. Tear down the old adapter + clear the loaded session.
+      const { adapter } = get();
+      if (adapter) { adapter.disconnect(); }
+      const { useArtifactStore } = await import("./artifact");
+      useArtifactStore.getState().reset();
+
+      // 3. Repoint the shared base + identity, then build a fresh connection.
+      setCurrentHost(host);
+      set({ adapter: null, connected: false, sessionId: null, projectHash: hash, daemonStartedAt: null });
+      get().connect();
+      // 4. Refresh the active-sessions list against the new daemon.
+      try {
+        const r = await apiGet(`${apiBase()}/api/active-sessions`);
+        set({ activeSessions: (await r.json())?.sessions ?? [] });
+      } catch { /* best-effort */ }
     },
   };
 });

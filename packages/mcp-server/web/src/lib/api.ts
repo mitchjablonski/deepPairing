@@ -6,10 +6,38 @@
  * access is guarded so module load doesn't throw.
  */
 
-export const API_BASE =
-  typeof window !== "undefined" && window.location?.host
-    ? `http://${window.location.host}`
-    : "";
+// MP1 (multi-project spike) — the host:port the SPA currently talks to.
+// Defaults to the page's own origin (the daemon that served the HTML), but the
+// project switcher can repoint it at another project's daemon (a different
+// localhost port). Cross-origin is already allowed: the daemon's CORS + WS
+// origin guard are hostname-only (port-agnostic). Mutable module state read by
+// API_BASE / wsBase / sessionHeaders so a switch doesn't require reload.
+const defaultHost =
+  typeof window !== "undefined" && window.location?.host ? window.location.host : "";
+let currentHost = defaultHost;
+
+/** Repoint the SPA at a project's daemon host:port (e.g. "localhost:3851"). */
+export function setCurrentHost(host: string): void {
+  currentHost = host || defaultHost;
+}
+export function getCurrentHost(): string {
+  return currentHost;
+}
+
+/** Current daemon HTTP base, e.g. "http://localhost:3851". Reads the live
+ *  switchable host so callers always hit the selected project. */
+export function apiBase(): string {
+  return currentHost ? `http://${currentHost}` : "";
+}
+/** Current daemon WS base, e.g. "ws://localhost:3851/ws". */
+export function wsBase(): string {
+  return currentHost ? `ws://${currentHost}/ws` : "";
+}
+
+// Back-compat: existing call sites import API_BASE as a const. It still
+// reflects the ORIGIN host (pre-switch). New/switch-aware code should call
+// apiBase() instead. Kept so the spike doesn't have to touch every call site.
+export const API_BASE = defaultHost ? `http://${defaultHost}` : "";
 
 /** Get headers with session ID for daemon routing */
 export function sessionHeaders(): Record<string, string> {

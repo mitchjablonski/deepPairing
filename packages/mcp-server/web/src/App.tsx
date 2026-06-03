@@ -15,6 +15,7 @@ import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { YourTasteDrawer } from "./components/YourTasteDrawer";
 import { ConversationRail } from "./components/ConversationRail";
+import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
@@ -221,6 +222,7 @@ function App() {
       <div className="flex items-center justify-between px-4 py-2 border-b border-border-default bg-surface-secondary">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-sm font-bold shrink-0">deepPairing</h1>
+          <ProjectSwitcher />
           <TurnIndicator />
         </div>
         <div className="flex items-center gap-1 shrink-0">

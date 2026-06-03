@@ -180,7 +180,14 @@ export function createHttpRoutes(
     if (c.req.method === "OPTIONS") return next();
     const p = c.req.path;
     const isBootstrap =
-      c.req.method === "GET" && (!p.startsWith("/api/") || p === "/api/daemon-info");
+      c.req.method === "GET" &&
+      (!p.startsWith("/api/") ||
+        p === "/api/daemon-info" ||
+        // MP1 — read-only cross-daemon discovery (project switcher). Returns no
+        // session data (just peer projectRoot/port/hash), so the wrong-store
+        // threat model doesn't apply; and it can't be hash-gated because the
+        // SPA may query it for a project whose hash it doesn't hold yet.
+        p === "/api/projects");
     if (isBootstrap) return next();
     const hashFail = checkProjectHash(c, daemonHash);
     if (hashFail) return hashFail;

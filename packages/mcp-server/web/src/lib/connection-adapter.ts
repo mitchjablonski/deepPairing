@@ -3,6 +3,7 @@
  * Abstracts the transport layer so the same React app works in both
  * browser (WebSocket) and VS Code webview (message passing).
  */
+import { wsBase } from "./api";
 
 export interface ConnectionAdapter {
   connect(): void;
@@ -70,7 +71,10 @@ export class WebSocketAdapter implements ConnectionAdapter {
   private readonly baseUrl: string;
 
   constructor(url?: string, private sessionId?: string) {
-    this.baseUrl = url ?? `ws://${window.location.host}/ws`;
+    // MP1 — default to the switchable wsBase() (the currently-selected
+    // project's daemon), not the fixed page origin, so a project switch that
+    // rebuilds the adapter connects to the chosen daemon.
+    this.baseUrl = url ?? (wsBase() || `ws://${window.location.host}/ws`);
     this.url = WebSocketAdapter.appendQuery(this.baseUrl, sessionId);
   }
 

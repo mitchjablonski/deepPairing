@@ -60,6 +60,10 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // closing the stale-tab-after-port-recycling write hole.
 import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "./project-root.js";
 const daemonProjectHash = projectHashOf(projectRoot);
+// MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
+// so route handlers defined before the server starts can read it at call time
+// (e.g. /api/projects, to mark which discovered daemon is self).
+let boundPort = 0;
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
 const daemonInfoFile = path.join(dpDir, "daemon.json");
@@ -310,6 +314,36 @@ app.get("/api/daemon-info", (c) => {
   // X-Project-Hash for any X-Session-Id'd request. Advertised here so a
   // future client can verify before sending mutations.
   return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt });
+});
+
+// MP1 (multi-project spike) — discover every live deepPairing daemon so the
+// SPA can offer a one-page project switcher. The browser can't quickly sweep
+// 128 ports itself, so the daemon does it server-side (reusing the same
+// probeDaemonIdentity used by `deeppairing list`) and returns the peers,
+// including itself. This is a read-only discovery endpoint (no session data),
+// so it's exempt from the X-Project-Hash gate like /api/daemon-info.
+app.get("/api/projects", async (c) => {
+  const { probeDaemonIdentity } = await import("./daemon-lifecycle.js");
+  const probes: Array<Promise<{ port: number; identity: { projectRoot: string; startedAt: string } | null }>> = [];
+  for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
+    probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
+  }
+  const results = await Promise.all(probes);
+  const projects = results
+    .filter((r) => r.identity !== null)
+    .map((r) => {
+      const root = r.identity!.projectRoot;
+      const segs = root.split(/[\\/]/).filter(Boolean);
+      return {
+        projectRoot: root,
+        projectHash: projectHashOf(root),
+        port: r.port,
+        label: segs[segs.length - 1] ?? root,
+        isSelf: r.port === boundPort,
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return c.json({ projects, selfPort: boundPort, selfHash: daemonProjectHash });
 });
 
 // AA3 — cooperative shutdown endpoint. The doctor's project-mismatch
@@ -652,6 +686,7 @@ async function main() {
       if (result.ok) {
         server = candidateServer;
         port = candidate;
+        boundPort = candidate; // MP1 — expose to route handlers
         if (attempt > 0) log(`Preferred port ${preferredPort} busy — bound to ${candidate} instead (recorded in daemon.json).`);
         break;
       }
