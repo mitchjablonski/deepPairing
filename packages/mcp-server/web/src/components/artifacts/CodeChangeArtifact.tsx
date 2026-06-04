@@ -3,9 +3,24 @@ import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { ConceptBadge } from "../ConceptBadge";
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import { useArtifactStore } from "../../stores/artifact";
 import { computeLineDiff, collapseDiff, type DiffLine, type DiffRow } from "../../lib/diff";
+import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../LineComments";
+
+/**
+ * Shared props that make the diff views comment-capable. Comments anchor to
+ * the NEW-side line number so a comment made on a diff row is byte-identical
+ * to one made in the result/CommentableCode view (lineStart === lineEnd ===
+ * the new line). That target-shape parity is what lets agent replies — which
+ * inherit the parent's line target — thread back onto whichever surface the
+ * user is looking at.
+ */
+interface DiffCommentProps {
+  artifactId: string;
+  filePath?: string;
+  commentsByLine: Map<number, Comment[]>;
+}
 
 interface CodeChangeContent {
   filePath: string;
@@ -18,7 +33,7 @@ interface CodeChangeContent {
   concept?: { name: string; oneLineExplanation?: string };
 }
 
-function UnifiedDiffView({ diff }: { diff: DiffLine[] }) {
+function UnifiedDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: DiffLine[] } & DiffCommentProps) {
   // Collapse long unchanged runs into gap markers so an incremental edit to an
   // already-approved file shows just the changed hunks (+ context), not the
   // whole file. "Show all lines" / clicking a gap reveals everything.
@@ -26,6 +41,10 @@ function UnifiedDiffView({ diff }: { diff: DiffLine[] }) {
   const collapsed = useMemo(() => collapseDiff(diff), [diff]);
   const hidesLines = useMemo(() => collapsed.some((r) => r.type === "gap"), [collapsed]);
   const rows: DiffRow[] = expanded ? diff : collapsed;
+
+  // One open composer at a time, keyed by new-side line number.
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const [mode, setMode] = useState<LineMode>("comment");
 
   return (
     <div className="font-mono text-[13px] leading-[20px] bg-surface-code rounded overflow-hidden">
@@ -49,45 +68,105 @@ function UnifiedDiffView({ diff }: { diff: DiffLine[] }) {
             <span className="px-2 italic">{row.count} unchanged line{row.count === 1 ? "" : "s"}</span>
           </button>
         ) : (
-          <div
-            key={i}
-            className={`flex ${
-              row.type === "removed"
-                ? "bg-accent-red-dim/30"
-                : row.type === "added"
-                  ? "bg-accent-green-dim/30"
-                  : ""
-            }`}
-          >
-            {/* Old line number */}
-            <span className="w-8 shrink-0 text-right pr-1 py-0.5 text-[11px] text-text-muted select-none">
-              {row.oldLineNum ?? ""}
-            </span>
-            {/* New line number */}
-            <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-[11px] text-text-muted select-none border-r border-border-subtle">
-              {row.newLineNum ?? ""}
-            </span>
-            {/* Diff marker */}
-            <span className={`w-5 shrink-0 text-center py-0.5 select-none font-bold ${
-              row.type === "removed"
-                ? "text-accent-red"
-                : row.type === "added"
-                  ? "text-accent-green"
-                  : "text-text-muted"
-            }`}>
-              {row.type === "removed" ? "-" : row.type === "added" ? "+" : " "}
-            </span>
-            {/* Code content */}
-            <span className={`px-2 py-0.5 whitespace-pre flex-1 overflow-x-auto ${
-              row.type === "removed"
-                ? "text-accent-red line-through opacity-70"
-                : row.type === "added"
-                  ? "text-text-primary"
-                  : "text-text-secondary"
-            }`}>
-              {row.content || " "}
-            </span>
-          </div>
+          (() => {
+            // Comments anchor to the new-side line. Removed rows have no new
+            // line, so they get no comment affordance (the simplest correct
+            // behavior — there's nothing in the result to anchor to).
+            const newLine = row.newLineNum;
+            const commentable = newLine != null;
+            const lineComments = commentable ? commentsByLine.get(newLine) ?? [] : [];
+            const isActive = commentable && activeLine === newLine;
+            return (
+              <div key={i} data-comment-anchor={commentable ? `line:${filePath ?? ""}:${newLine}` : undefined}>
+                <div
+                  className={`flex group ${
+                    row.type === "removed"
+                      ? "bg-accent-red-dim/30"
+                      : row.type === "added"
+                        ? "bg-accent-green-dim/30"
+                        : ""
+                  }`}
+                >
+                  {/* Gutter (+/?) — only for rows with a new-side line. */}
+                  {commentable ? (
+                    <LineGutter
+                      lineNum={newLine}
+                      commentCount={lineComments.length}
+                      active={isActive}
+                      activeMode={mode}
+                      onOpen={(m) => {
+                        setActiveLine(newLine);
+                        setMode(m);
+                      }}
+                      onClose={() => setActiveLine(null)}
+                      className="w-10 shrink-0 pr-0.5"
+                    />
+                  ) : (
+                    <span className="w-10 shrink-0" />
+                  )}
+                  {/* Old line number */}
+                  <span className="w-8 shrink-0 text-right pr-1 py-0.5 text-[11px] text-text-muted select-none">
+                    {row.oldLineNum ?? ""}
+                  </span>
+                  {/* New line number */}
+                  <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-[11px] text-text-muted select-none border-r border-border-subtle">
+                    {row.newLineNum ?? ""}
+                  </span>
+                  {/* Diff marker */}
+                  <span className={`w-5 shrink-0 text-center py-0.5 select-none font-bold ${
+                    row.type === "removed"
+                      ? "text-accent-red"
+                      : row.type === "added"
+                        ? "text-accent-green"
+                        : "text-text-muted"
+                  }`}>
+                    {row.type === "removed" ? "-" : row.type === "added" ? "+" : " "}
+                  </span>
+                  {/* Code content */}
+                  <span className={`px-2 py-0.5 whitespace-pre flex-1 overflow-x-auto ${
+                    row.type === "removed"
+                      ? "text-accent-red line-through opacity-70"
+                      : row.type === "added"
+                        ? "text-text-primary"
+                        : "text-text-secondary"
+                  }`}>
+                    {row.content || " "}
+                  </span>
+                </div>
+
+                {/* Existing comments + threaded replies on the new-side line. */}
+                {commentable && lineComments.length > 0 && !isActive && (
+                  <div className="ml-[5.5rem] mr-3 my-1">
+                    <LineCommentChips
+                      lineNum={newLine}
+                      comments={lineComments}
+                      artifactId={artifactId}
+                      filePath={filePath}
+                      onOpenLine={() => {
+                        setActiveLine(newLine);
+                        setMode("comment");
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Inline composer. No span end (a diff isn't a contiguous
+                    source); single-line targeting matches the result view. */}
+                {isActive && (
+                  <LineComposer
+                    lineNum={newLine}
+                    artifactId={artifactId}
+                    filePath={filePath}
+                    lineText={row.content}
+                    mode={mode}
+                    setMode={setMode}
+                    existingComments={lineComments}
+                    onClose={() => setActiveLine(null)}
+                  />
+                )}
+              </div>
+            );
+          })()
         ),
       )}
     </div>
@@ -157,7 +236,7 @@ function toSplitRows(rows: DiffRow[]): SplitRow[] {
   return out;
 }
 
-function SplitCellView({ cell }: { cell: SplitCell }) {
+function SplitCellView({ cell, gutter }: { cell: SplitCell; gutter?: ReactNode }) {
   if (cell.kind === "empty") {
     return <div className="flex bg-surface-elevated/20 min-h-[20px]" />;
   }
@@ -181,7 +260,8 @@ function SplitCellView({ cell }: { cell: SplitCell }) {
         ? "text-text-primary"
         : "text-text-secondary";
   return (
-    <div className={`flex min-w-0 ${bg}`}>
+    <div className={`flex min-w-0 group ${bg}`}>
+      {gutter}
       <span className="w-8 shrink-0 text-right pr-1 py-0.5 text-[11px] text-text-muted select-none border-r border-border-subtle">
         {cell.lineNum || ""}
       </span>
@@ -195,12 +275,16 @@ function SplitCellView({ cell }: { cell: SplitCell }) {
   );
 }
 
-function SplitDiffView({ diff }: { diff: DiffLine[] }) {
+function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: DiffLine[] } & DiffCommentProps) {
   const [expanded, setExpanded] = useState(false);
   const collapsed = useMemo(() => collapseDiff(diff), [diff]);
   const hidesLines = useMemo(() => collapsed.some((r) => r.type === "gap"), [collapsed]);
   const sourceRows: DiffRow[] = expanded ? diff : collapsed;
   const splitRows = useMemo(() => toSplitRows(sourceRows), [sourceRows]);
+
+  // One open composer at a time, keyed by the right (after) cell's line number.
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const [mode, setMode] = useState<LineMode>("comment");
 
   return (
     <div className="font-mono text-[13px] leading-[20px] bg-surface-code rounded overflow-hidden">
@@ -233,10 +317,72 @@ function SplitDiffView({ diff }: { diff: DiffLine[] }) {
             </span>
           </button>
         ) : (
-          <div key={i} className="grid grid-cols-2 divide-x divide-border-subtle">
-            <SplitCellView cell={row.left} />
-            <SplitCellView cell={row.right} />
-          </div>
+          (() => {
+            // Anchor comments to the right (after) cell's line. Removed-only
+            // rows have an empty right cell and no new line, so they get no
+            // comment affordance — matching the unified view's behavior.
+            const right = row.right;
+            const newLine = right.kind !== "empty" ? right.lineNum : undefined;
+            const commentable = newLine != null && newLine > 0;
+            const lineComments = commentable ? commentsByLine.get(newLine!) ?? [] : [];
+            const isActive = commentable && activeLine === newLine;
+            return (
+              <div key={i} data-comment-anchor={commentable ? `line:${filePath ?? ""}:${newLine}` : undefined}>
+                <div className="grid grid-cols-2 divide-x divide-border-subtle">
+                  <SplitCellView cell={row.left} />
+                  <SplitCellView
+                    cell={right}
+                    gutter={
+                      commentable ? (
+                        <LineGutter
+                          lineNum={newLine!}
+                          commentCount={lineComments.length}
+                          active={isActive}
+                          activeMode={mode}
+                          onOpen={(m) => {
+                            setActiveLine(newLine!);
+                            setMode(m);
+                          }}
+                          onClose={() => setActiveLine(null)}
+                          className="w-9 shrink-0 pr-0.5"
+                        />
+                      ) : undefined
+                    }
+                  />
+                </div>
+
+                {/* Existing comments + threaded replies, full width below the row. */}
+                {commentable && lineComments.length > 0 && !isActive && (
+                  <div className="ml-[5.5rem] mr-3 my-1">
+                    <LineCommentChips
+                      lineNum={newLine!}
+                      comments={lineComments}
+                      artifactId={artifactId}
+                      filePath={filePath}
+                      onOpenLine={() => {
+                        setActiveLine(newLine!);
+                        setMode("comment");
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Inline composer — single-line targeting, same as result view. */}
+                {isActive && (
+                  <LineComposer
+                    lineNum={newLine!}
+                    artifactId={artifactId}
+                    filePath={filePath}
+                    lineText={right.kind !== "empty" ? right.content : ""}
+                    mode={mode}
+                    setMode={setMode}
+                    existingComments={lineComments}
+                    onClose={() => setActiveLine(null)}
+                  />
+                )}
+              </div>
+            );
+          })()
         ),
       )}
     </div>
@@ -411,9 +557,19 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
 
       {/* Code view */}
       {viewMode === "unified" && diff ? (
-        <UnifiedDiffView diff={diff} />
+        <UnifiedDiffView
+          diff={diff}
+          artifactId={artifact.id}
+          filePath={content.filePath}
+          commentsByLine={commentsByLine}
+        />
       ) : viewMode === "split" && diff ? (
-        <SplitDiffView diff={diff} />
+        <SplitDiffView
+          diff={diff}
+          artifactId={artifact.id}
+          filePath={content.filePath}
+          commentsByLine={commentsByLine}
+        />
       ) : (
         <CommentableCode
           code={content.after || effectiveBefore}
