@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
-import { API_BASE, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 
 /**
  * U3 — surface a mutation failure as a toast. Pulled out of every catch
@@ -172,7 +172,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
 
   submitComment: async (artifactId, content, target, options) => {
     try {
-      await safeFetch(`${API_BASE}/api/comments`, {
+      await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({
@@ -191,7 +191,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
 
   updateArtifactStatus: async (artifactId, status, feedback) => {
     try {
-      await safeFetch(`${API_BASE}/api/artifacts/${artifactId}/status`, {
+      await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/status`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ status, feedback }),
@@ -207,7 +207,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
     try {
-      await safeFetch(`${API_BASE}/api/decisions/${decisionId}`, {
+      await safeFetch(`${apiBase()}/api/decisions/${decisionId}`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({
@@ -232,7 +232,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       ),
     }));
     try {
-      await safeFetch(`${API_BASE}/api/artifacts/${artifactId}/rename`, {
+      await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/rename`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ title }),
