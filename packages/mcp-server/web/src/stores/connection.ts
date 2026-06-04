@@ -296,7 +296,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // streaming on the same socket so the browser never knew its
           // optimistic state may be stale; the daemon broadcasts this so
           // we can refetch full state + toast the user.
-          fetch(`http://${window.location.host}/api/state`, {
+          fetch(`${apiBase()}/api/state`, {
             headers: { ...sessionHeaders(), "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
           })
             .then((r) => (r.ok ? r.json() : null))

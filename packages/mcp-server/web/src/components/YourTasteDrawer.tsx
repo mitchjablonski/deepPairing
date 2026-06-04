@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiGet, sessionHeaders } from "../lib/api";
+import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useArtifactStore } from "../stores/artifact";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
@@ -150,7 +150,7 @@ export function YourTasteDrawer({
     let cancelled = false;
     (async () => {
       try {
-        const res = await apiGet(`http://${window.location.host}/api/philosophy?limit=200`);
+        const res = await apiGet(`${apiBase()}/api/philosophy?limit=200`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) setEntries(data.entries ?? []);
@@ -169,7 +169,7 @@ export function YourTasteDrawer({
     let cancelled = false;
     (async () => {
       try {
-        const res = await apiGet(`http://${window.location.host}/api/philosophy/digest?sinceDays=7`);
+        const res = await apiGet(`${apiBase()}/api/philosophy/digest?sinceDays=7`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) setDigest(data);
@@ -199,7 +199,7 @@ export function YourTasteDrawer({
     let cancelled = false;
     (async () => {
       try {
-        const res = await apiGet(`http://${window.location.host}/api/team-preferences`);
+        const res = await apiGet(`${apiBase()}/api/team-preferences`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!cancelled) setTeamPrefs(data);
@@ -297,7 +297,7 @@ export function YourTasteDrawer({
                     // Refetch the stance list so the just-seeded entry
                     // appears immediately. Re-using the same fetch shape
                     // the mount effect uses.
-                    apiGet(`http://${window.location.host}/api/philosophy?limit=200`)
+                    apiGet(`${apiBase()}/api/philosophy?limit=200`)
                       .then((r) => r.ok ? r.json() : null)
                       .then((data) => {
                         if (data) setEntries(data.entries ?? []);
@@ -801,7 +801,7 @@ export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`http://${window.location.host}/api/philosophy/seed`, {
+      const res = await fetch(`${apiBase()}/api/philosophy/seed`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ concept, verdict }),

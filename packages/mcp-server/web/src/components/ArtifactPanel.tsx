@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { apiGet } from "../lib/api";
+import { apiGet, apiBase } from "../lib/api";
 import { type Artifact, type DecisionContent, getTypedContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
@@ -527,7 +527,6 @@ function ArtifactSidebar({
   );
 }
 
-const API_BASE = `http://${window.location.host}`;
 
 interface ActiveSession { sessionId: string; port: number; pid: number; startedAt: string }
 
@@ -544,7 +543,7 @@ function MultiAgentSync() {
 
     const sync = async () => {
       try {
-        const res = await apiGet(`${API_BASE}/api/active-sessions`);
+        const res = await apiGet(`${apiBase()}/api/active-sessions`);
         const data = await res.json();
         const sessions: ActiveSession[] = data.sessions ?? [];
 
@@ -553,7 +552,7 @@ function MultiAgentSync() {
 
           // Load this session's artifacts from disk via the API
           try {
-            const sRes = await apiGet(`${API_BASE}/api/live-session/${session.sessionId}`);
+            const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`);
             if (!sRes.ok) continue;
             const state = await sRes.json();
             if (cancelled) return;

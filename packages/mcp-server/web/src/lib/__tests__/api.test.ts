@@ -1,9 +1,35 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { sessionHeaders, safeFetch, ApiError } from "../api";
+import { sessionHeaders, safeFetch, ApiError, setCurrentHost, apiBase, wsBase } from "../api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setCurrentHost(""); // MP1 — reset to default origin between tests
+});
+
+describe("MP1 — switchable base (project switch)", () => {
+  it("apiBase/wsBase follow setCurrentHost so the SPA can repoint at another project's daemon", () => {
+    setCurrentHost("localhost:3910");
+    expect(apiBase()).toBe("http://localhost:3910");
+    expect(wsBase()).toBe("ws://localhost:3910/ws");
+
+    // Switch to a different project's port — both bases follow.
+    setCurrentHost("localhost:3866");
+    expect(apiBase()).toBe("http://localhost:3866");
+    expect(wsBase()).toBe("ws://localhost:3866/ws");
+  });
+
+  it("a mutation built from apiBase() targets the SELECTED daemon's port, not a fixed origin", async () => {
+    setCurrentHost("localhost:3910");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    // Mirrors how the artifact store posts an accept.
+    await safeFetch(`${apiBase()}/api/artifacts/art_x/status`, { method: "POST" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3910/api/artifacts/art_x/status",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });
 
 describe("sessionHeaders", () => {

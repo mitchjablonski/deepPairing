@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { apiGet } from "../lib/api";
+import { apiGet, apiBase } from "../lib/api";
 
-const API_BASE = `http://${window.location.host}`;
 
 const formats = [
   { id: "learnings", label: "Learnings", description: "Concepts named, predictions made, approaches rejected" },
@@ -18,7 +17,7 @@ export function ExportMenu() {
 
   const handleExport = async (format: string) => {
     try {
-      const res = await apiGet(`${API_BASE}/api/export?format=${format}`);
+      const res = await apiGet(`${apiBase()}/api/export?format=${format}`);
       const markdown = await res.text();
 
       await navigator.clipboard.writeText(markdown);
@@ -26,7 +25,7 @@ export function ExportMenu() {
       setTimeout(() => setCopied(null), 2000);
     } catch {
       // Fallback: open in new tab
-      window.open(`${API_BASE}/api/export?format=${format}`, "_blank");
+      window.open(`${apiBase()}/api/export?format=${format}`, "_blank");
     }
     setOpen(false);
   };

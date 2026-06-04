@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { apiBase } from "../lib/api";
 import { WalkthroughCards } from "./WalkthroughCards";
 
 /**
@@ -50,7 +51,7 @@ export function WaitingForClaude() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`http://${window.location.host}/api/daemon-info`);
+        const res = await fetch(`${apiBase()}/api/daemon-info`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setInfo(data);
