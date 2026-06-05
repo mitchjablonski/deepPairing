@@ -316,6 +316,14 @@ export function createDaemonRoutes(
     return c.json({ status: "marked" });
   });
 
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const { resolvedAt } = await c.req.json().catch(() => ({}));
+    r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
+    return c.json({ status: "resolved" });
+  });
+
   // --- Decisions ---
 
   app.post("/api/internal/sessions/:sessionId/decisions", async (c) => {

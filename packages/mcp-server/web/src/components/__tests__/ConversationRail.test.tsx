@@ -138,6 +138,19 @@ describe("ConversationRail (W1)", () => {
     expect(screen.getByText(/1 unanswered question/i)).toBeInTheDocument();
   });
 
+  it("does NOT count a human question the human resolved themselves (humanResolvedAt set)", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    const q = comment({
+      id: "q1", artifactId: "a1", author: "human", intent: "question",
+      content: "never mind, figured it out", createdAt: "2026-04-26T10:00:00.000Z",
+    });
+    (q as any).humanResolvedAt = "2026-04-26T11:00:00.000Z";
+    s.addComment(q);
+    render(<ConversationRail onClose={() => {}} />);
+    expect(screen.queryByText(/1 unanswered question/i)).not.toBeInTheDocument();
+  });
+
   it("does NOT flag a question once an agent reply exists for it", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { title: "Findings" }));

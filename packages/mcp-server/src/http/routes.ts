@@ -288,6 +288,24 @@ export function createHttpRoutes(
     return c.json({ comment });
   });
 
+  // Mark a human's OWN unanswered question resolved (human-side "I'm done
+  // waiting" — they figured it out or it's no longer relevant). VISIBILITY /
+  // waiting-signal only: sets humanResolvedAt; never touches `acknowledged`
+  // (the agent's drain queue) or artifact status.
+  app.post("/api/comments/:commentId/mark-resolved", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    const resolvedAt = new Date().toISOString();
+    await store.markCommentHumanResolved(commentId, resolvedAt);
+    const comment = await store.getComment(commentId);
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+    }
+    return c.json({ status: "resolved", commentId, comment: comment ?? null });
+  });
+
   // Resolve a decision from the web UI
   app.post("/api/decisions/:decisionId", async (c) => {
     const sid = getSessionId(c);

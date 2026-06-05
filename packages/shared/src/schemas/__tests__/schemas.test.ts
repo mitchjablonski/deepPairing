@@ -246,6 +246,26 @@ describe("CommentSchema", () => {
       CommentSchema.parse({ ...sampleComment, content: "" }),
     ).toThrow();
   });
+
+  it("accepts an optional humanResolvedAt timestamp", () => {
+    const result = CommentSchema.parse({
+      ...sampleComment,
+      intent: "question",
+      humanResolvedAt: "2026-05-31T12:00:00.000Z",
+    });
+    expect(result.humanResolvedAt).toBe("2026-05-31T12:00:00.000Z");
+  });
+
+  it("is backward-compatible: a comment without humanResolvedAt still parses", () => {
+    const result = CommentSchema.parse(sampleComment);
+    expect(result.humanResolvedAt).toBeUndefined();
+  });
+
+  it("rejects a non-datetime humanResolvedAt", () => {
+    expect(() =>
+      CommentSchema.parse({ ...sampleComment, humanResolvedAt: "not-a-date" }),
+    ).toThrow();
+  });
 });
 
 describe("AgentEventSchema - artifact events", () => {
@@ -265,6 +285,15 @@ describe("AgentEventSchema - artifact events", () => {
     const event = { type: "comment_added", comment: sampleComment };
     const result = AgentEventSchema.parse(event);
     expect(result.type).toBe("comment_added");
+  });
+
+  it("parses comment_updated events", () => {
+    const event = {
+      type: "comment_updated",
+      comment: { ...sampleComment, humanResolvedAt: "2026-05-31T12:00:00.000Z" },
+    };
+    const result = AgentEventSchema.parse(event);
+    expect(result.type).toBe("comment_updated");
   });
 
   it("parses plan_review_request events", () => {

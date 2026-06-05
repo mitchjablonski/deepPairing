@@ -154,6 +154,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           store.addComment(data.comment);
           break;
 
+        case "comment_updated":
+          store.updateComment(data.comment);
+          break;
+
         case "artifact_renamed":
           useArtifactStore.setState((s) => ({
             artifacts: s.artifacts.map((a) =>
