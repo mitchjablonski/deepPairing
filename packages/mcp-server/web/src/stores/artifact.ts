@@ -284,7 +284,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       return { comments: nextComments };
     });
     try {
-      await safeFetch(`${API_BASE}/api/comments/${commentId}/mark-resolved`, {
+      await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-resolved`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ resolvedAt }),

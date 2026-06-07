@@ -309,11 +309,39 @@ app.route("/", publicRoutes);
 // N2.1: daemon identity endpoint so multi-project clients can verify they're
 // adopting the right daemon before trusting a port (avoids cross-project
 // adoption when daemon.json has been deleted). Includes projectRoot + port.
+// MP1 — count items waiting on the human across ALL of this daemon's sessions
+// (draft reviewable artifacts + unanswered/un-resolved human questions). Mirrors
+// the web lib/pending.ts rule so the cross-project badge matches the in-app
+// PendingBanner. Advertised on /api/daemon-info so the discovery sweep can show
+// a per-project "agent waiting" count without the browser polling every daemon.
+const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change"]);
+function computeDaemonPendingCount(): number {
+  let n = 0;
+  for (const store of sessions.values()) {
+    try {
+      const st: any = store.getFullState();
+      for (const a of st.artifacts ?? []) {
+        if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
+      }
+      for (const cmt of st.comments ?? []) {
+        if (
+          cmt.author === "human" &&
+          cmt.intent === "question" &&
+          !cmt.answeredByCommentId &&
+          !cmt.humanResolvedAt
+        ) n++;
+      }
+    } catch { /* skip a store that can't render state */ }
+  }
+  return n;
+}
+
 app.get("/api/daemon-info", (c) => {
   // AA4 — projectHash is the value the browser must send back in
   // X-Project-Hash for any X-Session-Id'd request. Advertised here so a
   // future client can verify before sending mutations.
-  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt });
+  // MP1 — pendingCount drives the cross-project "agent waiting" badge.
+  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, pendingCount: computeDaemonPendingCount() });
 });
 
 // MP1 (multi-project spike) — discover every live deepPairing daemon so the
@@ -324,7 +352,7 @@ app.get("/api/daemon-info", (c) => {
 // so it's exempt from the X-Project-Hash gate like /api/daemon-info.
 app.get("/api/projects", async (c) => {
   const { probeDaemonIdentity } = await import("./daemon-lifecycle.js");
-  const probes: Array<Promise<{ port: number; identity: { projectRoot: string; startedAt: string } | null }>> = [];
+  const probes: Array<Promise<{ port: number; identity: any | null }>> = [];
   for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
     probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
   }
@@ -332,7 +360,7 @@ app.get("/api/projects", async (c) => {
   const projects = results
     .filter((r) => r.identity !== null)
     .map((r) => {
-      const root = r.identity!.projectRoot;
+      const root = r.identity!.projectRoot as string;
       const segs = root.split(/[\\/]/).filter(Boolean);
       return {
         projectRoot: root,
@@ -340,6 +368,9 @@ app.get("/api/projects", async (c) => {
         port: r.port,
         label: segs[segs.length - 1] ?? root,
         isSelf: r.port === boundPort,
+        // MP1 — per-project "agent waiting" count (from each peer's
+        // /api/daemon-info). Drives the switcher badge + global indicator.
+        pendingCount: typeof r.identity.pendingCount === "number" ? r.identity.pendingCount : 0,
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));

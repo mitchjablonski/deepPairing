@@ -16,6 +16,8 @@ interface DiscoveredProject {
   port: number;
   label: string;
   isSelf: boolean;
+  /** MP1 — items waiting on the human in that project (drafts + open questions). */
+  pendingCount?: number;
 }
 
 export function ProjectSwitcher() {
@@ -60,6 +62,13 @@ export function ProjectSwitcher() {
   // switch between — otherwise it's noise.
   if (projects.length <= 1) return null;
 
+  // MP1 — global "agent waiting elsewhere" signal: total pending across OTHER
+  // projects (not the one you're viewing), so a waiting agent is noticeable
+  // even while you're heads-down on a different project.
+  const otherWaiting = projects
+    .filter((p) => current?.port !== p.port)
+    .reduce((sum, p) => sum + (p.pendingCount ?? 0), 0);
+
   return (
     <div className="relative shrink-0">
       <button
@@ -67,12 +76,21 @@ export function ProjectSwitcher() {
         disabled={switching}
         className="flex items-center gap-1.5 px-2 py-1 rounded text-2xs bg-surface-elevated border border-border-default
                    text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50"
-        title="Switch project"
+        title={otherWaiting > 0 ? `${otherWaiting} item${otherWaiting > 1 ? "s" : ""} waiting in other projects` : "Switch project"}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-accent-green shrink-0" />
         <span className="font-medium max-w-[160px] truncate">
           {switching ? "Switching…" : current?.label ?? "Select project"}
         </span>
+        {/* Global indicator: another project's agent is waiting on you. */}
+        {otherWaiting > 0 && (
+          <span
+            className="ml-0.5 px-1.5 rounded-full bg-accent-amber text-surface-primary text-[10px] font-bold leading-tight"
+            aria-label={`${otherWaiting} items waiting in other projects`}
+          >
+            {otherWaiting}
+          </span>
+        )}
         <span className="text-text-muted">▾</span>
       </button>
 
@@ -96,6 +114,17 @@ export function ProjectSwitcher() {
                 >
                   <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isCurrent ? "bg-accent-green" : "bg-text-muted"}`} />
                   <span className="flex-1 min-w-0 truncate">{p.label}</span>
+                  {/* Per-project waiting badge — amber count when that project's
+                      agent needs the human. */}
+                  {(p.pendingCount ?? 0) > 0 && (
+                    <span
+                      className="px-1.5 rounded-full bg-accent-amber text-surface-primary text-[10px] font-bold leading-tight shrink-0"
+                      aria-label={`${p.pendingCount} waiting`}
+                      title={`${p.pendingCount} item${(p.pendingCount ?? 0) > 1 ? "s" : ""} waiting for you`}
+                    >
+                      {p.pendingCount}
+                    </span>
+                  )}
                   <span className="text-2xs text-text-muted font-mono shrink-0">:{p.port}</span>
                 </button>
               );
