@@ -445,4 +445,49 @@ describe("CommentableCode", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     expect(screen.getByRole("button", { name: /submit suggestion/i })).toBeInTheDocument();
   });
+
+  // Turn-state surfacing on INLINE line comments (LineComments path). These
+  // were initially added only to the bottom CommentThread; manual testing
+  // found a line question had no "Mark resolved", so they were added to the
+  // inline renderer too. These lock that in.
+  describe("turn-state on inline line comments", () => {
+    const mkQ = (over: any = {}) => ({
+      id: "cmt_q", sessionId: "s", target: { artifactId: "art_x", lineStart: 1, lineEnd: 1 },
+      parentCommentId: null, author: "human" as const, intent: "question" as const,
+      content: "is this constant time?", acknowledged: false, createdAt: "2026-04-26T10:00:00.000Z", ...over,
+    });
+
+    it("an unanswered human question shows 'awaiting answer' + a 'Mark resolved' that calls the store", async () => {
+      const byLine = new Map<number, any[]>([[1, [mkQ()]]]);
+      const spy = vi.spyOn(useArtifactStore.getState(), "markQuestionResolved").mockResolvedValue();
+      render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={byLine} />);
+      expect(screen.getByText(/awaiting answer/i)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /mark resolved/i }));
+      expect(spy).toHaveBeenCalledWith("cmt_q");
+    });
+
+    it("a resolved question shows 'resolved by you' and no 'Mark resolved'", () => {
+      const byLine = new Map<number, any[]>([[1, [mkQ({ humanResolvedAt: "2026-04-26T11:00:00.000Z" })]]]);
+      render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={byLine} />);
+      expect(screen.getByText(/resolved by you/i)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /mark resolved/i })).not.toBeInTheDocument();
+    });
+
+    it("an answered question shows neither 'awaiting answer' nor 'Mark resolved'", () => {
+      const byLine = new Map<number, any[]>([[1, [mkQ({ answeredByCommentId: "cmt_a" })]]]);
+      render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={byLine} />);
+      expect(screen.queryByText(/awaiting answer/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /mark resolved/i })).not.toBeInTheDocument();
+    });
+
+    it("a plain human comment shows delivery status (delivered vs seen) from acknowledged", () => {
+      const undelivered = { id: "c1", sessionId: "s", target: { artifactId: "art_x", lineStart: 1, lineEnd: 1 }, parentCommentId: null, author: "human" as const, content: "looks good", acknowledged: false, createdAt: "2026-04-26T10:00:00.000Z" };
+      const byLine = new Map<number, any[]>([[1, [undelivered]]]);
+      const { rerender } = render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={byLine} />);
+      expect(screen.getByText(/delivered · awaiting agent/i)).toBeInTheDocument();
+      const seen = new Map<number, any[]>([[1, [{ ...undelivered, acknowledged: true }]]]);
+      rerender(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={seen} />);
+      expect(screen.getByText(/seen by agent/i)).toBeInTheDocument();
+    });
+  });
 });

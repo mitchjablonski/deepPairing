@@ -98,7 +98,7 @@ export function LineCommentChips({
   filePath,
   onOpenLine,
 }: LineCommentChipsProps) {
-  const { submitComment } = useArtifactStore();
+  const { submitComment, markQuestionResolved } = useArtifactStore();
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replySubmitting, setReplySubmitting] = useState(false);
@@ -178,16 +178,24 @@ export function LineCommentChips({
     const cStart = (c.target as any).lineStart as number | undefined;
     const cEnd = (c.target as any).lineEnd as number | undefined;
     const spanLabel = cStart != null && cEnd != null && cStart !== cEnd ? ` (lines ${cStart}–${cEnd})` : "";
+    // Turn-state surfacing (mirrors CommentThread): an unanswered human
+    // QUESTION can be marked resolved by the human; a posted human comment
+    // shows whether the agent has drained it (delivered vs seen), read-only.
+    const isHuman = c.author === "human";
+    const isQuestion = c.intent === "question";
+    const answered = !!(c as any).answeredByCommentId;
+    const humanResolved = !!(c as any).humanResolvedAt;
+    const unansweredQuestion = isHuman && isQuestion && !answered && !humanResolved;
     return (
       <div key={c.id} className="mb-0.5">
         <div className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs">
-          <span className={`font-semibold shrink-0 ${c.author === "human" ? "text-accent-blue" : "text-text-muted"}`}>
+          <span className={`font-semibold shrink-0 ${isHuman ? "text-accent-blue" : "text-text-muted"}`}>
             {isReply && (
               <span className="opacity-60 mr-1" aria-hidden>
                 ↳
               </span>
             )}
-            {c.author === "human" ? "You" : "Agent"}
+            {isHuman ? "You" : "Agent"}
             {spanLabel}:
           </span>
           <span className="text-text-secondary flex-1">{c.content}</span>
@@ -206,6 +214,37 @@ export function LineCommentChips({
             </button>
           )}
         </div>
+        {/* Question status: awaiting answer + a human "Mark resolved", or
+            "resolved by you" once cleared. */}
+        {isHuman && isQuestion && (
+          <div className="flex items-center gap-2 px-3 mt-0.5 text-2xs">
+            {humanResolved ? (
+              <span className="text-text-muted italic">resolved by you</span>
+            ) : answered ? null : (
+              <>
+                <span className="text-accent-violet">⏳ awaiting answer</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void markQuestionResolved(c.id);
+                  }}
+                  className="text-text-muted hover:text-text-secondary underline-offset-2 hover:underline"
+                  title="Mark this question resolved — clears it from your 'waiting' list without an agent answer"
+                >
+                  Mark resolved
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {/* Delivery visibility for plain human comments (read-only; derived
+            from the agent's acknowledged drain flag — never sets it). */}
+        {isHuman && !isQuestion && (
+          <div className="px-3 mt-0.5 text-2xs text-text-muted">
+            {c.acknowledged ? "✓ seen by agent" : "delivered · awaiting agent"}
+          </div>
+        )}
         {replyingTo === c.id && (
           <div className="ml-4 mt-1 pl-3 border-l-2 border-accent-blue/30" onClick={(e) => e.stopPropagation()}>
             <textarea
