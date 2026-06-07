@@ -191,6 +191,34 @@ describe("connection store — handleMessage dispatch", () => {
     expect(useArtifactStore.getState().comments["a1"]).toHaveLength(1);
   });
 
+  it("upserts (not duplicates) an existing comment on `comment_updated`", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "comment_added",
+      comment: {
+        id: "q1", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null,
+        author: "human", content: "why?", acknowledged: false, intent: "question",
+        createdAt: "2026-04-16T10:00:00.000Z",
+      },
+    });
+    await flush();
+
+    activeAdapter.emit({
+      type: "comment_updated",
+      comment: {
+        id: "q1", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null,
+        author: "human", content: "why?", acknowledged: false, intent: "question",
+        humanResolvedAt: "2026-04-16T11:00:00.000Z",
+        createdAt: "2026-04-16T10:00:00.000Z",
+      },
+    });
+    await flush();
+
+    const list = useArtifactStore.getState().comments["a1"];
+    expect(list).toHaveLength(1); // upsert, not append
+    expect((list[0] as any).humanResolvedAt).toBe("2026-04-16T11:00:00.000Z");
+  });
+
   it("renames artifact on `artifact_renamed`", async () => {
     useArtifactStore.getState().addArtifact({
       id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null,

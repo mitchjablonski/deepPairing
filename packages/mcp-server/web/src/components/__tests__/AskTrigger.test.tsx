@@ -107,4 +107,61 @@ describe("AskTrigger", () => {
     expect(screen.getByText(/why this approach/i)).toBeInTheDocument();
     expect(screen.getByText(/because Y/i)).toBeInTheDocument();
   });
+
+  it("offers 'Mark resolved' on an unanswered human question and POSTs to the route", async () => {
+    useArtifactStore.getState().addComment({
+      id: "cmt_q1",
+      sessionId: "s1",
+      target: { artifactId: "art_x", findingIndex: 0 } as any,
+      parentCommentId: null,
+      author: "human",
+      content: "why this approach?",
+      acknowledged: false,
+      createdAt: "2026-04-17T10:00:00.000Z",
+      intent: "question",
+    } as any);
+
+    render(<AskTrigger artifactId="art_x" target={{ findingIndex: 0 }} />);
+    await userEvent.click(screen.getByRole("button", { name: /ask the agent/i }));
+
+    expect(screen.getByText(/awaiting answer/i)).toBeInTheDocument();
+    const markBtn = screen.getByRole("button", { name: /mark resolved/i });
+    await userEvent.click(markBtn);
+
+    // Hits the public mark-resolved route.
+    const call = (fetch as any).mock.calls.find((c: any[]) =>
+      String(c[0]).includes("/api/comments/cmt_q1/mark-resolved"),
+    );
+    expect(call).toBeTruthy();
+    expect(call[1].method).toBe("POST");
+
+    // Optimistically stamped locally → no longer counted as unanswered.
+    const updated = useArtifactStore.getState().comments["art_x"].find((c) => c.id === "cmt_q1");
+    expect((updated as any)?.humanResolvedAt).toBeTruthy();
+  });
+
+  it("shows 'resolved by you' (not 'awaiting answer') once humanResolvedAt is set, and stops pulsing", async () => {
+    useArtifactStore.getState().addComment({
+      id: "cmt_q1",
+      sessionId: "s1",
+      target: { artifactId: "art_x", findingIndex: 0 } as any,
+      parentCommentId: null,
+      author: "human",
+      content: "why this approach?",
+      acknowledged: false,
+      createdAt: "2026-04-17T10:00:00.000Z",
+      intent: "question",
+      humanResolvedAt: "2026-04-17T11:00:00.000Z",
+    } as any);
+
+    render(<AskTrigger artifactId="art_x" target={{ findingIndex: 0 }} />);
+    // The trigger no longer flags it as unanswered (no pulse / "unanswered" label).
+    const btn = screen.getByRole("button", { name: /ask the agent about this/i });
+    expect(btn.className).not.toMatch(/animate-pulse/);
+
+    await userEvent.click(btn);
+    expect(screen.getByText(/resolved by you/i)).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /mark resolved/i })).not.toBeInTheDocument();
+  });
 });

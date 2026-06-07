@@ -404,6 +404,10 @@ export class DaemonClient implements IStore {
     await this.post(`/comments/${commentId}/answered`, { answerCommentId });
   }
 
+  async markCommentHumanResolved(commentId: string, resolvedAt?: string): Promise<void> {
+    await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
+  }
+
   // --- Decisions ---
 
   async recordDecisionRequest(params: RecordDecisionParams): Promise<void> {

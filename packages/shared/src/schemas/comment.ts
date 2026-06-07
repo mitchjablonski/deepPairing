@@ -47,6 +47,13 @@ export const CommentSchema = z.object({
   intent: CommentIntentSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: z.string().nullable().optional(),
+  /**
+   * Set when the human marks their OWN unanswered question resolved (e.g. they
+   * figured it out themselves, or it's no longer relevant). Lets the "waiting
+   * on human" signal stop counting a question the agent never answered. Purely
+   * human-driven; does not touch the agent's `acknowledged` queue.
+   */
+  humanResolvedAt: z.string().datetime().nullable().optional(),
   acknowledged: z.boolean(),
   createdAt: z.string().datetime(),
 });

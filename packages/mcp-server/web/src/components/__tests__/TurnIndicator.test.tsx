@@ -111,4 +111,21 @@ describe("TurnIndicator — Q4 unanswered-questions badge", () => {
     render(<TurnIndicator />);
     expect(screen.queryByText(/question.* waiting/i)).not.toBeInTheDocument();
   });
+
+  it("does NOT count a question the human resolved themselves (humanResolvedAt set)", () => {
+    seedConnected();
+    seedArtifact({ id: "art_1" });
+    seedComment("art_1", { humanResolvedAt: "2026-04-22T00:00:00Z" });
+    render(<TurnIndicator />);
+    expect(screen.queryByText(/question.* waiting/i)).not.toBeInTheDocument();
+  });
+
+  it("still counts a sibling unresolved question when another was human-resolved", () => {
+    seedConnected();
+    seedArtifact({ id: "art_1" });
+    seedComment("art_1", { humanResolvedAt: "2026-04-22T00:00:00Z" });
+    seedComment("art_1"); // still open
+    render(<TurnIndicator />);
+    expect(screen.getByText(/1 question waiting/i)).toBeInTheDocument();
+  });
 });

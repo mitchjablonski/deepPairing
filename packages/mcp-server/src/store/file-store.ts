@@ -543,6 +543,14 @@ export class FileStore implements IStore {
     }
   }
 
+  markCommentHumanResolved(commentId: string, resolvedAt?: string): void {
+    const comment = this.comments.find((c) => c.id === commentId);
+    if (comment) {
+      comment.humanResolvedAt = resolvedAt ?? new Date().toISOString();
+      this.scheduleFlush();
+    }
+  }
+
   // --- Decisions ---
 
   recordDecisionRequest(params: {

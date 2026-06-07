@@ -180,6 +180,13 @@ export interface IStore {
   acknowledgeComments(ids: string[]): MaybePromise<void>;
   /** Mark a question comment as answered by linking to the answer comment. */
   markCommentAnswered(commentId: string, answerCommentId: string): MaybePromise<void>;
+  /**
+   * Mark a human's OWN unanswered question as resolved by the human. Sets
+   * `humanResolvedAt`; no-op if the comment isn't found. Does NOT touch the
+   * agent's `acknowledged` queue — this is a human-side "I'm done waiting"
+   * signal so the "waiting on human" indicator stops counting it.
+   */
+  markCommentHumanResolved(commentId: string, resolvedAt?: string): MaybePromise<void>;
   getComment(commentId: string): MaybePromise<Comment | undefined>;
 
   // Decisions
