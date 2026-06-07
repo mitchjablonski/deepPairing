@@ -64,7 +64,9 @@ export interface ArtifactState {
 
   updateArtifactStatus: (
     artifactId: string,
-    status: "approved" | "revised" | "rejected",
+    // "obsolete" = human dismisses a draft as overcome by new information
+    // (already used by ArtifactStatusActions' Dismiss; widen the type to match).
+    status: "approved" | "revised" | "rejected" | "obsolete",
     feedback?: string,
   ) => Promise<void>;
 
