@@ -61,6 +61,20 @@ function CommentBubble({ comment }: { comment: Comment }) {
           {!isHuman && comment.acknowledged && (
             <span className="text-text-muted text-2xs" title="Acknowledged">✓</span>
           )}
+          {/* Read-only delivery signal on YOUR comments, derived purely from the
+              agent's drain queue (`acknowledged`). We NEVER set acknowledged
+              here — that's the agent's check_feedback path. */}
+          {isHuman && (comment.acknowledged
+            ? (
+              <span className="text-text-muted text-2xs" title="The agent has drained this comment">
+                ✓ seen by agent
+              </span>
+            )
+            : (
+              <span className="text-accent-blue/70 text-2xs" title="Delivered to the session — the agent will see it on its next check_feedback">
+                delivered · awaiting agent
+              </span>
+            ))}
         </div>
         <p className="text-xs text-text-primary whitespace-pre-wrap">{comment.content}</p>
 
@@ -199,7 +213,7 @@ export function AskTrigger({
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
   const { sent, flash } = useSentFlash();
-  const { submitComment, comments } = useArtifactStore();
+  const { submitComment, comments, markQuestionResolved } = useArtifactStore();
 
   // Look up existing question(s) + their answers for this target
   const artifactComments = (comments[artifactId] ?? []) as any[];
@@ -214,7 +228,10 @@ export function AskTrigger({
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
   });
-  const unanswered = matching.filter((q) => !q.answeredByCommentId).length;
+  // A question is still "waiting" only when neither the agent answered it nor
+  // the human marked it resolved themselves. humanResolvedAt clears the violet
+  // pulse the same way an answer does.
+  const unanswered = matching.filter((q) => !q.answeredByCommentId && !q.humanResolvedAt).length;
   const answeredQuestions = matching.filter((q) => q.answeredByCommentId);
 
   const send = async () => {
@@ -269,6 +286,20 @@ export function AskTrigger({
                     {answer ? (
                       <div className="mt-1 pl-3 border-l-2 border-accent-violet/30 text-text-secondary whitespace-pre-wrap">
                         {answer.content}
+                      </div>
+                    ) : q.humanResolvedAt ? (
+                      <div className="mt-0.5 pl-3 text-text-muted italic">resolved by you</div>
+                    ) : q.author === "human" ? (
+                      <div className="mt-0.5 pl-3 flex items-center gap-2">
+                        <span className="text-text-muted italic">awaiting answer</span>
+                        <button
+                          type="button"
+                          onClick={() => markQuestionResolved(q.id)}
+                          title="Mark this question resolved — stops it counting as waiting on the agent"
+                          className="text-2xs text-accent-blue hover:underline"
+                        >
+                          Mark resolved
+                        </button>
                       </div>
                     ) : (
                       <div className="mt-0.5 pl-3 text-text-muted italic">awaiting answer</div>

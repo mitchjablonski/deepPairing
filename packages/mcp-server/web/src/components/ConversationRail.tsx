@@ -190,7 +190,13 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     let n = 0;
     for (const g of grouped) {
       for (const t of g.threads) {
-        if (t.comment.author === "human" && (t.comment as any).intent === "question" && t.replies.length === 0) {
+        if (
+          t.comment.author === "human" &&
+          (t.comment as any).intent === "question" &&
+          !(t.comment as any).answeredByCommentId &&
+          !(t.comment as any).humanResolvedAt &&
+          t.replies.length === 0
+        ) {
           n++;
         }
       }

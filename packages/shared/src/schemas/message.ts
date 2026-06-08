@@ -114,6 +114,16 @@ export const CommentAddedEventSchema = z.object({
   comment: CommentSchema,
 });
 
+/**
+ * Emitted when an EXISTING comment's fields change (e.g. the human marks
+ * their own question resolved). Carries the full comment so the UI can
+ * upsert by id rather than append.
+ */
+export const CommentUpdatedEventSchema = z.object({
+  type: z.literal("comment_updated"),
+  comment: CommentSchema,
+});
+
 export const PlanReviewRequestEventSchema = z.object({
   type: z.literal("plan_review_request"),
   artifactId: z.string(),
@@ -144,6 +154,7 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   ArtifactCreatedEventSchema,
   ArtifactUpdatedEventSchema,
   CommentAddedEventSchema,
+  CommentUpdatedEventSchema,
   PlanReviewRequestEventSchema,
 ]);
 
@@ -158,4 +169,5 @@ export type CodeChangeEvent = z.infer<typeof CodeChangeEventSchema>;
 export type ArtifactCreatedEvent = z.infer<typeof ArtifactCreatedEventSchema>;
 export type ArtifactUpdatedEvent = z.infer<typeof ArtifactUpdatedEventSchema>;
 export type CommentAddedEvent = z.infer<typeof CommentAddedEventSchema>;
+export type CommentUpdatedEvent = z.infer<typeof CommentUpdatedEventSchema>;
 export type PlanReviewRequestEvent = z.infer<typeof PlanReviewRequestEventSchema>;

@@ -40,7 +40,12 @@ export function TurnIndicator() {
     const out: Array<{ artifactId: string; comment: Comment }> = [];
     for (const [artifactId, list] of Object.entries(comments)) {
       for (const c of list as Comment[]) {
-        if (c.author === "human" && (c as any).intent === "question" && !(c as any).answeredByCommentId) {
+        if (
+          c.author === "human" &&
+          (c as any).intent === "question" &&
+          !(c as any).answeredByCommentId &&
+          !(c as any).humanResolvedAt
+        ) {
           out.push({ artifactId, comment: c });
         }
       }

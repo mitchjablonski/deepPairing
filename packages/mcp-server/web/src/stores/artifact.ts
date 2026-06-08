@@ -48,6 +48,8 @@ export interface ArtifactState {
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
   addComment: (comment: Comment) => void;
+  /** Upsert an existing comment by id (e.g. from a comment_updated WS event). */
+  updateComment: (comment: Comment) => void;
   selectArtifact: (id: string | null) => void;
   /** Re-select the artifact you were last on (persisted across reloads), if
    *  it's present in the freshly-hydrated session. Called after hydration. */
@@ -62,7 +64,9 @@ export interface ArtifactState {
 
   updateArtifactStatus: (
     artifactId: string,
-    status: "approved" | "revised" | "rejected",
+    // "obsolete" = human dismisses a draft as overcome by new information
+    // (already used by ArtifactStatusActions' Dismiss; widen the type to match).
+    status: "approved" | "revised" | "rejected" | "obsolete",
     feedback?: string,
   ) => Promise<void>;
 
@@ -74,6 +78,13 @@ export interface ArtifactState {
   ) => Promise<void>;
 
   renameArtifact: (artifactId: string, title: string) => Promise<void>;
+
+  /**
+   * Mark a human's OWN unanswered question resolved. Optimistically stamps
+   * humanResolvedAt locally then POSTs. VISIBILITY/waiting-signal only — does
+   * NOT touch the comment's `acknowledged` field (the agent's drain queue).
+   */
+  markQuestionResolved: (commentId: string) => Promise<void>;
 
   reset: () => void;
 }
@@ -139,6 +150,19 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       return {
         comments: { ...state.comments, [key]: [...existing, comment] },
       };
+    }),
+
+  updateComment: (comment) =>
+    set((state) => {
+      const key = comment.target.artifactId;
+      const existing = state.comments[key] ?? [];
+      const idx = existing.findIndex((c) => c.id === comment.id);
+      // Upsert: replace in place if present, else append (a comment_updated
+      // for an unseen comment shouldn't be dropped).
+      const next = idx >= 0
+        ? existing.map((c) => (c.id === comment.id ? { ...c, ...comment } : c))
+        : [...existing, comment];
+      return { comments: { ...state.comments, [key]: next } };
     }),
 
   selectArtifact: (id) => set((state) => {
@@ -241,6 +265,34 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       // Roll back the optimistic update so the UI reflects truth.
       set({ artifacts: prev });
       await toastApiError("Rename artifact", err);
+      throw err;
+    }
+  },
+
+  markQuestionResolved: async (commentId) => {
+    const resolvedAt = new Date().toISOString();
+    // Optimistic: stamp humanResolvedAt locally so the waiting signal clears
+    // immediately. Snapshot for rollback on failure.
+    const prev = useArtifactStore.getState().comments;
+    set((state) => {
+      const nextComments: Record<string, Comment[]> = {};
+      for (const [key, list] of Object.entries(state.comments)) {
+        nextComments[key] = list.map((c) =>
+          c.id === commentId ? { ...c, humanResolvedAt: resolvedAt } : c,
+        );
+      }
+      return { comments: nextComments };
+    });
+    try {
+      await safeFetch(`${API_BASE}/api/comments/${commentId}/mark-resolved`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ resolvedAt }),
+      });
+    } catch (err) {
+      // Roll back so the UI reflects truth (still awaiting).
+      set({ comments: prev });
+      await toastApiError("Mark question resolved", err);
       throw err;
     }
   },

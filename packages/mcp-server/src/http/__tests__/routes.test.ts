@@ -119,6 +119,64 @@ describe("HTTP Routes", () => {
     expect(body.comment.author).toBe("human");
   });
 
+  it("POST /api/comments/:id/mark-resolved sets humanResolvedAt + broadcasts, leaving acknowledged untouched", async () => {
+    // Capture broadcasts to assert the UI gets a refresh signal.
+    const events: any[] = [];
+    const local = withHash(
+      createHttpRoutes(store, tmpDir, (event) => events.push(event)),
+      tmpDir,
+    );
+
+    const q = store.addComment({
+      id: "q1",
+      artifactId: "art_1",
+      content: "Why this approach?",
+      author: "human",
+      intent: "question",
+    });
+    expect(q.acknowledged).toBe(false);
+    expect(q.humanResolvedAt).toBeUndefined();
+
+    const res = await local.request(`/api/comments/${q.id}/mark-resolved`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("resolved");
+    expect(typeof body.comment.humanResolvedAt).toBe("string");
+
+    // Persisted on the store.
+    expect(store.getComment("q1")?.humanResolvedAt).toBeTruthy();
+    // CRITICAL: the agent's drain queue is untouched.
+    expect(store.getComment("q1")?.acknowledged).toBe(false);
+
+    // UI refresh signal emitted.
+    const updated = events.find((e) => e.type === "comment_updated");
+    expect(updated).toBeTruthy();
+    expect(updated.comment.id).toBe("q1");
+    expect(updated.comment.humanResolvedAt).toBeTruthy();
+  });
+
+  it("POST /api/comments/:id/mark-resolved is a graceful no-op for an unknown comment", async () => {
+    const events: any[] = [];
+    const local = withHash(
+      createHttpRoutes(store, tmpDir, (event) => events.push(event)),
+      tmpDir,
+    );
+    const res = await local.request(`/api/comments/nope/mark-resolved`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.comment).toBeNull();
+    // No comment_updated broadcast for a comment that doesn't exist.
+    expect(events.some((e) => e.type === "comment_updated")).toBe(false);
+  });
+
   it("POST /api/artifacts/:id/status rejects invalid status", async () => {
     const res = await app.request("/api/artifacts/art_1/status", {
       method: "POST",

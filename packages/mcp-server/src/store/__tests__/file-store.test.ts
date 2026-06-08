@@ -116,6 +116,43 @@ describe("FileStore", () => {
     expect(comments[0].content).toBe("Great finding");
   });
 
+  it("markCommentHumanResolved sets humanResolvedAt + persists", () => {
+    const store = createStore("human-resolved");
+    store.addComment({
+      id: "q1",
+      artifactId: "art_1",
+      content: "Why this approach?",
+      author: "human",
+      intent: "question",
+    });
+
+    // Before: no humanResolvedAt.
+    expect(store.getComment("q1")?.humanResolvedAt).toBeUndefined();
+
+    const at = "2026-05-31T12:00:00.000Z";
+    store.markCommentHumanResolved("q1", at);
+    expect(store.getComment("q1")?.humanResolvedAt).toBe(at);
+    // The agent's drain queue is untouched — acknowledged stays false.
+    expect(store.getComment("q1")?.acknowledged).toBe(false);
+
+    // No-op on an unknown id (must not throw).
+    expect(() => store.markCommentHumanResolved("does_not_exist")).not.toThrow();
+
+    // Persists across reload.
+    store.forceFlush();
+    const store2 = createStore("human-resolved");
+    expect(store2.getComment("q1")?.humanResolvedAt).toBe(at);
+  });
+
+  it("markCommentHumanResolved defaults resolvedAt to now when omitted", () => {
+    const store = createStore("human-resolved-default");
+    store.addComment({ id: "q2", artifactId: "art_1", content: "Q?", author: "human", intent: "question" });
+    store.markCommentHumanResolved("q2");
+    const resolved = store.getComment("q2")?.humanResolvedAt;
+    expect(typeof resolved).toBe("string");
+    expect(Number.isNaN(Date.parse(resolved as string))).toBe(false);
+  });
+
   it("round-trips decisions", () => {
     const store = createStore( "decisions");
     store.recordDecisionRequest({
