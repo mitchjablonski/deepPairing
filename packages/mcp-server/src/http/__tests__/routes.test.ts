@@ -195,6 +195,27 @@ describe("HTTP Routes", () => {
     expect(res.status).toBe(400);
   });
 
+  it("POST /api/decisions/:id flips the decision artifact to approved even with no decision RECORD (matches by content.decisionId)", async () => {
+    // Repro: a decision artifact exists but the daemon's decisions map has no
+    // record for it (separate-process desync, or seeded out-of-band). Without
+    // the fallback the route returned 200 "resolved" yet left the artifact in
+    // draft, so it kept showing as "waiting for you".
+    store.createArtifact({
+      id: "art_dec",
+      type: "decision",
+      title: "pick a cache layer",
+      content: { decisionId: "dec1", context: "which?", options: [] },
+    });
+    const res = await app.request("/api/decisions/dec1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "o1", reasoning: "go" }),
+    });
+    expect(res.status).toBe(200);
+    const artifacts = await store.getArtifacts();
+    expect(artifacts.find((a) => a.id === "art_dec")?.status).toBe("approved");
+  });
+
   it("GET /api/sessions/:sessionId rejects path traversal", async () => {
     // Hono normalizes `../` in URLs, so test with encoded dots and slashes
     const res = await app.request("/api/sessions/..%2F..%2Fetc");

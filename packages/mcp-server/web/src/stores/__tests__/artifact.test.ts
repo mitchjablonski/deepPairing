@@ -208,6 +208,51 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     expect(toasts[0].title).toBe("Approve failed");
   });
 
+  it("updateArtifactStatus optimistically flips local status so a dismissed draft leaves the 'waiting' set without the WS broadcast", async () => {
+    // Regression: dismissing a draft persisted obsolete server-side but the
+    // local artifact stayed `draft` (no optimistic update), so it kept
+    // rendering as "waiting for you" until a session-scoped artifact_updated
+    // broadcast arrived — which never reaches a tab viewing a project it
+    // switched into. The optimistic flip must happen regardless of the WS.
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("d1", { type: "decision", status: "draft" }));
+    // Don't await: status must already be optimistic before the POST settles.
+    const p = s.updateArtifactStatus("d1", "obsolete");
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("obsolete");
+    await p;
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("obsolete");
+  });
+
+  it("updateArtifactStatus rolls back the optimistic status change on failure", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("d1", { type: "decision", status: "draft" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 500 })));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    await expect(s.updateArtifactStatus("d1", "obsolete")).rejects.toBeDefined();
+    // After rollback the draft is back so it isn't silently hidden from review.
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+  });
+
+  it("resolveDecision optimistically marks the matching decision artifact approved so it leaves the 'waiting' set without the WS broadcast", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("dec-art", { type: "decision", status: "draft", content: { decisionId: "dec1", context: "c", options: [] } }));
+    const p = s.resolveDecision("dec1", "o1");
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+    await p;
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+  });
+
+  it("resolveDecision rolls back the optimistic approval on failure", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("dec-art", { type: "decision", status: "draft", content: { decisionId: "dec1", context: "c", options: [] } }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 500 })));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    await expect(s.resolveDecision("dec1", "o1")).rejects.toBeDefined();
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+  });
+
   it("renameArtifact rolls back the optimistic title change on failure", async () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { title: "Original" }));

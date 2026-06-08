@@ -31,25 +31,21 @@ describe("computePending — single source of truth for 'waiting on human'", () 
     expect(computePending(artifacts, {}).drafts.map((a) => a.id)).toEqual(["a4"]);
   });
 
-  it("counts unanswered human questions, but not answered or human-resolved ones", () => {
+  it("does NOT count human-asked questions — that's the agent's turn, not yours", () => {
     const comments = {
       a: [
-        com({ id: "q1", intent: "question" }), // counts
-        com({ id: "q2", intent: "question", answeredByCommentId: "x" }), // answered → no
-        com({ id: "q3", intent: "question", humanResolvedAt: "2026-01-02T00:00:00.000Z" }), // resolved → no
-        com({ id: "c1", intent: "comment" }), // plain comment → no
-        com({ id: "qa", intent: "question", author: "agent" }), // agent question → no
+        com({ id: "q1", intent: "question" }), // unanswered human question → still NOT your turn
+        com({ id: "q2", intent: "question", answeredByCommentId: "x" }),
+        com({ id: "c1", intent: "comment" }),
       ],
     };
-    const { questions, total } = computePending([], comments);
-    expect(questions.map((q) => q.comment.id)).toEqual(["q1"]);
-    expect(total).toBe(1);
+    expect(computePending([], comments).total).toBe(0);
   });
 
-  it("total = drafts + unanswered questions", () => {
+  it("total = drafts only (questions are excluded)", () => {
     const artifacts = [art({ id: "d", type: "decision", status: "draft" })];
     const comments = { d: [com({ id: "q", intent: "question" })] };
-    expect(computePending(artifacts, comments).total).toBe(2);
+    expect(computePending(artifacts, comments).total).toBe(1);
   });
 
   it("predicate helpers are consistent with the aggregate", () => {

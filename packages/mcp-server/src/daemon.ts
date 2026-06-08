@@ -309,11 +309,18 @@ app.route("/", publicRoutes);
 // N2.1: daemon identity endpoint so multi-project clients can verify they're
 // adopting the right daemon before trusting a port (avoids cross-project
 // adoption when daemon.json has been deleted). Includes projectRoot + port.
-// MP1 — count items waiting on the human across ALL of this daemon's sessions
-// (draft reviewable artifacts + unanswered/un-resolved human questions). Mirrors
-// the web lib/pending.ts rule so the cross-project badge matches the in-app
-// PendingBanner. Advertised on /api/daemon-info so the discovery sweep can show
-// a per-project "agent waiting" count without the browser polling every daemon.
+// MP1 — count items waiting on the human across ALL of this daemon's sessions.
+// This is exactly "your turn": draft reviewable artifacts you must Approve/
+// Revise/Reject/Dismiss. Mirrors the web lib/pending.ts rule so the cross-
+// project badge matches the in-app PendingBanner. Advertised on
+// /api/daemon-info so the discovery sweep can show a per-project "agent
+// waiting" count without the browser polling every daemon.
+//
+// A human's own unanswered question is deliberately NOT counted: that's the
+// AGENT's turn (you asked, it owes the answer), and TurnIndicator already
+// surfaces it as a violet "waiting on the agent" badge. Counting it here made
+// the "waiting on YOU" badge stay lit on something you can't action — see the
+// matching exclusion in lib/pending.ts.
 const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change"]);
 function computeDaemonPendingCount(): number {
   let n = 0;
@@ -322,14 +329,6 @@ function computeDaemonPendingCount(): number {
       const st: any = store.getFullState();
       for (const a of st.artifacts ?? []) {
         if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
-      }
-      for (const cmt of st.comments ?? []) {
-        if (
-          cmt.author === "human" &&
-          cmt.intent === "question" &&
-          !cmt.answeredByCommentId &&
-          !cmt.humanResolvedAt
-        ) n++;
       }
     } catch { /* skip a store that can't render state */ }
   }

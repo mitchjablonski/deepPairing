@@ -2,23 +2,23 @@ import { useArtifactStore } from "../stores/artifact";
 import { computePending } from "../lib/pending";
 
 /**
- * The "waiting for your review" banner. Now driven by the shared computePending
- * selector (lib/pending) so it counts the SAME set as the TurnIndicator and the
- * cross-project badge — drafts of any reviewable type plus unanswered/un-resolved
- * questions — instead of its old narrow decision|plan-only filter.
- *
- * Every counted draft also gets a quick "Dismiss" here (marks it obsolete), so
- * an abandoned draft can be cleared from the banner without opening the artifact
- * and hunting for the tertiary dismiss link — a "waiting" signal you can't clear
+ * The "waiting for your review" banner. Driven by the shared computePending
+ * selector (lib/pending) so it counts the SAME set as the cross-project badge —
+ * draft reviewable artifacts that are genuinely YOUR turn. Human-asked questions
+ * are NOT shown here: they're the agent's turn (TurnIndicator surfaces them as a
+ * "waiting on the agent" badge), and a "waiting on you" banner you can't action
  * is just a nag.
+ *
+ * Every counted draft gets a quick "Dismiss" here (marks it obsolete), so an
+ * abandoned draft can be cleared without opening the artifact and hunting for
+ * the tertiary dismiss link.
  */
 export function PendingBanner() {
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
 
-  const { drafts, questions, total } = computePending(artifacts, comments);
+  const { drafts, total } = computePending(artifacts);
   if (total === 0) return null;
 
   return (
@@ -47,16 +47,6 @@ export function PendingBanner() {
               ✕
             </button>
           </span>
-        ))}
-        {questions.slice(0, 2).map(({ artifactId, comment }) => (
-          <button
-            key={comment.id}
-            onClick={() => selectArtifact(artifactId)}
-            className="px-2 py-0.5 bg-accent-violet-dim text-accent-violet rounded text-2xs shrink-0 hover:bg-accent-violet-dim/80 transition-colors"
-            title={comment.content}
-          >
-            ❓ {comment.content.slice(0, 24)}{comment.content.length > 24 ? "…" : ""}
-          </button>
         ))}
       </div>
     </div>

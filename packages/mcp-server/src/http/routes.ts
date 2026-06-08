@@ -328,19 +328,37 @@ export function createHttpRoutes(
       : undefined;
     await store.resolveDecision(decisionId, optionId, reasoning, prediction);
 
+    // Flip the decision ARTIFACT to approved so it leaves the "waiting" set.
+    // Prefer the decision RECORD's artifactId, but fall back to the decision
+    // artifact carrying this decisionId when no record is found. The daemon
+    // and the MCP server are separate processes sharing the file store (see
+    // X6), so the daemon's decisions map can legitimately lag/miss a record
+    // the artifact already references — without this fallback the route
+    // returns 200 "resolved" yet leaves the artifact stuck in draft, so it
+    // keeps showing as "waiting for you" even though the choice was made.
     const decision = await store.getDecision(decisionId);
-    if (decision) {
-      await store.updateArtifactStatus(decision.artifactId, "approved", "ui_decision_resolve" as any);
+    let targetArtifactId = decision?.artifactId;
+    if (!targetArtifactId) {
+      const artifacts = await store.getArtifacts();
+      const art = artifacts.find(
+        (a) =>
+          a.type === "decision" &&
+          ((a.content as any)?.decisionId === decisionId || a.id === decisionId),
+      );
+      targetArtifactId = art?.id;
+    }
+    if (targetArtifactId) {
+      await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve" as any);
       // X6 — emission seam: HTTP-side mutations pass null for `server`
       // (the MCP server lives in the daemon's separate process). Today
       // a no-op; future Tasks impl can route via the daemon broadcast.
-      await maybeUpdateTaskStatus(null, decision.artifactId, store);
+      await maybeUpdateTaskStatus(null, targetArtifactId, store);
     }
 
     broadcast({
       type: "decision_resolved",
       decisionId,
-      artifactId: decision?.artifactId,
+      artifactId: targetArtifactId,
       optionId,
       reasoning,
     }, sid);
