@@ -60,6 +60,10 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // closing the stale-tab-after-port-recycling write hole.
 import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "./project-root.js";
 const daemonProjectHash = projectHashOf(projectRoot);
+// MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
+// so route handlers defined before the server starts can read it at call time
+// (e.g. /api/projects, to mark which discovered daemon is self).
+let boundPort = 0;
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
 const daemonInfoFile = path.join(dpDir, "daemon.json");
@@ -305,11 +309,71 @@ app.route("/", publicRoutes);
 // N2.1: daemon identity endpoint so multi-project clients can verify they're
 // adopting the right daemon before trusting a port (avoids cross-project
 // adoption when daemon.json has been deleted). Includes projectRoot + port.
+// MP1 — count items waiting on the human across ALL of this daemon's sessions.
+// This is exactly "your turn": draft reviewable artifacts you must Approve/
+// Revise/Reject/Dismiss. Mirrors the web lib/pending.ts rule so the cross-
+// project badge matches the in-app PendingBanner. Advertised on
+// /api/daemon-info so the discovery sweep can show a per-project "agent
+// waiting" count without the browser polling every daemon.
+//
+// A human's own unanswered question is deliberately NOT counted: that's the
+// AGENT's turn (you asked, it owes the answer), and TurnIndicator already
+// surfaces it as a violet "waiting on the agent" badge. Counting it here made
+// the "waiting on YOU" badge stay lit on something you can't action — see the
+// matching exclusion in lib/pending.ts.
+const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change"]);
+function computeDaemonPendingCount(): number {
+  let n = 0;
+  for (const store of sessions.values()) {
+    try {
+      const st: any = store.getFullState();
+      for (const a of st.artifacts ?? []) {
+        if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
+      }
+    } catch { /* skip a store that can't render state */ }
+  }
+  return n;
+}
+
 app.get("/api/daemon-info", (c) => {
   // AA4 — projectHash is the value the browser must send back in
   // X-Project-Hash for any X-Session-Id'd request. Advertised here so a
   // future client can verify before sending mutations.
-  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt });
+  // MP1 — pendingCount drives the cross-project "agent waiting" badge.
+  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, pendingCount: computeDaemonPendingCount() });
+});
+
+// MP1 (multi-project spike) — discover every live deepPairing daemon so the
+// SPA can offer a one-page project switcher. The browser can't quickly sweep
+// 128 ports itself, so the daemon does it server-side (reusing the same
+// probeDaemonIdentity used by `deeppairing list`) and returns the peers,
+// including itself. This is a read-only discovery endpoint (no session data),
+// so it's exempt from the X-Project-Hash gate like /api/daemon-info.
+app.get("/api/projects", async (c) => {
+  const { probeDaemonIdentity } = await import("./daemon-lifecycle.js");
+  const probes: Array<Promise<{ port: number; identity: any | null }>> = [];
+  for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
+    probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
+  }
+  const results = await Promise.all(probes);
+  const projects = results
+    .filter((r) => r.identity !== null)
+    .map((r) => {
+      const root = r.identity!.projectRoot as string;
+      const segs = root.split(/[\\/]/).filter(Boolean);
+      return {
+        projectRoot: root,
+        projectHash: projectHashOf(root),
+        port: r.port,
+        label: segs[segs.length - 1] ?? root,
+        isSelf: r.port === boundPort,
+        // MP1 — per-project "agent waiting" count (from each peer's
+        // /api/daemon-info). Drives the switcher badge + global indicator.
+        pendingCount: typeof r.identity.pendingCount === "number" ? r.identity.pendingCount : 0,
+      };
+    })
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return c.json({ projects, selfPort: boundPort, selfHash: daemonProjectHash });
 });
 
 // AA3 — cooperative shutdown endpoint. The doctor's project-mismatch
@@ -652,6 +716,7 @@ async function main() {
       if (result.ok) {
         server = candidateServer;
         port = candidate;
+        boundPort = candidate; // MP1 — expose to route handlers
         if (attempt > 0) log(`Preferred port ${preferredPort} busy — bound to ${candidate} instead (recorded in daemon.json).`);
         break;
       }

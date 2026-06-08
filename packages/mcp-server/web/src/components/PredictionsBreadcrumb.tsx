@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet, sessionHeaders } from "../lib/api";
+import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 
 /**
  * N3.3 — Past-predictions breadcrumb.
@@ -67,7 +67,7 @@ export function PredictionsBreadcrumb({
       try {
         const params = new URLSearchParams({ concept, limit: "3" });
         if (excludeArtifactId) params.set("excludeArtifactId", excludeArtifactId);
-        const res = await apiGet(`http://${window.location.host}/api/predictions?${params}`);
+        const res = await apiGet(`${apiBase()}/api/predictions?${params}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setPredictions(data.predictions ?? []);
@@ -175,7 +175,7 @@ function PredictionRow({
     // Optimistic — flip the row immediately; roll back on failure.
     onRetrospected(verdict);
     try {
-      const res = await fetch(`http://${window.location.host}/api/retrospectives`, {
+      const res = await fetch(`${apiBase()}/api/retrospectives`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ decisionId: p.decisionId, verdict }),

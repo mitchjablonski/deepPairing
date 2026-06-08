@@ -37,6 +37,18 @@ describe("SpecArtifact — tolerates missing optional arrays", () => {
 describe("PlanArtifact — MotivatedByBadges tolerates unresolved / odd data", () => {
   beforeEach(() => useArtifactStore.getState().reset());
 
+  it("renders a plan step missing optional `files` without crashing (files is optional per schema)", () => {
+    // A step like "run tests" touches no files. `files` is optional in
+    // PlanStepSchema, but the render did an unguarded `step.files.length` →
+    // "Failed to render" for a perfectly valid plan.
+    const plan = mk("plan", {
+      steps: [{ description: "run the test suite", reasoning: "verify green" }],
+      estimatedChanges: 0,
+    }, { id: "planNoFiles" });
+    expect(() => render(<PlanArtifact artifact={plan} />)).not.toThrow();
+    expect(screen.getByText("run the test suite")).toBeInTheDocument();
+  });
+
   it("renders a plan step whose motivatedBy is a non-artifact-id, even when a research artifact has non-array findings", () => {
     // Seed a research artifact whose `findings` is a STRING (the exact shape
     // that made `findings?.some` throw before the guard).

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
-import { API_BASE, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 
 /**
  * U3 — surface a mutation failure as a toast. Pulled out of every catch
@@ -196,7 +196,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
 
   submitComment: async (artifactId, content, target, options) => {
     try {
-      await safeFetch(`${API_BASE}/api/comments`, {
+      await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({
@@ -214,13 +214,29 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   },
 
   updateArtifactStatus: async (artifactId, status, feedback) => {
+    // Optimistic: flip the local status immediately so the item leaves the
+    // "waiting for you" set (PendingBanner/TurnIndicator/cross-project badge)
+    // the instant you act on it — don't wait on the WS `artifact_updated`
+    // broadcast. That broadcast is session-scoped; when you're viewing a
+    // project you SWITCHED into (a cross-project connection), it may never
+    // reach this tab, leaving a just-dismissed draft rendering as "waiting
+    // for you" (e.g. an obsolete item that won't clear). Same optimistic +
+    // rollback pattern as renameArtifact / markQuestionResolved.
+    const prev = useArtifactStore.getState().artifacts;
+    set((state) => ({
+      artifacts: state.artifacts.map((a) =>
+        a.id === artifactId ? { ...a, status } : a,
+      ),
+    }));
     try {
-      await safeFetch(`${API_BASE}/api/artifacts/${artifactId}/status`, {
+      await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/status`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ status, feedback }),
       });
     } catch (err) {
+      // Roll back so the UI reflects truth (still awaiting your review).
+      set({ artifacts: prev });
       await toastApiError(
         status === "approved" ? "Approve" : status === "rejected" ? "Reject" : "Revise",
         err,
@@ -230,8 +246,25 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   },
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
+    // Optimistic: flip the decision artifact to "approved" locally so it leaves
+    // the "waiting for you" set the instant you choose — don't wait on the
+    // session-scoped `decision_resolved` WS broadcast (which never reaches a
+    // tab viewing a project it switched into). The server route ALSO marks the
+    // artifact approved, so this just closes the local-state gap. Same
+    // optimistic + rollback pattern as updateArtifactStatus.
+    const prev = useArtifactStore.getState().artifacts;
+    set((state) => ({
+      artifacts: state.artifacts.map((a) =>
+        // ArtifactPanel resolves decisions by content.decisionId, falling back
+        // to the artifact id (effectiveDecisionId), so match both.
+        (a.content as any)?.decisionId === decisionId ||
+        (a.type === "decision" && a.id === decisionId)
+          ? { ...a, status: "approved" as ArtifactStatus }
+          : a,
+      ),
+    }));
     try {
-      await safeFetch(`${API_BASE}/api/decisions/${decisionId}`, {
+      await safeFetch(`${apiBase()}/api/decisions/${decisionId}`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({
@@ -242,6 +275,8 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         }),
       });
     } catch (err) {
+      // Roll back so the decision is still shown as awaiting your choice.
+      set({ artifacts: prev });
       await toastApiError("Resolve decision", err);
       throw err;
     }
@@ -256,7 +291,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       ),
     }));
     try {
-      await safeFetch(`${API_BASE}/api/artifacts/${artifactId}/rename`, {
+      await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/rename`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ title }),
@@ -284,7 +319,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       return { comments: nextComments };
     });
     try {
-      await safeFetch(`${API_BASE}/api/comments/${commentId}/mark-resolved`, {
+      await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-resolved`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ resolvedAt }),

@@ -67,7 +67,8 @@ interface BranchStep {
 
 interface PlanStep {
   description: string;
-  files: (string | { filePath: string; description?: string; changeType?: string })[];
+  // Optional per the schema — a step may touch no files (e.g. "run tests").
+  files?: (string | { filePath: string; description?: string; changeType?: string })[];
   reasoning: string;
   motivatedBy?: string[];
   preview?: { before: string; after: string; filePath: string };
@@ -230,8 +231,12 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                         <MotivatedByBadges labels={step.motivatedBy} />
                       )}
 
-                      {/* File list */}
-                      {step.files.length > 0 && (
+                      {/* File list — `files` is optional in the schema (a step
+                          like "run tests" touches none), so guard the access:
+                          an unguarded `step.files.length` throws and crashes the
+                          whole plan panel ("Failed to render") for a perfectly
+                          valid plan. */}
+                      {step.files && step.files.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {step.files.map((f, fIdx) => {
                             const filePath = typeof f === "string" ? f : f.filePath;

@@ -3,6 +3,7 @@
  * Abstracts the transport layer so the same React app works in both
  * browser (WebSocket) and VS Code webview (message passing).
  */
+import { wsBase } from "./api";
 
 export interface ConnectionAdapter {
   connect(): void;
@@ -53,6 +54,15 @@ export class WebSocketAdapter implements ConnectionAdapter {
   private reconnectAttempt = 0;
   private readonly maxReconnectDelay = 30000;
   /**
+   * MP1 — set by disconnect(): a DELIBERATE close (e.g. a project switch tears
+   * down this adapter and builds a fresh one for the new daemon). onclose must
+   * then NOT re-arm reconnect or run the cross-project mismatch probe — without
+   * this, switching projects looked like a dropped connection, the old
+   * adapter's probe saw the NEW daemon's different hash, and fired the false
+   * "tab is bound to a stale daemon" toast.
+   */
+  private closed = false;
+  /**
    * II3 — set once the probe confirms the live daemon serves a different
    * project. Latches the reconnect loop OFF: `onclose` will not re-arm
    * the timer, so we stop hammering a daemon that will only ever 403 our
@@ -70,7 +80,10 @@ export class WebSocketAdapter implements ConnectionAdapter {
   private readonly baseUrl: string;
 
   constructor(url?: string, private sessionId?: string) {
-    this.baseUrl = url ?? `ws://${window.location.host}/ws`;
+    // MP1 — default to the switchable wsBase() (the currently-selected
+    // project's daemon), not the fixed page origin, so a project switch that
+    // rebuilds the adapter connects to the chosen daemon.
+    this.baseUrl = url ?? (wsBase() || `ws://${window.location.host}/ws`);
     this.url = WebSocketAdapter.appendQuery(this.baseUrl, sessionId);
   }
 
@@ -123,6 +136,7 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
   connect(): void {
     if (this.ws && this.ws.readyState <= 1) return;
+    this.closed = false; // a fresh connect re-arms the adapter
 
     this.ws = new WebSocket(this.url);
 
@@ -140,6 +154,10 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
     this.ws.onclose = () => {
       this.disconnectHandler?.();
+      // MP1 — a deliberate disconnect (project switch / teardown) is terminal
+      // for this adapter. Don't reconnect and don't probe — the caller built (or
+      // will build) a fresh adapter for the target daemon.
+      if (this.closed) return;
       // II3 — a confirmed cross-project mismatch latches the loop OFF.
       // Don't re-arm: the daemon on this port serves a different project
       // and will only ever 403 our stale hash. The user must reload to
@@ -182,6 +200,7 @@ export class WebSocketAdapter implements ConnectionAdapter {
   }
 
   disconnect(): void {
+    this.closed = true; // MP1 — mark terminal so onclose doesn't reconnect/probe
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

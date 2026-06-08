@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiGet } from "../lib/api";
+import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
@@ -18,7 +18,6 @@ interface SearchResult {
   matchedVia: string[];
 }
 
-const API_BASE = `http://${window.location.host}`;
 
 interface SessionSummary {
   id: string;
@@ -55,7 +54,7 @@ export function SessionBrowser() {
   };
 
   useEffect(() => {
-    apiGet(`${API_BASE}/api/sessions`)
+    apiGet(`${apiBase()}/api/sessions`)
       .then((res) => res.json())
       .then((data) => setSessions(data.sessions ?? []))
       .catch(() => {})
@@ -65,7 +64,7 @@ export function SessionBrowser() {
   const loadSession = async (sessionId: string, focusArtifactId?: string) => {
     setLoadingSession(sessionId);
     try {
-      const res = await apiGet(`${API_BASE}/api/sessions/${sessionId}`);
+      const res = await apiGet(`${apiBase()}/api/sessions/${sessionId}`);
       const state = await res.json();
 
       reset();
@@ -111,7 +110,7 @@ export function SessionBrowser() {
       setSearching(true);
       setSearchError(null);
       try {
-        const res = await apiGet(`${API_BASE}/api/search?q=${encodeURIComponent(q)}`);
+        const res = await apiGet(`${apiBase()}/api/search?q=${encodeURIComponent(q)}`);
         if (!res.ok) throw new Error(`Search failed: ${res.status}`);
         const data = await res.json();
         setResults(data.results ?? []);

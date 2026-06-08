@@ -2,19 +2,20 @@ import type { Artifact, Comment } from "@deeppairing/shared";
 
 /**
  * Single source of truth for "what is waiting on the human" — used by the
- * PendingBanner, TurnIndicator, and the cross-project waiting badge so they
- * can't drift apart (pre-this, each computed its own filter: PendingBanner
- * counted only decision/plan, TurnIndicator counted research/spec/decision/plan
- * but not code_change, etc.).
+ * PendingBanner and the cross-project waiting badge so they can't drift apart
+ * (pre-this, each computed its own filter: PendingBanner counted only
+ * decision/plan, etc.).
  *
- * A trustworthy "agent is waiting for you" signal requires that EVERY counted
- * item be human-dismissable — so the set here is exactly the set the dismiss
- * affordances cover:
- *   - draft reviewable artifacts → Approve/Revise/Reject, or Dismiss (obsolete)
- *   - unanswered human questions that aren't human-resolved → "Mark resolved"
- *     (answered or humanResolvedAt clears them)
- * Decisions/plans are artifacts in `draft`; resolving them flips status, so
- * they leave this set naturally.
+ * "Waiting on you" == draft reviewable artifacts you must act on
+ * (Approve/Revise/Reject, or Dismiss → obsolete). Resolving a decision/plan
+ * flips its status, so it leaves this set naturally.
+ *
+ * A human's own unanswered question is deliberately EXCLUDED: that's the
+ * AGENT's turn (you asked it; the agent owes the answer). TurnIndicator
+ * surfaces those separately as a violet "waiting on the agent" badge. Counting
+ * them here kept the "waiting on YOU" signal lit on something you can't action
+ * — the same exclusion lives in the daemon's computeDaemonPendingCount.
+ * `isUnresolvedQuestion` is still exported for the agent-turn surfaces.
  */
 
 /** Artifact types whose `draft` state means "the human needs to review this".
@@ -37,28 +38,23 @@ export function isUnresolvedQuestion(c: Comment): boolean {
 export interface PendingSummary {
   /** Draft artifacts awaiting the human's review. */
   drafts: Artifact[];
-  /** Unanswered, un-dismissed human questions (with the artifact they're on). */
-  questions: Array<{ artifactId: string; comment: Comment }>;
-  /** drafts.length + questions.length — the single number a badge shows. */
+  /** drafts.length — the single number the "waiting on you" badge shows. */
   total: number;
 }
 
 /**
- * Compute everything currently waiting on the human across an artifact list +
- * the per-artifact comment map (the shape the web artifact store holds:
- * Record<artifactId, Comment[]>).
+ * Compute everything currently waiting on the human ("your turn") across an
+ * artifact list. Human-asked questions are excluded — they're the agent's turn
+ * (see the module docstring) and belong to the separate "waiting on the agent"
+ * surface, not this count.
+ *
+ * Takes the per-artifact comment map for signature stability with callers even
+ * though the count no longer depends on it.
  */
 export function computePending(
   artifacts: Artifact[],
-  commentsByArtifact: Record<string, Comment[]>,
+  _commentsByArtifact: Record<string, Comment[]> = {},
 ): PendingSummary {
   const drafts = artifacts.filter(isDraftAwaitingReview);
-  const questions: Array<{ artifactId: string; comment: Comment }> = [];
-  for (const [artifactId, list] of Object.entries(commentsByArtifact)) {
-    for (const c of list ?? []) {
-      if (isUnresolvedQuestion(c)) questions.push({ artifactId, comment: c });
-    }
-  }
-  questions.sort((a, b) => a.comment.createdAt.localeCompare(b.comment.createdAt));
-  return { drafts, questions, total: drafts.length + questions.length };
+  return { drafts, total: drafts.length };
 }
