@@ -154,6 +154,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
     buildEditorLink: (filePath, line, column = 1) => {
       const scheme = get().editorScheme;
       if (!scheme) return null;
+      // A code_change/plan step with no filePath (partial/legacy artifact) must
+      // not crash the "open in editor" link — no path, no link.
+      if (!filePath) return null;
 
       // Resolve relative paths against project root
       let absPath = filePath;

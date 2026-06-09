@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { API_BASE, sessionHeaders } from "../lib/api";
+import { apiBase, sessionHeaders } from "../lib/api";
 
 /**
  * Y1' — "Cross-checked your N prior stances before proposing this."
@@ -152,7 +152,7 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     setLoaded(false);
     setTrace(null);
     setOpen(false);
-    fetch(`${API_BASE}/api/artifacts/${encodeURIComponent(artifactId)}/preflight-trace`, {
+    fetch(`${apiBase()}/api/artifacts/${encodeURIComponent(artifactId)}/preflight-trace`, {
       headers: sessionHeaders(),
     })
       .then((r) => (r.ok ? r.json() : { trace: null }))

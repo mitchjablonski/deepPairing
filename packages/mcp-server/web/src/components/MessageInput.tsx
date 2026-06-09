@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
-import { API_BASE, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 import { useSentFlash } from "../hooks/useSentFlash";
 
@@ -101,7 +101,7 @@ export function MessageInput() {
     setSending(true);
 
     try {
-      await safeFetch(`${API_BASE}/api/comments`, {
+      await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({

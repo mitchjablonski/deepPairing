@@ -137,12 +137,16 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
     steps?: PlanStep[];
     estimatedChanges?: number;
   };
+  // `steps` is cast unchecked from the store — a partial/legacy plan can have it
+  // missing OR a non-array. `?? []` only guards null/undefined, so a wrong-type
+  // value still threw on `.map`/`.length`. Coerce to a real array once.
+  const steps = Array.isArray(content.steps) ? content.steps : [];
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const { updateArtifactStatus } = useArtifactStore();
 
   // Step acceptance state (only editable when draft)
   const [checkedSteps, setCheckedSteps] = useState<boolean[]>(
-    () => (content.steps ?? []).map(() => true),
+    () => steps.map(() => true),
   );
 
   const toggleStep = (index: number) => {
@@ -169,11 +173,11 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
   return (
     <div className="space-y-4">
-      {content.steps && (
+      {steps.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-              Implementation Steps ({content.steps.length})
+              Implementation Steps ({steps.length})
             </h4>
             {content.estimatedChanges != null && (
               <span className="text-xs text-text-muted">
@@ -182,7 +186,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             )}
           </div>
 
-          {content.steps.map((step, i) => {
+          {steps.map((step, i) => {
             const stepComments = comments.filter(
               (c) => c.target.stepIndex === i && c.target.lineStart == null,
             );
