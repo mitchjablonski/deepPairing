@@ -354,7 +354,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                           <ConceptBadge name={option.concept.name} explanation={option.concept.oneLineExplanation} />
                         </div>
                       )}
-                      {option.pros.length > 0 && (
+                      {Array.isArray(option.pros) && option.pros.length > 0 && (
                         <div className="space-y-0.5 mb-1.5">
                           {option.pros.map((pro, i) => (
                             <div key={i} className="flex items-start gap-1.5 text-xs">
@@ -364,7 +364,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                           ))}
                         </div>
                       )}
-                      {option.cons.length > 0 && (
+                      {Array.isArray(option.cons) && option.cons.length > 0 && (
                         <div className="space-y-0.5 mb-2">
                           {option.cons.map((con, i) => (
                             <div key={i} className="flex items-start gap-1.5 text-xs">
@@ -555,7 +555,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               )}
 
               {/* Pros */}
-              {option.pros.length > 0 && (
+              {Array.isArray(option.pros) && option.pros.length > 0 && (
                 <div className="space-y-0.5 mb-1.5">
                   {option.pros.map((pro, i) => (
                     <div key={i} className="flex items-start gap-1.5 text-xs">
@@ -567,7 +567,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               )}
 
               {/* Cons */}
-              {option.cons.length > 0 && (
+              {Array.isArray(option.cons) && option.cons.length > 0 && (
                 <div className="space-y-0.5 mb-2">
                   {option.cons.map((con, i) => (
                     <div key={i} className="flex items-start gap-1.5 text-xs">

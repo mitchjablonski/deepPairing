@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { API_BASE, sessionHeaders, apiGet } from "../lib/api";
+import { apiBase, sessionHeaders, apiGet } from "../lib/api";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
 
@@ -24,7 +24,7 @@ export function AutonomySlider() {
 
   // Load from server on mount
   useEffect(() => {
-    apiGet(`${API_BASE}/api/state`)
+    apiGet(`${apiBase()}/api/state`)
       .then((r) => r.json())
       .then((state) => {
         if (state.autonomyLevel) setLevel(state.autonomyLevel);
@@ -35,7 +35,7 @@ export function AutonomySlider() {
   const handleChange = async (newLevel: AutonomyLevel) => {
     setLevel(newLevel);
     try {
-      await fetch(`${API_BASE}/api/preferences`, {
+      await fetch(`${apiBase()}/api/preferences`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ autonomyLevel: newLevel }),

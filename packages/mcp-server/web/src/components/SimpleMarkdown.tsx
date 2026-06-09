@@ -40,7 +40,12 @@ function isTableSeparator(line: string): boolean {
   return /^\|[\s-:|]+\|$/.test(line.trim());
 }
 
-export function SimpleMarkdown({ text, className }: { text: string; className?: string }) {
+export function SimpleMarkdown({ text, className }: { text?: string | null; className?: string }) {
+  // Tolerate missing text: callers pass artifact content fields (objective,
+  // action, reasoning, …) cast unchecked from the store, so any of them can be
+  // undefined on a partial/legacy artifact. Pre-this, `text.split(...)` threw
+  // and crashed the whole renderer. Nothing to render → render nothing.
+  if (!text) return null;
   // Split into paragraphs on double newlines
   const paragraphs = text.split(/\n\n+/);
 

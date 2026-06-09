@@ -2,6 +2,10 @@ import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 
+// Monotonic counter for provisional (optimistic) comment ids until the server
+// assigns a real one. Module-scoped so ids stay unique across submits.
+let localCommentSeq = 0;
+
 /**
  * U3 — surface a mutation failure as a toast. Pulled out of every catch
  * block so the message wording stays consistent and the import isn't
@@ -195,8 +199,32 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   // user can react (re-try, run doctor, restart Claude Code, etc).
 
   submitComment: async (artifactId, content, target, options) => {
+    // Optimistic: render the comment immediately instead of waiting on the
+    // session-scoped `comment_added` WS broadcast. Pre-this, submitComment was
+    // the last broadcast-only mutation — the user hit send and nothing appeared
+    // until the round-trip, and in the global-client window right after a
+    // project switch (before a session is selected) the comment could appear to
+    // vanish entirely. Snapshot for rollback, insert a provisional, then
+    // reconcile with the server-assigned comment (addComment dedupes by id, so
+    // the later WS echo collapses into one record).
+    const prev = useArtifactStore.getState().comments;
+    const sid =
+      (typeof window !== "undefined" &&
+        (window as any).__dpConnectionStore?.getState?.().sessionId) || "";
+    const provisional: Comment = {
+      id: `local_${Date.now().toString(36)}_${++localCommentSeq}`,
+      sessionId: sid,
+      target: { artifactId, ...target },
+      parentCommentId: options?.parentCommentId ?? null,
+      author: "human",
+      content,
+      acknowledged: false,
+      createdAt: new Date().toISOString(),
+      ...(options?.intent ? { intent: options.intent } : {}),
+    } as Comment;
+    useArtifactStore.getState().addComment(provisional);
     try {
-      await safeFetch(`${apiBase()}/api/comments`, {
+      const res = await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({
@@ -207,7 +235,20 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
           parentCommentId: options?.parentCommentId ?? null,
         }),
       });
+      // Reconcile: swap the provisional for the real (server-id'd) comment.
+      let serverComment: Comment | null = null;
+      try { serverComment = (await res.json())?.comment ?? null; } catch { /* keep provisional */ }
+      set((state) => {
+        const list = (state.comments[artifactId] ?? []).filter((c) => c.id !== provisional.id);
+        const next =
+          serverComment && !list.some((c) => c.id === serverComment!.id)
+            ? [...list, serverComment]
+            : list;
+        return { comments: { ...state.comments, [artifactId]: next } };
+      });
     } catch (err) {
+      // Roll back the provisional so a failed send doesn't leave a phantom.
+      set({ comments: prev });
       await toastApiError("Send comment", err);
       throw err;
     }

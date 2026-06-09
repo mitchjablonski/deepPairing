@@ -253,6 +253,35 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
   });
 
+  it("submitComment optimistically shows the comment, then reconciles to the server comment (no dup)", async () => {
+    const s = useArtifactStore.getState();
+    const serverComment = {
+      id: "srv1", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null,
+      author: "human", content: "hello", acknowledged: false, createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ comment: serverComment }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )));
+    const p = s.submitComment("a1", "hello");
+    // Optimistic: a provisional comment is visible synchronously, before the POST resolves.
+    const optimistic = useArtifactStore.getState().comments["a1"] ?? [];
+    expect(optimistic.some((c) => c.content === "hello" && c.id.startsWith("local_"))).toBe(true);
+    await p;
+    // Reconciled: provisional swapped for the server id, exactly one record.
+    expect((useArtifactStore.getState().comments["a1"] ?? []).map((c) => c.id)).toEqual(["srv1"]);
+  });
+
+  it("submitComment rolls back the optimistic comment on failure", async () => {
+    const s = useArtifactStore.getState();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 500 })));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    await expect(s.submitComment("a1", "hello")).rejects.toBeDefined();
+    expect(useArtifactStore.getState().comments["a1"] ?? []).toEqual([]);
+    expect(useToastStore.getState().toasts[0].title).toBe("Send comment failed");
+  });
+
   it("renameArtifact rolls back the optimistic title change on failure", async () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { title: "Original" }));

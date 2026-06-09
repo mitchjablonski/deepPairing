@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { API_BASE, sessionHeaders } from "../lib/api";
+import { apiBase, sessionHeaders } from "../lib/api";
 
 /**
  * EE2 — shared ledger digest store. Pre-EE2 three independent fetchers
@@ -83,7 +83,7 @@ let activeTraceListener: ((e: Event) => void) | null = null;
  * pinning the user on a stale error during a brief blip.
  */
 async function fetchOnce(): Promise<Response> {
-  return fetch(`${API_BASE}/api/ledger/digest`, { headers: sessionHeaders() });
+  return fetch(`${apiBase()}/api/ledger/digest`, { headers: sessionHeaders() });
 }
 
 async function fetchWithRetry(): Promise<Response> {

@@ -53,6 +53,24 @@ describe("DecisionCard — resolved options disclosure", () => {
   });
 });
 
+describe("DecisionCard — tolerates options missing pros/cons", () => {
+  it("renders an option whose pros/cons arrays are absent without crashing", () => {
+    // content is cast unchecked in ArtifactPanel, so a partial/hand-edited
+    // decision can omit pros/cons. Unguarded option.pros.length threw and took
+    // the whole panel down.
+    const malformed = {
+      type: "decision_request" as const,
+      decisionId: "dec_x",
+      context: "Which?",
+      options: [
+        { id: "o1", title: "Option A", description: "no pros/cons here", effort: "low", risk: "low", recommendation: true },
+      ],
+    } as any;
+    expect(() => render(<DecisionCard event={malformed} decisionId="dec_x" />)).not.toThrow();
+    expect(screen.getByText("Option A")).toBeInTheDocument();
+  });
+});
+
 describe("DecisionCard — draft state", () => {
   it("renders every option with its title", () => {
     render(<DecisionCard event={event} />);

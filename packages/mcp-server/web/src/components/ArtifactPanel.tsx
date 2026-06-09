@@ -16,6 +16,7 @@ import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 
@@ -680,7 +681,25 @@ export function ArtifactPanel() {
       <div className="flex-1 flex flex-col min-w-0">
         <AnimatePresence mode="popLayout">
           {selectedArtifact ? (
-            <ArtifactDetail key={selectedArtifact.id} artifact={selectedArtifact} />
+            // Per-artifact boundary: a renderer crash on malformed content is
+            // isolated to THIS pane — the sidebar (outside this subtree) stays
+            // usable so the user can pick another artifact. Keying by id remounts
+            // a fresh boundary on selection change, so switching away from a
+            // broken artifact auto-recovers (no manual "Try again" loop on the
+            // same crashing content).
+            <ErrorBoundary
+              key={selectedArtifact.id}
+              fallback={
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 p-6 text-center">
+                  <p className="text-sm text-accent-red font-medium">This artifact failed to render</p>
+                  <p className="text-xs text-text-muted max-w-xs">
+                    Its content may be malformed. Pick another artifact from the sidebar — the rest of the session is unaffected.
+                  </p>
+                </div>
+              }
+            >
+              <ArtifactDetail artifact={selectedArtifact} />
+            </ErrorBoundary>
           ) : (
             <div className="flex-1 flex items-center justify-center text-xs text-text-muted">
               Select an artifact to view details

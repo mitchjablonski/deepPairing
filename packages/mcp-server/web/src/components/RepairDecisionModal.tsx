@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { buildRepairPrompt } from "../lib/repairPrompt";
-import { API_BASE } from "../lib/api";
+import { apiBase } from "../lib/api";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface Props {
@@ -85,7 +85,7 @@ export function RepairDecisionModal({
       const token = (window as any).__deepPairingToken as string | undefined;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE}/api/prompts`, {
+      const res = await fetch(`${apiBase()}/api/prompts`, {
         method: "POST",
         headers,
         body: JSON.stringify({
