@@ -93,7 +93,15 @@ async function fetchWithRetry(): Promise<Response> {
   return fetchOnce();
 }
 
-async function doFetch(set: (partial: Partial<LedgerState>) => void): Promise<void> {
+async function doFetch(
+  // Accept both the object and updater-function forms of zustand's set (the
+  // version bump at the success path needs the previous state).
+  set: (
+    partial:
+      | Partial<LedgerState>
+      | ((s: LedgerState) => Partial<LedgerState>),
+  ) => void,
+): Promise<void> {
   if (inflight) return inflight;
   inflight = (async () => {
     set({ loading: true });
