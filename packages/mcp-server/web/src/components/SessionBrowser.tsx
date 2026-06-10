@@ -277,7 +277,7 @@ export function SessionBrowser() {
   );
 }
 
-function SearchResults({
+export function SearchResults({
   results,
   searching,
   onPick,

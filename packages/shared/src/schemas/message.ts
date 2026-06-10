@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ArtifactSchema, ArtifactStatusSchema } from "./artifact.js";
 import { CommentSchema } from "./comment.js";
 import { EvidenceInputSchema } from "./evidence.js";
+import { DecisionOptionSchema } from "./decision.js";
 
 export const TextEventSchema = z.object({
   type: z.literal("text"),
@@ -49,18 +50,11 @@ export const DecisionRequestEventSchema = z.object({
   type: z.literal("decision_request"),
   decisionId: z.string(),
   context: z.string(),
-  options: z.array(
-    z.object({
-      id: z.string(),
-      title: z.string(),
-      description: z.string(),
-      pros: z.array(z.string()),
-      cons: z.array(z.string()),
-      effort: z.enum(["low", "medium", "high"]),
-      risk: z.enum(["low", "medium", "high"]),
-      recommendation: z.boolean(),
-    }),
-  ),
+  // Reuse the canonical option schema (decision.ts) instead of a drifted inline
+  // copy — the inline one was missing `concept`, so DecisionCard's
+  // `option.concept` reads didn't type-check (Z5 noted both the wire/event and
+  // stored-content shapes must carry it).
+  options: z.array(DecisionOptionSchema),
 });
 
 export const ReasoningEventSchema = z.object({

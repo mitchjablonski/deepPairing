@@ -137,7 +137,7 @@ describe("PredictionsBreadcrumb", () => {
       // POST was made with the expected payload
       const postCall = fetchMock.mock.calls.find((c: any[]) => String(c[0]).includes("/api/retrospectives"));
       expect(postCall).toBeTruthy();
-      const body = JSON.parse(postCall![1].body);
+      const body = JSON.parse((postCall as any)[1].body);
       expect(body).toEqual({ decisionId: "dec_1", verdict: "right" });
 
       // Optimistic verdict label appears immediately

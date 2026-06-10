@@ -390,7 +390,9 @@ function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: D
 }
 
 export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
-  const content = artifact.content as CodeChangeContent;
+  // `content` is the loosely-typed store shape (Record<string, unknown>); the
+  // renderer guards each field, so cast through unknown to the expected shape.
+  const content = artifact.content as unknown as CodeChangeContent;
 
   // Reconstruct `before` from session history when the agent omitted it
   // (commonly: a re-edit mislabeled as changeType="create" with empty before).
