@@ -308,6 +308,37 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("C-4 — /api/files security", () => {
+    it("Host allowlist: a non-loopback Host is rejected with forbidden_host (DNS-rebinding guard)", async () => {
+      const res = await app.request("/api/state", { headers: { host: "evil.example.com" } });
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe("forbidden_host");
+    });
+
+    it("Host allowlist: a loopback Host (localhost:PORT) passes the guard", async () => {
+      const res = await app.request("/api/state", { headers: { host: "localhost:3847" } });
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(200);
+    });
+
+    it("Bearer gate: /api/files 401s without the daemon token when one is configured", async () => {
+      const authed = withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-files"), tmpDir);
+      const res = await authed.request("/api/files?path=hello.txt");
+      expect(res.status).toBe(401);
+      expect((await res.json()).code).toBe("daemon_auth_required");
+    });
+
+    it("Bearer gate: /api/files serves the file when the correct token is present", async () => {
+      fs.writeFileSync(path.join(tmpDir, "hello.txt"), "hi there\n");
+      const authed = withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-files"), tmpDir);
+      const res = await authed.request("/api/files?path=hello.txt", {
+        headers: { Authorization: "Bearer tok-files" },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).content).toBe("hi there\n");
+    });
+  });
+
   describe("GET /api/search", () => {
     it("returns empty results for empty query", async () => {
       const res = await app.request("/api/search?q=");

@@ -44,8 +44,9 @@ page to re-bind."*
 **What it means:** the daemon's `projectHash` (sha256 of `projectRoot`,
 sliced 8 chars) doesn't match the one your browser tab is sending. This
 usually means a daemon restart claimed a different `projectRoot` than the
-one your tab was bound to — typically because two projects competed for
-port 3847 and the wrong one won.
+one your tab was bound to — typically because two daemons competed for the
+same deterministic port slot (a project-hash collision in `3847-3974`, or a
+recycled port after a restart) and the wrong one won.
 
 **Fix:**
 
@@ -104,9 +105,10 @@ loaded deepPairing's MCP server.
   errors:** check that `pnpm build` actually ran for the
   `@deeppairing/mcp-server` workspace. `pnpm --filter @deeppairing/mcp-server build`
   forces a rebuild.
-* **Port 3847 already in use:** the daemon sweeps 3847-3856 and adopts
-  the first free port. If all ten are taken, doctor will tell you what's
-  holding them.
+* **Port already in use:** the daemon prefers its deterministic per-project
+  port (derived from the project hash, in the `3847-3974` range) and sweeps
+  for the next free slot if that one is busy. If it can't bind, doctor will
+  tell you what's holding the ports.
 
 ## Still stuck?
 

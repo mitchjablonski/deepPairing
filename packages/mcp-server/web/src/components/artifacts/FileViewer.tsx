@@ -34,8 +34,15 @@ export function FileViewer({
 
   useEffect(() => {
     setLoading(true);
-    // In the companion UI, files are read by Claude Code — no server-side file cache
-    apiGet(`/api/files?path=${encodeURIComponent(filePath)}`)
+    // C-4 — /api/files is Bearer-gated (reading project files is the daemon's
+    // highest-value read). The daemon injects the token as
+    // window.__deepPairingToken into the served index.html; attach it the same
+    // way RepairDecisionModal does for /api/prompts.
+    const token = (window as any).__deepPairingToken as string | undefined;
+    apiGet(
+      `/api/files?path=${encodeURIComponent(filePath)}`,
+      token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+    )
       .then((res) => {
         if (!res.ok) throw new Error("File not cached");
         return res.json();

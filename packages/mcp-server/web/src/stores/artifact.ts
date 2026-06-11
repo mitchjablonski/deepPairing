@@ -206,8 +206,10 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     // project switch (before a session is selected) the comment could appear to
     // vanish entirely. Snapshot for rollback, insert a provisional, then
     // reconcile with the server-assigned comment (addComment dedupes by id, so
-    // the later WS echo collapses into one record).
-    const prev = useArtifactStore.getState().comments;
+    // the later WS echo collapses into one record). Rollback is SURGICAL: it
+    // removes only this provisional from the *current* state, so a comment or
+    // artifact that arrived over the WS while the POST was in flight isn't wiped
+    // by restoring a stale whole-collection snapshot.
     const sid =
       (typeof window !== "undefined" &&
         (window as any).__dpConnectionStore?.getState?.().sessionId) || "";
@@ -247,8 +249,14 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         return { comments: { ...state.comments, [artifactId]: next } };
       });
     } catch (err) {
-      // Roll back the provisional so a failed send doesn't leave a phantom.
-      set({ comments: prev });
+      // Roll back ONLY the provisional so a failed send doesn't leave a phantom
+      // — without discarding comments that arrived over the WS in the meantime.
+      set((state) => ({
+        comments: {
+          ...state.comments,
+          [artifactId]: (state.comments[artifactId] ?? []).filter((c) => c.id !== provisional.id),
+        },
+      }));
       await toastApiError("Send comment", err);
       throw err;
     }
@@ -263,7 +271,12 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     // reach this tab, leaving a just-dismissed draft rendering as "waiting
     // for you" (e.g. an obsolete item that won't clear). Same optimistic +
     // rollback pattern as renameArtifact / markQuestionResolved.
-    const prev = useArtifactStore.getState().artifacts;
+    //
+    // Rollback is SURGICAL: capture only THIS artifact's prior status and, on
+    // failure, revert only that one field on the *current* state — so an
+    // artifact_created / comment_added that arrived over the WS while the POST
+    // was in flight isn't erased by restoring a stale whole-array snapshot.
+    const prevStatus = useArtifactStore.getState().artifacts.find((a) => a.id === artifactId)?.status;
     set((state) => ({
       artifacts: state.artifacts.map((a) =>
         a.id === artifactId ? { ...a, status } : a,
@@ -276,8 +289,15 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         body: JSON.stringify({ status, feedback }),
       });
     } catch (err) {
-      // Roll back so the UI reflects truth (still awaiting your review).
-      set({ artifacts: prev });
+      // Roll back only this artifact's status so the UI reflects truth (still
+      // awaiting your review) without clobbering concurrent WS updates.
+      if (prevStatus !== undefined) {
+        set((state) => ({
+          artifacts: state.artifacts.map((a) =>
+            a.id === artifactId ? { ...a, status: prevStatus } : a,
+          ),
+        }));
+      }
       await toastApiError(
         status === "approved" ? "Approve" : status === "rejected" ? "Reject" : "Revise",
         err,
@@ -293,15 +313,20 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     // tab viewing a project it switched into). The server route ALSO marks the
     // artifact approved, so this just closes the local-state gap. Same
     // optimistic + rollback pattern as updateArtifactStatus.
-    const prev = useArtifactStore.getState().artifacts;
+    // ArtifactPanel resolves decisions by content.decisionId, falling back to
+    // the artifact id (effectiveDecisionId), so match both.
+    const matches = (a: Artifact) =>
+      (a.content as any)?.decisionId === decisionId ||
+      (a.type === "decision" && a.id === decisionId);
+    // SURGICAL rollback: remember the prior status of just the matched
+    // decision artifact(s) and revert only those on failure — concurrent WS
+    // updates to other artifacts survive (unlike a whole-array snapshot).
+    const prevStatusById = new Map(
+      useArtifactStore.getState().artifacts.filter(matches).map((a) => [a.id, a.status]),
+    );
     set((state) => ({
       artifacts: state.artifacts.map((a) =>
-        // ArtifactPanel resolves decisions by content.decisionId, falling back
-        // to the artifact id (effectiveDecisionId), so match both.
-        (a.content as any)?.decisionId === decisionId ||
-        (a.type === "decision" && a.id === decisionId)
-          ? { ...a, status: "approved" as ArtifactStatus }
-          : a,
+        matches(a) ? { ...a, status: "approved" as ArtifactStatus } : a,
       ),
     }));
     try {
@@ -316,8 +341,13 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         }),
       });
     } catch (err) {
-      // Roll back so the decision is still shown as awaiting your choice.
-      set({ artifacts: prev });
+      // Roll back only the matched decision artifact(s) so it's still shown as
+      // awaiting your choice, without discarding concurrent WS updates.
+      set((state) => ({
+        artifacts: state.artifacts.map((a) =>
+          prevStatusById.has(a.id) ? { ...a, status: prevStatusById.get(a.id)! } : a,
+        ),
+      }));
       await toastApiError("Resolve decision", err);
       throw err;
     }
@@ -325,7 +355,9 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
 
   renameArtifact: async (artifactId, title) => {
     // Optimistic UI: apply the rename locally first; roll back on failure.
-    const prev = useArtifactStore.getState().artifacts;
+    // SURGICAL rollback: remember only this artifact's prior title and revert
+    // just that field on failure, so concurrent WS updates aren't clobbered.
+    const prevTitle = useArtifactStore.getState().artifacts.find((a) => a.id === artifactId)?.title;
     set((state) => ({
       artifacts: state.artifacts.map((a) =>
         a.id === artifactId ? { ...a, title } : a,
@@ -338,8 +370,14 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         body: JSON.stringify({ title }),
       });
     } catch (err) {
-      // Roll back the optimistic update so the UI reflects truth.
-      set({ artifacts: prev });
+      // Roll back only this artifact's title so the UI reflects truth.
+      if (prevTitle !== undefined) {
+        set((state) => ({
+          artifacts: state.artifacts.map((a) =>
+            a.id === artifactId ? { ...a, title: prevTitle } : a,
+          ),
+        }));
+      }
       await toastApiError("Rename artifact", err);
       throw err;
     }
@@ -348,14 +386,14 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   markQuestionResolved: async (commentId) => {
     const resolvedAt = new Date().toISOString();
     // Optimistic: stamp humanResolvedAt locally so the waiting signal clears
-    // immediately. Snapshot for rollback on failure.
-    const prev = useArtifactStore.getState().comments;
+    // immediately. SURGICAL rollback: remember only this comment's prior
+    // humanResolvedAt and revert just that field on failure, so comments that
+    // arrived over the WS in the meantime aren't discarded.
+    const stamp = (c: Comment): Comment => ({ ...c, humanResolvedAt: resolvedAt });
     set((state) => {
       const nextComments: Record<string, Comment[]> = {};
       for (const [key, list] of Object.entries(state.comments)) {
-        nextComments[key] = list.map((c) =>
-          c.id === commentId ? { ...c, humanResolvedAt: resolvedAt } : c,
-        );
+        nextComments[key] = list.map((c) => (c.id === commentId ? stamp(c) : c));
       }
       return { comments: nextComments };
     });
@@ -366,8 +404,20 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         body: JSON.stringify({ resolvedAt }),
       });
     } catch (err) {
-      // Roll back so the UI reflects truth (still awaiting).
-      set({ comments: prev });
+      // Roll back only this comment's resolved stamp (we set it to `resolvedAt`
+      // above, so clearing that exact value is the inverse) without discarding
+      // concurrent WS updates.
+      set((state) => {
+        const nextComments: Record<string, Comment[]> = {};
+        for (const [key, list] of Object.entries(state.comments)) {
+          nextComments[key] = list.map((c) => {
+            if (c.id !== commentId || c.humanResolvedAt !== resolvedAt) return c;
+            const { humanResolvedAt: _dropped, ...rest } = c;
+            return rest as Comment;
+          });
+        }
+        return { comments: nextComments };
+      });
       await toastApiError("Mark question resolved", err);
       throw err;
     }

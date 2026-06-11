@@ -105,8 +105,9 @@ Nothing leaves your machine that you didn't already send to Anthropic.
 
 - **No telemetry.** No analytics endpoints; no usage tracking.
 - **No account.** No login; no server we run.
-- **Local-only daemon.** Binds explicitly to `127.0.0.1` on port
-  3847; sibling devices on the same wifi can't reach it.
+- **Local-only daemon.** Binds explicitly to `127.0.0.1` on its
+  per-project port (in `3847-3974`); sibling devices on the same wifi
+  can't reach it.
 - **Storage on your disk only.** Sessions at
   `.deeppairing/sessions/{id}/`; cross-project ledger at
   `~/.deeppairing/philosophy/v1.json`. Plain JSON; inspect with
@@ -146,7 +147,7 @@ shapes the next milestone.
 
 ## "Where's the roadmap?"
 
-Open in [Discussions](https://github.com/deeppairing/deeppairing/discussions)
+Open in [Discussions](https://github.com/mitchjablonski/deepPairing/discussions)
 once we have ~10 active users. Pre-launch we're deliberately not
 publishing one; council reviews kept landing "wait for real-user
 signals before prioritizing the next bundle." The deferred items

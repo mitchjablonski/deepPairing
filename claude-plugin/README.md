@@ -2,8 +2,9 @@
 
 Turn Claude Code from a black box into a pairing partner. Structured
 artifacts (findings, specs, decisions, plans), cross-session rejection
-memory, a cross-project philosophy ledger, and a companion web UI at
-http://localhost:3847 for inline review and commenting.
+memory, a cross-project philosophy ledger, and a companion web UI (on a
+deterministic per-project port, `3847` for the first project) for inline
+review and commenting.
 
 ## Install
 
@@ -58,6 +59,10 @@ opaque "module not found" errors.
   artifact, or pattern.
 - `/deeppairing:stance <concept>` — Check your cross-project stance on a
   concept (do you avoid or prefer it?).
+- `/deeppairing:review-pr <pr>` — Pair-review a pull request and stage
+  findings for inline PR comments.
+- `/deeppairing:post-pr <pr>` — Post the approved pair findings as inline
+  comments on the pull request (via the `gh` CLI).
 
 **Skill** (auto-invoked)
 
@@ -66,20 +71,20 @@ opaque "module not found" errors.
 
 **MCP server** (bundled via `.mcp.json`)
 
-- 13 tools: `present_findings`, `present_spec`, `present_options`,
+- 12 tools: `present_findings`, `present_spec`, `present_options`,
   `present_plan`, `present_code_change`, `log_reasoning`,
   `answer_question`, `revise_artifact` (mode: supersede | retract),
-  `recall` (mode: philosophy | sessions | any),
-  `request_horizon_check`, `post_pr_review`, `export_session`,
-  `check_feedback`.
+  `recall` (mode: philosophy | sessions | ledger | any),
+  `post_pr_review`, `export_session`, `check_feedback`.
 - MCP resources: `deeppairing://session/current`,
   `deeppairing://artifact/{id}`, `deeppairing://sessions`,
   `deeppairing://session/{id}`.
 - MCP elicitation for quick approvals in-terminal.
 
-**Companion web UI** — `http://localhost:3847` (or the next free port if
-3847 is in use; check `.deeppairing/daemon.json` for the actual port).
-Auto-opens on first daemon start (unless `DEEPPAIRING_OPEN_BROWSER=0`).
+**Companion web UI** — a deterministic per-project port in `3847-3974`
+(the first project gets `3847`; check `.deeppairing/daemon.json` for this
+project's actual port). Auto-opens on first daemon start (unless
+`DEEPPAIRING_OPEN_BROWSER=0`).
 
 ## What the plugin sets up automatically
 
@@ -115,6 +120,6 @@ cross-project philosophy ledger that makes the NEXT session smarter.
 
 ## See also
 
-- Main repo: https://github.com/deeppairing/deeppairing
+- Main repo: https://github.com/mitchjablonski/deepPairing
 - `deeppairing.md` in `packages/mcp-server/` — the full collaboration
   protocol the agent follows

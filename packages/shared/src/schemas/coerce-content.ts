@@ -5,6 +5,7 @@ import type {
   Finding,
   PlanContent,
   PlanStep,
+  PlanBranch,
   SpecContent,
   SpecRequirement,
   SpecTask,
@@ -86,10 +87,8 @@ function coerceFinding(v: unknown): Finding {
   if (typeof f.impact === "string") out.impact = f.impact;
   if (typeof f.recommendation === "string") out.recommendation = f.recommendation;
   if (Array.isArray(f.relatedFindings)) out.relatedFindings = strArr(f.relatedFindings);
-  // UI-extension field the present_findings tool accepts but the Zod schema
-  // doesn't model — preserve it so the renderer's confidence badge still shows.
   const confidence = optOneOf(f.confidence, LMH);
-  if (confidence) (out as Finding & { confidence?: string }).confidence = confidence;
+  if (confidence) out.confidence = confidence;
   return out;
 }
 
@@ -127,18 +126,16 @@ function coercePlanStep(v: unknown): PlanStep {
       filePath: str(s.preview.filePath),
     };
   }
-  // UI-extension fields the present_plan tool accepts but the Zod schema doesn't
-  // model (conditional branches). Preserve them so the renderer still gets them.
-  const ext = out as PlanStep & { condition?: string; branches?: unknown[] };
-  if (typeof s.condition === "string") ext.condition = s.condition;
+  // Conditional-branch fields (now first-class in PlanStepSchema).
+  if (typeof s.condition === "string") out.condition = s.condition;
   if (Array.isArray(s.branches)) {
-    ext.branches = s.branches.filter(isObj).map((b) => {
-      const branch: Record<string, unknown> = {
+    out.branches = s.branches.filter(isObj).map((b) => {
+      const branch: PlanBranch = {
         description: str(b.description),
         reasoning: str(b.reasoning),
       };
       const bf = coerceFiles(b.files);
-      if (bf) branch.files = bf;
+      if (bf) branch.files = bf as PlanBranch["files"];
       return branch;
     });
   }

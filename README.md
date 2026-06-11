@@ -18,18 +18,20 @@ That refusal — and the cross-project taste it's drawing from — is what deepP
 
 > **See it for yourself in 90 seconds.** A scripted [demo command](#try-the-demo) fires the rejection-block toast against a real companion UI. Screen recordings of the live flow ship with the next tagged release.
 
+![The rejection-block toast firing: the agent paraphrases a previously-rejected stance and deepPairing's pre-flight gate intercepts it.](docs/assets/hero.svg)
+
 ## Try the demo
 
 ```bash
-git clone https://github.com/deeppairing/deeppairing.git
-cd deeppairing
+git clone https://github.com/mitchjablonski/deepPairing.git
+cd deepPairing
 pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js demo
 ```
 
 > Requires Node 20+ and pnpm 10+. Cold-clone wall time is around 60-90s on `pnpm install` (Turborepo + a few hundred deps), then ~10s for the monorepo build, then ~5s for the demo. No Claude Code installation needed for this path.
 
-The companion UI auto-opens at `http://localhost:3847`. The hero rejection-block toast fires within ~5 seconds. That's the proof. Everything below is whether you'd want this in your daily Claude Code loop.
+The demo auto-opens the companion UI in your browser. (The daemon binds a deterministic per-project port in the range `3847-3974` — the first project gets `3847` — so the demo opens whichever port it picked; you don't have to guess.) The hero rejection-block toast fires within ~5 seconds. That's the proof. Everything below is whether you'd want this in your daily Claude Code loop.
 
 ## Use it in Claude Code
 
@@ -72,6 +74,8 @@ deepPairing's `runPreflight` ([packages/mcp-server/src/mcp/preflight-validator.t
 ## What makes this different
 
 The concept-match pre-flight is the moat. These are the affordances that compound on top of it:
+
+![The Your Taste drawer: cross-project stance tiles, seeded entries, and top-cited stances with citation counts.](docs/assets/ledger.svg)
 
 - **Cross-project Philosophy Ledger.** Stances accumulate at `~/.deeppairing/philosophy/v1.json` across every deepPairing project you've opted in to publish from (opt-in is one prompt at `init`). Portable via `deeppairing philosophy export | import --merge`.
 - **Three-layer memory model.** Filesystem-sensed guardrails (migrations, CI), team conventions (committable `.deeppairing/team.json`), personal philosophy. Surfaced separately to the agent. Never merged.
@@ -131,7 +135,7 @@ For details: see [ARCHITECTURE.md](ARCHITECTURE.md). If something isn't behaving
 - **`packages/shared/`** — Zod schemas + fixtures that both server and UI import.
 - **`claude-plugin/`** — Claude Code plugin: `.mcp.json`, slash commands (`/deeppairing:start`, `/deeppairing:review`, `/deeppairing:stance`, `/deeppairing:review-pr`, `/deeppairing:post-pr`), `pairing-protocol` skill.
 
-12 MCP tools: `present_findings`, `present_options`, `present_spec`, `present_plan`, `present_code_change`, `log_reasoning`, `recall` (mode: philosophy | sessions | any), `revise_artifact` (mode: supersede | retract), `answer_question`, `post_pr_review`, `export_session`, `check_feedback`. Plus a `recall` MCP prompt for user-invoked slash-style queries.
+12 MCP tools: `present_findings`, `present_options`, `present_spec`, `present_plan`, `present_code_change`, `log_reasoning`, `recall` (mode: philosophy | sessions | ledger | any), `revise_artifact` (mode: supersede | retract), `answer_question`, `post_pr_review`, `export_session`, `check_feedback`. Plus a `recall` MCP prompt for user-invoked slash-style queries.
 
 ## Status
 

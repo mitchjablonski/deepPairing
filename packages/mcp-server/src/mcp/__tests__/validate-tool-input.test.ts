@@ -96,6 +96,19 @@ describe("Tool-input validation at the write boundary", () => {
     expect(store.getArtifacts()).toHaveLength(1);
   });
 
+  it("present_findings PERSISTS a finding's `confidence` (C-1 — schema must model what the tool advertises)", async () => {
+    // The tool's JSON schema accepts `confidence` and the UI renders a badge,
+    // but the non-strict validation boundary used to strip it before persist
+    // because FindingSchema didn't model it. Now it must survive to disk.
+    const { isError } = await call("present_findings", {
+      summary: "s",
+      findings: [{ category: "perf", detail: "N+1", significance: "high", confidence: "high" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { findings: Array<{ confidence?: string }> };
+    expect(content.findings[0].confidence).toBe("high");
+  });
+
   it("present_options rejects fewer than 2 options (decisions need a real choice)", async () => {
     const { text, isError } = await call("present_options", {
       context: "Pick something",
@@ -144,6 +157,30 @@ describe("Tool-input validation at the write boundary", () => {
     expect(store.getArtifacts()).toHaveLength(1);
   });
 
+  it("present_plan PERSISTS a step's `condition`/`branches` (C-1 — schema must model what the tool advertises)", async () => {
+    // present_plan accepts conditional branches and the renderer displays
+    // them, but the non-strict boundary used to strip them before persist
+    // because PlanStepSchema didn't model them. Now they must survive to disk.
+    const { isError } = await call("present_plan", {
+      title: "Plan",
+      estimatedChanges: 1,
+      steps: [
+        {
+          description: "Run tests, then branch",
+          reasoning: "gate the next move on the result",
+          condition: "if tests pass",
+          branches: [{ description: "ship it", reasoning: "green build", files: ["release.ts"] }],
+        },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as {
+      steps: Array<{ condition?: string; branches?: Array<{ description: string; files?: string[] }> }>;
+    };
+    expect(content.steps[0].condition).toBe("if tests pass");
+    expect(content.steps[0].branches?.[0]).toMatchObject({ description: "ship it", files: ["release.ts"] });
+  });
+
   it("present_code_change rejects missing required fields (filePath, changeType, after, reasoning)", async () => {
     const { text, isError } = await call("present_code_change", {
       // filePath missing
@@ -165,6 +202,24 @@ describe("Tool-input validation at the write boundary", () => {
     expect(text).toContain("INPUT_VALIDATION_FAILED");
     expect(text).toMatch(/action|reasoning/);
     expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("log_reasoning advertises `confidence` as optional (C-1 — was wrongly in required)", async () => {
+    // The JSON schema marked confidence required while the description and the
+    // Zod schema both call it optional — a strict MCP client would reject valid
+    // calls. The advertised contract must match.
+    const { tools } = await client.listTools();
+    const lr = tools.find((t) => t.name === "log_reasoning");
+    expect(lr?.inputSchema?.required).toEqual(["action", "reasoning"]);
+  });
+
+  it("log_reasoning ACCEPTS a call without `confidence`", async () => {
+    const { isError } = await call("log_reasoning", {
+      action: "refactor the parser",
+      reasoning: "the current one is unreadable",
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
   });
 
   it("present_spec rejects a string `requirements` field", async () => {

@@ -112,6 +112,22 @@ describe("ArtifactStatusActions — draft interactions", () => {
     );
   });
 
+  it("re-enables the panel after a failed action so the user can retry (try/finally)", async () => {
+    // Before the try/finally fix, handleAction set submitting=true, then the
+    // re-throwing mutation skipped setSubmitting(false) — so a single failed
+    // Approve/Reject disabled EVERY action forever (and threw unhandled).
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 500 })));
+    const { useToastStore } = await import("../../../stores/toast");
+    useToastStore.getState().dismissAll();
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    // The failure surfaced as a toast, and the panel is usable again.
+    await waitFor(() => expect(useToastStore.getState().toasts[0]?.title).toBe("Approve failed"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Approve$/ })).not.toBeDisabled(),
+    );
+  });
+
   it("clicking Request Revision submits both the comment and revised status", async () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     const textarea = screen.getByRole("textbox");

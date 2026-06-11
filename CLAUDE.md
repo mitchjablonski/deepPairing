@@ -5,7 +5,7 @@ Collaborative human-AI development framework. MCP server + companion web UI that
 ## Architecture
 
 ```
-Claude Code ←stdio→ deepPairing MCP Server ←WebSocket→ Companion Web UI (localhost:3847)
+Claude Code ←stdio→ deepPairing MCP Server ←WebSocket→ Companion Web UI (localhost, per-project port)
                      ↕ file store (.deeppairing/)        ↕ HTTP REST API
 ```
 
@@ -13,16 +13,14 @@ Turborepo + pnpm monorepo:
 
 ```
 packages/
-  shared/       # Zod schemas, types, fixtures
-  mcp-server/   # Standalone MCP server + HTTP server + companion web UI
+  shared/         # Zod schemas, types, fixtures
+  mcp-server/     # Standalone MCP server + HTTP server + companion web UI
     src/
-      mcp/      # MCP server (stdio transport, 5 tools)
-      http/     # Hono HTTP + WebSocket server
-      store/    # File-based persistence (.deeppairing/)
-    web/        # Companion React app (Vite build → dist/web/)
-apps/
-  api/          # [LEGACY] Old Agent SDK harness
-  web/          # [LEGACY] Old standalone frontend
+      mcp/        # MCP server (stdio transport, 12 tools)
+      http/       # Hono HTTP + WebSocket server
+      store/      # File-based persistence (.deeppairing/)
+    web/          # Companion React app (Vite build → dist/web/)
+  vscode-extension/ # VS Code webview that embeds the companion UI
 ```
 
 ### Key Architecture Decisions
@@ -30,7 +28,7 @@ apps/
 - **MCP server running inside Claude Code** — not a separate agent harness. Claude Code IS the agent.
 - **Non-blocking MCP tools** — `present_options` and `present_plan` record and return immediately. Human responds via companion UI or terminal. Agent calls `check_feedback` to get responses.
 - **File-based persistence** — `.deeppairing/sessions/{id}/` stores artifacts, comments, decisions as JSON.
-- **Dual transport** — stdio for MCP protocol, HTTP port 3847 for companion web UI + WebSocket.
+- **Dual transport** — stdio for MCP protocol; HTTP on a deterministic per-project port (`3847-3974`, first project gets `3847`) for the companion web UI + WebSocket.
 - **Fakes not mocks** for testing.
 
 ### Data Flow
@@ -48,8 +46,7 @@ apps/
 
 ```bash
 pnpm install
-pnpm --filter @deeppairing/mcp-server build        # Build MCP server
-cd packages/mcp-server/web && npx vite build        # Build companion web UI
+pnpm --filter @deeppairing/mcp-server build        # Build server + companion UI (vite + plugin bundle)
 pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 ```
 
@@ -80,7 +77,7 @@ pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 ```
 Make sure you've run `pnpm install && pnpm build` in the deepPairing repo first.
 
-Open http://localhost:3847 for the companion UI.
+Open the companion UI at the daemon's port — `http://localhost:3847` for the first project, otherwise the deterministic per-project port recorded in `.deeppairing/daemon.json`.
 
 ## Code Conventions
 
