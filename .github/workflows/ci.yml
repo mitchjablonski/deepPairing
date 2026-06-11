@@ -29,3 +29,27 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The e2e specs boot a real daemon from the built dist, so build first.
+      - name: Build
+        run: pnpm build
+
+      - name: Install Chromium
+        run: pnpm --filter @deeppairing/mcp-server exec playwright install --with-deps chromium
+
+      - name: E2E (companion UI bootstrap + demo)
+        run: pnpm --filter @deeppairing/mcp-server test:e2e

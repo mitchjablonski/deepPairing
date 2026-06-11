@@ -125,3 +125,14 @@ test("companion UI boots: served HTML injects the hash, the WS connects, and the
   await page.waitForTimeout(1500);
   expect(forbidden, "no /api read should 403 — every SPA fetch must carry X-Project-Hash").toEqual([]);
 });
+
+test("FD-2 — `init demo` runs against the daemon with no project hash (cold-clone hero path)", async ({ request }) => {
+  // Reproduces exactly what `cli/init.ts demoCmd` does: a hashless POST to
+  // /api/demo/run. Before the FD-2 gate exemption this fail-closed 403'd, so
+  // `node dist/cli/init.js demo` — the single command the README leads with —
+  // died on a fresh clone with "daemon responded 403".
+  const res = await request.post(`${baseURL}/api/demo/run`);
+  expect(res.status(), "the scripted demo must not be gate-403'd").toBe(200);
+  const body = (await res.json()) as { sessionId?: string };
+  expect(body.sessionId, "demo run returns a fresh demo session id").toMatch(/^demo_/);
+});
