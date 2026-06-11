@@ -1,4 +1,5 @@
 import type { Artifact } from "@deeppairing/shared";
+import { coercePlanContent } from "@deeppairing/shared";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
@@ -133,14 +134,11 @@ function PlanStepPreview({ step, artifactId, stepIndex }: { step: PlanStep; arti
 }
 
 export function PlanArtifact({ artifact }: PlanArtifactProps) {
-  const content = artifact.content as {
-    steps?: PlanStep[];
-    estimatedChanges?: number;
-  };
-  // `steps` is cast unchecked from the store — a partial/legacy plan can have it
-  // missing OR a non-array. `?? []` only guards null/undefined, so a wrong-type
-  // value still threw on `.map`/`.length`. Coerce to a real array once.
-  const steps = Array.isArray(content.steps) ? content.steps : [];
+  // Coercion boundary: `content.steps` is a guaranteed array and
+  // `estimatedChanges` a number, so the renderer can trust the shape.
+  const content = coercePlanContent(artifact.content);
+  // Local PlanStep adds the UI-only condition/branches the coercer preserves.
+  const steps = content.steps as unknown as PlanStep[];
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const { updateArtifactStatus } = useArtifactStore();
 
@@ -179,7 +177,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
               Implementation Steps ({steps.length})
             </h4>
-            {content.estimatedChanges != null && (
+            {content.estimatedChanges > 0 && (
               <span className="text-xs text-text-muted">
                 ~{content.estimatedChanges} file changes
               </span>

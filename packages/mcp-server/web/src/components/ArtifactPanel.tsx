@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
-import { type Artifact, type DecisionContent, getTypedContent } from "@deeppairing/shared";
+import { type Artifact, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
@@ -206,13 +206,16 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         <CodeChangeArtifact artifact={artifact} />
       )}
       {artifact.type === "decision" && (() => {
-        const dc = getTypedContent<DecisionContent>(artifact);
-        if (!dc.options) return null;
+        // Coercion boundary: options always an array, context/decisionId always
+        // strings. An options-less decision has nothing to render, so bail.
+        const dc = coerceDecisionContent(artifact.content);
+        if (dc.options.length === 0) return null;
 
         // When viewing a past resolved decision via replay, pull the record so
         // DecisionCard can open in the resolved state with the Re-pair button.
         const replay = useReplayStore.getState();
-        const effectiveDecisionId = dc.decisionId ?? artifact.id;
+        // decisionId defaults to "" — fall back to the artifact id, not "".
+        const effectiveDecisionId = dc.decisionId || artifact.id;
         const record = replay.decisions.find(
           (d) => d.decisionId === effectiveDecisionId || d.artifactId === artifact.id,
         );
