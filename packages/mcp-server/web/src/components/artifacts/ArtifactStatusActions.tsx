@@ -161,16 +161,22 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
   const handleAction = async (action: "approved" | "revised" | "rejected") => {
     cancelCountdown();
     setSubmitting(true);
-
-    // Submit comment alongside the action if the user typed one
-    const trimmedComment = comment.trim();
-    if (trimmedComment) {
-      await submitComment(artifact.id, trimmedComment);
+    try {
+      // Submit comment alongside the action if the user typed one
+      const trimmedComment = comment.trim();
+      if (trimmedComment) {
+        await submitComment(artifact.id, trimmedComment);
+      }
+      await updateArtifactStatus(artifact.id, action, trimmedComment || undefined);
+      setComment(""); // only clear on success, so a failed action keeps the text to retry
+    } catch {
+      // The store mutations re-throw AFTER toasting a user-facing error. Swallow
+      // here so the click handler doesn't reject — but the `finally` MUST run so
+      // the panel re-enables; otherwise a single failed Approve/Reject disables
+      // every action forever (the U3 "approve doesn't land" class of bug).
+    } finally {
+      setSubmitting(false);
     }
-
-    await updateArtifactStatus(artifact.id, action, trimmedComment || undefined);
-    setSubmitting(false);
-    setComment("");
   };
 
   /**
@@ -185,9 +191,14 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     if (!trimmedComment) return;
     cancelCountdown();
     setSubmitting(true);
-    await submitComment(artifact.id, trimmedComment);
-    setSubmitting(false);
-    setComment("");
+    try {
+      await submitComment(artifact.id, trimmedComment);
+      setComment(""); // only clear on success
+    } catch {
+      // store already toasted; keep the panel usable (see handleAction)
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   /**
@@ -199,9 +210,14 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
   const handleDismissObsolete = async () => {
     cancelCountdown();
     setSubmitting(true);
-    await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
-    setSubmitting(false);
-    setComment("");
+    try {
+      await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
+      setComment(""); // only clear on success
+    } catch {
+      // store already toasted; keep the panel usable (see handleAction)
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (

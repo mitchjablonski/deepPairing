@@ -234,6 +234,39 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
   });
 
+  it("updateArtifactStatus rollback is SURGICAL — a WS artifact that arrived mid-flight survives", async () => {
+    // The rollback used to restore a whole-array snapshot captured BEFORE the
+    // POST, so an artifact_created that arrived over the WS while the request
+    // was in flight got erased on failure. Surgical rollback reverts only the
+    // one artifact's status and leaves everything else as-is.
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { status: "draft" }));
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
+      // Simulate a session-scoped WS broadcast landing mid-request.
+      useArtifactStore.getState().addArtifact(artifact("ws-arrival", { status: "draft" }));
+      return new Response("oops", { status: 500 });
+    }));
+    await expect(s.updateArtifactStatus("a1", "approved")).rejects.toBeDefined();
+    const ids = useArtifactStore.getState().artifacts.map((a) => a.id);
+    expect(ids).toContain("ws-arrival"); // not erased by the rollback
+    expect(useArtifactStore.getState().artifacts.find((a) => a.id === "a1")?.status).toBe("draft"); // reverted
+  });
+
+  it("submitComment rollback is SURGICAL — only the provisional is removed, a mid-flight WS comment survives", async () => {
+    const s = useArtifactStore.getState();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
+      // A real comment_added for the SAME artifact arrives over the WS while
+      // the send is in flight; it must outlive the failed provisional.
+      useArtifactStore.getState().addComment(comment("ws-c", "a1"));
+      return new Response("oops", { status: 500 });
+    }));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    await expect(s.submitComment("a1", "my reply")).rejects.toBeDefined();
+    const list = useArtifactStore.getState().comments["a1"] ?? [];
+    expect(list.map((c) => c.id)).toEqual(["ws-c"]); // provisional gone, WS comment kept
+  });
+
   it("resolveDecision optimistically marks the matching decision artifact approved so it leaves the 'waiting' set without the WS broadcast", async () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("dec-art", { type: "decision", status: "draft", content: { decisionId: "dec1", context: "c", options: [] } }));
