@@ -331,7 +331,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             },
             confidence: { type: "string", enum: ["low", "medium", "high"] },
           },
-          required: ["action", "reasoning", "confidence"],
+          // `confidence` is optional in ReasoningContentSchema and the tool's
+          // own description says required: action, reasoning. Keep the JSON
+          // schema consistent so strict MCP clients don't reject valid calls.
+          required: ["action", "reasoning"],
         },
       },
       {
