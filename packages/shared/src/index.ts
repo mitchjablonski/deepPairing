@@ -72,6 +72,16 @@ export {
 } from "./schemas/artifact.js";
 
 export {
+  coerceArtifactContent,
+  coerceResearchContent,
+  coercePlanContent,
+  coerceSpecContent,
+  coerceDecisionContent,
+  coerceCodeChangeContent,
+  coerceReasoningContent,
+} from "./schemas/coerce-content.js";
+
+export {
   CommentBodySchema,
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,

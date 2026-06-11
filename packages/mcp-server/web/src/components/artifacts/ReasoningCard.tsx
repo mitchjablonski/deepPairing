@@ -1,9 +1,8 @@
 import { useMemo, useState } from "react";
 import {
   type Artifact,
-  type ReasoningContent,
   type Evidence,
-  getTypedContent,
+  coerceReasoningContent,
 } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { SimpleMarkdown } from "../SimpleMarkdown";
@@ -30,7 +29,9 @@ interface Props {
  *   6. Evidence strip: files/lines that motivated this reasoning step.
  */
 export function ReasoningCard({ artifact }: Props) {
-  const rc = getTypedContent<ReasoningContent>(artifact);
+  // Coercion boundary: a fully-shaped ReasoningContent so the renderer can
+  // trust the shape (arrays are arrays, action/reasoning are strings).
+  const rc = coerceReasoningContent(artifact.content);
   const { artifacts, selectArtifact, submitComment } = useArtifactStore();
 
   const relatedArtifact = useMemo(

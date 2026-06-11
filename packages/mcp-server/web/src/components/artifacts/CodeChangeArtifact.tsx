@@ -1,4 +1,5 @@
 import type { Artifact, Comment } from "@deeppairing/shared";
+import { coerceCodeChangeContent } from "@deeppairing/shared";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
@@ -20,17 +21,6 @@ interface DiffCommentProps {
   artifactId: string;
   filePath?: string;
   commentsByLine: Map<number, Comment[]>;
-}
-
-interface CodeChangeContent {
-  filePath: string;
-  changeType: "create" | "modify" | "delete";
-  before: string;
-  after: string;
-  reasoning: string;
-  // Y5 — named pattern this change embodies. Drives ConceptBadge rendering
-  // and (eventually) preflight matching against past project rejections.
-  concept?: { name: string; oneLineExplanation?: string };
 }
 
 function UnifiedDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: DiffLine[] } & DiffCommentProps) {
@@ -390,9 +380,9 @@ function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: D
 }
 
 export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
-  // `content` is the loosely-typed store shape (Record<string, unknown>); the
-  // renderer guards each field, so cast through unknown to the expected shape.
-  const content = artifact.content as unknown as CodeChangeContent;
+  // Coercion boundary: a fully-shaped CodeChangeContent (all strings present,
+  // changeType a valid enum) so the renderer can trust the shape.
+  const content = coerceCodeChangeContent(artifact.content);
 
   // Reconstruct `before` from session history when the agent omitted it
   // (commonly: a re-edit mislabeled as changeType="create" with empty before).

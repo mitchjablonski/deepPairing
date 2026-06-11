@@ -1,4 +1,5 @@
 import type { Artifact, Evidence, Comment } from "@deeppairing/shared";
+import { coerceResearchContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
@@ -451,21 +452,14 @@ function renderEvidence(
 }
 
 export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
-  // Defensive: artifact.content can drift in the wild (older sessions,
-  // partial writes, malformed agent output). Coerce to an object and
-  // skip non-object findings so one bad entry can't ErrorBoundary the
-  // whole artifact.
-  const rawContent = (artifact.content && typeof artifact.content === "object")
-    ? (artifact.content as Record<string, unknown>)
-    : {};
-  const content = {
-    summary: typeof rawContent.summary === "string" ? rawContent.summary : undefined,
-    findings: Array.isArray(rawContent.findings)
-      ? (rawContent.findings as any[]).filter((f) => f && typeof f === "object") as RichFinding[]
-      : [],
-    openQuestions: Array.isArray(rawContent.openQuestions)
-      ? (rawContent.openQuestions as any[]).filter((q) => typeof q === "string") as string[]
-      : undefined,
+  // Coercion boundary: turn raw/partial/legacy content into a fully-shaped
+  // ResearchContent (every finding an object, findings an array) so the
+  // renderer can trust the shape. RichFinding is the local view type — it adds
+  // the UI-only `confidence` the coercer preserves and narrows `evidence`.
+  const content = coerceResearchContent(artifact.content) as {
+    summary: string;
+    findings: RichFinding[];
+    openQuestions?: string[];
   };
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const [focusMode, setFocusMode] = useState(false);

@@ -1,5 +1,5 @@
-import type { Artifact, SpecContent, SpecRequirement, SpecTask } from "@deeppairing/shared";
-import { getTypedContent } from "@deeppairing/shared";
+import type { Artifact, SpecRequirement, SpecTask } from "@deeppairing/shared";
+import { coerceSpecContent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { useArtifactStore } from "../../stores/artifact";
@@ -35,11 +35,10 @@ const estimateStyles: Record<string, string> = {
  *   6. Open questions — things the agent wants the human to decide
  */
 export function SpecArtifact({ artifact }: Props) {
-  const spec = getTypedContent<SpecContent>(artifact);
-  // Defensive: agents ship specs with inconsistent shapes — a spec missing
-  // `requirements` would crash on `.length`/`.map` and take down the whole
-  // artifact view. (`tasks`/`openQuestions` are already guarded below.)
-  const requirements = spec.requirements ?? [];
+  // Coercion boundary: a fully-shaped SpecContent (requirements always an
+  // array) so the renderer can trust the shape without per-field guards.
+  const spec = coerceSpecContent(artifact.content);
+  const requirements = spec.requirements;
 
   return (
     <div className="space-y-4">
