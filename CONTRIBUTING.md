@@ -4,17 +4,17 @@ Thanks for your interest in contributing. deepPairing is a collaborative human-A
 
 ## Where to start
 
-- **Good first issues** are labelled [`good-first-issue`](https://github.com/deeppairing/deeppairing/issues?q=is%3Aopen+label%3Agood-first-issue). They're scoped to one file or one component and don't require deep familiarity with the daemon architecture.
+- **Good first issues** are labelled [`good-first-issue`](https://github.com/mitchjablonski/deepPairing/issues?q=is%3Aopen+label%3Agood-first-issue). They're scoped to one file or one component and don't require deep familiarity with the daemon architecture.
 - **`help-wanted`** labels are larger but well-defined — pick one if you want a meaningful contribution and have ~half a day.
-- **Architecture / design conversations** start in [Discussions](https://github.com/deeppairing/deeppairing/discussions) rather than as issues. The Philosophy Ledger trust model, the three-process daemon, and the elicitation-vs-companion-UI tension are all live questions worth thinking out loud about.
+- **Architecture / design conversations** start in [Discussions](https://github.com/mitchjablonski/deepPairing/discussions) rather than as issues. The Philosophy Ledger trust model, the three-process daemon, and the elicitation-vs-companion-UI tension are all live questions worth thinking out loud about.
 - **Don't ship a large refactor without aligning first.** A 500-line "while I was here" diff is hard to review and easy to reject. Open a draft PR with an empty diff + a written design and tag a maintainer.
 
 ## Development setup
 
 ```bash
 # Clone and install
-git clone https://github.com/deeppairing/deeppairing.git
-cd deeppairing
+git clone https://github.com/mitchjablonski/deepPairing.git
+cd deepPairing
 pnpm install
 
 # Build everything (server + web UI + shared schemas)

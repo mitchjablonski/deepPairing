@@ -6,13 +6,15 @@ description: Use this whenever the user asks me to investigate code, compare opt
 # deepPairing Collaboration Protocol
 
 You have deepPairing MCP tools available. Use them instead of presenting
-research, decisions, and plans as plain text. The companion UI at
-localhost:3847 provides rich rendering, inline code commenting, and
-structured decision-making that plain terminal output cannot.
+research, decisions, and plans as plain text. The companion UI (served by
+the daemon on a deterministic per-project port) provides rich rendering,
+inline code commenting, and structured decision-making that plain terminal
+output cannot.
 
 On your first tool call, the response includes:
-- The companion UI URL — tell the user: "Open http://localhost:3847 to
-  review findings, comment on code, and make decisions."
+- The companion UI URL — tell the user: "Open <that URL> to review
+  findings, comment on code, and make decisions." Use the exact URL from
+  the tool response (the port is per-project, not always 3847).
 - **Session memory** — rejected approaches from this project (`present_*`
   tools will REFUSE any proposal that matches one), approved patterns, and
   project guardrails (migrations, CI workflows, infra paths).

@@ -1,7 +1,7 @@
 {
   "name": "deeppairing",
   "version": "0.0.2",
-  "description": "Placeholder reservation. The real deepPairing project lives at https://github.com/deeppairing/deeppairing — install from source while we're pre-1.0.",
+  "description": "Placeholder reservation. The real deepPairing project lives at https://github.com/mitchjablonski/deepPairing — install from source while we're pre-1.0.",
   "main": "index.js",
   "bin": {
     "deeppairing": "./index.js"
@@ -9,7 +9,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/deeppairing/deeppairing.git"
+    "url": "https://github.com/mitchjablonski/deepPairing.git"
   },
-  "deprecated": "Pre-1.0: install from source — https://github.com/deeppairing/deeppairing. This npm name is a placeholder reservation; running it does nothing useful."
+  "deprecated": "Pre-1.0: install from source — https://github.com/mitchjablonski/deepPairing. This npm name is a placeholder reservation; running it does nothing useful."
 }

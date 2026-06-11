@@ -26,9 +26,10 @@ sessions match against before the agent can paraphrase past you.
                                                          ▼
 ┌──────────────────┐    HTTP+WS    ┌────────────────────────────────┐
 │ Companion web UI │ ◄───────────► │   deepPairing daemon           │
-│ localhost:3847   │  port 3847    │   (one per host, not per       │
-│ (React + Vite)   │               │    project — multi-session)    │
-└──────────────────┘               │   src/daemon.ts + http/        │
+│ localhost:<port> │ deterministic │   (one per project, on a       │
+│ (React + Vite)   │  per-project  │    deterministic port —        │
+└──────────────────┘   port        │    multi-session)              │
+                                   │   src/daemon.ts + http/        │
                                    └────────────────────────────────┘
                                                          │
                                                          ▼ FileStore
@@ -44,21 +45,24 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 13 MCP tools (see below). Talks to the
+  session. Implements the 12 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
-- **deepPairing daemon** (`src/daemon.ts`) — one per host. Owns the
-  HTTP+WebSocket server on port 3847, the per-session FileStores, and
-  the global Philosophy Ledger. Auto-shuts down when no clients have
-  been connected for ~5 minutes.
+- **deepPairing daemon** (`src/daemon.ts`) — one per project, bound to
+  a deterministic per-project port in the `3847-3974` range (derived
+  from the project hash; the first project gets `3847`). Owns the
+  HTTP+WebSocket server, the per-session FileStores, and the global
+  Philosophy Ledger. Auto-shuts down ~60s after the last session
+  unregisters and the last UI client disconnects.
 
 This split was the X-series refactor. Pre-X, every wrapper ran its own
-HTTP server and the companion UI couldn't see other projects. Post-X,
-the daemon is the single owner; wrappers register sessions with it and
-DaemonClient (`src/daemon-client.ts`) implements `IStore` over HTTP so
-the same code paths work in standalone or daemon mode.
+HTTP server and the companion UI couldn't see other sessions. Post-X,
+one daemon per project is the single owner; wrappers register sessions
+with it and DaemonClient (`src/daemon-client.ts`) implements `IStore`
+over HTTP so the same code paths work in standalone or daemon mode. The
+companion UI can aggregate across several projects' daemons.
 
-## The MCP tool surface (13 tools)
+## The MCP tool surface (12 tools)
 
 Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
 in `src/mcp/server.ts`. The split:
@@ -82,8 +86,6 @@ in `src/mcp/server.ts`. The split:
 - `revise_artifact` — supersede or retract a prior artifact
 
 **Side-channel**:
-- `request_horizon_check` — flag a decision for retrospective review at
-  3mo/1y/2y
 - `answer_question` — agent reply to a human question on an artifact
 - `post_pr_review` — push approved findings as inline comments to a PR
 - `export_session` — markdown / pr-comments / json dump
@@ -125,10 +127,13 @@ recorded in a sidecar trace so the breadcrumb in the UI can render
   team.json                       # Team-shared rules (commit to git)
   metrics.json                    # Local engagement counters
   hooks-state.json                # Stop-hook fire log
+  daemon.json                     # Per-project daemon liveness (pid, port, projectRoot)
 
 ~/.deeppairing/
   philosophy/v1.json              # Cross-project Philosophy Ledger
-  daemon.json                     # Daemon liveness info (pid, port, project)
+
+$XDG_RUNTIME_DIR/deeppairing/     # (POSIX hosts where .deeppairing can't hold 0600)
+  <projectHash>.json              # Bearer-token sidecar, mode 0600 — see daemon-token.ts
 ```
 
 All writes go through `writeJsonAtomic` (`.tmp.PID.TS.RAND` +
