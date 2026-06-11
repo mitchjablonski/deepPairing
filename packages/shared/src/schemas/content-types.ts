@@ -20,6 +20,13 @@ export const FindingSchema = z.object({
    * first. Optional so older sessions remain valid.
    */
   severity: FindingSeveritySchema.optional(),
+  /**
+   * How confident the agent is in this finding. The `present_findings` tool
+   * accepts it and the UI renders a confidence badge, so it must be modelled
+   * here — otherwise the non-strict validation boundary silently strips it
+   * before the artifact is persisted. Optional for back-compat.
+   */
+  confidence: z.enum(["low", "medium", "high"]).optional(),
   impact: z.string().optional().describe("What happens if this is not addressed"),
   recommendation: z.string().optional().describe("What should be done"),
   relatedFindings: z.array(z.string()).optional(),
@@ -43,13 +50,28 @@ export const FileChangeSchema = z.object({
 
 export type FileChange = z.infer<typeof FileChangeSchema>;
 
+/** A files field shared by plan steps and their conditional branches:
+ *  either a list of paths or a list of structured FileChange entries. */
+const PlanFilesSchema = z.union([z.array(z.string()), z.array(FileChangeSchema)]);
+
+/** One conditional branch of a plan step (executes when the step's
+ *  `condition` is met). Mirrors the `branches` shape the present_plan tool
+ *  accepts; deliberately not recursive (branches don't nest). */
+export const PlanBranchSchema = z.object({
+  description: z.string(),
+  reasoning: z.string(),
+  files: PlanFilesSchema.optional(),
+});
+
+export type PlanBranch = z.infer<typeof PlanBranchSchema>;
+
 export const PlanStepSchema = z.object({
   description: z.string(),
   reasoning: z.string(),
   /** Optional: not every plan step touches files (e.g. "run tests",
    *  "review the design"). The structural validator only needs files to
    *  be an array of strings/FileChange when present. */
-  files: z.union([z.array(z.string()), z.array(FileChangeSchema)]).optional(),
+  files: PlanFilesSchema.optional(),
   motivatedBy: z.array(z.string()).optional().describe("Finding titles that led to this step"),
   preview: z
     .object({
@@ -59,6 +81,14 @@ export const PlanStepSchema = z.object({
     })
     .optional()
     .describe("Before/after code preview"),
+  /**
+   * Conditional-branch fields the `present_plan` tool accepts and the plan
+   * renderer displays. Modelled here so the non-strict validation boundary
+   * stops stripping them before the artifact is persisted. Optional for
+   * back-compat.
+   */
+  condition: z.string().optional().describe("Condition that turns this step into a conditional branch"),
+  branches: z.array(PlanBranchSchema).optional().describe("Sub-steps that execute if the condition is met"),
 });
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;
