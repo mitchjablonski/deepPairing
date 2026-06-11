@@ -89,6 +89,16 @@ export function createDaemonRoutes(
    * skip the check by passing undefined.
    */
   authToken?: string,
+  /**
+   * C-3 — the set of sessions with a LIVE registered wrapper, distinct from
+   * the `sessions` data map (which deliberately retains a session's store
+   * after unregister so the companion UI can keep reading it). /register adds,
+   * /unregister removes. The daemon's idle-shutdown keys on this set + the UI
+   * client count — NOT on `sessions.size`, which is monotonic and so kept the
+   * daemon alive forever (one leaked node process per project ever opened).
+   * Optional so route-logic test fixtures don't have to thread it.
+   */
+  activeSessions?: Set<string>,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
@@ -178,6 +188,8 @@ export function createDaemonRoutes(
       project: body.project ?? "",
       registeredAt: new Date().toISOString(),
     });
+    // C-3 — mark this session's wrapper as live so idle-shutdown holds off.
+    activeSessions?.add(sessionId);
     return c.json({
       status: "registered",
       sessionId,
@@ -200,7 +212,10 @@ export function createDaemonRoutes(
     const sessionId = c.req.param("sessionId");
     const store = sessions.get(sessionId);
     if (store) store.forceFlush();
-    // Don't delete from map — session data persists for the web UI
+    // Don't delete from the data map — the session's store stays so the web UI
+    // can keep reading it. But DO drop it from the active set: with the wrapper
+    // gone, the daemon may idle-shut once the UI client also disconnects.
+    activeSessions?.delete(sessionId);
     return c.json({ status: "unregistered" });
   });
 
