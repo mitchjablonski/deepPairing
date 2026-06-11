@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 **Open a private GitHub security advisory:**
-https://github.com/deeppairing/deeppairing/security/advisories/new
+https://github.com/mitchjablonski/deepPairing/security/advisories/new
 
 We aim to respond within 5 business days. Please do not file public
 issues for vulnerability reports.
@@ -87,9 +87,9 @@ model assumes:
   you don't want sessions committed.
 - `<project>/.deeppairing/team.json` — team-shared rules. Intended to
   be committed; review changes in PRs.
-- HTTP daemon port (default 3847) — localhost-only; per-port one
-  daemon at a time, eviction requires the daemon's own pid in
-  `X-DeepPairing-Confirm-Pid`.
+- HTTP daemon port (deterministic per-project, in `3847-3974`) —
+  localhost-only; per-port one daemon at a time, eviction requires the
+  daemon's own pid in `X-DeepPairing-Confirm-Pid`.
 
 ## Disclosure timeline (template)
 
