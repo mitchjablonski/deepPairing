@@ -161,6 +161,33 @@ export function createHttpRoutes(
     return next();
   });
 
+  // C-4 — DNS-rebinding guard. The daemon binds 127.0.0.1, but that alone
+  // doesn't stop a malicious web page: it can rebind its own domain's DNS to
+  // 127.0.0.1, at which point the browser treats it as same-origin (CORS no
+  // longer applies) and can read daemon responses — e.g. learn the projectHash
+  // from /api/daemon-info, then read arbitrary project files via /api/files.
+  // The tell is the Host header: a rebinding request still carries the
+  // ATTACKER's domain as Host (the browser sends the name it navigated to),
+  // never a loopback name. Reject any present Host whose hostname isn't
+  // loopback, before any data is served. Legitimate browser/CLI/WS clients all
+  // send localhost / 127.0.0.1 / [::1]. A missing Host (non-browser clients,
+  // Hono test requests) isn't the rebinding vector and still falls to the
+  // hash/bearer gates below.
+  app.use("*", async (c, next) => {
+    const host = c.req.header("host");
+    if (host) {
+      const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+      const isLoopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+      if (!isLoopback) {
+        return c.json(
+          { error: "Forbidden host — the daemon only serves loopback origins.", code: ERROR_CODES.forbidden_host },
+          403,
+        );
+      }
+    }
+    return next();
+  });
+
   // AA4 — global middleware. Every route checks X-Project-Hash before
   // doing anything else. CORS preflight (OPTIONS) skips the check —
   // browsers don't send our custom headers on preflight.
@@ -904,6 +931,24 @@ export function createHttpRoutes(
 
   // Read a project file for the FileViewer
   app.get("/api/files", (c) => {
+    // C-4 — Bearer-gated like /api/prompts. Reading arbitrary project files is
+    // the highest-value read the daemon offers, so the X-Project-Hash gate
+    // (the hash is discoverable via /api/daemon-info) isn't enough on its own.
+    // Require the daemon's bearer token too; the browser sends it via the
+    // window.__deepPairingToken injection (FileViewer attaches it). This raises
+    // the bar to "can read .deeppairing/daemon.json" — the same posture III5
+    // gave /api/prompts — and, with the Host guard above, closes the
+    // DNS-rebinding arbitrary-file-read path.
+    if (authToken) {
+      const auth = c.req.header("Authorization");
+      if (auth !== `Bearer ${authToken}`) {
+        log(`[files-auth] 401 — bad/missing Authorization header`);
+        return c.json(
+          { error: "Authorization required to read project files.", code: ERROR_CODES.daemon_auth_required },
+          401,
+        );
+      }
+    }
     const filePath = c.req.query("path");
     if (!filePath || !projectRoot) {
       return c.json({ error: "path parameter required" }, 400);

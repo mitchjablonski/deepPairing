@@ -36,6 +36,8 @@ export const ERROR_CODES = {
   no_active_session: "no_active_session",
   /** Zod (or hand-rolled) validation failed on a request body. */
   validation_error: "validation_error",
+  /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
+  forbidden_host: "forbidden_host",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
