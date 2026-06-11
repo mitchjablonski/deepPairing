@@ -118,6 +118,12 @@ function log(msg: string): void {
 
 const sessions = new Map<string, FileStore>();
 const sessionMeta = new Map<string, SessionMeta>();
+// C-3 — sessions with a LIVE registered wrapper (added on /register, removed
+// on /unregister), distinct from the `sessions` data map which is retained
+// after unregister so the UI can keep reading. Idle-shutdown keys on this set
+// + the client count; `sessions.size` is monotonic and never reaches 0, which
+// is why the daemon used to leak a process per project forever.
+const activeSessions = new Set<string>();
 
 function createSession(sessionId: string): FileStore {
   log(`Creating session: ${sessionId}`);
@@ -218,11 +224,11 @@ function getClientCount(): number {
 let shutdownTimer: ReturnType<typeof setInterval> | null = null;
 
 function checkAutoShutdown(): void {
-  if (sessions.size === 0 && getClientCount() === 0) {
+  if (activeSessions.size === 0 && getClientCount() === 0) {
     if (!shutdownTimer) {
-      log("No sessions or clients — will shut down in 60s if still idle");
+      log("No active sessions or clients — will shut down in 60s if still idle");
       shutdownTimer = setTimeout(() => {
-        if (sessions.size === 0 && getClientCount() === 0) {
+        if (activeSessions.size === 0 && getClientCount() === 0) {
           log("Auto-shutting down (idle)");
           cleanup();
           process.exit(0);
@@ -259,7 +265,7 @@ app.use("/*", cors({
 
 // Mount internal daemon routes (for MCP wrappers).
 // II1 — pass authToken so every /api/internal/* requires Authorization.
-const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken);
+const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken, activeSessions);
 app.route("/", daemonRoutes);
 
 // Mount public web UI routes (for browser)

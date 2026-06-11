@@ -64,6 +64,40 @@ describe("Daemon Routes", () => {
     expect(sessions.has(SESSION)).toBe(true);
   });
 
+  // C-3 — the active-session set the daemon's idle-shutdown keys on. /register
+  // adds, /unregister removes — but unregister must NOT drop the session's data
+  // store (the UI keeps reading it). Pre-fix, nothing ever left, so the daemon
+  // (which shuts down only when activeSessions AND clients are both empty) never
+  // idle-shut: one leaked process per project.
+  it("tracks active sessions: register adds, unregister removes — while the data store is retained", async () => {
+    const active = new Set<string>();
+    const localSessions = new Map<string, FileStore>();
+    const localApp = createDaemonRoutes(
+      localSessions,
+      new Map<string, SessionMeta>(),
+      (sid) => {
+        const s = new FileStore(tmpDir, sid);
+        localSessions.set(sid, s);
+        return s;
+      },
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      active,
+    );
+
+    await localApp.request(`/api/internal/sessions/${SESSION}/register`, { method: "POST" });
+    expect(active.has(SESSION)).toBe(true);
+
+    const unreg = await localApp.request(`/api/internal/sessions/${SESSION}/unregister`, { method: "POST" });
+    expect(unreg.status).toBe(200);
+    // Active set is now empty → idle-shutdown can fire once clients also drop...
+    expect(active.size).toBe(0);
+    // ...but the data store is retained so the companion UI can still read it.
+    expect(localSessions.has(SESSION)).toBe(true);
+  });
+
   // II1 — when createDaemonRoutes is given an authToken, every internal
   // route requires `Authorization: Bearer <token>`. The default `app`
   // fixture above intentionally omits the token so existing tests stay
