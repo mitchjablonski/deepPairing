@@ -67,7 +67,6 @@ export {
   type Artifact,
   type DecisionContent,
   type CodeChangeContent,
-  getTypedContent,
   parseArtifactContent,
 } from "./schemas/artifact.js";
 
