@@ -215,7 +215,15 @@ export function createHttpRoutes(
         // threat model doesn't apply; and it can't be hash-gated because the
         // SPA may query it for a project whose hash it doesn't hold yet.
         p === "/api/projects");
-    if (isBootstrap) return next();
+    // FD-2 — the scripted `init demo` is a cold-clone entry point: the user has
+    // no project hash to send (no browser tab, no registered session). Its
+    // handler (daemon.ts) only ever creates a throwaway `demo_<ts>` session and
+    // never targets an existing store, so the AA4 wrong-store threat model
+    // doesn't apply — same justification as the discovery routes above. Exempt
+    // it so the hero demo works on a fresh clone instead of fail-closed 403ing.
+    // (This is a POST, hence handled separately from the GET-only bootstrap set.)
+    const isDemoRun = p === "/api/demo/run";
+    if (isBootstrap || isDemoRun) return next();
     const hashFail = checkProjectHash(c, daemonHash);
     if (hashFail) return hashFail;
     return next();

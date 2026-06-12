@@ -1191,12 +1191,13 @@ async function demoCmd(): Promise<void> {
   console.log(bold("\n  deepPairing demo"));
   console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
 
-  // II1 — ensureDaemon now returns DaemonInfo (with authToken). demoCmd only
-  // POSTs to /api/demo/run, which is a top-level daemon route NOT behind the
-  // AA4 X-Project-Hash / III5 Bearer gate (those guard the createHttpRoutes
-  // surface, e.g. /api/state). So no token is needed here; normalize to port
-  // for the fetch below. (Earlier this comment wrongly listed /api/state as
-  // public — it is gated; demoCmd just never calls it.)
+  // demoCmd POSTs to /api/demo/run with no project hash (a cold-clone user has
+  // none yet). That route IS reached by the global X-Project-Hash gate — it's a
+  // POST, and the gate's "*" middleware is mounted before the route handler — so
+  // it's explicitly exempted in routes.ts (FD-2): the handler only ever creates
+  // a fresh demo session, so the wrong-store threat model doesn't apply. No
+  // bearer token or hash header is needed here. (An earlier version of this
+  // comment claimed the route was outside the gate; it isn't — it's exempted.)
   const daemonInfo = await ensureDaemon(cwd);
   const port = daemonInfo.port;
   console.log(`  ${green("✓")} Daemon ready on port ${port}`);

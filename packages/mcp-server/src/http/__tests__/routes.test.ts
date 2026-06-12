@@ -89,6 +89,17 @@ describe("HTTP Routes", () => {
       expect(res.status).toBe(403);
     });
 
+    it("does NOT 403 a hashless POST /api/demo/run (FD-2 — cold-clone demo entry point)", async () => {
+      const bare = createHttpRoutes(store, tmpDir);
+      const res = await bare.request("/api/demo/run", { method: "POST" });
+      // createHttpRoutes doesn't define /api/demo/run (the daemon mounts it
+      // top-level), so a 404 — not a 403 — proves the gate let it through.
+      // Before the FD-2 exemption this hashless POST fail-closed 403'd, which is
+      // exactly why `init demo` died on a fresh clone.
+      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(404);
+    });
+
     it("serves GET /api/state when the correct X-Project-Hash is present", async () => {
       const bare = createHttpRoutes(store, tmpDir);
       const res = await bare.request("/api/state", {
