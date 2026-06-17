@@ -130,24 +130,14 @@ export const CodeChangeContentSchema = z.object({
 export type CodeChangeContent = z.infer<typeof CodeChangeContentSchema>;
 
 /**
- * Helper to cast artifact content to a typed interface.
- *
- * @deprecated U2 — this is an unchecked `as T` cast and bypasses Zod's
- * source-of-truth guarantee. Prefer `parseArtifactContent(artifact)` for
- * a discriminated, validated payload. Kept here because dozens of web
- * components still use it; migrate gradually.
- */
-export function getTypedContent<T>(artifact: Artifact): T {
-  return artifact.content as T;
-}
-
-/**
  * U2 — discriminated, validated artifact-content parser. Switches on
- * `artifact.type` and runs the matching Zod schema's `.safeParse` so the
- * caller gets a typed payload OR a structured failure (instead of a
- * silent type lie like `getTypedContent` produces). On failure the
- * parser returns `{ ok: false, error }` rather than throwing — every
- * call site already runs in render, where a throw would crash the UI.
+ * `artifact.type` and runs the matching Zod schema's `.safeParse`, returning
+ * a typed payload OR a structured failure. This is the STRICT counterpart to
+ * the renderer-facing `coerceArtifactContent` (which is lenient and never
+ * fails): use this when a caller needs to know the content is well-formed
+ * (validation, tooling), and the coercer when a renderer must show whatever
+ * it can. On failure the parser returns `{ ok: false, error }` rather than
+ * throwing.
  *
  * Falls back to ResearchContentSchema-style validation for `research`,
  * PlanContentSchema for `plan`, etc., importing lazily so this module
