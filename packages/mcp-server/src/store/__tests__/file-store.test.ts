@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests } from "../global-store.js";
+import { setGlobalStoreForTests, getGlobalStore } from "../global-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -259,6 +259,52 @@ describe("FileStore", () => {
     const memory = store.getSessionMemory();
     expect(memory.approvedPatterns).toContain("Service pattern");
     expect(memory.rejectedApproaches.map((r) => r.description)).toContain("Inline refactor");
+  });
+
+  describe("overrideRejectedApproach (scope-down a false-positive block)", () => {
+    const ledgerStance = (concept: string) =>
+      getGlobalStore()
+        .query({ limit: 100 })
+        .find((e) => e.concept.toLowerCase() === concept)?.stance;
+
+    it("retires the local stance AND flips the derived ledger stance off 'avoid'", () => {
+      const store = createStore("override");
+      store.setGlobalLedgerPublish(true);
+      store.recordRejectedApproach({
+        description: "Deploy: Railway",
+        concept: "pay-per-request hosting",
+        reason: "vendor lock-in",
+      });
+      // Before: blocks locally and derives "avoid" cross-project.
+      expect(store.getSessionMemory().rejectedApproaches.map((r) => r.concept)).toContain(
+        "pay-per-request hosting",
+      );
+      expect(ledgerStance("pay-per-request hosting")).toBe("avoid");
+
+      // Override: retire the local entry + record an approved counter-instance.
+      const { retired } = store.overrideRejectedApproach({ concept: "pay-per-request hosting" });
+      expect(retired).toBe(1);
+      // After: gone locally (block clears now) and the derived stance shifted
+      // to "mixed" (1 reject + 1 approve) so future projects stop tripping.
+      expect(store.getSessionMemory().rejectedApproaches.map((r) => r.concept)).not.toContain(
+        "pay-per-request hosting",
+      );
+      expect(ledgerStance("pay-per-request hosting")).toBe("mixed");
+    });
+
+    it("clears the local block even with publish OFF (nothing to counter globally)", () => {
+      const store = createStore("override-nopub");
+      store.recordRejectedApproach({ description: "Inline refactor" }); // publish off by default
+      expect(store.getSessionMemory().rejectedApproaches).toHaveLength(1);
+      const { retired } = store.overrideRejectedApproach({ description: "Inline refactor" });
+      expect(retired).toBe(1);
+      expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+    });
+
+    it("returns retired:0 when nothing matches (no crash)", () => {
+      const store = createStore("override-miss");
+      expect(store.overrideRejectedApproach({ concept: "never recorded" })).toEqual({ retired: 0 });
+    });
   });
 
   describe("project guardrails (J6)", () => {

@@ -231,6 +231,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               hero: {
                 source,
                 concept: match.concept ?? match.description ?? "this approach",
+                description: match.description,
                 proposal: match.proposal,
                 reason: match.reason,
                 via: match.via ?? "surface",
@@ -266,6 +267,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 onClick: () => window.dispatchEvent(new CustomEvent("dp:open-your-taste")),
               },
             });
+          });
+          break;
+
+        case "stance_overridden":
+          // A taste stance was scoped down (override of a false-positive block).
+          // The acting tab already toasted its own confirmation; here we just
+          // keep OTHER tabs' ledger view consistent by refreshing the digest.
+          import("./ledger").then(({ useLedgerStore }) => {
+            void useLedgerStore.getState().refetch();
           });
           break;
 

@@ -672,6 +672,56 @@ export function createHttpRoutes(
     });
   });
 
+  // Scope-down (override) a personal pre-flight block the user judges a false
+  // positive. The gate is fuzzy by design, so wrong blocks are guaranteed —
+  // this is the safety valve. Retires the matching local stance (clears the
+  // block in THIS project now) and records an `approved` counter-instance in
+  // the global ledger (shifts the derived stance off "avoid" for future
+  // projects), keeping append-only history. See FileStore.overrideRejectedApproach.
+  app.post("/api/philosophy/override", async (c) => {
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
+    }
+    // v1 boundary: team-rule blocks live in committed .deeppairing/team.json.
+    // Overriding one silently mutates shared, version-controlled config, so we
+    // don't — the UI surfaces "edit team.json" for team-source blocks and
+    // shouldn't reach here. Guard defensively anyway.
+    if (body?.source === "team") {
+      return c.json(
+        {
+          error:
+            "Team-rule blocks can't be overridden here — edit .deeppairing/team.json (it's shared and committed).",
+          code: ERROR_CODES.validation_error,
+        },
+        400,
+      );
+    }
+    const description = typeof body?.description === "string" ? body.description : undefined;
+    const concept = typeof body?.concept === "string" ? body.concept : undefined;
+    if (!description && !concept) {
+      return c.json(
+        { error: "description or concept is required to identify the stance", code: ERROR_CODES.validation_error },
+        400,
+      );
+    }
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) {
+      return c.json(
+        { error: "No active session to override against.", code: ERROR_CODES.no_active_session },
+        409,
+      );
+    }
+    const result = await store.overrideRejectedApproach({ description, concept });
+    // Tell the connected UI the ledger changed so digests/drawer refresh and
+    // the tempo layer can confirm the override landed.
+    broadcast({ type: "stance_overridden", concept: concept ?? description, retired: result.retired }, sid);
+    return c.json({ status: "overridden", concept: concept ?? description, ...result });
+  });
+
   app.get("/api/philosophy/digest", (c) => {
     const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
     const now = Date.now();

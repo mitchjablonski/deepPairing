@@ -62,6 +62,16 @@ interface LedgerState {
   version: number;
   /** Force-refetch (drops the in-flight request and starts a new one). */
   refetch: () => Promise<void>;
+  /**
+   * Scope-down a personal pre-flight block the user judged a false positive.
+   * POSTs /api/philosophy/override (retire local stance + global counter-
+   * instance), toasts the outcome, and refreshes the digest on success.
+   */
+  overrideStance: (payload: {
+    source: "session" | "team";
+    description?: string;
+    concept?: string;
+  }) => Promise<void>;
 }
 
 let inflight: Promise<void> | null = null;
@@ -133,6 +143,41 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
   loading: false,
   version: 0,
   refetch: () => doFetch(set as any),
+  overrideStance: async (payload) => {
+    const { useToastStore } = await import("./toast");
+    const label = payload.concept || payload.description || "this approach";
+    try {
+      const res = await fetch(`${apiBase()}/api/philosophy/override`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        useToastStore.getState().push({
+          kind: "error",
+          title: "Couldn't override",
+          body: body?.error ?? `Request failed (${res.status})`,
+          ttl: 7000,
+        });
+        return;
+      }
+      useToastStore.getState().push({
+        kind: "success",
+        title: "🧭 Overridden — won't block this again",
+        body: `"${label}" scoped down in Your taste.`,
+        ttl: 5000,
+      });
+      void get().refetch();
+    } catch (err: any) {
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Couldn't override",
+        body: err?.message ?? String(err),
+        ttl: 7000,
+      });
+    }
+  },
 }));
 
 /**

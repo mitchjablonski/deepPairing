@@ -1500,6 +1500,44 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("POST /api/philosophy/override (scope-down a false-positive block)", () => {
+    it("retires a personal stance so it stops blocking, and reports the count", async () => {
+      store.recordRejectedApproach({ description: "Deploy: Railway", concept: "pay-per-request hosting" });
+      const res = await app.request("/api/philosophy/override", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "session", concept: "pay-per-request hosting" }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe("overridden");
+      expect(body.retired).toBe(1);
+      // The stance is gone from the project's pre-flight memory.
+      expect(
+        store.getSessionMemory().rejectedApproaches.map((r) => r.concept),
+      ).not.toContain("pay-per-request hosting");
+    });
+
+    it("refuses a team-rule block (400 — that's committed, edit team.json)", async () => {
+      const res = await app.request("/api/philosophy/override", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "team", concept: "whatever" }),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/team\.json/);
+    });
+
+    it("400s when neither description nor concept identifies a stance", async () => {
+      const res = await app.request("/api/philosophy/override", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "session" }),
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
   describe("AA5 — /api/ledger/digest", () => {
     // Z1's durable preflight traces unlocked the cross-project moat
     // surface. These tests pin the aggregation shape — what the YourTaste

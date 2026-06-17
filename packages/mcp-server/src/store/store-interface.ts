@@ -250,6 +250,18 @@ export interface IStore {
     description: string;
     concept?: string;
   }): MaybePromise<void>;
+  /**
+   * Scope-down a personal rejected-approach the pre-flight gate matched as a
+   * false positive. Retires the matching local entry (so it stops blocking in
+   * THIS project immediately) and records an `approved` counter-instance in the
+   * global ledger (so the derived stance shifts off "avoid" and the same shape
+   * stops tripping in future projects). Append-only ledger history is kept.
+   * Returns how many local entries were retired.
+   */
+  overrideRejectedApproach(params: {
+    description?: string;
+    concept?: string;
+  }): MaybePromise<{ retired: number }>;
   getSessionMemory(): MaybePromise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }>;
   /**
    * III8 — per-project opt-in to PUBLISH this project's rejections /
