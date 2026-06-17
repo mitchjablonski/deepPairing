@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { type DecisionContent, getTypedContent } from "@deeppairing/shared";
+import { coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 
 export function ReviewGate() {
@@ -21,9 +21,8 @@ export function ReviewGate() {
 
   // Build summary of what Accept All will do
   const autoDecisions = decisionDraft.map((a) => {
-    const dc = getTypedContent<DecisionContent>(a);
-    const options = dc.options ?? [];
-    const recommended = options.find((o) => o.recommendation) ?? options[0];
+    const dc = coerceDecisionContent(a.content);
+    const recommended = dc.options.find((o) => o.recommendation) ?? dc.options[0];
     return { artifact: a, recommended };
   }).filter((d) => d.recommended);
 
@@ -35,9 +34,8 @@ export function ReviewGate() {
 
     for (const artifact of allDraft) {
       if (artifact.type === "decision") {
-        const dc = getTypedContent<DecisionContent>(artifact);
-        const options = dc.options ?? [];
-        const recommended = options.find((o) => o.recommendation) ?? options[0];
+        const dc = coerceDecisionContent(artifact.content);
+        const recommended = dc.options.find((o) => o.recommendation) ?? dc.options[0];
         if (recommended && dc.decisionId) {
           await resolveDecision(dc.decisionId, recommended.id, "Accepted via bulk approve");
         }
@@ -99,7 +97,7 @@ export function ReviewGate() {
           Will auto-select recommended options:
           {autoDecisions.map((d) => (
             <span key={d.artifact.id} className="block ml-2 text-text-secondary">
-              • {getTypedContent<DecisionContent>(d.artifact).context}: <strong>{d.recommended?.title}</strong>
+              • {coerceDecisionContent(d.artifact.content).context}: <strong>{d.recommended?.title}</strong>
             </span>
           ))}
         </div>

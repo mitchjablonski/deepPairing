@@ -397,16 +397,11 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
   const reconstructed = useMemo(() => {
     if (content.before) return null;
     const prior = allArtifacts
-      .filter((a) =>
-        a.id !== artifact.id &&
-        a.type === "code_change" &&
-        (a.content as any)?.filePath === content.filePath &&
-        typeof (a.content as any)?.after === "string" &&
-        (a.content as any).after.length > 0 &&
-        a.createdAt < artifact.createdAt,
-      )
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
-    return prior ? { before: (prior.content as any).after as string, fromId: prior.id as string } : null;
+      .filter((a) => a.id !== artifact.id && a.type === "code_change" && a.createdAt < artifact.createdAt)
+      .map((a) => ({ artifact: a, cc: coerceCodeChangeContent(a.content) }))
+      .filter(({ cc }) => cc.filePath === content.filePath && cc.after.length > 0)
+      .sort((x, y) => (x.artifact.createdAt < y.artifact.createdAt ? 1 : -1))[0];
+    return prior ? { before: prior.cc.after, fromId: prior.artifact.id } : null;
   }, [content.before, content.filePath, artifact.id, artifact.createdAt, allArtifacts]);
 
   const effectiveBefore = content.before || reconstructed?.before || "";
