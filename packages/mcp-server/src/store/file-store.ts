@@ -867,6 +867,62 @@ export class FileStore implements IStore {
   }
 
   /**
+   * Scope-down (override) a personal rejected-approach that the pre-flight gate
+   * matched as a false positive. The gate is fuzzy by design, so wrong blocks
+   * are guaranteed — this is the safety valve that keeps a wrong block from
+   * being permanent.
+   *
+   * Two writes, mirroring recordRejectedApproach in reverse:
+   *   1) Retire the matching local entry from preferences.json so the block
+   *      clears in THIS project immediately (the pre-flight reads this list).
+   *   2) Record an `approved` counter-instance in the global ledger so the
+   *      DERIVED stance shifts off "avoid" (deriveStance counts approvals vs
+   *      rejections) and the same shape stops tripping in future projects.
+   *      Append-only history is preserved — we never delete the concept's
+   *      instance log, so "the story of why" survives and a later genuine
+   *      rejection can swing the stance back.
+   *
+   * The global write is gated on the same publish opt-in as the rejection
+   * mirror: if you never published the rejection, there's nothing to counter
+   * globally and the local retire alone suffices.
+   *
+   * Matches local entries by exact description OR concept, covering both the
+   * surface- and concept-via blocks the matcher can produce. Returns the
+   * number of local entries retired.
+   */
+  overrideRejectedApproach(params: { description?: string; concept?: string }): { retired: number } {
+    const { description, concept } = params;
+    const conceptKey = concept?.trim() || description?.trim() || "";
+    if (conceptKey && this.globalLedgerPublishEnabled()) {
+      try {
+        getGlobalStore().recordInstance(conceptKey, {
+          project: this.projectHint,
+          sessionId: this.sessionId,
+          verdict: "approved",
+          reason: "Overridden — not my taste (pre-flight false positive)",
+          description,
+        });
+      } catch {
+        // Non-fatal — losing a ledger append doesn't break the override; the
+        // local retire below is what clears the block in this project.
+      }
+    }
+
+    const prefs = this.readPreferences();
+    const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+    const keep = rejected.filter(
+      (r) =>
+        !((description && r.description === description) || (concept && r.concept === concept)),
+    );
+    const retired = rejected.length - keep.length;
+    if (retired > 0) {
+      prefs.rejectedApproaches = keep;
+      this.writePreferences(prefs);
+    }
+    return { retired };
+  }
+
+  /**
    * Get session memory context for the agent.
    * Returns rejected approaches and approved patterns from previous sessions.
    */

@@ -105,5 +105,31 @@ describe("ToastLayer", () => {
       // The concept renders; a separate "Proposed: global state" line should NOT.
       expect(screen.queryByText(/proposed:/i)).not.toBeInTheDocument();
     });
+
+    it("offers 'Not my taste' on a personal block, and clicking it overrides + dismisses", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "overridden", retired: 1 }) });
+      vi.stubGlobal("fetch", fetchMock);
+      push("preflight-block", {
+        title: "x",
+        hero: heroOf({ source: "session", concept: "pay-per-request hosting", description: "Deploy: Railway", via: "concept" }),
+      });
+      render(<ToastLayer />);
+      await userEvent.click(screen.getByRole("button", { name: /not my taste/i }));
+      // POSTs the override with the stance identity (description + concept).
+      const call = fetchMock.mock.calls.find((c: any) => String(c[0]).includes("/api/philosophy/override"));
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call![1].body);
+      expect(body).toMatchObject({ source: "session", description: "Deploy: Railway", concept: "pay-per-request hosting" });
+      // The block toast is dismissed after overriding.
+      expect(screen.queryByText("Blocked by your taste")).not.toBeInTheDocument();
+      vi.unstubAllGlobals();
+    });
+
+    it("does NOT offer override on a team block — points to team.json instead", () => {
+      push("preflight-block", { title: "x", hero: heroOf({ source: "team", via: "avoid" }) });
+      render(<ToastLayer />);
+      expect(screen.queryByRole("button", { name: /not my taste/i })).not.toBeInTheDocument();
+      expect(screen.getByText(/edit team\.json/i)).toBeInTheDocument();
+    });
   });
 });

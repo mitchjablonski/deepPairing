@@ -21,6 +21,9 @@ export type ToastKind = "info" | "success" | "block" | "error" | "preflight-bloc
 export interface PreflightBlockHero {
   source: "session" | "team";
   concept: string;
+  /** Raw rejected-approach description — carried alongside `concept` so an
+   *  override can identify the exact personal stance to scope down. */
+  description?: string;
   proposal?: string;
   reason?: string;
   via: "surface" | "concept" | "avoid" | "require";

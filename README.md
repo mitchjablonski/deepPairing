@@ -65,7 +65,7 @@ Claude calls deepPairing's MCP tools instead of dumping findings as plain text. 
 | Vanilla Claude Code | None | No | None |
 | **deepPairing** | **Yes** — cross-project Philosophy Ledger | **Yes** — hard pre-flight gate | Configurable Full / Light / Minimal |
 
-> **False positives happen.** Concept-match is fuzzy by design (it has to be, to catch paraphrases). Every block is one-click overridable from the companion UI; the override updates the ledger so the same shape doesn't trip again on similar wording.
+> **False positives happen.** Concept-match is fuzzy by design (it has to be, to catch paraphrases). A block on **your own taste** is one-click overridable from the companion UI ("Not my taste") — the override scopes the stance down and records the correction in the ledger, so the same shape stops tripping on similar wording. (Blocks from a **team rule** point you to `.deeppairing/team.json` instead, since that's shared and committed.)
 
 Cursor's canvases and Claude Code's auto-memory both look like deepPairing on the surface, but neither catches the paraphrase: canvases are a presentation surface (no gate on the tool call), and auto-memory is a context the model is *encouraged* to consult, not a constraint. Reject "Railway" in either and an hour later "Fly.io for pay-per-request hosting" sails through.
 

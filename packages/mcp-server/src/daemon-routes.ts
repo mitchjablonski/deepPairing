@@ -493,6 +493,20 @@ export function createDaemonRoutes(
     return c.json({ status: "recorded" });
   });
 
+  // Scope-down a personal rejected-approach the pre-flight gate matched as a
+  // false positive (mirror of recordRejectedApproach in reverse). Exists for
+  // IStore symmetry; the human-facing path is the public /api/philosophy/override.
+  app.post("/api/internal/sessions/:sessionId/memory/override", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => ({}));
+    const result = await r.store.overrideRejectedApproach({
+      description: typeof body?.description === "string" ? body.description : undefined,
+      concept: typeof body?.concept === "string" ? body.concept : undefined,
+    });
+    return c.json({ status: "overridden", ...result });
+  });
+
   // III8 — per-project opt-in to publish to the global ledger. The wrapper
   // (or a future UI surface) calls these to flip the gate that controls
   // whether recordRejectedApproach / recordApprovedPattern mirror into

@@ -1,4 +1,5 @@
 import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/toast";
+import { useLedgerStore } from "../stores/ledger";
 
 const kindStyles: Record<Toast["kind"], { bg: string; border: string; accent: string; icon: string }> = {
   info: {
@@ -47,10 +48,12 @@ function humanizeAge(iso?: string): string | null {
   return `${Math.round(days / 365)} years ago`;
 }
 
-function PreflightBlockHeroCard({ hero, onDismiss, action }: {
+function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
   hero: PreflightBlockHero;
   onDismiss: () => void;
   action?: { label: string; onClick: () => void };
+  /** Scope-down this block as a false positive (personal stances only). */
+  onOverride?: () => void;
 }) {
   const style = kindStyles["preflight-block"];
   const when = humanizeAge(hero.rejectedAt);
@@ -112,14 +115,36 @@ function PreflightBlockHeroCard({ hero, onDismiss, action }: {
           {hero.projectCount && hero.projectCount > 1 && <> · {hero.projectCount} projects</>}
           <span> · {matchDetail}</span>
         </div>
-        {action && (
-          <button
-            onClick={action.onClick}
-            className={`text-2xs font-medium hover:underline ${style.accent} shrink-0`}
-          >
-            {action.label}
-          </button>
-        )}
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Scope-down a false positive. The gate is fuzzy by design, so this
+              is the safety valve — personal stances only. Team rules live in a
+              committed file, so we point the user there instead of mutating it. */}
+          {hero.source === "session" && onOverride && (
+            <button
+              onClick={() => { onOverride(); onDismiss(); }}
+              title="False positive? Scope this stance down so it stops blocking — and the ledger learns the correction."
+              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
+            >
+              Not my taste
+            </button>
+          )}
+          {hero.source === "team" && (
+            <span
+              className="text-[10px] text-text-muted italic"
+              title="Team rules are committed — edit .deeppairing/team.json to change them."
+            >
+              edit team.json
+            </span>
+          )}
+          {action && (
+            <button
+              onClick={action.onClick}
+              className={`text-2xs font-medium hover:underline ${style.accent}`}
+            >
+              {action.label}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -150,6 +175,13 @@ export function ToastLayer() {
               hero={t.hero}
               onDismiss={() => dismiss(t.id)}
               action={t.action}
+              onOverride={() =>
+                void useLedgerStore.getState().overrideStance({
+                  source: t.hero!.source,
+                  description: t.hero!.description,
+                  concept: t.hero!.concept,
+                })
+              }
             />
           );
         }

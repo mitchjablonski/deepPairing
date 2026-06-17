@@ -505,6 +505,10 @@ export class DaemonClient implements IStore {
     await this.post("/memory/approved", params);
   }
 
+  async overrideRejectedApproach(params: { description?: string; concept?: string }): Promise<{ retired: number }> {
+    return this.post("/memory/override", params);
+  }
+
   async getSessionMemory(): Promise<{ rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] }> {
     return this.get("/memory");
   }
