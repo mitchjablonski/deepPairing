@@ -44,6 +44,13 @@ export type DecisionResolveBody = z.infer<typeof DecisionResolveBodySchema>;
 export const StatusUpdateBodySchema = z.object({
   status: z.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: z.string().optional(),
+  /**
+   * On reject, the human-named pattern being rejected — the cross-project
+   * ledger key. Optional: when absent the server falls back to the agent's
+   * named concept, then the artifact title (legacy behavior). Naming it
+   * explicitly is what lets a future paraphrase get caught across projects.
+   */
+  concept: z.string().optional(),
 });
 export type StatusUpdateBody = z.infer<typeof StatusUpdateBodySchema>;
 

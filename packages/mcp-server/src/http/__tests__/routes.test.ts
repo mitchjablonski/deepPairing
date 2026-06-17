@@ -197,6 +197,41 @@ describe("HTTP Routes", () => {
     expect(res.status).toBe(400);
   });
 
+  describe("reject-concept capture (human-named ledger key)", () => {
+    const reject = (id: string, body: Record<string, unknown>) =>
+      app.request(`/api/artifacts/${id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "rejected", ...body }),
+      });
+
+    it("keys the ledger on the HUMAN-named concept, over the agent's concept or the title", async () => {
+      store.createArtifact({
+        id: "art_rej_1",
+        type: "research",
+        title: "Add a global ConfigStore singleton",
+        content: { concept: { name: "agent-named concept" } },
+      });
+      const res = await reject("art_rej_1", { feedback: "breaks testability", concept: "global mutable state for config" });
+      expect(res.status).toBe(200);
+      const entry = store.getSessionMemory().rejectedApproaches.find((r) => r.description === "Add a global ConfigStore singleton");
+      expect(entry?.concept).toBe("global mutable state for config");
+    });
+
+    it("falls back to the agent's concept when the human leaves it blank", async () => {
+      store.createArtifact({
+        id: "art_rej_2",
+        type: "research",
+        title: "T2",
+        content: { concept: { name: "agent fallback concept" } },
+      });
+      const res = await reject("art_rej_2", { feedback: "no" }); // no `concept` in body
+      expect(res.status).toBe(200);
+      const entry = store.getSessionMemory().rejectedApproaches.find((r) => r.description === "T2");
+      expect(entry?.concept).toBe("agent fallback concept");
+    });
+  });
+
   it("POST /api/decisions/:id requires optionId", async () => {
     const res = await app.request("/api/decisions/dec_1", {
       method: "POST",

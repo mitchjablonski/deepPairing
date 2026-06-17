@@ -148,6 +148,35 @@ describe("ArtifactStatusActions — draft interactions", () => {
     expect(statusCall[1].body).toContain('"status":"revised"');
   });
 
+  it("reject is two-step: names the pattern (pre-filled from the agent's concept), then sends it as the ledger key", async () => {
+    render(<ArtifactStatusActions artifact={artifact({ content: { concept: { name: "agent concept" } } })} />);
+    await userEvent.type(screen.getByRole("textbox"), "breaks testability");
+    // First click reveals the "name the pattern" field — no reject yet.
+    await userEvent.click(screen.getByRole("button", { name: /^Reject$/ }));
+    expect((fetch as any).mock.calls.some((c: any) => String(c[0]).includes("/status"))).toBe(false);
+    const conceptInput = screen.getByLabelText(/what pattern are you rejecting/i);
+    expect(conceptInput).toHaveValue("agent concept"); // pre-filled, editable
+
+    // Edit to the human's wording, then confirm.
+    await userEvent.clear(conceptInput);
+    await userEvent.type(conceptInput, "global mutable state for config");
+    await userEvent.click(screen.getByRole("button", { name: /reject & remember/i }));
+
+    await waitFor(() => {
+      const statusCall = (fetch as any).mock.calls.find((c: any) => String(c[0]).includes("/api/artifacts/art_x/status"));
+      expect(statusCall).toBeTruthy();
+      expect(statusCall[1].body).toContain('"status":"rejected"');
+      expect(statusCall[1].body).toContain('"concept":"global mutable state for config"');
+    });
+  });
+
+  it("the reject pattern field is empty when the agent named no concept", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    await userEvent.type(screen.getByRole("textbox"), "nope");
+    await userEvent.click(screen.getByRole("button", { name: /^Reject$/ }));
+    expect(screen.getByLabelText(/what pattern are you rejecting/i)).toHaveValue("");
+  });
+
   it("Cmd+Enter in the textarea submits approve", async () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     const textarea = screen.getByRole("textbox");

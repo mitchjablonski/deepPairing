@@ -114,6 +114,9 @@ export interface ArtifactState {
     // (already used by ArtifactStatusActions' Dismiss; widen the type to match).
     status: "approved" | "revised" | "rejected" | "obsolete",
     feedback?: string,
+    // On reject only: the human-named pattern, persisted as the cross-project
+    // ledger key (server falls back to the agent's concept / the title).
+    concept?: string,
   ) => Promise<void>;
 
   resolveDecision: (
@@ -304,7 +307,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     }
   },
 
-  updateArtifactStatus: async (artifactId, status, feedback) => {
+  updateArtifactStatus: async (artifactId, status, feedback, concept) => {
     // Optimistic: flip the local status immediately so the item leaves the
     // "waiting for you" set (PendingBanner/TurnIndicator/cross-project badge)
     // the instant you act on it — don't wait on the WS `artifact_updated`
@@ -320,7 +323,8 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         safeFetch(`${apiBase()}/api/artifacts/${artifactId}/status`, {
           method: "POST",
           headers: sessionHeaders(),
-          body: JSON.stringify({ status, feedback }),
+          // `concept` is sent on reject only — the human-named ledger key.
+          body: JSON.stringify({ status, feedback, concept }),
         }),
       status === "approved" ? "Approve" : status === "rejected" ? "Reject" : "Revise",
     );

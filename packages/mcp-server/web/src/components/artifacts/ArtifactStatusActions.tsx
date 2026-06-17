@@ -18,6 +18,14 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
   const autonomyLevel = useConnectionStore((s) => s.autonomyLevel);
   const commentRef = useRef<HTMLTextAreaElement>(null);
 
+  // Reject-concept capture: rejecting is the highest-value teaching moment, so
+  // we name the PATTERN being rejected (the cross-project ledger key) instead
+  // of letting the moat key on the artifact title. Clicking Reject reveals a
+  // field pre-filled with the agent's own concept (when it named one), editable.
+  const agentConcept = (artifact.content as { concept?: { name?: string } } | null)?.concept?.name;
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectConcept, setRejectConcept] = useState("");
+
   // Auto-proceed countdown state
   const [countdown, setCountdown] = useState<number | null>(null);
   const [countdownMax, setCountdownMax] = useState(COUNTDOWN_SECONDS);
@@ -167,8 +175,13 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
       if (trimmedComment) {
         await submitComment(artifact.id, trimmedComment);
       }
-      await updateArtifactStatus(artifact.id, action, trimmedComment || undefined);
+      // On reject, carry the human-named pattern as the ledger key (empty →
+      // server falls back to the agent's concept, then the title).
+      const concept = action === "rejected" ? rejectConcept.trim() || undefined : undefined;
+      await updateArtifactStatus(artifact.id, action, trimmedComment || undefined, concept);
       setComment(""); // only clear on success, so a failed action keeps the text to retry
+      setRejecting(false);
+      setRejectConcept("");
     } catch {
       // The store mutations re-throw AFTER toasting a user-facing error. Swallow
       // here so the click handler doesn't reject — but the `finally` MUST run so
@@ -177,6 +190,14 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // Reject is two-step: the first click reveals the "name the pattern" field
+  // (pre-filled with the agent's concept); the confirm click does the reject.
+  const beginReject = () => {
+    cancelCountdown();
+    setRejectConcept(agentConcept ?? "");
+    setRejecting(true);
   };
 
   /**
@@ -306,16 +327,65 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
             Request revision
           </button>
           <button
-            onClick={() => handleAction("rejected")}
-            disabled={submitting || !comment.trim()}
+            onClick={beginReject}
+            disabled={submitting || !comment.trim() || rejecting}
             className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
                        hover:bg-accent-red-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-            title={comment.trim() ? "Reject and remember the reason across sessions" : "Add a reason first"}
+            title={comment.trim() ? "Reject and remember this pattern across sessions" : "Add a reason first"}
           >
             Reject
           </button>
         </div>
       </div>
+
+      {/* Reject confirm: name the pattern (the cross-project ledger key) so a
+          future paraphrase gets caught — not just this artifact's title. */}
+      {rejecting && (
+        <div className="space-y-1.5 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
+          <label htmlFor="reject-concept" className="block text-2xs font-medium text-text-secondary">
+            What pattern are you rejecting?{" "}
+            <span className="font-normal text-text-muted">
+              This becomes your cross-project memory key — so the agent can’t paraphrase past it later.
+            </span>
+          </label>
+          <input
+            id="reject-concept"
+            autoFocus
+            value={rejectConcept}
+            onChange={(e) => setRejectConcept(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); handleAction("rejected"); }
+              if (e.key === "Escape") { e.preventDefault(); setRejecting(false); }
+            }}
+            placeholder="e.g. “global mutable state for config”"
+            className="w-full px-2 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-red"
+          />
+          {agentConcept && (
+            <div className="text-[10px] text-text-muted">
+              Pre-filled from the agent’s named concept — edit it to match how <em>you’d</em> phrase the rule.
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleAction("rejected")}
+              disabled={submitting}
+              className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded
+                         hover:bg-accent-red/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+              title="Reject and remember this pattern across every project"
+            >
+              Reject &amp; remember
+            </button>
+            <button
+              onClick={() => setRejecting(false)}
+              disabled={submitting}
+              className="text-2xs text-text-muted hover:text-text-secondary"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tertiary — close as overcome by new information (neither approve nor
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
