@@ -6,6 +6,8 @@ import type {
   PlanContent,
   PlanStep,
   PlanBranch,
+  PlanVisual,
+  PlanVisualFile,
   SpecContent,
   SpecRequirement,
   SpecTask,
@@ -144,10 +146,38 @@ function coercePlanStep(v: unknown): PlanStep {
 
 export function coercePlanContent(raw: unknown): PlanContent {
   const c = obj(raw);
-  return {
+  const out: PlanContent = {
     steps: arr(c.steps).map(coercePlanStep),
     estimatedChanges: num(c.estimatedChanges),
   };
+  if (Array.isArray(c.visuals)) {
+    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  }
+  return out;
+}
+
+/** Coerce a plan visual to a fully-shaped block (id always present so comments
+ *  can anchor; kind a valid enum; payload fields kept when the right type). */
+function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
+  const o = obj(v);
+  const out: PlanVisual = {
+    id: str(o.id) || fallbackId,
+    kind: oneOf(o.kind, ["diagram", "file_map", "prototype"] as const, "diagram"),
+  };
+  if (typeof o.title === "string") out.title = o.title;
+  if (typeof o.caption === "string") out.caption = o.caption;
+  if (typeof o.source === "string") out.source = o.source;
+  if (typeof o.html === "string") out.html = o.html;
+  if (Array.isArray(o.files)) {
+    out.files = o.files.filter(isObj).map((f): PlanVisualFile => {
+      const file: PlanVisualFile = { path: str(f.path) };
+      const change = optOneOf(f.change, ["create", "modify", "delete"] as const);
+      if (change) file.change = change;
+      if (typeof f.note === "string") file.note = f.note;
+      return file;
+    });
+  }
+  return out;
 }
 
 // --- spec ---------------------------------------------------------------------

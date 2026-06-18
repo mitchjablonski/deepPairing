@@ -181,6 +181,25 @@ describe("Tool-input validation at the write boundary", () => {
     expect(content.steps[0].branches?.[0]).toMatchObject({ description: "ship it", files: ["release.ts"] });
   });
 
+  it("present_plan PERSISTS `visuals` (diagram + file_map) so the planning UI can render them", async () => {
+    const { isError } = await call("present_plan", {
+      title: "Plan with visuals",
+      estimatedChanges: 2,
+      steps: [{ description: "do it", reasoning: "because" }],
+      visuals: [
+        { id: "arch", kind: "diagram", title: "Architecture", source: "graph TD; UI-->API-->DB" },
+        { id: "files", kind: "file_map", files: [{ path: "src/api.ts", change: "create", note: "new route" }] },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as {
+      visuals?: Array<{ id: string; kind: string; source?: string; files?: Array<{ path: string }> }>;
+    };
+    expect(content.visuals).toHaveLength(2);
+    expect(content.visuals![0]).toMatchObject({ id: "arch", kind: "diagram", source: "graph TD; UI-->API-->DB" });
+    expect(content.visuals![1].files?.[0]).toMatchObject({ path: "src/api.ts", change: "create" });
+  });
+
   it("present_code_change rejects missing required fields (filePath, changeType, after, reasoning)", async () => {
     const { text, isError } = await call("present_code_change", {
       // filePath missing

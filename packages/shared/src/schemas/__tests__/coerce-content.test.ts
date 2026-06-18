@@ -56,6 +56,23 @@ describe("coercePlanContent", () => {
     expect(step.condition).toBe("if tests fail");
     expect(step.branches?.[0]).toMatchObject({ description: "fix", reasoning: "why", files: ["a.ts"] });
   });
+  it("coerces visuals: keeps a valid diagram, shapes a file_map, and fills id/kind defaults", () => {
+    const p = coercePlanContent({
+      visuals: [
+        { id: "v1", kind: "diagram", source: "graph TD; A-->B", title: "Arch" },
+        { id: "v2", kind: "file_map", files: [{ path: "a.ts", change: "create" }, "junk", { path: "b.ts", change: "bogus" }] },
+        { kind: "weird" }, // no id, bad kind → id fallback + kind defaults to "diagram"
+      ],
+    });
+    expect(p.visuals).toHaveLength(3);
+    expect(p.visuals![0]).toMatchObject({ id: "v1", kind: "diagram", source: "graph TD; A-->B", title: "Arch" });
+    // non-object dropped; an invalid change enum dropped, leaving a clean { path }
+    expect(p.visuals![1].files).toEqual([{ path: "a.ts", change: "create" }, { path: "b.ts" }]);
+    expect(p.visuals![2]).toMatchObject({ id: "visual_2", kind: "diagram" });
+  });
+  it("non-array visuals → omitted (no throw)", () => {
+    expect(coercePlanContent({ visuals: "nope" }).visuals).toBeUndefined();
+  });
 });
 
 describe("coerceSpecContent", () => {

@@ -223,7 +223,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         name: "present_plan",
         description:
           "Present an implementation plan as steps with file changes and before/after previews." +
-          "\n\nSchema note: `steps` is an array of objects (each needs `description` + `reasoning`; `files[]` optional for steps like \"run tests\"). INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` ('diagram'=Mermaid in `source`; 'file_map'=`files[]`; 'prototype'=`html`), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — this REPLACES Claude Code's native plan-approval flow. Do NOT call ExitPlanMode after present_plan. The companion UI is the only approval surface; call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
@@ -265,6 +265,35 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               },
             },
             estimatedChanges: { type: "number" },
+            visuals: {
+              type: "array",
+              description: "Diagrams / file maps / prototypes that frame the plan. Strongly encouraged.",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "Stable id — keep it across revisions so comment threads survive" },
+                  kind: { type: "string", enum: ["diagram", "file_map", "prototype"] },
+                  title: { type: "string" },
+                  caption: { type: "string" },
+                  source: { type: "string", description: "kind='diagram': Mermaid source" },
+                  files: {
+                    type: "array",
+                    description: "kind='file_map': planned file operations",
+                    items: {
+                      type: "object",
+                      properties: {
+                        path: { type: "string" },
+                        change: { type: "string", enum: ["create", "modify", "delete"] },
+                        note: { type: "string" },
+                      },
+                      required: ["path"],
+                    },
+                  },
+                  html: { type: "string", description: "kind='prototype': self-contained HTML (rendered sandboxed)" },
+                },
+                required: ["id", "kind"],
+              },
+            },
           },
           required: ["title", "steps", "estimatedChanges"],
         },

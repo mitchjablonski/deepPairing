@@ -93,9 +93,51 @@ export const PlanStepSchema = z.object({
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;
 
+/** One planned file operation in a `file_map` visual. */
+export const PlanVisualFileSchema = z.object({
+  path: z.string(),
+  change: z.enum(["create", "modify", "delete"]).optional(),
+  note: z.string().optional(),
+});
+
+export type PlanVisualFile = z.infer<typeof PlanVisualFileSchema>;
+
+/**
+ * A visual attached to a plan (or spec) — rendered as a first-class,
+ * commentable block alongside the explicit steps so the planning phase isn't a
+ * wall of prose. One of:
+ *   - "diagram"   — Mermaid source (flowchart / erDiagram / sequenceDiagram /
+ *                   stateDiagram / classDiagram). The renderer is fuzzy-safe:
+ *                   invalid Mermaid shows the source + an error, never crashes.
+ *   - "file_map"  — structured list of planned create/modify/delete operations.
+ *   - "prototype" — self-contained HTML/CSS rendered in a SANDBOXED iframe.
+ *
+ * Payload fields are per-kind and all optional so the structural validator
+ * stays lenient; the renderer reads the field matching `kind`.
+ */
+export const PlanVisualSchema = z.object({
+  /** Stable id — comments anchor to it. Keep it across revisions so a comment
+   *  thread on a diagram survives the agent redrawing it. */
+  id: z.string(),
+  kind: z.enum(["diagram", "file_map", "prototype"]),
+  title: z.string().optional(),
+  caption: z.string().optional(),
+  /** kind="diagram": Mermaid source. */
+  source: z.string().optional(),
+  /** kind="file_map": the planned file operations. */
+  files: z.array(PlanVisualFileSchema).optional(),
+  /** kind="prototype": a self-contained HTML document (rendered sandboxed). */
+  html: z.string().optional(),
+});
+
+export type PlanVisual = z.infer<typeof PlanVisualSchema>;
+
 export const PlanContentSchema = z.object({
   steps: z.array(PlanStepSchema),
   estimatedChanges: z.number(),
+  /** Optional visuals (diagrams / file maps / prototypes) that frame the plan.
+   *  Optional for back-compat. */
+  visuals: z.array(PlanVisualSchema).optional(),
 });
 
 export type PlanContent = z.infer<typeof PlanContentSchema>;

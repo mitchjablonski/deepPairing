@@ -7,7 +7,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentPlanInput(args);
   if (!validated.ok) return validated.error;
-  const { title, steps: planSteps, estimatedChanges } = validated.data;
+  const { title, steps: planSteps, estimatedChanges, visuals } = validated.data;
   const proposals: string[] = [
     title,
     ...planSteps.map((s) => s.description),
@@ -31,7 +31,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
     id,
     type: "plan",
     title,
-    content: { steps: planSteps, estimatedChanges },
+    content: { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) },
     relatedArtifactIds: args?.relatedFindings,
   });
   await ctx.store.recordPlanReview(id);
