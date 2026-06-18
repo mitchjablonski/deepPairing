@@ -1,5 +1,6 @@
 import type { PlanVisual, PlanVisualFile } from "@deeppairing/shared";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { PrototypeFrame } from "./PrototypeFrame";
 import { CommentTrigger, AskTrigger } from "./CommentThread";
 import { useArtifactStore } from "../stores/artifact";
 
@@ -77,13 +78,8 @@ function VisualBody({ visual }: { visual: PlanVisual }) {
     return <FileMap files={visual.files ?? []} />;
   }
 
-  // prototype — the sandboxed iframe renderer lands in a dedicated PR (its
-  // security model deserves its own review). Until then, degrade clearly.
-  return (
-    <div className="text-2xs text-text-muted italic rounded border border-dashed border-border-default p-3 text-center">
-      Interactive prototype — sandboxed rendering ships in an upcoming update.
-    </div>
-  );
+  // prototype — agent-authored HTML, run in a hardened sandbox (see PrototypeFrame).
+  return <PrototypeFrame html={visual.html ?? ""} />;
 }
 
 // --- file_map: a directory tree of planned operations ------------------------

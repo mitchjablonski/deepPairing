@@ -51,10 +51,12 @@ describe("ArtifactVisuals", () => {
     expect(screen.getAllByRole("button").length).toBeGreaterThan(0);
   });
 
-  it("shows a sandboxed placeholder for prototypes (the iframe lands in its own PR)", () => {
+  it("renders a prototype as a click-to-run sandboxed frame (html not injected into the page)", () => {
     render(<ArtifactVisuals artifactId="a" visuals={[{ id: "p", kind: "prototype", html: "<button>hi</button>" }]} />);
-    expect(screen.getByText(/sandboxed rendering ships/i)).toBeInTheDocument();
-    // The raw HTML is NOT injected into the page in this placeholder.
+    expect(screen.getByText(/sandboxed . no network/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run prototype/i })).toBeInTheDocument();
+    // The raw agent HTML never lands in the parent DOM.
     expect(screen.queryByText("hi")).not.toBeInTheDocument();
+    expect(document.querySelector("iframe")).toBeNull(); // not until the user opts in
   });
 });
