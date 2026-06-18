@@ -231,14 +231,15 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
 
         return (
           <>
-            {/* N3.3: on high-stakes decisions, surface prior predictions on
-                similar decisions so the user can calibrate before choosing. */}
-            {dc.stakes === "high" && (
-              <PredictionsBreadcrumb
-                concept={`${artifact.title} ${dc.context ?? ""}`}
-                excludeArtifactId={artifact.id}
-              />
-            )}
+            {/* N3.3: surface prior predictions on similar decisions so the user
+                can calibrate before choosing. Fires on EVERY decision (not just
+                high-stakes) — the breadcrumb self-hides when nothing matches, so
+                the gate was needlessly starving the calibration loop of the
+                occasions it could appear. */}
+            <PredictionsBreadcrumb
+              concept={`${artifact.title} ${dc.context ?? ""}`}
+              excludeArtifactId={artifact.id}
+            />
             <DecisionCard
               event={{
                 type: "decision_request",

@@ -8,6 +8,7 @@ import { PendingBanner } from "./components/PendingBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { AutonomySlider } from "./components/AutonomySlider";
+import { CompoundingBadge } from "./components/CompoundingBadge";
 import { CommandPalette } from "./components/CommandPalette";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { ReplayScrubber } from "./components/ReplayScrubber";
@@ -226,6 +227,7 @@ function App() {
           <TurnIndicator />
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <CompoundingBadge onOpen={() => window.dispatchEvent(new CustomEvent("dp:open-your-taste"))} />
           <AutonomySlider />
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
