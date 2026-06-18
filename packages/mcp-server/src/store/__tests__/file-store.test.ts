@@ -307,6 +307,39 @@ describe("FileStore", () => {
     });
   });
 
+  describe("findPastPredictions — concept-token matching (N3.3)", () => {
+    function seedPrediction(sessionId: string, title: string, context: string, predicted: string) {
+      const store = createStore(sessionId);
+      store.createArtifact({ id: `dart_${sessionId}`, type: "decision", title, content: {} });
+      store.recordDecisionRequest({
+        decisionId: `dec_${sessionId}`,
+        artifactId: `dart_${sessionId}`,
+        context,
+        options: [{ id: "o1", title: "Redis", description: "in-memory" }],
+        stakes: "high",
+      });
+      store.resolveDecision(`dec_${sessionId}`, "o1", "go", { predictedOutcome: predicted, confidence: "high" });
+      store.forceFlush();
+    }
+
+    it("surfaces a past prediction sharing ≥2 concept tokens, even with a differently-worded query", () => {
+      seedPrediction("past", "Choose a cache layer for hot reads", "API latency", "Redis will hold up");
+      // Shares exactly two distinctive tokens (cache, layer). The OLD majority
+      // rule needed ceil(5/2)=3 of the query's tokens, so this missed; the
+      // token-floor rule surfaces it.
+      const hits = FileStore.findPastPredictions(tmpDir, "which cache layer should we pick");
+      expect(hits).toHaveLength(1);
+      expect(hits[0].predictedOutcome).toBe("Redis will hold up");
+    });
+
+    it("does NOT surface on a single incidental token overlap (floor is 2)", () => {
+      seedPrediction("past2", "Choose a cache layer for hot reads", "API latency", "Redis");
+      // Only "choose" overlaps — one shared token isn't a concept match.
+      const hits = FileStore.findPastPredictions(tmpDir, "which database should we choose");
+      expect(hits).toHaveLength(0);
+    });
+  });
+
   describe("project guardrails (J6)", () => {
     it("detects migrations directory", () => {
       fs.mkdirSync(path.join(tmpDir, "migrations"), { recursive: true });
