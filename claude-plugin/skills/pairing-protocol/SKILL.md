@@ -56,6 +56,22 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   optional design + tasks. "Think together before building."
 - **`present_plan`** — before multi-file changes. Steps with before/after
   previews, motivated by findings / requirements.
+- **Lead with VISUALS when planning.** A wall of prose is the weakest way to
+  pitch a plan or spec — a picture is the strongest. Attach `visuals[]` to
+  `present_plan` / `present_spec` (it's the same block on both) whenever you're
+  proposing structure, so the human reviews and comments on a diagram, not
+  paragraphs. Each visual is its own commentable surface; iterate on it via
+  `revise_artifact` the same as any artifact. Reach for:
+  - `kind: "diagram"` — Mermaid in `source`: **flowchart** for architecture,
+    **erDiagram** for a DB/schema map, **sequenceDiagram** for an API/request
+    flow, **stateDiagram** / **classDiagram** as needed. This is the highest-
+    leverage one — default to it any time you're describing how pieces fit.
+  - `kind: "file_map"` — `files[]` ({ path, change: create|modify|delete, note })
+    for a clear map of what the change touches.
+  - `kind: "prototype"` — self-contained HTML in `html` for a clickable
+    wireframe / interactive mock (runs in a sandboxed frame; no network).
+  Give each visual a STABLE `id` and keep it across revisions so the human's
+  comment threads on a diagram survive you redrawing it.
 - **`present_code_change`** — call this BEFORE the Write/Edit, for **every**
   code change you make, with diff + reasoning. No exceptions: this includes
   small follow-on edits, new files (tests, configs), and each file of a

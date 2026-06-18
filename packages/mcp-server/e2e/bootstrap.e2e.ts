@@ -151,3 +151,79 @@ test("FD-2 — `init demo` runs against the daemon with no project hash (cold-cl
   const body = (await res.json()) as { sessionId?: string };
   expect(body.sessionId, "demo run returns a fresh demo session id").toMatch(/^demo_/);
 });
+
+/** The daemon's bearer token lives in daemon.json on POSIX dirs, or a 0600
+ *  sidecar otherwise. The e2e tmpdir is POSIX so daemon.json carries it. */
+function readDaemonToken(): string {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "daemon.json"), "utf-8"));
+    if (info.authToken) return info.authToken;
+  } catch {}
+  for (const d of [process.env.XDG_RUNTIME_DIR, os.tmpdir()].filter(Boolean) as string[]) {
+    try {
+      const sc = JSON.parse(fs.readFileSync(path.join(d, "deeppairing", `${expectedHash}.json`), "utf-8"));
+      if (sc.authToken) return sc.authToken;
+    } catch {}
+  }
+  return "";
+}
+
+test("plan visuals render in a real browser: Mermaid SVG, file-map tree, and a sandboxed prototype", async ({ page }) => {
+  // Seed a plan with all three visual kinds via the internal API, then assert
+  // the companion UI renders them for real — this is the live verification the
+  // unit tests (which mock mermaid) can't give: real mermaid in a real browser.
+  const token = readDaemonToken();
+  expect(token, "need the daemon bearer token to seed via the internal API").not.toBe("");
+  const sid = "viz_session";
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+    "X-Project-Hash": expectedHash,
+  };
+
+  const reg = await fetch(`${baseURL}/api/internal/sessions/${sid}/register`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ title: "Viz plan", project: "e2e" }),
+  });
+  expect(reg.ok, "session register").toBe(true);
+
+  const art = await fetch(`${baseURL}/api/internal/sessions/${sid}/artifacts`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      id: "art_viz",
+      type: "plan",
+      title: "Plan with visuals",
+      content: {
+        steps: [{ description: "wire it up", reasoning: "because" }],
+        estimatedChanges: 2,
+        visuals: [
+          { id: "arch", kind: "diagram", title: "Architecture", source: "graph TD; UI-->API-->DB" },
+          { id: "files", kind: "file_map", title: "Files", files: [{ path: "src/api.ts", change: "create" }] },
+          { id: "proto", kind: "prototype", title: "Mock", html: "<button id='go'>Go</button>" },
+        ],
+      },
+    }),
+  });
+  expect(art.ok, "artifact create").toBe(true);
+
+  await page.goto(`${baseURL}/?session=${sid}`, { waitUntil: "domcontentloaded" });
+
+  // The plan loads, is selected, and its visuals section renders all three blocks.
+  await expect(page.getByText("Visuals (3)")).toBeVisible({ timeout: 15_000 });
+
+  // 1) Mermaid actually produced an SVG (real engine in a real browser).
+  await expect
+    .poll(() => page.locator(".dp-mermaid svg").count(), { timeout: 15_000 })
+    .toBeGreaterThan(0);
+
+  // 2) The file-map tree shows the planned file.
+  await expect(page.getByText("api.ts")).toBeVisible();
+
+  // 3) The prototype is click-to-run; clicking mounts the hardened sandbox iframe.
+  const runBtn = page.getByRole("button", { name: /run prototype/i });
+  await expect(runBtn).toBeVisible();
+  await runBtn.click();
+  await expect(page.locator('iframe[sandbox="allow-scripts"]')).toHaveCount(1);
+});

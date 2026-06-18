@@ -66,8 +66,10 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
 }
 
 function VisualBody({ visual }: { visual: PlanVisual }) {
+  // Defensive even though the coercer shapes visuals upstream: a renderer must
+  // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
-    return visual.source?.trim() ? (
+    return typeof visual.source === "string" && visual.source.trim() ? (
       <MermaidDiagram source={visual.source} />
     ) : (
       <div className="text-2xs text-text-muted">No diagram source provided.</div>
@@ -75,11 +77,11 @@ function VisualBody({ visual }: { visual: PlanVisual }) {
   }
 
   if (visual.kind === "file_map") {
-    return <FileMap files={visual.files ?? []} />;
+    return <FileMap files={Array.isArray(visual.files) ? visual.files : []} />;
   }
 
   // prototype — agent-authored HTML, run in a hardened sandbox (see PrototypeFrame).
-  return <PrototypeFrame html={visual.html ?? ""} />;
+  return <PrototypeFrame html={typeof visual.html === "string" ? visual.html : ""} />;
 }
 
 // --- file_map: a directory tree of planned operations ------------------------
@@ -93,7 +95,7 @@ interface TreeNode {
 function buildTree(files: PlanVisualFile[]): TreeNode {
   const root: TreeNode = { name: "", children: new Map() };
   for (const f of files) {
-    const parts = (f.path ?? "").split("/").filter(Boolean);
+    const parts = String(f?.path ?? "").split("/").filter(Boolean);
     if (parts.length === 0) continue;
     let node = root;
     parts.forEach((part, i) => {
