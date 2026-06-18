@@ -1390,8 +1390,16 @@ export class FileStore implements IStore {
         ).toLowerCase();
 
         const hits = tokens.filter((t) => haystack.includes(t));
-        // Require majority of tokens to match so we don't surface unrelated decisions.
-        if (hits.length < Math.ceil(tokens.length / 2)) continue;
+        // N3.3 — match on concept-token OVERLAP, not a majority of the (broad)
+        // title+context query. The old `ceil(tokens.length / 2)` rule scaled
+        // with query length, so a paraphrased decision that shared the real
+        // concept but differed in wording almost never cleared the bar — the
+        // calibration loop basically never fired. Require a fixed floor of
+        // shared ≥4-char tokens instead (2, or the single token when that's all
+        // the query has). Decisions that recorded a prediction are rare, so this
+        // surfaces the relevant ones without flooding.
+        const required = Math.min(2, tokens.length);
+        if (hits.length < required) continue;
 
         const chosen = (dec.options ?? []).find((o: any) => o.id === dec.response!.optionId);
         const resolvedAt = dec.resolvedAt ?? dec.createdAt;
