@@ -414,7 +414,7 @@ export function createHttpRoutes(
       log(`[status] REJECTED — body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
       return c.json(formatZodIssues(parsed.error), 400);
     }
-    const { status, feedback } = parsed.data;
+    const { status, feedback, concept: humanConcept } = parsed.data;
 
     // U0.6 diagnostic — log the routing decision so we can confirm whether
     // the UI's X-Session-Id matches the store the artifact actually lives
@@ -469,22 +469,26 @@ export function createHttpRoutes(
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find((a) => a.id === artifactId);
       if (artifact && artifact.type !== "decision") {
-        // AA1 — when the artifact's content carries a Y5-style concept
-        // (code_change does today; spec/plan can in the future), use its
-        // name as the cross-project ledger key. Otherwise fall back to
-        // the artifact title.
+        // The cross-project ledger key, in priority order:
+        //   1. the HUMAN-named concept from the reject prompt (the whole point
+        //      — the user phrases the pattern they're rejecting, so a future
+        //      paraphrase gets caught), then
+        //   2. AA1 — the artifact's own Y5-style concept (code_change carries
+        //      one today; spec/plan may in future), then
+        //   3. the artifact title (legacy fallback).
         const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
+        const concept = humanConcept?.trim() || artConcept || undefined;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || undefined,
           sourceArtifactId: artifactId,
-          concept: artConcept,
+          concept,
         });
         broadcast({
           type: "ledger_write",
           kind: "rejected",
           description: artifact.title,
-          concept: artConcept,
+          concept,
           reason: feedback?.trim() || undefined,
           sourceArtifactId: artifactId,
         }, sid);
