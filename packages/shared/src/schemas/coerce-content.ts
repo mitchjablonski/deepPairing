@@ -214,6 +214,7 @@ export function coerceSpecContent(raw: unknown): SpecContent {
   if (typeof c.design === "string") out.design = c.design;
   if (Array.isArray(c.tasks)) out.tasks = c.tasks.map(coerceTask);
   if (Array.isArray(c.openQuestions)) out.openQuestions = strArr(c.openQuestions);
+  if (Array.isArray(c.visuals)) out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 

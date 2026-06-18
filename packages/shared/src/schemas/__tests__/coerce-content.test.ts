@@ -83,6 +83,10 @@ describe("coerceSpecContent", () => {
     const s = coerceSpecContent({ objective: "o", requirements: [{ id: "R1", statement: "do", rationale: "why" }] });
     expect(s.requirements[0]).toEqual({ id: "R1", statement: "do", rationale: "why", acceptanceCriteria: [] });
   });
+  it("coerces visuals (specs carry them too)", () => {
+    const s = coerceSpecContent({ objective: "o", requirements: [], visuals: [{ id: "v", kind: "diagram", source: "graph TD; A-->B" }] });
+    expect(s.visuals).toEqual([{ id: "v", kind: "diagram", source: "graph TD; A-->B" }]);
+  });
 });
 
 describe("coerceDecisionContent", () => {

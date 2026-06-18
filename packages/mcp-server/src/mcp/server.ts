@@ -174,7 +174,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         name: "present_spec",
         description:
           "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
-          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` ('diagram'=Mermaid in `source`; 'file_map'=`files[]`; 'prototype'=`html`), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
@@ -215,6 +215,35 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               },
             },
             openQuestions: { type: "array", items: { type: "string" }, description: "Things you need the human to decide before proceeding" },
+            visuals: {
+              type: "array",
+              description: "Diagrams / file maps / prototypes that frame the spec. Encouraged.",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "Stable id — keep it across revisions so comment threads survive" },
+                  kind: { type: "string", enum: ["diagram", "file_map", "prototype"] },
+                  title: { type: "string" },
+                  caption: { type: "string" },
+                  source: { type: "string", description: "kind='diagram': Mermaid source" },
+                  files: {
+                    type: "array",
+                    description: "kind='file_map': planned file operations",
+                    items: {
+                      type: "object",
+                      properties: {
+                        path: { type: "string" },
+                        change: { type: "string", enum: ["create", "modify", "delete"] },
+                        note: { type: "string" },
+                      },
+                      required: ["path"],
+                    },
+                  },
+                  html: { type: "string", description: "kind='prototype': self-contained HTML (rendered sandboxed)" },
+                },
+                required: ["id", "kind"],
+              },
+            },
           },
           required: ["title", "objective", "requirements"],
         },

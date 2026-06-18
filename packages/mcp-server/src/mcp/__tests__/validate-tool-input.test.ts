@@ -252,4 +252,16 @@ describe("Tool-input validation at the write boundary", () => {
     expect(text).toContain("requirements");
     expect(store.getArtifacts()).toHaveLength(0);
   });
+
+  it("present_spec PERSISTS `visuals` (specs are a planning surface too)", async () => {
+    const { isError } = await call("present_spec", {
+      title: "Auth rate limiting",
+      objective: "Block credential stuffing",
+      requirements: [{ id: "R1", statement: "limit /login", rationale: "stop brute force", acceptanceCriteria: ["429 after 5"] }],
+      visuals: [{ id: "flow", kind: "diagram", title: "Request flow", source: "sequenceDiagram; Client->>API: login" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { visuals?: Array<{ id: string; source?: string }> };
+    expect(content.visuals?.[0]).toMatchObject({ id: "flow", source: "sequenceDiagram; Client->>API: login" });
+  });
 });

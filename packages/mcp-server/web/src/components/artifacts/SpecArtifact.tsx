@@ -2,6 +2,7 @@ import type { Artifact, SpecRequirement, SpecTask } from "@deeppairing/shared";
 import { coerceSpecContent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
+import { ArtifactVisuals } from "../ArtifactVisuals";
 import { useArtifactStore } from "../../stores/artifact";
 
 interface Props {
@@ -61,6 +62,9 @@ export function SpecArtifact({ artifact }: Props) {
           <SimpleMarkdown text={spec.context} className="text-xs text-text-secondary space-y-1" />
         </div>
       )}
+
+      {/* Visuals frame the spec — diagrams / file maps the human can comment on. */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={spec.visuals ?? []} />
 
       {/* Requirements — each is individually challengeable */}
       <div>

@@ -186,6 +186,9 @@ export const SpecContentSchema = z.object({
   design: z.string().optional(),
   tasks: z.array(SpecTaskSchema).optional(),
   openQuestions: z.array(z.string()).optional(),
+  /** Visuals (diagrams / file maps / prototypes) that frame the spec — same
+   *  block as plans. Optional for back-compat. */
+  visuals: z.array(PlanVisualSchema).optional(),
 });
 
 export type SpecContent = z.infer<typeof SpecContentSchema>;
