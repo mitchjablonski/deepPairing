@@ -124,6 +124,35 @@ describe("ArtifactVisuals", () => {
     expect(screen.getByText("Comment on this prototype")).toBeInTheDocument();
   });
 
+  it("renders an annotated_code visual: real code + the agent's line annotations, numbered from lineStart", () => {
+    const { container } = render(
+      <ArtifactVisuals
+        artifactId="a"
+        visuals={[
+          {
+            id: "ac",
+            kind: "annotated_code",
+            title: "The change",
+            code: "const x = 1;\nreturn x;",
+            filePath: "src/x.ts",
+            lineStart: 40,
+            annotations: [{ line: 40, note: "declare the value", kind: "add" }],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("The change")).toBeInTheDocument();
+    expect(screen.getByText("Comment on this code")).toBeInTheDocument(); // kind-aware CTA
+    expect(screen.getByText("declare the value")).toBeInTheDocument(); // agent annotation rendered
+    expect(screen.getByText("40")).toBeInTheDocument(); // gutter numbered from lineStart
+    expect(container.textContent).toContain("return x;"); // code body present
+  });
+
+  it("annotated_code without code degrades to a notice (no crash)", () => {
+    render(<ArtifactVisuals artifactId="a" visuals={[{ id: "ac", kind: "annotated_code" }]} />);
+    expect(screen.getByText(/No code provided/i)).toBeInTheDocument();
+  });
+
   describe("adversarial / partial visuals never crash", () => {
     const cases: Array<[string, PlanVisual]> = [
       ["empty diagram source", { id: "d", kind: "diagram", source: "" }],
@@ -132,6 +161,8 @@ describe("ArtifactVisuals", () => {
       ["unknown kind", { id: "u", kind: "weird" as any }],
       ["file with no change (defaults)", { id: "f2", kind: "file_map", files: [{ path: "root.ts" }] }],
       ["deeply nested path", { id: "f3", kind: "file_map", files: [{ path: "a/b/c/d/e.ts", change: "create" }] }],
+      ["annotated_code with bad annotations", { id: "ac", kind: "annotated_code", code: "x", annotations: "nope" as any }],
+      ["annotated_code with non-string code", { id: "ac2", kind: "annotated_code", code: 42 as any }],
     ];
     for (const [name, visual] of cases) {
       it(name, () => {

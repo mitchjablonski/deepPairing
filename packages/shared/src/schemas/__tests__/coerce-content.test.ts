@@ -73,6 +73,44 @@ describe("coercePlanContent", () => {
   it("non-array visuals → omitted (no throw)", () => {
     expect(coercePlanContent({ visuals: "nope" }).visuals).toBeUndefined();
   });
+
+  it("coerces an annotated_code visual: keeps code/filePath/lineStart, shapes annotations, drops junk", () => {
+    const p = coercePlanContent({
+      visuals: [
+        {
+          id: "ac",
+          kind: "annotated_code",
+          code: "const x = 1;\nreturn x;",
+          filePath: "src/x.ts",
+          language: "ts",
+          lineStart: 40,
+          annotations: [
+            { line: 40, note: "declare", kind: "add" },
+            { line: 41, note: "return it" }, // no kind → kept, kind omitted
+            { line: "nope", note: "bad line" }, // dropped (line not a number)
+            { line: 42 }, // dropped (no note)
+            "junk", // dropped (not an object)
+          ],
+        },
+      ],
+    });
+    const v = p.visuals![0];
+    expect(v).toMatchObject({ id: "ac", kind: "annotated_code", code: "const x = 1;\nreturn x;", filePath: "src/x.ts", language: "ts", lineStart: 40 });
+    expect(v.annotations).toEqual([
+      { line: 40, note: "declare", kind: "add" },
+      { line: 41, note: "return it" },
+    ]);
+  });
+
+  it("annotated_code with wrong-typed fields → safe (no throw, junk dropped)", () => {
+    const v = coercePlanContent({
+      visuals: [{ id: "ac", kind: "annotated_code", code: 42, lineStart: "x", annotations: "nope" }],
+    }).visuals![0];
+    expect(v.kind).toBe("annotated_code");
+    expect(v.code).toBeUndefined(); // non-string dropped
+    expect(v.lineStart).toBeUndefined(); // non-number dropped
+    expect(v.annotations).toBeUndefined(); // non-array dropped
+  });
 });
 
 describe("coerceSpecContent", () => {

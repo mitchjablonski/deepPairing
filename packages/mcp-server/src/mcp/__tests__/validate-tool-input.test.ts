@@ -200,6 +200,38 @@ describe("Tool-input validation at the write boundary", () => {
     expect(content.visuals![1].files?.[0]).toMatchObject({ path: "src/api.ts", change: "create" });
   });
 
+  it("present_plan PERSISTS an `annotated_code` visual (code + line annotations survive the validation boundary)", async () => {
+    const { isError } = await call("present_plan", {
+      title: "Plan with annotated code",
+      estimatedChanges: 1,
+      steps: [{ description: "do it", reasoning: "because" }],
+      visuals: [
+        {
+          id: "ac",
+          kind: "annotated_code",
+          title: "The hot path",
+          code: "function f() {\n  return cache.get(k);\n}",
+          filePath: "src/cache.ts",
+          lineStart: 12,
+          annotations: [{ line: 13, note: "add a TTL check here", kind: "change" }],
+        },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as {
+      visuals?: Array<{ id: string; kind: string; code?: string; filePath?: string; lineStart?: number; annotations?: Array<{ line: number; note: string; kind?: string }> }>;
+    };
+    expect(content.visuals).toHaveLength(1);
+    expect(content.visuals![0]).toMatchObject({
+      id: "ac",
+      kind: "annotated_code",
+      code: "function f() {\n  return cache.get(k);\n}",
+      filePath: "src/cache.ts",
+      lineStart: 12,
+    });
+    expect(content.visuals![0].annotations?.[0]).toMatchObject({ line: 13, note: "add a TTL check here", kind: "change" });
+  });
+
   it("present_code_change rejects missing required fields (filePath, changeType, after, reasoning)", async () => {
     const { text, isError } = await call("present_code_change", {
       // filePath missing
