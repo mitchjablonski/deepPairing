@@ -66,18 +66,16 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
                 is a labelled bar at the BOTTOM — where the eye lands after reading
                 the visual. Comments still anchor to this visual's id, so the
                 whole existing comment → check_feedback → revise loop is reused. */}
-            <div className="flex items-center gap-2 pt-2 border-t border-white/[0.05]">
+            <div className="flex items-stretch gap-2 pt-2 border-t border-white/[0.05]">
               <CommentTrigger
                 variant="pill"
+                fullWidth
                 label={`Comment on this ${noun}`}
                 artifactId={artifactId}
                 target={{ visualId: v.id }}
                 existingCount={existing}
               />
               <AskTrigger variant="pill" artifactId={artifactId} target={{ visualId: v.id }} />
-              <span className="ml-auto text-[9px] text-text-muted italic hidden sm:inline">
-                comments pin to this {noun}
-              </span>
             </div>
           </div>
         );

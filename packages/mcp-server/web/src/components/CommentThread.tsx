@@ -366,12 +366,16 @@ export function CommentTrigger({
   existingCount,
   variant = "inline",
   label,
+  fullWidth = false,
 }: {
   artifactId: string;
   target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number; visualId?: string };
   existingCount: number;
   variant?: "inline" | "pill";
   label?: string;
+  /** Stretch the pill to fill its container — a prominent, hard-to-miss CTA
+   *  for large blocks (visuals). Only meaningful with variant="pill". */
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
@@ -388,7 +392,9 @@ export function CommentTrigger({
 
   const classes =
     variant === "pill"
-      ? "inline-flex items-center gap-1.5 text-2xs px-2 py-1 rounded-md font-medium transition-colors"
+      ? `inline-flex items-center gap-1.5 text-2xs rounded-md font-medium transition-colors ${
+          fullWidth ? "w-full justify-center px-3 py-1.5" : "px-2 py-1"
+        }`
       : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
   const tint =
     existingCount > 0
@@ -396,7 +402,7 @@ export function CommentTrigger({
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary";
 
   return (
-    <div>
+    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={label ?? "Add a comment here"}
