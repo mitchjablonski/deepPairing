@@ -6,7 +6,7 @@ import { useSentFlash } from "../hooks/useSentFlash";
 interface CommentThreadProps {
   artifactId: string;
   comments: Comment[];
-  target?: { lineNumber?: number; findingIndex?: number; stepIndex?: number };
+  target?: { lineNumber?: number; findingIndex?: number; stepIndex?: number; visualId?: string };
 }
 
 function Avatar({ author }: { author: string }) {
@@ -205,6 +205,7 @@ export function AskTrigger({
     alternativeIndex?: number;
     optionId?: string;
     sectionId?: string;
+    visualId?: string;
   };
   /** "inline" = compact icon-button; "pill" = small labelled pill */
   variant?: "inline" | "pill";
@@ -225,6 +226,7 @@ export function AskTrigger({
     if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
     if (target.optionId != null && (c.target as any).optionId !== target.optionId) return false;
     if (target.sectionId != null && (c.target as any).sectionId !== target.sectionId) return false;
+    if (target.visualId != null && (c.target as any).visualId !== target.visualId) return false;
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
   });
@@ -361,7 +363,7 @@ export function CommentTrigger({
   existingCount,
 }: {
   artifactId: string;
-  target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number };
+  target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number; visualId?: string };
   existingCount: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -373,6 +375,7 @@ export function CommentTrigger({
     }
     if (target.findingIndex != null) return c.target.findingIndex === target.findingIndex;
     if (target.stepIndex != null) return c.target.stepIndex === target.stepIndex;
+    if (target.visualId != null) return (c.target as any).visualId === target.visualId;
     return false;
   });
 

@@ -222,6 +222,7 @@ export function validatePresentPlanInput(args: any): ValidationResult<z.infer<ty
   const contentParse = PlanContentSchema.safeParse({
     steps: args?.steps,
     estimatedChanges: args?.estimatedChanges,
+    visuals: args?.visuals,
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };

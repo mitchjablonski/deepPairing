@@ -1,6 +1,7 @@
 import type { Artifact } from "@deeppairing/shared";
 import { coercePlanContent } from "@deeppairing/shared";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
+import { PlanVisuals } from "../PlanVisuals";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
@@ -171,6 +172,10 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
   return (
     <div className="space-y-4">
+      {/* Visuals frame the plan — diagrams / file maps / prototypes the human
+          can comment on directly. Self-hides when the plan has none. */}
+      <PlanVisuals artifactId={artifact.id} visuals={content.visuals ?? []} />
+
       {steps.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
