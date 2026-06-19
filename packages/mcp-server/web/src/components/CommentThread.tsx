@@ -195,6 +195,7 @@ export function AskTrigger({
   artifactId,
   target,
   variant = "inline",
+  fullWidth = false,
 }: {
   artifactId: string;
   target: {
@@ -209,6 +210,9 @@ export function AskTrigger({
   };
   /** "inline" = compact icon-button; "pill" = small labelled pill */
   variant?: "inline" | "pill";
+  /** Stretch to fill its container — pairs with CommentTrigger's fullWidth so
+   *  the two actions sit as equal halves of a wide bar. Pill variant only. */
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
@@ -249,7 +253,9 @@ export function AskTrigger({
 
   const classes =
     variant === "pill"
-      ? "inline-flex items-center gap-1 text-2xs px-2 py-0.5 rounded transition-colors font-medium"
+      ? `inline-flex items-center gap-1 text-2xs transition-colors font-medium ${
+          fullWidth ? "w-full justify-center px-3 py-1.5 rounded-md" : "px-2 py-0.5 rounded"
+        }`
       : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
 
   const tint = unanswered > 0
@@ -259,7 +265,7 @@ export function AskTrigger({
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
 
   return (
-    <div>
+    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={unanswered > 0 ? `${unanswered} unanswered question` : "Ask the agent about this"}
@@ -356,15 +362,26 @@ export function AskTrigger({
   );
 }
 
-/** Inline comment trigger — click to start a comment on a specific location */
+/** Inline comment trigger — click to start a comment on a specific location.
+ *  variant="pill" renders a labelled call-to-action (e.g. "Comment on this
+ *  diagram") instead of the compact icon — used where the bare top-right icon
+ *  is too easy to miss (notably the visual blocks). */
 export function CommentTrigger({
   artifactId,
   target,
   existingCount,
+  variant = "inline",
+  label,
+  fullWidth = false,
 }: {
   artifactId: string;
   target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number; visualId?: string };
   existingCount: number;
+  variant?: "inline" | "pill";
+  label?: string;
+  /** Stretch the pill to fill its container — a prominent, hard-to-miss CTA
+   *  for large blocks (visuals). Only meaningful with variant="pill". */
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
@@ -379,17 +396,27 @@ export function CommentTrigger({
     return false;
   });
 
+  const classes =
+    variant === "pill"
+      ? `inline-flex items-center gap-1.5 text-2xs rounded-md font-medium transition-colors ${
+          fullWidth ? "w-full justify-center px-3 py-1.5" : "px-2 py-1"
+        }`
+      : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
+  const tint =
+    existingCount > 0
+      ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
+      : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary";
+
   return (
-    <div>
+    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
-          existingCount > 0
-            ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
-            : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary"
-        }`}
+        title={label ?? "Add a comment here"}
+        aria-label={label ?? "Add a comment"}
+        className={`${classes} ${tint}`}
       >
         <span className="text-[10px]">💬</span>
+        {variant === "pill" && <span>{label ?? "Comment"}</span>}
         {existingCount > 0 && <span>{existingCount}</span>}
       </button>
 

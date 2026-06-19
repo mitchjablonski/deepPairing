@@ -106,6 +106,24 @@ describe("ArtifactVisuals", () => {
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 
+  it("surfaces a labelled, kind-aware comment call-to-action on each visual (not just a top-right icon)", () => {
+    render(
+      <ArtifactVisuals
+        artifactId="a"
+        visuals={[
+          { id: "d", kind: "diagram", source: "graph TD; A-->B" },
+          { id: "fm", kind: "file_map", files: [{ path: "a.ts" }] },
+          { id: "p", kind: "prototype", html: "<i>x</i>" },
+        ]}
+      />,
+    );
+    // The discoverable affordance is labelled per kind, so it's obvious what
+    // clicking does — unlike the old bare 💬 icon.
+    expect(screen.getByText("Comment on this diagram")).toBeInTheDocument();
+    expect(screen.getByText("Comment on this file map")).toBeInTheDocument();
+    expect(screen.getByText("Comment on this prototype")).toBeInTheDocument();
+  });
+
   describe("adversarial / partial visuals never crash", () => {
     const cases: Array<[string, PlanVisual]> = [
       ["empty diagram source", { id: "d", kind: "diagram", source: "" }],
