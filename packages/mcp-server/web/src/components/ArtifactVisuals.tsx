@@ -10,6 +10,13 @@ const kindLabel: Record<string, string> = {
   prototype: "Prototype",
 };
 
+/** Lowercase noun for the comment call-to-action ("Comment on this diagram"). */
+const kindNoun: Record<string, string> = {
+  diagram: "diagram",
+  file_map: "file map",
+  prototype: "prototype",
+};
+
 const changeStyle: Record<string, { glyph: string; cls: string }> = {
   create: { glyph: "+", cls: "text-accent-green" },
   modify: { glyph: "~", cls: "text-accent-amber" },
@@ -34,30 +41,44 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
       </h4>
       {visuals.map((v) => {
         const existing = comments.filter((c) => (c.target as { visualId?: string }).visualId === v.id).length;
+        const noun = kindNoun[v.kind] ?? "visual";
         return (
           <div
             key={v.id}
             data-comment-anchor={`visual:${v.id}`}
-            className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3 space-y-2"
+            className="group bg-surface-secondary rounded-lg border border-white/[0.06] p-3 space-y-2 transition-colors hover:border-accent-blue/25"
           >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-surface-elevated text-text-muted">
-                  {kindLabel[v.kind] ?? v.kind}
-                </span>
-                {v.title && (
-                  <span className="text-sm font-semibold text-text-primary truncate">{v.title}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <AskTrigger artifactId={artifactId} target={{ visualId: v.id }} />
-                <CommentTrigger artifactId={artifactId} target={{ visualId: v.id }} existingCount={existing} />
-              </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-surface-elevated text-text-muted">
+                {kindLabel[v.kind] ?? v.kind}
+              </span>
+              {v.title && (
+                <span className="text-sm font-semibold text-text-primary truncate">{v.title}</span>
+              )}
             </div>
 
             <VisualBody visual={v} />
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
+
+            {/* Discoverable comment affordance. A bare top-right icon was too easy
+                to miss on a tall diagram/prototype, so the primary call-to-action
+                is a labelled bar at the BOTTOM — where the eye lands after reading
+                the visual. Comments still anchor to this visual's id, so the
+                whole existing comment → check_feedback → revise loop is reused. */}
+            <div className="flex items-center gap-2 pt-2 border-t border-white/[0.05]">
+              <CommentTrigger
+                variant="pill"
+                label={`Comment on this ${noun}`}
+                artifactId={artifactId}
+                target={{ visualId: v.id }}
+                existingCount={existing}
+              />
+              <AskTrigger variant="pill" artifactId={artifactId} target={{ visualId: v.id }} />
+              <span className="ml-auto text-[9px] text-text-muted italic hidden sm:inline">
+                comments pin to this {noun}
+              </span>
+            </div>
           </div>
         );
       })}

@@ -356,15 +356,22 @@ export function AskTrigger({
   );
 }
 
-/** Inline comment trigger — click to start a comment on a specific location */
+/** Inline comment trigger — click to start a comment on a specific location.
+ *  variant="pill" renders a labelled call-to-action (e.g. "Comment on this
+ *  diagram") instead of the compact icon — used where the bare top-right icon
+ *  is too easy to miss (notably the visual blocks). */
 export function CommentTrigger({
   artifactId,
   target,
   existingCount,
+  variant = "inline",
+  label,
 }: {
   artifactId: string;
   target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number; visualId?: string };
   existingCount: number;
+  variant?: "inline" | "pill";
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
@@ -379,17 +386,25 @@ export function CommentTrigger({
     return false;
   });
 
+  const classes =
+    variant === "pill"
+      ? "inline-flex items-center gap-1.5 text-2xs px-2 py-1 rounded-md font-medium transition-colors"
+      : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
+  const tint =
+    existingCount > 0
+      ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
+      : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary";
+
   return (
     <div>
       <button
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
-          existingCount > 0
-            ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
-            : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary"
-        }`}
+        title={label ?? "Add a comment here"}
+        aria-label={label ?? "Add a comment"}
+        className={`${classes} ${tint}`}
       >
         <span className="text-[10px]">💬</span>
+        {variant === "pill" && <span>{label ?? "Comment"}</span>}
         {existingCount > 0 && <span>{existingCount}</span>}
       </button>
 
