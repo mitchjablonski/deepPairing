@@ -65,3 +65,40 @@ describe("PlanArtifact — MotivatedByBadges tolerates unresolved / odd data", (
     expect(screen.getByText("REQ-1")).toBeInTheDocument();
   });
 });
+
+describe("plan/spec visuals render end-to-end through the artifact", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  it("PlanArtifact renders a file_map visual block (artifact → coercer → ArtifactVisuals)", () => {
+    const plan = mk("plan", {
+      steps: [{ description: "do it", reasoning: "r" }],
+      estimatedChanges: 1,
+      visuals: [{ id: "fm", kind: "file_map", title: "Touch list", files: [{ path: "src/api.ts", change: "create" }] }],
+    }, { id: "planViz" });
+    render(<PlanArtifact artifact={plan} />);
+    expect(screen.getByText("Visuals (1)")).toBeInTheDocument();
+    expect(screen.getByText("Touch list")).toBeInTheDocument();
+    expect(screen.getByText("api.ts")).toBeInTheDocument();
+  });
+
+  it("SpecArtifact renders a file_map visual block too (spec parity)", () => {
+    const spec = mk("spec", {
+      objective: "obj",
+      requirements: [],
+      visuals: [{ id: "fm", kind: "file_map", title: "Spec files", files: [{ path: "schema.sql", change: "create" }] }],
+    }, { id: "specViz" });
+    render(<SpecArtifact artifact={spec} />);
+    expect(screen.getByText("Visuals (1)")).toBeInTheDocument();
+    expect(screen.getByText("schema.sql")).toBeInTheDocument();
+  });
+
+  it("a plan with wrong-typed visuals doesn't crash the artifact (coercer + defensive render)", () => {
+    const plan = mk("plan", {
+      steps: [{ description: "x", reasoning: "y" }],
+      estimatedChanges: 0,
+      visuals: "not-an-array",
+    }, { id: "planBadViz" });
+    expect(() => render(<PlanArtifact artifact={plan} />)).not.toThrow();
+    expect(screen.getByText("x")).toBeInTheDocument();
+  });
+});

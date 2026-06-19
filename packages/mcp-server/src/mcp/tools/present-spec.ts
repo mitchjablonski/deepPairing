@@ -7,7 +7,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentSpecInput(args);
   if (!validated.ok) return validated.error;
-  const { title, objective, context, requirements, design, tasks, openQuestions } = validated.data;
+  const { title, objective, context, requirements, design, tasks, openQuestions, visuals } = validated.data;
   const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
   const proposals: string[] = [
@@ -32,6 +32,7 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
       design,
       tasks: tasksArr,
       openQuestions: openQuestions ?? [],
+      ...(visuals ? { visuals } : {}),
     },
   });
   // AA6.3 — trace before broadcast so the breadcrumb is populated on

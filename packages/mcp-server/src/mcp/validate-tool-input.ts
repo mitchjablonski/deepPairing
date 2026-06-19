@@ -207,6 +207,7 @@ export function validatePresentSpecInput(args: any): ValidationResult<z.infer<ty
     design: args?.design,
     tasks: args?.tasks,
     openQuestions: args?.openQuestions,
+    visuals: args?.visuals,
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC) };
