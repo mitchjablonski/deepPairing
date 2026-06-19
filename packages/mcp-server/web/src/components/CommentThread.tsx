@@ -195,6 +195,7 @@ export function AskTrigger({
   artifactId,
   target,
   variant = "inline",
+  fullWidth = false,
 }: {
   artifactId: string;
   target: {
@@ -209,6 +210,9 @@ export function AskTrigger({
   };
   /** "inline" = compact icon-button; "pill" = small labelled pill */
   variant?: "inline" | "pill";
+  /** Stretch to fill its container — pairs with CommentTrigger's fullWidth so
+   *  the two actions sit as equal halves of a wide bar. Pill variant only. */
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
@@ -249,7 +253,9 @@ export function AskTrigger({
 
   const classes =
     variant === "pill"
-      ? "inline-flex items-center gap-1 text-2xs px-2 py-0.5 rounded transition-colors font-medium"
+      ? `inline-flex items-center gap-1 text-2xs transition-colors font-medium ${
+          fullWidth ? "w-full justify-center px-3 py-1.5 rounded-md" : "px-2 py-0.5 rounded"
+        }`
       : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
 
   const tint = unanswered > 0
@@ -259,7 +265,7 @@ export function AskTrigger({
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
 
   return (
-    <div>
+    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={unanswered > 0 ? `${unanswered} unanswered question` : "Ask the agent about this"}

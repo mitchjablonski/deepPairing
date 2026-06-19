@@ -75,7 +75,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
                 target={{ visualId: v.id }}
                 existingCount={existing}
               />
-              <AskTrigger variant="pill" artifactId={artifactId} target={{ visualId: v.id }} />
+              <AskTrigger variant="pill" fullWidth artifactId={artifactId} target={{ visualId: v.id }} />
             </div>
           </div>
         );
