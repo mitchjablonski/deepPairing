@@ -217,7 +217,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             openQuestions: { type: "array", items: { type: "string" }, description: "Things you need the human to decide before proceeding" },
             visuals: {
               type: "array",
-              description: "Diagrams / file maps / prototypes that frame the spec. Encouraged.",
+              description: "Diagrams / file maps / annotated code / prototypes that frame the spec. Encouraged.",
               items: {
                 type: "object",
                 properties: {
@@ -313,7 +313,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             estimatedChanges: { type: "number" },
             visuals: {
               type: "array",
-              description: "Diagrams / file maps / prototypes that frame the plan. Strongly encouraged.",
+              description: "Diagrams / file maps / annotated code / prototypes that frame the plan. Strongly encouraged.",
               items: {
                 type: "object",
                 properties: {

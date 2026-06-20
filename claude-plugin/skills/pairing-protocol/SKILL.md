@@ -67,9 +67,18 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
     flow, **stateDiagram** / **classDiagram** as needed. This is the highest-
     leverage one — default to it any time you're describing how pieces fit.
   - `kind: "file_map"` — `files[]` ({ path, change: create|modify|delete, note })
-    for a clear map of what the change touches.
+    for a clear map of what the change touches (scope at a glance).
+  - `kind: "annotated_code"` — a real snippet (`code` + `filePath`, optional
+    `lineStart`) with line-anchored `annotations[]` ({ line, note, kind:
+    add|change|remove|context }). Reach for it when the plan hinges on *specific
+    existing lines*: it renders through the per-line-commentable code block, so
+    the human comments on the actual code you're about to touch, not a
+    paraphrase. The most grounded visual — prefer it over prose when you're
+    saying "here's the line that changes."
   - `kind: "prototype"` — self-contained HTML in `html` for a clickable
     wireframe / interactive mock (runs in a sandboxed frame; no network).
+  Quick picker: **diagram** = how pieces fit · **file_map** = what's touched ·
+  **annotated_code** = the exact lines changing · **prototype** = how it feels.
   Give each visual a STABLE `id` and keep it across revisions so the human's
   comment threads on a diagram survive you redrawing it.
 - **`present_code_change`** — call this BEFORE the Write/Edit, for **every**
