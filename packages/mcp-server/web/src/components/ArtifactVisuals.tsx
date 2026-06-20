@@ -87,7 +87,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
   );
 }
 
-function VisualBody({ artifactId, visual }: { artifactId: string; visual: PlanVisual }) {
+export function VisualBody({ artifactId, visual }: { artifactId: string; visual: PlanVisual }) {
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
