@@ -102,15 +102,32 @@ export const PlanVisualFileSchema = z.object({
 
 export type PlanVisualFile = z.infer<typeof PlanVisualFileSchema>;
 
+/** One line-anchored annotation on an `annotated_code` visual — the agent
+ *  pinning an explanation to a specific line ("this is the line that changes,
+ *  and here's why"). `line` is the ABSOLUTE line number shown in the gutter
+ *  (i.e. within [lineStart, lineStart + lines - 1]). */
+export const PlanVisualAnnotationSchema = z.object({
+  line: z.number(),
+  note: z.string(),
+  /** Semantic tag for styling the marker; purely presentational. */
+  kind: z.enum(["add", "change", "remove", "context"]).optional(),
+});
+
+export type PlanVisualAnnotation = z.infer<typeof PlanVisualAnnotationSchema>;
+
 /**
  * A visual attached to a plan (or spec) — rendered as a first-class,
  * commentable block alongside the explicit steps so the planning phase isn't a
  * wall of prose. One of:
- *   - "diagram"   — Mermaid source (flowchart / erDiagram / sequenceDiagram /
- *                   stateDiagram / classDiagram). The renderer is fuzzy-safe:
- *                   invalid Mermaid shows the source + an error, never crashes.
- *   - "file_map"  — structured list of planned create/modify/delete operations.
- *   - "prototype" — self-contained HTML/CSS rendered in a SANDBOXED iframe.
+ *   - "diagram"        — Mermaid source (flowchart / erDiagram / sequenceDiagram
+ *                        / stateDiagram / classDiagram). The renderer is
+ *                        fuzzy-safe: invalid Mermaid shows the source + an
+ *                        error, never crashes.
+ *   - "file_map"       — structured list of planned create/modify/delete ops.
+ *   - "prototype"      — self-contained HTML/CSS rendered in a SANDBOXED iframe.
+ *   - "annotated_code" — a real code snippet with line-anchored annotations,
+ *                        rendered through the per-line-commentable code block so
+ *                        the human can comment on the actual lines changing.
  *
  * Payload fields are per-kind and all optional so the structural validator
  * stays lenient; the renderer reads the field matching `kind`.
@@ -119,7 +136,7 @@ export const PlanVisualSchema = z.object({
   /** Stable id — comments anchor to it. Keep it across revisions so a comment
    *  thread on a diagram survives the agent redrawing it. */
   id: z.string(),
-  kind: z.enum(["diagram", "file_map", "prototype"]),
+  kind: z.enum(["diagram", "file_map", "prototype", "annotated_code"]),
   title: z.string().optional(),
   caption: z.string().optional(),
   /** kind="diagram": Mermaid source. */
@@ -128,6 +145,18 @@ export const PlanVisualSchema = z.object({
   files: z.array(PlanVisualFileSchema).optional(),
   /** kind="prototype": a self-contained HTML document (rendered sandboxed). */
   html: z.string().optional(),
+  /** kind="annotated_code": the code snippet to render + annotate. */
+  code: z.string().optional(),
+  /** kind="annotated_code": source path (drives syntax highlighting + the
+   *  per-line comment anchor). */
+  filePath: z.string().optional(),
+  /** kind="annotated_code": override the language inferred from filePath. */
+  language: z.string().optional(),
+  /** kind="annotated_code": line number of the snippet's first line (default 1)
+   *  so gutter numbers and annotations match the real file. */
+  lineStart: z.number().optional(),
+  /** kind="annotated_code": line-anchored explanations. */
+  annotations: z.array(PlanVisualAnnotationSchema).optional(),
 });
 
 export type PlanVisual = z.infer<typeof PlanVisualSchema>;

@@ -1,6 +1,7 @@
-import type { PlanVisual, PlanVisualFile } from "@deeppairing/shared";
+import type { Comment, PlanVisual, PlanVisualFile, PlanVisualAnnotation } from "@deeppairing/shared";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { PrototypeFrame } from "./PrototypeFrame";
+import { CommentableCode } from "./CommentableCode";
 import { CommentTrigger, AskTrigger } from "./CommentThread";
 import { useArtifactStore } from "../stores/artifact";
 
@@ -8,6 +9,7 @@ const kindLabel: Record<string, string> = {
   diagram: "Diagram",
   file_map: "File map",
   prototype: "Prototype",
+  annotated_code: "Annotated code",
 };
 
 /** Lowercase noun for the comment call-to-action ("Comment on this diagram"). */
@@ -15,6 +17,7 @@ const kindNoun: Record<string, string> = {
   diagram: "diagram",
   file_map: "file map",
   prototype: "prototype",
+  annotated_code: "code",
 };
 
 const changeStyle: Record<string, { glyph: string; cls: string }> = {
@@ -57,7 +60,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
               )}
             </div>
 
-            <VisualBody visual={v} />
+            <VisualBody artifactId={artifactId} visual={v} />
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
 
@@ -84,7 +87,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
   );
 }
 
-function VisualBody({ visual }: { visual: PlanVisual }) {
+function VisualBody({ artifactId, visual }: { artifactId: string; visual: PlanVisual }) {
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
@@ -99,8 +102,60 @@ function VisualBody({ visual }: { visual: PlanVisual }) {
     return <FileMap files={Array.isArray(visual.files) ? visual.files : []} />;
   }
 
+  if (visual.kind === "annotated_code") {
+    return typeof visual.code === "string" && visual.code.length > 0 ? (
+      <AnnotatedCode artifactId={artifactId} visual={visual} />
+    ) : (
+      <div className="text-2xs text-text-muted">No code provided.</div>
+    );
+  }
+
   // prototype — agent-authored HTML, run in a hardened sandbox (see PrototypeFrame).
   return <PrototypeFrame html={typeof visual.html === "string" ? visual.html : ""} />;
+}
+
+// --- annotated_code: real code + line-anchored agent notes, per-line commentable
+function AnnotatedCode({ artifactId, visual }: { artifactId: string; visual: PlanVisual }) {
+  const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  const filePath = typeof visual.filePath === "string" ? visual.filePath : undefined;
+  const lineStart = typeof visual.lineStart === "number" && Number.isFinite(visual.lineStart) ? visual.lineStart : 1;
+
+  // Existing human line-comments on THIS file, keyed by absolute line. Mirrors
+  // the {lineStart,lineEnd,filePath} target shape LineComposer submits, and
+  // scopes by filePath so two annotated_code visuals don't cross-show comments.
+  const commentsByLine = new Map<number, Comment[]>();
+  for (const c of allComments) {
+    const t = c.target as { lineStart?: number; lineEnd?: number; filePath?: string; findingIndex?: number; stepIndex?: number; evidenceIndex?: number };
+    if (t?.lineStart == null || t.findingIndex != null || t.stepIndex != null || t.evidenceIndex != null) continue;
+    if (filePath != null && t.filePath !== filePath) continue;
+    const start = Math.floor(Number(t.lineStart));
+    if (!Number.isFinite(start)) continue;
+    const end = t.lineEnd == null ? start : Math.floor(Number(t.lineEnd));
+    const safeEnd = Math.min(Number.isFinite(end) ? Math.max(start, end) : start, start + 200);
+    for (let line = start; line <= safeEnd; line++) {
+      commentsByLine.set(line, [...(commentsByLine.get(line) ?? []), c]);
+    }
+  }
+
+  // Agent annotations keyed by absolute line.
+  const annotationsByLine = new Map<number, PlanVisualAnnotation[]>();
+  for (const a of Array.isArray(visual.annotations) ? visual.annotations : []) {
+    if (typeof a?.line !== "number" || !Number.isFinite(a.line)) continue;
+    annotationsByLine.set(a.line, [...(annotationsByLine.get(a.line) ?? []), a]);
+  }
+
+  return (
+    <CommentableCode
+      code={visual.code ?? ""}
+      filePath={filePath}
+      language={typeof visual.language === "string" ? visual.language : undefined}
+      lineStart={lineStart}
+      artifactId={artifactId}
+      commentsByLine={commentsByLine}
+      annotationsByLine={annotationsByLine}
+      targetContext={{ visualId: visual.id }}
+    />
+  );
 }
 
 // --- file_map: a directory tree of planned operations ------------------------

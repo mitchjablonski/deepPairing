@@ -8,6 +8,7 @@ import type {
   PlanBranch,
   PlanVisual,
   PlanVisualFile,
+  PlanVisualAnnotation,
   SpecContent,
   SpecRequirement,
   SpecTask,
@@ -162,7 +163,7 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
   const o = obj(v);
   const out: PlanVisual = {
     id: str(o.id) || fallbackId,
-    kind: oneOf(o.kind, ["diagram", "file_map", "prototype"] as const, "diagram"),
+    kind: oneOf(o.kind, ["diagram", "file_map", "prototype", "annotated_code"] as const, "diagram"),
   };
   if (typeof o.title === "string") out.title = o.title;
   if (typeof o.caption === "string") out.caption = o.caption;
@@ -176,6 +177,22 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
       if (typeof f.note === "string") file.note = f.note;
       return file;
     });
+  }
+  // annotated_code payload
+  if (typeof o.code === "string") out.code = o.code;
+  if (typeof o.filePath === "string") out.filePath = o.filePath;
+  if (typeof o.language === "string") out.language = o.language;
+  if (typeof o.lineStart === "number" && Number.isFinite(o.lineStart)) out.lineStart = o.lineStart;
+  if (Array.isArray(o.annotations)) {
+    out.annotations = o.annotations
+      .filter(isObj)
+      .filter((a) => typeof a.line === "number" && Number.isFinite(a.line) && typeof a.note === "string")
+      .map((a): PlanVisualAnnotation => {
+        const ann: PlanVisualAnnotation = { line: a.line as number, note: a.note as string };
+        const kind = optOneOf(a.kind, ["add", "change", "remove", "context"] as const);
+        if (kind) ann.kind = kind;
+        return ann;
+      });
   }
   return out;
 }

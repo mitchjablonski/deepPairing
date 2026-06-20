@@ -1,8 +1,16 @@
 import { useState } from "react";
-import type { Comment } from "@deeppairing/shared";
+import type { Comment, PlanVisualAnnotation } from "@deeppairing/shared";
 import { useHighlightedCode } from "../hooks/useHighlightedCode";
 import { detectLanguage } from "../lib/highlighter";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "./LineComments";
+
+/** Presentational treatment for an agent annotation marker, by semantic kind. */
+const annStyle: Record<string, { glyph: string; cls: string }> = {
+  add: { glyph: "+", cls: "text-accent-green" },
+  remove: { glyph: "−", cls: "text-accent-red" },
+  change: { glyph: "~", cls: "text-accent-amber" },
+  context: { glyph: "›", cls: "text-text-muted" },
+};
 
 interface CommentableCodeProps {
   code: string;
@@ -12,11 +20,15 @@ interface CommentableCodeProps {
   artifactId: string;
   /** Existing comments keyed by line number */
   commentsByLine?: Map<number, Comment[]>;
+  /** Agent annotations keyed by absolute line number — rendered as a callout
+   *  under the line (the agent's voice, distinct from human comments). */
+  annotationsByLine?: Map<number, PlanVisualAnnotation[]>;
   /** Additional context for the comment target */
   targetContext?: {
     findingIndex?: number;
     evidenceIndex?: number;
     stepIndex?: number;
+    visualId?: string;
   };
 }
 
@@ -27,6 +39,7 @@ export function CommentableCode({
   filePath,
   artifactId,
   commentsByLine,
+  annotationsByLine,
   targetContext,
 }: CommentableCodeProps) {
   // One open composer at a time across the whole block. Mode lives here too so
@@ -87,6 +100,22 @@ export function CommentableCode({
                 </span>
               )}
             </div>
+
+            {/* Agent annotations on this line — the planning voice ("here's the
+                line that changes, and why"), styled distinctly from human
+                comments so the two don't blur together. */}
+            {(annotationsByLine?.get(lineNum) ?? []).map((a, ai) => {
+              const s = annStyle[a.kind ?? "context"] ?? annStyle.context;
+              return (
+                <div
+                  key={`ann-${ai}`}
+                  className="ml-[5.5rem] mr-3 my-1 flex items-start gap-1.5 px-2 py-1 rounded bg-accent-violet-dim/15 border-l-2 border-accent-violet/40"
+                >
+                  <span className={`shrink-0 font-bold text-2xs ${s.cls}`}>{s.glyph}</span>
+                  <span className="text-2xs text-text-secondary whitespace-pre-wrap">{a.note}</span>
+                </div>
+              );
+            })}
 
             {/* Existing comments on this line (collapsed/threaded) — hidden
                 while the composer is open since the composer shows them too. */}

@@ -174,7 +174,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         name: "present_spec",
         description:
           "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
-          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` ('diagram'=Mermaid in `source`; 'file_map'=`files[]`; 'prototype'=`html`), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
@@ -217,12 +217,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             openQuestions: { type: "array", items: { type: "string" }, description: "Things you need the human to decide before proceeding" },
             visuals: {
               type: "array",
-              description: "Diagrams / file maps / prototypes that frame the spec. Encouraged.",
+              description: "Diagrams / file maps / annotated code / prototypes that frame the spec. Encouraged.",
               items: {
                 type: "object",
                 properties: {
                   id: { type: "string", description: "Stable id — keep it across revisions so comment threads survive" },
-                  kind: { type: "string", enum: ["diagram", "file_map", "prototype"] },
+                  kind: { type: "string", enum: ["diagram", "file_map", "prototype", "annotated_code"] },
                   title: { type: "string" },
                   caption: { type: "string" },
                   source: { type: "string", description: "kind='diagram': Mermaid source" },
@@ -240,6 +240,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                     },
                   },
                   html: { type: "string", description: "kind='prototype': self-contained HTML (rendered sandboxed)" },
+                  code: { type: "string", description: "kind='annotated_code': the real code snippet to show + annotate" },
+                  filePath: { type: "string", description: "kind='annotated_code': source path (drives highlighting + per-line comments)" },
+                  language: { type: "string", description: "kind='annotated_code': override language inferred from filePath" },
+                  lineStart: { type: "number", description: "kind='annotated_code': line number of the snippet's first line (default 1)" },
+                  annotations: {
+                    type: "array",
+                    description: "kind='annotated_code': line-anchored explanations",
+                    items: {
+                      type: "object",
+                      properties: {
+                        line: { type: "number", description: "absolute line number (within the snippet's lineStart range)" },
+                        note: { type: "string" },
+                        kind: { type: "string", enum: ["add", "change", "remove", "context"] },
+                      },
+                      required: ["line", "note"],
+                    },
+                  },
                 },
                 required: ["id", "kind"],
               },
@@ -252,7 +269,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         name: "present_plan",
         description:
           "Present an implementation plan as steps with file changes and before/after previews." +
-          "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` ('diagram'=Mermaid in `source`; 'file_map'=`files[]`; 'prototype'=`html`), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — this REPLACES Claude Code's native plan-approval flow. Do NOT call ExitPlanMode after present_plan. The companion UI is the only approval surface; call check_feedback for the verdict.",
         inputSchema: {
           type: "object" as const,
@@ -296,12 +313,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             estimatedChanges: { type: "number" },
             visuals: {
               type: "array",
-              description: "Diagrams / file maps / prototypes that frame the plan. Strongly encouraged.",
+              description: "Diagrams / file maps / annotated code / prototypes that frame the plan. Strongly encouraged.",
               items: {
                 type: "object",
                 properties: {
                   id: { type: "string", description: "Stable id — keep it across revisions so comment threads survive" },
-                  kind: { type: "string", enum: ["diagram", "file_map", "prototype"] },
+                  kind: { type: "string", enum: ["diagram", "file_map", "prototype", "annotated_code"] },
                   title: { type: "string" },
                   caption: { type: "string" },
                   source: { type: "string", description: "kind='diagram': Mermaid source" },
@@ -319,6 +336,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                     },
                   },
                   html: { type: "string", description: "kind='prototype': self-contained HTML (rendered sandboxed)" },
+                  code: { type: "string", description: "kind='annotated_code': the real code snippet to show + annotate" },
+                  filePath: { type: "string", description: "kind='annotated_code': source path (drives highlighting + per-line comments)" },
+                  language: { type: "string", description: "kind='annotated_code': override language inferred from filePath" },
+                  lineStart: { type: "number", description: "kind='annotated_code': line number of the snippet's first line (default 1)" },
+                  annotations: {
+                    type: "array",
+                    description: "kind='annotated_code': line-anchored explanations",
+                    items: {
+                      type: "object",
+                      properties: {
+                        line: { type: "number", description: "absolute line number (within the snippet's lineStart range)" },
+                        note: { type: "string" },
+                        kind: { type: "string", enum: ["add", "change", "remove", "context"] },
+                      },
+                      required: ["line", "note"],
+                    },
+                  },
                 },
                 required: ["id", "kind"],
               },
