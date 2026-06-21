@@ -124,4 +124,76 @@ describe("RevisionDiff", () => {
     expect(screen.getByText("unchanged")).toBeInTheDocument();
     expect(screen.queryByText("Before")).not.toBeInTheDocument();
   });
+
+  it("diffs plan STEPS in the body (added / changed / removed)", () => {
+    const v1 = mkArtifact({
+      id: "p1",
+      version: 1,
+      content: {
+        estimatedChanges: 1,
+        steps: [
+          { description: "Add WS gateway", reasoning: "push" },
+          { description: "Drop the poller", reasoning: "obsolete" },
+        ],
+      },
+    });
+    const v2 = mkArtifact({
+      id: "p2",
+      version: 2,
+      parentId: "p1",
+      content: {
+        estimatedChanges: 2,
+        steps: [
+          { description: "Add WS gateway", reasoning: "push via worker" }, // changed (reasoning)
+          { description: "Add unread cache", reasoning: "fast counts" }, // added
+        ],
+      },
+    });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+
+    render(<RevisionDiff artifact={v2} />);
+    expect(screen.getByText("Steps")).toBeInTheDocument();
+    expect(screen.getByText("Add unread cache")).toBeInTheDocument(); // added
+    expect(screen.getByText("Drop the poller")).toBeInTheDocument(); // removed
+    expect(screen.getByText("Add WS gateway")).toBeInTheDocument(); // changed (matched by description)
+  });
+
+  it("diffs DECISION options in the body (the other revisable artifact)", () => {
+    const v1 = mkArtifact({
+      id: "d1",
+      type: "decision",
+      version: 1,
+      content: {
+        context: "pick a store",
+        decisionId: "store",
+        options: [
+          { id: "a", title: "Postgres", description: "relational", pros: [], cons: [], recommendation: true },
+          { id: "b", title: "Mongo", description: "document", pros: [], cons: [], recommendation: false },
+        ],
+      },
+    });
+    const v2 = mkArtifact({
+      id: "d2",
+      type: "decision",
+      version: 2,
+      parentId: "d1",
+      content: {
+        context: "pick a store",
+        decisionId: "store",
+        options: [
+          { id: "a", title: "Postgres", description: "relational + JSONB", pros: [], cons: [], recommendation: true }, // changed
+          { id: "c", title: "SQLite", description: "embedded", pros: [], cons: [], recommendation: false }, // added
+        ],
+      },
+    });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+
+    render(<RevisionDiff artifact={v2} />);
+    expect(screen.getByText("Options")).toBeInTheDocument();
+    expect(screen.getByText("SQLite")).toBeInTheDocument(); // added
+    expect(screen.getByText("Mongo")).toBeInTheDocument(); // removed
+    expect(screen.getByText("Postgres")).toBeInTheDocument(); // changed (matched by id)
+  });
 });
