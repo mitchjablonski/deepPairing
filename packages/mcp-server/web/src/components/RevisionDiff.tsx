@@ -44,7 +44,10 @@ function visualChanged(a: PlanVisual, b: PlanVisual): boolean {
 
 export function RevisionDiff({ artifact }: { artifact: Artifact }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
-  const [open, setOpen] = useState(false);
+  // Default open — "what changed" is the whole point of landing on a revision;
+  // hiding it behind a collapsed toggle is exactly how the affordance gets
+  // missed. The human can collapse it once they've absorbed the delta.
+  const [open, setOpen] = useState(true);
 
   // A revision links to its predecessor via parentId. No parent in the store
   // (a first version, or the parent isn't loaded) → nothing to diff.

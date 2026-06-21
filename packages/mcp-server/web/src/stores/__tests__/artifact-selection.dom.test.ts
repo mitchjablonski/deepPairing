@@ -52,3 +52,32 @@ describe("artifact selection survives reload (restoreSelection)", () => {
     expect(localStorage.getItem("dp-selected-artifact")).toBeNull();
   });
 });
+
+const mkV = (id: string, over: Record<string, unknown> = {}) =>
+  ({ id, type: "plan", title: "Plan", status: "draft", version: 1, content: {}, parentId: null, ...over }) as any;
+
+describe("revision selection — land on the live version, not the dead one", () => {
+  beforeEach(() => {
+    useArtifactStore.getState().reset();
+    localStorage.clear();
+  });
+
+  it("does NOT default-select a superseded artifact during hydration", () => {
+    const s = useArtifactStore.getState();
+    // Hydration order: the (now superseded) v1 arrives first, then its revision.
+    s.addArtifact(mkV("v1", { status: "superseded" }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull(); // skipped
+    s.addArtifact(mkV("v2", { parentId: "v1", version: 2 }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("v2"); // lands on the live revision
+  });
+
+  it("follows to the successor when the viewed artifact is superseded mid-session", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(mkV("v1"));
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("v1");
+    // The revision arrives, then v1 flips to superseded (the revise_artifact flow).
+    s.addArtifact(mkV("v2", { parentId: "v1", version: 2 }));
+    s.updateArtifact("v1", "superseded");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("v2");
+  });
+});

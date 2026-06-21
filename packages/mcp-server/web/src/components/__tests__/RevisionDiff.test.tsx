@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { Artifact } from "@deeppairing/shared";
 import { RevisionDiff } from "../RevisionDiff";
 import { useArtifactStore } from "../../stores/artifact";
@@ -83,7 +83,6 @@ describe("RevisionDiff", () => {
     useArtifactStore.getState().addArtifact(v2);
 
     render(<RevisionDiff artifact={v2} />);
-    fireEvent.click(screen.getByText(/What changed since v1/));
 
     expect(screen.getByText(/keep the poller behind a flag/)).toBeInTheDocument();
     expect(screen.getByText("cache.ts")).toBeInTheDocument(); // added
@@ -110,7 +109,6 @@ describe("RevisionDiff", () => {
     useArtifactStore.getState().addArtifact(v2);
 
     render(<RevisionDiff artifact={v2} />);
-    fireEvent.click(screen.getByText(/What changed since v1/));
     expect(screen.getByText("Before")).toBeInTheDocument();
     expect(screen.getByText("After")).toBeInTheDocument();
   });
@@ -123,7 +121,6 @@ describe("RevisionDiff", () => {
     useArtifactStore.getState().addArtifact(v2);
 
     render(<RevisionDiff artifact={v2} />);
-    fireEvent.click(screen.getByText(/What changed since v1/));
     expect(screen.getByText("unchanged")).toBeInTheDocument();
     expect(screen.queryByText("Before")).not.toBeInTheDocument();
   });
