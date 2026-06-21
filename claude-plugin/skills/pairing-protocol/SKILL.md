@@ -94,8 +94,14 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   pattern so the human learns it, not just the fix.
 - **`revise_artifact`** — one tool for both flavors of taking something back:
   - `mode: "supersede"` + new `content` → creates a v(N+1) draft linked via
-    parentId; the old one flips to "superseded". Use when the human
-    requests a revision.
+    parentId; the old one flips to "superseded". **Default to this whenever you
+    update an artifact you already presented** — after the human's feedback OR
+    just because you thought of something better. Do NOT call `present_*` again
+    with a fresh artifact: re-posting orphans the comment thread and the human
+    can't see what changed, whereas superseding links the versions and renders a
+    clean before/after diff (the whole point of the review loop). Pass the
+    original's `artifactId` — find it via the `deeppairing://` resources or
+    `recall` if you don't have it in hand.
   - `mode: "retract"` → marks the artifact retracted with your reason. Use
     when you realize mid-flight you shouldn't have presented something.
     Graceful exit without breaking the polling loop.

@@ -232,6 +232,29 @@ describe("Tool-input validation at the write boundary", () => {
     expect(content.visuals![0].annotations?.[0]).toMatchObject({ line: 13, note: "add a TTL check here", kind: "change" });
   });
 
+  it("present_plan NUDGES toward revise_artifact when a live plan with a similar title already exists", async () => {
+    await call("present_plan", { title: "Add realtime notifications", estimatedChanges: 2, steps: [{ description: "ws gateway", reasoning: "push" }] });
+    const first = store.getArtifacts()[0];
+    const { text, isError } = await call("present_plan", {
+      title: "Add realtime notifications", // re-post (a revision masquerading as a fresh plan)
+      estimatedChanges: 3,
+      steps: [{ description: "ws gateway via worker", reasoning: "push" }],
+    });
+    expect(isError).toBeFalsy(); // advisory — the artifact is still created
+    expect(text).toMatch(/revise_artifact/);
+    expect(text).toContain(first.id); // hands the agent the id to supersede
+  });
+
+  it("present_plan does NOT nudge for a genuinely unrelated new plan", async () => {
+    await call("present_plan", { title: "Add realtime notifications", estimatedChanges: 2, steps: [{ description: "ws", reasoning: "push" }] });
+    const { text } = await call("present_plan", {
+      title: "Migrate billing to Stripe",
+      estimatedChanges: 4,
+      steps: [{ description: "stripe sdk", reasoning: "payments" }],
+    });
+    expect(text).not.toMatch(/revise_artifact/);
+  });
+
   it("present_code_change rejects missing required fields (filePath, changeType, after, reasoning)", async () => {
     const { text, isError } = await call("present_code_change", {
       // filePath missing
