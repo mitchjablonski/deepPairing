@@ -259,3 +259,61 @@ export async function getPassiveFeedback(store: IStore): Promise<string> {
   const formatted = comments.map((c) => `- ${c.content}`).join("\n");
   return `\n\n[Human feedback]: ${formatted}`;
 }
+
+/**
+ * Near-duplicate revision nudge. The agent tends to RE-POST a fresh present_*
+ * when it's actually revising an artifact it already presented — which orphans
+ * the thread and skips the revision diff (the human never sees what changed).
+ * When a present_plan / present_spec lands and a LIVE artifact of the same type
+ * with a similar title already exists, append a nudge pointing the agent at
+ * revise_artifact — and hand it the artifactId so revising is frictionless.
+ *
+ * Advisory only: the artifact IS still created; this steers the NEXT call. We
+ * gate on title similarity so genuinely-new artifacts (a second, unrelated plan)
+ * don't get nagged.
+ */
+const LIVE_STATUSES = new Set(["draft", "approved", "revised"]);
+
+function normalizeTitle(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+}
+
+/** Cheap title similarity: normalized equality, containment, or ≥50% token overlap. */
+export function titlesSimilar(a: string, b: string): boolean {
+  const na = normalizeTitle(a);
+  const nb = normalizeTitle(b);
+  if (!na || !nb) return false;
+  if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+  const ta = new Set(na.split(" "));
+  const tb = new Set(nb.split(" "));
+  const inter = [...ta].filter((w) => tb.has(w)).length;
+  const union = new Set([...ta, ...tb]).size;
+  return union > 0 && inter / union >= 0.5;
+}
+
+export async function revisionNudge(
+  store: IStore,
+  type: string,
+  title: string,
+  excludeId?: string,
+): Promise<string> {
+  const all = await store.getArtifacts();
+  const prior = all
+    .filter(
+      (a) =>
+        a.type === type &&
+        a.id !== excludeId &&
+        LIVE_STATUSES.has(a.status) &&
+        titlesSimilar(a.title ?? "", title),
+    )
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  if (prior.length === 0) return "";
+  const match = prior[prior.length - 1]; // most recent live look-alike
+  return (
+    `\n\n↻ This looks like a revision of a live ${type} you already presented ` +
+    `(${match.id}${match.title ? ` "${match.title}"` : ""}). Next time, call ` +
+    `\`revise_artifact\` mode='supersede' artifactId='${match.id}' with the new content — ` +
+    `it links the versions and gives your pair a clean before/after diff, instead of a ` +
+    `separate ${type} that orphans the thread. (This one was still created.)`
+  );
+}

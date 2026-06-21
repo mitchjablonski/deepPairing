@@ -50,4 +50,12 @@ describe("first-call hint — always-on protocol preamble", () => {
     expect(hint).toMatch(/check_feedback/);
     expect(hint).toMatch(/present_code_change/);
   });
+
+  it("teaches revise_artifact over re-posting (the adoption rule that makes the revision diff fire)", async () => {
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/revise_artifact/);
+    expect(hint).toMatch(/supersede/);
+    // names the failure mode it's steering away from
+    expect(hint).toMatch(/re-post/i);
+  });
 });
