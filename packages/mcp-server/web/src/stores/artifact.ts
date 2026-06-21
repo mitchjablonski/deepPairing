@@ -176,7 +176,12 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       }
       return {
         artifacts: [...state.artifacts, artifact],
-        selectedArtifactId: state.selectedArtifactId ?? artifact.id,
+        // Don't default-select a superseded version — its successor (the
+        // revision that replaced it) is what the human should land on, where
+        // the "what changed" diff lives. Without this, hydrating a session
+        // whose first artifact was later revised opens the dead v1.
+        selectedArtifactId:
+          state.selectedArtifactId ?? (artifact.status === "superseded" ? null : artifact.id),
         unreadIds: state.selectedArtifactId && state.selectedArtifactId !== artifact.id
           ? [...state.unreadIds, artifact.id]
           : state.unreadIds,
@@ -184,11 +189,24 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     }),
 
   updateArtifact: (id, status, version) =>
-    set((state) => ({
-      artifacts: state.artifacts.map((a) =>
+    set((state) => {
+      const artifacts = state.artifacts.map((a) =>
         a.id === id ? { ...a, status, ...(version != null ? { version } : {}) } : a,
-      ),
-    })),
+      );
+      // When the artifact you're viewing gets superseded mid-session, follow
+      // to the revision that replaced it (parentId === id) so you land on the
+      // new version + its "what changed" diff, not a dimmed dead one.
+      let selectedArtifactId = state.selectedArtifactId;
+      let unreadIds = state.unreadIds;
+      if (status === "superseded" && selectedArtifactId === id) {
+        const successor = artifacts.find((a) => a.parentId === id);
+        if (successor) {
+          selectedArtifactId = successor.id;
+          unreadIds = unreadIds.filter((u) => u !== successor.id);
+        }
+      }
+      return { artifacts, selectedArtifactId, unreadIds };
+    }),
 
   addComment: (comment) =>
     set((state) => {

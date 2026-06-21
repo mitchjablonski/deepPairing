@@ -8,6 +8,7 @@ import { useReplayStore } from "../stores/replay";
 import { useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
 import { PlanArtifact } from "./artifacts/PlanArtifact";
+import { RevisionDiff } from "./RevisionDiff";
 import { DecisionCard } from "./DecisionCard";
 import { CodeChangeArtifact } from "./artifacts/CodeChangeArtifact";
 import { ReasoningCard } from "./artifacts/ReasoningCard";
@@ -181,6 +182,11 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <p className="text-xs text-text-muted italic">{artifact.agentReasoning}</p>
         )}
       </div>
+
+      {/* Revision diff — when this artifact supersedes a prior version, show
+          what changed (anchored to the agent's revise reason) so the human
+          sees their feedback land instead of eyeballing v2 against memory. */}
+      <RevisionDiff artifact={artifact} />
 
       {/* Z3 — preflight breadcrumb hoisted ABOVE the type-specific renderer
           so the moat frames the proposal instead of footnoting it. PMF
