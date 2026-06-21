@@ -27,6 +27,11 @@ export interface MetricsCounts {
   retrospectives: { total: number; right: number; wrong: number; mixed: number };
   horizonChecksRequested: number;
   questions: { asked: number; answered: number };
+  // Production telemetry — does the agent actually USE the structured surface,
+  // and does the human engage with it? (Added to answer "is any of this used?")
+  artifacts: { total: number; byType: Record<string, number> };
+  visuals: { total: number; byKind: Record<string, number> };
+  comments: number;
 }
 
 export interface MetricsFile {
@@ -44,7 +49,10 @@ export type MetricsEvent =
   | { kind: "horizon_check_requested" }
   | { kind: "question_asked" }
   | { kind: "question_answered" }
-  | { kind: "session_started" };
+  | { kind: "session_started" }
+  | { kind: "artifact_created"; artifactType: string }
+  | { kind: "visual_attached"; visualKind: string }
+  | { kind: "comment_added" };
 
 const VERSION = 1 as const;
 
@@ -55,6 +63,9 @@ function emptyCounts(): MetricsCounts {
     retrospectives: { total: 0, right: 0, wrong: 0, mixed: 0 },
     horizonChecksRequested: 0,
     questions: { asked: 0, answered: 0 },
+    artifacts: { total: 0, byType: {} },
+    visuals: { total: 0, byKind: {} },
+    comments: 0,
   };
 }
 
@@ -88,6 +99,8 @@ export function readMetrics(projectRoot: string): MetricsFile {
         ledgerWrites: { ...emptyCounts().ledgerWrites, ...(parsed.counts?.ledgerWrites ?? {}) },
         retrospectives: { ...emptyCounts().retrospectives, ...(parsed.counts?.retrospectives ?? {}) },
         questions: { ...emptyCounts().questions, ...(parsed.counts?.questions ?? {}) },
+        artifacts: { ...emptyCounts().artifacts, ...(parsed.counts?.artifacts ?? {}) },
+        visuals: { ...emptyCounts().visuals, ...(parsed.counts?.visuals ?? {}) },
       },
     };
   } catch {
@@ -138,6 +151,19 @@ export function recordMetricEvent(projectRoot: string, event: MetricsEvent): voi
       break;
     case "question_answered":
       data.counts.questions.answered += 1;
+      break;
+    case "artifact_created":
+      data.counts.artifacts.total += 1;
+      data.counts.artifacts.byType[event.artifactType] =
+        (data.counts.artifacts.byType[event.artifactType] ?? 0) + 1;
+      break;
+    case "visual_attached":
+      data.counts.visuals.total += 1;
+      data.counts.visuals.byKind[event.visualKind] =
+        (data.counts.visuals.byKind[event.visualKind] ?? 0) + 1;
+      break;
+    case "comment_added":
+      data.counts.comments += 1;
       break;
   }
 
