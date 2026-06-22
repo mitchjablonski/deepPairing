@@ -210,6 +210,27 @@ function recordEventForMetrics(event: any): void {
       // sectionId. The feedback_received broadcast carries only intent,
       // not the full target, so routes.ts records this one inline.
       break;
+    case "comment_added":
+      // Production telemetry — count HUMAN comments only (agent replies go
+      // through answer_question, a different surface). Tells us whether the
+      // human actually engages with the artifacts, not just the agent.
+      if (event.comment?.author === "human") {
+        recordMetricEvent(projectRoot, { kind: "comment_added" });
+      }
+      break;
+    case "artifact_created": {
+      // Does the agent actually produce the structured surface? Count by type,
+      // and count each attached visual by kind (the #29/#31 adoption question).
+      const a = event.artifact;
+      if (a?.type) recordMetricEvent(projectRoot, { kind: "artifact_created", artifactType: String(a.type) });
+      const visuals = a?.content?.visuals;
+      if (Array.isArray(visuals)) {
+        for (const v of visuals) {
+          if (v?.kind) recordMetricEvent(projectRoot, { kind: "visual_attached", visualKind: String(v.kind) });
+        }
+      }
+      break;
+    }
   }
 }
 

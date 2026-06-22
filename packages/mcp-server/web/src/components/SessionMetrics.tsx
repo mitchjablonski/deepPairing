@@ -12,7 +12,18 @@ interface MetricsSnapshot {
     retrospectives: { total: number; right: number; wrong: number; mixed: number };
     horizonChecksRequested: number;
     questions: { asked: number; answered: number };
+    artifacts?: { total: number; byType: Record<string, number> };
+    visuals?: { total: number; byKind: Record<string, number> };
+    comments?: number;
   };
+}
+
+/** Compact "plan 3 · spec 1" detail from a by-key count record. */
+function recordDetail(rec?: Record<string, number>): string | undefined {
+  if (!rec) return undefined;
+  const entries = Object.entries(rec).filter(([, n]) => n > 0);
+  if (entries.length === 0) return undefined;
+  return entries.map(([k, n]) => `${k.replace(/_/g, " ")} ${n}`).join(" · ");
 }
 
 export function SessionMetrics() {
@@ -163,6 +174,17 @@ export function SessionMetrics() {
                   : undefined
               }
             />
+            <MetricRow
+              label="📦 Artifacts produced"
+              value={metrics.counts.artifacts?.total ?? 0}
+              detail={recordDetail(metrics.counts.artifacts?.byType)}
+            />
+            <MetricRow
+              label="🖼 Visuals attached"
+              value={metrics.counts.visuals?.total ?? 0}
+              detail={recordDetail(metrics.counts.visuals?.byKind)}
+            />
+            <MetricRow label="💬 Comments (you)" value={metrics.counts.comments ?? 0} />
           </div>
         </div>
       )}

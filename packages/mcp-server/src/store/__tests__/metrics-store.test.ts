@@ -88,6 +88,47 @@ describe("recordMetricEvent", () => {
     expect(m.counts.questions.answered).toBe(1);
   });
 
+  it("tallies artifact_created by type (production telemetry)", () => {
+    recordMetricEvent(tmpDir, { kind: "artifact_created", artifactType: "plan" });
+    recordMetricEvent(tmpDir, { kind: "artifact_created", artifactType: "plan" });
+    recordMetricEvent(tmpDir, { kind: "artifact_created", artifactType: "spec" });
+    const m = readMetrics(tmpDir);
+    expect(m.counts.artifacts.total).toBe(3);
+    expect(m.counts.artifacts.byType.plan).toBe(2);
+    expect(m.counts.artifacts.byType.spec).toBe(1);
+  });
+
+  it("tallies visual_attached by kind (is the agent producing visuals?)", () => {
+    recordMetricEvent(tmpDir, { kind: "visual_attached", visualKind: "diagram" });
+    recordMetricEvent(tmpDir, { kind: "visual_attached", visualKind: "file_map" });
+    recordMetricEvent(tmpDir, { kind: "visual_attached", visualKind: "diagram" });
+    const m = readMetrics(tmpDir);
+    expect(m.counts.visuals.total).toBe(3);
+    expect(m.counts.visuals.byKind.diagram).toBe(2);
+    expect(m.counts.visuals.byKind.file_map).toBe(1);
+  });
+
+  it("counts comment_added", () => {
+    recordMetricEvent(tmpDir, { kind: "comment_added" });
+    recordMetricEvent(tmpDir, { kind: "comment_added" });
+    expect(readMetrics(tmpDir).counts.comments).toBe(2);
+  });
+
+  it("back-fills the new count fields when reading a pre-existing (older-shape) metrics file", () => {
+    fs.mkdirSync(path.join(tmpDir, ".deeppairing"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".deeppairing", "metrics.json"),
+      JSON.stringify({ version: 1, counts: { preflightBlocks: { total: 2 } } }),
+    );
+    const m = readMetrics(tmpDir);
+    expect(m.counts.artifacts.total).toBe(0);
+    expect(m.counts.artifacts.byType).toEqual({});
+    expect(m.counts.visuals.total).toBe(0);
+    expect(m.counts.comments).toBe(0);
+    // and the pre-existing count survives the back-fill
+    expect(m.counts.preflightBlocks.total).toBe(2);
+  });
+
   it("tracks horizon_check_requested and session_started totals", () => {
     recordMetricEvent(tmpDir, { kind: "horizon_check_requested" });
     recordMetricEvent(tmpDir, { kind: "horizon_check_requested" });
