@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Artifact, PlanVisual, PlanVisualFile } from "@deeppairing/shared";
-import { coercePlanContent, coerceSpecContent } from "@deeppairing/shared";
+import { coercePlanContent, coerceSpecContent, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { VisualBody } from "./ArtifactVisuals";
 
@@ -28,6 +28,104 @@ function visualsOf(a: Artifact): PlanVisual[] {
   if (a.type === "plan") return coercePlanContent(a.content).visuals ?? [];
   if (a.type === "spec") return coerceSpecContent(a.content).visuals ?? [];
   return [];
+}
+
+// --- body diff: the artifact's structured list (steps / requirements / options)
+
+/** One comparable list entry: `key` matches an item across versions; `detail`
+ *  is everything else, so two same-key items with different detail = changed. */
+interface DiffItem {
+  key: string;
+  label: string;
+  detail: string;
+}
+
+const norm = (s: unknown): string => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/** The list that defines this artifact type's body, mapped to comparable items.
+ *  Steps have no stable id (keyed by description); requirements/options do. */
+function bodyOf(a: Artifact): { title: string; items: DiffItem[] } | null {
+  if (a.type === "plan") {
+    const steps = coercePlanContent(a.content).steps;
+    return {
+      title: "Steps",
+      items: steps.map((s, i) => ({
+        key: norm(s.description) || `step-${i}`,
+        label: s.description || `Step ${i + 1}`,
+        detail: `${s.reasoning}|${JSON.stringify((s as { files?: unknown }).files ?? [])}`,
+      })),
+    };
+  }
+  if (a.type === "spec") {
+    const reqs = coerceSpecContent(a.content).requirements;
+    return {
+      title: "Requirements",
+      items: reqs.map((r, i) => ({
+        key: r.id || norm(r.statement) || `req-${i}`,
+        label: r.id ? `${r.id} · ${r.statement}` : r.statement || `Requirement ${i + 1}`,
+        detail: `${r.rationale}|${JSON.stringify(r.acceptanceCriteria ?? [])}|${(r as { priority?: string }).priority ?? ""}`,
+      })),
+    };
+  }
+  if (a.type === "decision") {
+    const opts = coerceDecisionContent(a.content).options;
+    return {
+      title: "Options",
+      items: opts.map((o, i) => ({
+        key: o.id || norm(o.title) || `opt-${i}`,
+        label: o.title || `Option ${i + 1}`,
+        detail: `${o.description}|${JSON.stringify(o.pros)}|${JSON.stringify(o.cons)}|${o.recommendation}`,
+      })),
+    };
+  }
+  return null;
+}
+
+function BodyDiff({ old, next }: { old: Artifact; next: Artifact }) {
+  const o = bodyOf(old);
+  const n = bodyOf(next);
+  if (!o || !n) return null;
+
+  const oldByKey = new Map(o.items.map((it) => [it.key, it]));
+  const newByKey = new Map(n.items.map((it) => [it.key, it]));
+  const added = n.items.filter((it) => !oldByKey.has(it.key));
+  const removed = o.items.filter((it) => !newByKey.has(it.key));
+  const changed = n.items.filter((it) => {
+    const p = oldByKey.get(it.key);
+    return p && p.detail !== it.detail;
+  });
+
+  const unchanged = added.length === 0 && removed.length === 0 && changed.length === 0;
+
+  return (
+    <div className="space-y-1">
+      <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide">{n.title}</div>
+      {unchanged ? (
+        <div className="text-2xs text-text-muted italic">no changes</div>
+      ) : (
+        <ul className="text-2xs space-y-0.5">
+          {added.map((it) => (
+            <li key={`a-${it.key}`} className="flex items-baseline gap-1.5">
+              <span className="text-accent-green font-bold w-3 shrink-0">＋</span>
+              <span className="text-text-primary">{it.label}</span>
+            </li>
+          ))}
+          {changed.map((it) => (
+            <li key={`c-${it.key}`} className="flex items-baseline gap-1.5">
+              <span className="text-accent-amber font-bold w-3 shrink-0">~</span>
+              <span className="text-text-primary">{it.label}</span>
+            </li>
+          ))}
+          {removed.map((it) => (
+            <li key={`r-${it.key}`} className="flex items-baseline gap-1.5">
+              <span className="text-accent-red font-bold w-3 shrink-0">−</span>
+              <span className="text-text-secondary line-through opacity-70">{it.label}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Did a matched visual's payload actually change? (Compares the field that
@@ -72,6 +170,7 @@ export function RevisionDiff({ artifact }: { artifact: Artifact }) {
               <span className="font-semibold text-accent-amber">Revised:</span> {artifact.agentReasoning}
             </div>
           )}
+          <BodyDiff old={parent} next={artifact} />
           <VisualsDiff oldVisuals={visualsOf(parent)} newVisuals={visualsOf(artifact)} artifactId={artifact.id} />
         </div>
       )}
