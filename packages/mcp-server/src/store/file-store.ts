@@ -591,8 +591,28 @@ export class FileStore implements IStore {
     return this.decisions.get(decisionId)?.response ?? null;
   }
 
+  /** An artifact whose review can never resolve normally any more — it was
+   *  superseded by a newer version, retracted, rejected, or marked obsolete.
+   *  A pending decision/plan-review record pointing at such an artifact is an
+   *  orphan and must NOT keep reporting as "waiting" (it would block
+   *  check_feedback forever). A record with no backing artifact is left as-is
+   *  (artifacts are never deleted in production; only their status changes), so
+   *  unknown ids stay pending rather than vanishing. */
+  private isArtifactClosed(artifactId: string): boolean {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art) return false;
+    return (
+      art.status === "superseded" ||
+      art.status === "retracted" ||
+      art.status === "rejected" ||
+      art.status === "obsolete"
+    );
+  }
+
   getPendingDecisions(): DecisionRecord[] {
-    return Array.from(this.decisions.values()).filter((d) => !d.response);
+    return Array.from(this.decisions.values()).filter(
+      (d) => !d.response && !this.isArtifactClosed(d.artifactId),
+    );
   }
 
   getDecision(decisionId: string): DecisionRecord | undefined {
@@ -639,7 +659,9 @@ export class FileStore implements IStore {
   }
 
   getPendingPlanReviews(): PlanReviewRecord[] {
-    return Array.from(this.planReviews.values()).filter((p) => !p.verdict);
+    return Array.from(this.planReviews.values()).filter(
+      (p) => !p.verdict && !this.isArtifactClosed(p.artifactId),
+    );
   }
 
   // --- Engagement Metrics ---

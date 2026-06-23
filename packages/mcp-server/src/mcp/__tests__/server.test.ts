@@ -1765,7 +1765,7 @@ describe("MCP Tool Handlers", () => {
         reason: "retry",
       });
       expect(isError).toBe(true);
-      expect(text).toContain("already superseded");
+      expect(text).toContain("superseded");
     });
 
     it("records a new plan review cycle when superseding a plan", async () => {
@@ -1792,6 +1792,76 @@ describe("MCP Tool Handlers", () => {
       const newPlan = store.getArtifacts().find((a) => a.id !== oldPlan.id)!;
       const pending = store.getPendingPlanReviews();
       expect(pending.map((p) => p.artifactId)).toContain(newPlan.id);
+      // F1 — the OLD plan's review is now an orphan (its artifact is superseded)
+      // and must NOT keep reporting as pending; otherwise check_feedback says
+      // "WAITING: plan review pending" forever for an artifact the human can't see.
+      expect(pending.map((p) => p.artifactId)).not.toContain(oldPlan.id);
+    });
+
+    it("F1 — superseding a decision retires the old pending decision (no orphan WAITING)", async () => {
+      await callTool("present_options", {
+        context: "pick a store",
+        options: [
+          { id: "a", title: "Postgres", description: "relational", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Mongo", description: "document", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const oldDec = store.getArtifacts()[0];
+      expect(store.getPendingDecisions().map((d) => d.artifactId)).toContain(oldDec.id);
+
+      await callTool("revise_artifact", {
+        artifactId: oldDec.id,
+        mode: "supersede",
+        content: {
+          context: "pick a store",
+          decisionId: "store_v2",
+          options: [
+            { id: "a", title: "Postgres", description: "relational + jsonb", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+            { id: "c", title: "SQLite", description: "embedded", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+          ],
+        },
+        reason: "dropped Mongo, added SQLite",
+      });
+      // Old decision's pending record is gone now that its artifact is superseded.
+      expect(store.getPendingDecisions().map((d) => d.artifactId)).not.toContain(oldDec.id);
+    });
+
+    it("F3 — rejects malformed supersede content via the same validator present_* uses", async () => {
+      await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const old = store.getArtifacts()[0];
+      const before = store.getArtifacts().length;
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
+        content: { summary: "x2", findings: "not-an-array" }, // the original field bug
+        reason: "revise",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("INPUT_VALIDATION_FAILED");
+      // The malformed shape did NOT land: no v2 created, old one not retired.
+      expect(store.getArtifacts().length).toBe(before);
+      expect(store.getArtifacts()[0].status).not.toBe("superseded");
+    });
+
+    it("F5 — refuses to supersede a closed (rejected) artifact instead of resurrecting it", async () => {
+      await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "y", detail: "z", significance: "low" }],
+      });
+      const old = store.getArtifacts()[0];
+      store.updateArtifactStatus(old.id, "rejected");
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
+        content: { summary: "x2", findings: [] },
+        reason: "resurrect",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("rejected");
+      expect(store.getArtifacts()).toHaveLength(1); // no resurrected v2 draft
     });
 
     it("errors on unknown artifactId", async () => {
