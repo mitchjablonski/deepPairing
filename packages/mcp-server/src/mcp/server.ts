@@ -30,7 +30,15 @@ import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handleRecall } from "./tools/recall.js";
-import type { ToolContext } from "./tools/types.js";
+import type { ToolContext, ToolResult } from "./tools/types.js";
+import {
+  validatePresentFindingsInput,
+  validatePresentOptionsInput,
+  validatePresentSpecInput,
+  validatePresentPlanInput,
+  validatePresentCodeChangeInput,
+  validateLogReasoningInput,
+} from "./validate-tool-input.js";
 
 /**
  * U0.2 — schema for the quick-approve elicitation form.
@@ -59,6 +67,20 @@ import { matchesGlob as _matchesGlob } from "./preflight-validator.js";
 export const matchesGlob = _matchesGlob;
 
 type BroadcastFn = (event: any) => void;
+
+/** F3 — `revise_artifact mode='supersede'` must validate its new content with
+ *  the SAME strict validator the original present_* tool used, keyed by the
+ *  artifact's type, so a revision can't persist a shape present_* would reject.
+ *  Types without a present_* validator (none today) simply skip the check. */
+type SupersedeValidator = (args: any) => { ok: true } | { ok: false; error: ToolResult };
+const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
+  research: validatePresentFindingsInput,
+  spec: validatePresentSpecInput,
+  plan: validatePresentPlanInput,
+  decision: validatePresentOptionsInput,
+  code_change: validatePresentCodeChangeInput,
+  reasoning: validateLogReasoningInput,
+};
 
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
@@ -1503,11 +1525,27 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               isError: true,
             };
           }
-          if (old.status === "superseded" || old.status === "retracted") {
+          // F5 — don't supersede a CLOSED artifact. Beyond already-superseded/
+          // retracted, resurrecting a 'rejected' or 'obsolete' artifact into a
+          // fresh v(N+1) draft re-opens work the human deliberately closed (and
+          // re-queues a pending review). Only live artifacts can be revised.
+          if (["superseded", "retracted", "rejected", "obsolete"].includes(old.status)) {
             return {
-              content: [{ type: "text", text: `revise_artifact: ${artifactId} is already ${old.status}.` }],
+              content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${old.status} — a closed artifact can't be superseded. Present a new artifact instead.` }],
               isError: true,
             };
+          }
+
+          // F3 — route the new content through the SAME strict validator the
+          // original present_* tool uses, keyed on the artifact type. Pre-this,
+          // supersede only checked `typeof content === "object"`, so a revision
+          // could persist a malformed shape that present_* would have rejected
+          // (defeating the "bad shape never lands on disk" invariant). The
+          // validators read fields off one args object, so merge in the title.
+          const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
+          if (supersedeValidator) {
+            const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
+            if (!v.ok) return v.error;
           }
 
           const title = String(args?.title ?? old.title);

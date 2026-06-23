@@ -153,6 +153,30 @@ describe("FileStore", () => {
     expect(Number.isNaN(Date.parse(resolved as string))).toBe(false);
   });
 
+  it("pending plan-reviews / decisions exclude CLOSED artifacts (F1 orphan guard)", () => {
+    const store = createStore("orphan_guard");
+    store.createArtifact({ id: "p1", type: "plan", title: "Plan", content: { steps: [], estimatedChanges: 0 } });
+    store.recordPlanReview("p1");
+    expect(store.getPendingPlanReviews().map((p) => p.artifactId)).toContain("p1");
+
+    store.createArtifact({ id: "d1", type: "decision", title: "Decide", content: { context: "c", options: [] } });
+    store.recordDecisionRequest({ decisionId: "dec1", artifactId: "d1", context: "c", options: [] });
+    expect(store.getPendingDecisions().map((d) => d.artifactId)).toContain("d1");
+
+    // Closing the artifacts (superseded / terminal) retires their pending records,
+    // so check_feedback stops reporting them as WAITING forever.
+    store.updateArtifactStatus("p1", "superseded");
+    store.updateArtifactStatus("d1", "rejected");
+    expect(store.getPendingPlanReviews().map((p) => p.artifactId)).not.toContain("p1");
+    expect(store.getPendingDecisions().map((d) => d.artifactId)).not.toContain("d1");
+  });
+
+  it("a pending review with no backing artifact stays pending (artifacts are never deleted, only closed)", () => {
+    const store = createStore("ghost_review");
+    store.recordPlanReview("nonexistent");
+    expect(store.getPendingPlanReviews().map((p) => p.artifactId)).toContain("nonexistent");
+  });
+
   it("round-trips decisions", () => {
     const store = createStore( "decisions");
     store.recordDecisionRequest({
