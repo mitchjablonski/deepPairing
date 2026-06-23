@@ -80,4 +80,40 @@ describe("revision selection — land on the live version, not the dead one", ()
     s.updateArtifact("v1", "superseded");
     expect(useArtifactStore.getState().selectedArtifactId).toBe("v2");
   });
+
+  // U8 — selectArtifact() itself resolves a stale id (handed by CausalChain
+  // rows, related badges, the command palette, dp:focus-artifact, …) to the
+  // live successor, so no caller lands on a dead read-only version.
+  it("selectArtifact resolves a superseded id to its live successor", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(mkV("v1", { status: "superseded" }));
+    s.addArtifact(mkV("v2", { parentId: "v1", version: 2 }));
+    s.selectArtifact("v1");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("v2");
+  });
+
+  it("selectArtifact follows a multi-step supersede chain to the latest live version", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(mkV("v1", { status: "superseded" }));
+    s.addArtifact(mkV("v2", { parentId: "v1", version: 2, status: "superseded" }));
+    s.addArtifact(mkV("v3", { parentId: "v2", version: 3 }));
+    s.selectArtifact("v1");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("v3");
+  });
+
+  it("selectArtifact(null) clears selection without resolving", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(mkV("v1"));
+    s.selectArtifact(null);
+    expect(useArtifactStore.getState().selectedArtifactId).toBeNull();
+  });
+
+  it("restoreSelection resolves a saved-but-now-superseded id to the live version", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(mkV("v1", { status: "superseded" }));
+    s.addArtifact(mkV("v2", { parentId: "v1", version: 2 }));
+    localStorage.setItem("dp-selected-artifact", "v1"); // saved before v1 was superseded
+    s.restoreSelection();
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("v2");
+  });
 });

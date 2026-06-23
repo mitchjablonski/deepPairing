@@ -52,7 +52,10 @@ export function LineGutter({
         className={`w-4 h-4 flex items-center justify-center rounded text-[10px] font-semibold transition-all ${
           askActive
             ? "bg-accent-violet text-white"
-            : "opacity-0 group-hover:opacity-100 bg-accent-violet/80 text-white hover:bg-accent-violet"
+            // Faint at rest so it's discoverable that lines are commentable
+            // (not a hover-only secret), full on hover, and revealed on keyboard
+            // focus so the gutter is reachable without a mouse (U3).
+            : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-violet/80 text-white hover:bg-accent-violet"
         }`}
         title="Ask the agent about this line"
         aria-label="Ask a question about this line"
@@ -64,7 +67,7 @@ export function LineGutter({
         className={`w-4 h-4 flex items-center justify-center rounded text-[10px] transition-all ${
           commentActive || commentCount > 0
             ? "bg-accent-blue text-white"
-            : "opacity-0 group-hover:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue"
+            : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue"
         }`}
         title="Add comment on this line"
         aria-label="Add a comment on this line"
