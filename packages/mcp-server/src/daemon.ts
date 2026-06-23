@@ -24,6 +24,7 @@ import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
 import { mountStaticUi } from "./http/static-ui.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
+import { applyTopLevelGuards } from "./http/guards.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
@@ -284,6 +285,13 @@ app.use("/*", cors({
   },
 }));
 
+// Top-level guards (body-size cap + DNS-rebinding Host check) applied to the
+// ROOT app BEFORE any sub-app mount, so coverage is order-independent rather
+// than depending on the sub-app middleware leaking upward by mount order.
+// The body cap MEASURES the stream (chunked-safe), unlike the prior
+// header-only check. See http/guards.ts.
+applyTopLevelGuards(app, { maxBodyBytes: 64 * 1024 });
+
 // Mount internal daemon routes (for MCP wrappers).
 // II1 — pass authToken so every /api/internal/* requires Authorization.
 const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken, activeSessions);
@@ -502,6 +510,17 @@ app.get("/api/skill-status", (c) => {
 // requiring Claude Code to be connected. This is the PMF-thesis validator:
 // a fresh-install user must SEE the block fire, not just read about it.
 app.post("/api/demo/run", (c) => {
+  // S5 — bound demo-session minting. This route is intentionally unauthenticated
+  // (the cold-clone hero demo), so a loop could otherwise accumulate unbounded
+  // in-memory sessions. Evict the oldest demo sessions to keep at most a handful.
+  const MAX_DEMO_SESSIONS = 5;
+  const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
+  while (demoIds.length >= MAX_DEMO_SESSIONS) {
+    const oldest = demoIds.shift()!;
+    sessions.delete(oldest);
+    sessionMeta.delete(oldest);
+    activeSessions.delete(oldest);
+  }
   const sessionId = `demo_${Date.now()}`;
   const store = createSession(sessionId);
   sessionMeta.set(sessionId, {
