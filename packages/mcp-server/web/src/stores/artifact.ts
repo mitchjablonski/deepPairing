@@ -153,6 +153,27 @@ function lsSetSelection(id: string | null): void {
   } catch { /* private mode / quota — selection persistence is best-effort */ }
 }
 
+/**
+ * Follow the supersede chain from `id` to the live (non-superseded) version.
+ * Many callers select an artifact by a possibly-stale id — CausalChain rows,
+ * related-artifact badges, the command palette, the `dp:focus-artifact` event —
+ * and landing on a superseded/retracted version shows only disabled, read-only
+ * actions (a dead end). Resolving here means every caller inherits the guard
+ * (addArtifact/updateArtifact already avoid/advance on the hydration + live
+ * paths; this closes the explicit-select path).
+ */
+function resolveToLiveId(artifacts: Artifact[], id: string): string {
+  let current = artifacts.find((a) => a.id === id);
+  const seen = new Set<string>();
+  while (current && current.status === "superseded" && !seen.has(current.id)) {
+    seen.add(current.id);
+    const successor = artifacts.find((a) => a.parentId === current!.id);
+    if (!successor) break;
+    current = successor;
+  }
+  return current?.id ?? id;
+}
+
 export const useArtifactStore = create<ArtifactState>((set) => ({
   artifacts: [],
   comments: {},
@@ -233,21 +254,26 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     }),
 
   selectArtifact: (id) => set((state) => {
-    lsSetSelection(id);
+    // Resolve a stale/dead id to its live successor so no caller lands on a
+    // superseded artifact whose actions are all disabled (U8).
+    const resolved = id ? resolveToLiveId(state.artifacts, id) : id;
+    lsSetSelection(resolved);
     return {
-      selectedArtifactId: id,
-      unreadIds: state.unreadIds.filter((uid) => uid !== id),
+      selectedArtifactId: resolved,
+      unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
     };
   }),
 
   restoreSelection: () => set((state) => {
     const saved = lsGetSelection();
     // Only restore if it's still in the session; otherwise leave the default
-    // (first artifact) that addArtifact picked during hydration.
+    // (first artifact) that addArtifact picked during hydration. Resolve to the
+    // live version in case the saved artifact was superseded since.
     if (saved && state.artifacts.some((a) => a.id === saved)) {
+      const resolved = resolveToLiveId(state.artifacts, saved);
       return {
-        selectedArtifactId: saved,
-        unreadIds: state.unreadIds.filter((uid) => uid !== saved),
+        selectedArtifactId: resolved,
+        unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
       };
     }
     return {};
