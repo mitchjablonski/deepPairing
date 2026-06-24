@@ -85,6 +85,29 @@ describe("findRejectedApproachMatch", () => {
     expect(findRejectedApproachMatch(["", "  "], [railwayRejected])).toBeNull();
     expect(findRejectedApproachMatch(["Anything"], [{ ...railwayRejected, description: "" }])).toBeNull();
   });
+
+  // Regression: the old matcher used raw substring, so a short/fragment overlap
+  // blocked unrelated proposals (the "PR" / "LICENSE" false positives).
+  it("does NOT block on an ultra-short rejected stance ('PR')", () => {
+    const pr = { id: "r2", description: "PR", reason: "x", rejectedAt: "2026-04-01T00:00:00Z" } as any;
+    // "pr" lives inside "approach" / "express" — must not match.
+    expect(findRejectedApproachMatch(["Open a PR to merge the approach"], [pr])).toBeNull();
+    expect(findRejectedApproachMatch(["Use an express server"], [pr])).toBeNull();
+  });
+
+  it("does NOT block when only a fragment of the rejection overlaps a short token", () => {
+    const rej = { id: "r3", description: "improve the build pipeline", reason: "x", rejectedAt: "2026-04-01T00:00:00Z" } as any;
+    // OLD: "improve the build pipeline".includes("pr") was true ("im-PR-ove"),
+    // so a bare "pr" proposal token blocked. Now a <3-char token never matches.
+    expect(findRejectedApproachMatch(["pr"], [rej])).toBeNull();
+  });
+
+  it("matches a rejected noun only as a whole word, not a substring fragment", () => {
+    // "railway" must not match inside "guardrail"...
+    expect(findRejectedApproachMatch(["Add a guardrail check before deploy"], [railwayRejected])).toBeNull();
+    // ...but the real word still blocks.
+    expect(findRejectedApproachMatch(["Deploy to Railway again"], [railwayRejected])?.via).toBe("surface");
+  });
 });
 
 describe("findTeamPreferenceViolation", () => {
