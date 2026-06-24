@@ -58,4 +58,11 @@ describe("first-call hint — always-on protocol preamble", () => {
     // names the failure mode it's steering away from
     expect(hint).toMatch(/re-post/i);
   });
+
+  it("steers decisions to present_options, not buried/interleaved in a plan", async () => {
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/present_options/);
+    // names the failure mode: don't bury / interleave a decision in a plan
+    expect(hint).toMatch(/interleave|bury|own card/i);
+  });
 });

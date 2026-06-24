@@ -50,7 +50,13 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
 - **`present_options`** — at any decision point with 2-4 valid approaches.
   Set `stakes: "high"` on architecturally-significant / hard-to-reverse
   choices (schema, auth, infra, billing) — the UI captures the user's
-  prediction + confidence, raw material for calibration.
+  prediction + confidence, raw material for calibration. **One choice = one
+  `present_options` card, each with a `concept`.** Do NOT bury a decision inside
+  a plan step as an implied default ("approve = take my picks"), and do NOT
+  interleave several decisions inside a plan — both are easy for the human to
+  miss, skip the pros/cons/effort/risk review, and mean your picks never reach
+  the ledger (so nothing compounds across projects). A real choice is its own
+  card *before* the plan that depends on it.
 - **`present_spec`** — BEFORE `present_plan` for non-trivial features.
   Objective + requirements (each with rationale and acceptance criteria) +
   optional design + tasks. "Think together before building."
