@@ -156,6 +156,24 @@ export function findTeamPreferenceViolation(
  *      paraphrased re-proposals — e.g. "Deploy to Fly.io" still blocks
  *      after rejecting Railway with concept "pay-per-request hosting".
  */
+/**
+ * True when `needle` appears in `haystack` as a whole word / phrase, NOT as a
+ * substring fragment. Both args are assumed already lower-cased.
+ *
+ * This is the fix for the surface false-positive: the old matcher used raw
+ * `String.includes`, so a short rejected stance like "PR" matched inside
+ * "a**ppr**oach" / "ex**pr**ess", and "rail" inside "guard**rail**" — blocking
+ * unrelated proposals. A needle under 3 chars never matches; longer needles
+ * must be flanked by a non-alphanumeric char or a string edge, so "railway"
+ * still matches "deploy to railway" but not "guardrail".
+ */
+function containsAsPhrase(haystack: string, needle: string): boolean {
+  const n = needle.trim();
+  if (n.length < 3) return false;
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${esc}(?:[^a-z0-9]|$)`).test(haystack);
+}
+
 export function findRejectedApproachMatch(
   proposalStrings: string[],
   rejected: RejectedApproach[],
@@ -176,16 +194,17 @@ export function findRejectedApproachMatch(
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
-      // Direct substring in either direction (whole rejection description)
-      if (rejNormalized.includes(p) || p.includes(rejNormalized)) {
+      // Whole rejection description present as a phrase in either direction
+      // (word-bounded, so a short stance can't match a fragment of a word).
+      if (containsAsPhrase(p, rejNormalized) || containsAsPhrase(rejNormalized, p)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      // Specific noun fragment of the rejection (post-colon)
-      if (specificNoun.length >= 3 && p.includes(specificNoun)) {
+      // Specific noun of the rejection (post-colon), as a whole word.
+      if (containsAsPhrase(p, specificNoun)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      // Concept match: every non-stopword concept token present in the proposal
-      if (conceptTokens.length > 0 && conceptTokens.every((t) => p.includes(t))) {
+      // Concept match: every non-stopword concept token present as a whole word.
+      if (conceptTokens.length > 0 && conceptTokens.every((t) => containsAsPhrase(p, t))) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }
