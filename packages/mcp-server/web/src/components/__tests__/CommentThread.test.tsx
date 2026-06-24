@@ -68,4 +68,12 @@ describe("CommentThread — renders replies under their parent", () => {
     expect(screen.getByText(/seen by agent/i)).toBeInTheDocument();
     expect(screen.queryByText(/awaiting agent/i)).not.toBeInTheDocument();
   });
+
+  it("renders markdown in a comment body — **bold** becomes <strong>, not literal asterisks", () => {
+    const c = mk({ id: "m1", author: "agent", content: "This is **important** to note." });
+    render(<CommentThread artifactId="art_1" comments={[c]} />);
+    const strong = screen.getByText("important");
+    expect(strong.tagName).toBe("STRONG"); // rendered, not literal
+    expect(screen.queryByText(/\*\*important\*\*/)).not.toBeInTheDocument(); // no raw asterisks
+  });
 });
