@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useSentFlash } from "../hooks/useSentFlash";
+import { SimpleMarkdown } from "./SimpleMarkdown";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -76,7 +77,9 @@ function CommentBubble({ comment }: { comment: Comment }) {
               </span>
             ))}
         </div>
-        <p className="text-xs text-text-primary whitespace-pre-wrap">{comment.content}</p>
+        {/* Render markdown (the agent writes **bold**, `code`, lists) instead of
+            plain text — pre-this it showed the literal asterisks. */}
+        <SimpleMarkdown text={comment.content} className="text-xs text-text-primary space-y-1" />
 
         {/* Code reference blocks */}
         {refs && refs.length > 0 && (
@@ -292,8 +295,8 @@ export function AskTrigger({
                       ? {q.content}
                     </div>
                     {answer ? (
-                      <div className="mt-1 pl-3 border-l-2 border-accent-violet/30 text-text-secondary whitespace-pre-wrap">
-                        {answer.content}
+                      <div className="mt-1 pl-3 border-l-2 border-accent-violet/30">
+                        <SimpleMarkdown text={answer.content} className="text-text-secondary space-y-1" />
                       </div>
                     ) : q.humanResolvedAt ? (
                       <div className="mt-0.5 pl-3 text-text-muted italic">resolved by you</div>
