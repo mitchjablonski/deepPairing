@@ -16,7 +16,12 @@ import { recordMetricEvent } from "./metrics-store.js";
  * (real preflight blocks, via DaemonClient.recordMetric) and the `/answered`
  * route (question_answered).
  */
-export function recordBroadcastMetric(projectRoot: string, event: any): void {
+export function recordBroadcastMetric(projectRoot: string, sessionId: string, event: any): void {
+  // Demo sessions are throwaway proof-of-the-hook, not real pairing — exclude
+  // ALL their broadcasts (ledger_write, comment_added, artifact_created, …) so
+  // running the demo can't inflate any production counter. Consistent with
+  // createSession already excluding demo_ from session_started.
+  if (typeof sessionId === "string" && sessionId.startsWith("demo_")) return;
   switch (event?.type) {
     case "ledger_write":
       recordMetricEvent(projectRoot, {

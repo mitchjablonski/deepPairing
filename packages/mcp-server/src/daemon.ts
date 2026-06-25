@@ -176,7 +176,7 @@ function broadcast(sessionId: string, event: any): void {
   // daemon-side metric-worthy event passes through, so we tap it once here
   // (the pure mapping lives in store/metrics-tap.ts so it's unit-testable).
   try {
-    recordBroadcastMetric(projectRoot, event);
+    recordBroadcastMetric(projectRoot, sessionId, event);
   } catch {
     // Telemetry must never break a broadcast.
   }
