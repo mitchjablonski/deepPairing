@@ -10,6 +10,7 @@ import { createDaemonRoutes } from "../daemon-routes.js";
 import { DaemonClient } from "../daemon-client.js";
 import { FileStore } from "../store/file-store.js";
 import { setGlobalStoreForTests } from "../store/global-store.js";
+import { readMetrics } from "../store/metrics-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,34 @@ beforeEach(() => {
 
 afterAll(() => {
   // Clean up any leftover temp dirs
+});
+
+// --- F1: metrics recorded at daemon-side truth points ---
+
+describe("F1 — daemon-side metric recording", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("/answered records question_answered; /metrics records a real preflight block; non-whitelisted kinds are ignored", async () => {
+    // local app WITH a projectRoot so the metric writes land in tmpDir
+    const localApp = createDaemonRoutes(sessions, sessionMeta, createTestSession, () => {}, undefined, tmpDir);
+    await localApp.request(`/api/internal/sessions/s1/register`, j({}));
+
+    await localApp.request(`/api/internal/sessions/s1/comments/c1/answered`, j({ answerCommentId: "a1" }));
+    await localApp.request(`/api/internal/sessions/s1/metrics`, j({ kind: "preflight_block", source: "session" }));
+    await localApp.request(`/api/internal/sessions/s1/metrics`, j({ kind: "session_started" })); // not whitelisted
+
+    const m = readMetrics(tmpDir);
+    expect(m.counts.questions.answered).toBe(1);
+    expect(m.counts.preflightBlocks.total).toBe(1);
+    expect(m.counts.preflightBlocks.bySource.session).toBe(1);
+    expect(m.sessions).toBe(0); // the non-whitelisted session_started was NOT recorded
+  });
+
+  it("does not record metrics when the daemon has no projectRoot (test fixtures)", async () => {
+    await app.request(`/api/internal/sessions/s2/register`, j({}));
+    const res = await app.request(`/api/internal/sessions/s2/metrics`, j({ kind: "preflight_block", source: "team" }));
+    expect(res.status).toBe(200); // succeeds, just a no-op
+  });
 });
 
 // --- Daemon Routes (direct Hono request) ---

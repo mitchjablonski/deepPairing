@@ -404,6 +404,12 @@ export class DaemonClient implements IStore {
     await this.post(`/comments/${commentId}/answered`, { answerCommentId });
   }
 
+  /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
+   *  (the wrapper's broadcast is a no-op in standalone). Never throws. */
+  async recordMetric(event: { kind: "preflight_block"; source: "session" | "team" }): Promise<void> {
+    try { await this.post(`/metrics`, event); } catch { /* telemetry — never break a tool call */ }
+  }
+
   async markCommentHumanResolved(commentId: string, resolvedAt?: string): Promise<void> {
     await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
   }

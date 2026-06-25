@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeJsonAtomic } from "./atomic-write.js";
 
 /**
  * R1 — local, per-project telemetry.
@@ -113,9 +114,11 @@ function writeMetrics(projectRoot: string, data: MetricsFile): void {
   const file = metricsPath(projectRoot);
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-    fs.renameSync(tmp, file);
+    // F5 — use the shared PID+ts+random atomic writer rather than a fixed
+    // `${file}.tmp`. A second daemon (port-collision / sleep-handoff) or a
+    // concurrent route writer racing on the fixed tmp name could tear the
+    // file; writeJsonAtomic gives each writer a unique tmp before the rename.
+    writeJsonAtomic(file, data);
   } catch {
     // Non-fatal — losing a count is preferable to crashing a session
   }

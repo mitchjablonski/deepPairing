@@ -121,6 +121,12 @@ export async function preflightRejectedApproaches(
   // can surface a toast.
   broadcast(result.block.broadcastEvent);
 
+  // F1 — record the preflight-block metric at its truth point. The broadcast
+  // above is a no-op in standalone (the wrapper's broadcast), so the daemon's
+  // tap never saw a real block; route it to the daemon explicitly instead.
+  // Fire-and-forget (DaemonClient.recordMetric swallows errors).
+  void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
+
   // CC1 — append the trace summary to the block message too. Pre-CC1 the
   // agent saw the matched concept on block ("...which the user previously
   // rejected as X") but not the broader consideredCount / near-misses the
