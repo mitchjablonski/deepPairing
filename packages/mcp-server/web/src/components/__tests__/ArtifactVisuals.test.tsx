@@ -200,4 +200,15 @@ describe("VisualBody readOnly (revision-diff preview)", () => {
     expect(container.textContent).toContain("const x = 1;");
     expect(screen.queryByLabelText(/add a comment on this line/i)).not.toBeInTheDocument();
   });
+
+  it("a readOnly annotated_code STILL shows the agent's line annotations (they're part of the delta)", () => {
+    render(
+      <VisualBody
+        artifactId="a"
+        visual={{ id: "c", kind: "annotated_code", code: "const x = 1;", filePath: "x.ts", lineStart: 1, annotations: [{ line: 1, note: "the new value", kind: "add" }] }}
+        readOnly
+      />,
+    );
+    expect(screen.getByText("the new value")).toBeInTheDocument();
+  });
 });
