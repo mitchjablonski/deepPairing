@@ -113,6 +113,18 @@ describe("RevisionDiff", () => {
     expect(screen.getByText("After")).toBeInTheDocument();
   });
 
+  it("U1 — renders changed visuals READ-ONLY: a changed prototype shows previews, not Run buttons", () => {
+    const v1 = mkArtifact({ id: "p1", version: 1, content: { steps: [], estimatedChanges: 0, visuals: [{ id: "proto", kind: "prototype", html: "<button>a</button>" }] } });
+    const v2 = mkArtifact({ id: "p2", version: 2, parentId: "p1", content: { steps: [], estimatedChanges: 0, visuals: [{ id: "proto", kind: "prototype", html: "<button>b</button>" }] } });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+
+    render(<RevisionDiff artifact={v2} />);
+    // both panes are previews — no live Run button anywhere in the diff
+    expect(screen.queryByRole("button", { name: /run prototype/i })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/preview/i).length).toBeGreaterThan(0);
+  });
+
   it("marks an unchanged visual as unchanged (no noisy before/after)", () => {
     const visuals = [{ id: "arch", kind: "diagram" as const, title: "Arch", source: "graph TD; A-->B" }];
     const v1 = mkArtifact({ id: "u1", version: 1, content: { steps: [], estimatedChanges: 0, visuals } });

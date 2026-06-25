@@ -157,12 +157,36 @@ export function coercePlanContent(raw: unknown): PlanContent {
   return out;
 }
 
+/** Small non-crypto stable string hash (djb2) → base36. */
+function hashStr(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * F4 — a visual with no `id` used to get a positional fallback (`visual_0`),
+ * so inserting/reordering a visual between revisions shifted the ids and the
+ * revision diff matched unrelated visuals (everything after the insert read as
+ * "changed"). Derive a CONTENT-stable id instead, so the same visual keeps the
+ * same id across versions regardless of position. Falls back to the positional
+ * id only for an empty visual (nothing to key on).
+ */
+function visualFallbackId(o: Record<string, unknown>, indexFallback: string): string {
+  const kind = typeof o.kind === "string" ? o.kind : "visual";
+  const parts = [o.title, o.source, o.html, o.code, o.filePath, o.files, o.annotations];
+  const hasContent = parts.some(
+    (p) => p != null && (typeof p !== "string" || p.length > 0) && (!Array.isArray(p) || p.length > 0),
+  );
+  return hasContent ? `${kind}_${hashStr(JSON.stringify(parts))}` : indexFallback;
+}
+
 /** Coerce a plan visual to a fully-shaped block (id always present so comments
  *  can anchor; kind a valid enum; payload fields kept when the right type). */
 function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
   const o = obj(v);
   const out: PlanVisual = {
-    id: str(o.id) || fallbackId,
+    id: str(o.id) || visualFallbackId(o, fallbackId),
     kind: oneOf(o.kind, ["diagram", "file_map", "prototype", "annotated_code"] as const, "diagram"),
   };
   if (typeof o.title === "string") out.title = o.title;
