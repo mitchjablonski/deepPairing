@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { writeJsonAtomic } from "./atomic-write.js";
 
 /**
  * R1 — local, per-project telemetry.
@@ -18,7 +19,10 @@ import path from "node:path";
  * last 30 days" stays meaningful when someone reads this on a project
  * they've been using for months.
  *
- * Atomic writes via tmp+rename so concurrent wrappers don't tear the file.
+ * Writes go through writeJsonAtomic (unique pid+ts+random tmp + rename) so a
+ * second daemon / concurrent writer can't tear the file. (It prevents torn
+ * writes, not cross-process lost updates — but all real writers run in the one
+ * daemon process, serialized by the event loop between read and write.)
  */
 
 export interface MetricsCounts {
@@ -113,9 +117,11 @@ function writeMetrics(projectRoot: string, data: MetricsFile): void {
   const file = metricsPath(projectRoot);
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-    fs.renameSync(tmp, file);
+    // F5 — use the shared PID+ts+random atomic writer rather than a fixed
+    // `${file}.tmp`. A second daemon (port-collision / sleep-handoff) or a
+    // concurrent route writer racing on the fixed tmp name could tear the
+    // file; writeJsonAtomic gives each writer a unique tmp before the rename.
+    writeJsonAtomic(file, data);
   } catch {
     // Non-fatal — losing a count is preferable to crashing a session
   }

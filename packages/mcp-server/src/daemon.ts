@@ -29,6 +29,7 @@ import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
 import { recordMetricEvent } from "./store/metrics-store.js";
+import { recordBroadcastMetric } from "./store/metrics-tap.js";
 import { buildPingPayload, decidePing, sendPing } from "./ping.js";
 import {
   fsHonorsPosixMode,
@@ -172,66 +173,12 @@ function broadcast(sessionId: string, event: any): void {
   }
 
   // R1: local telemetry. Broadcast is the canonical point where every
-  // metric-worthy event passes through, so we tap it once here instead of
-  // scattering recordMetricEvent calls across routes / MCP handlers.
+  // daemon-side metric-worthy event passes through, so we tap it once here
+  // (the pure mapping lives in store/metrics-tap.ts so it's unit-testable).
   try {
-    recordEventForMetrics(event);
+    recordBroadcastMetric(projectRoot, sessionId, event);
   } catch {
     // Telemetry must never break a broadcast.
-  }
-}
-
-function recordEventForMetrics(event: any): void {
-  switch (event?.type) {
-    case "preflight_blocked":
-      recordMetricEvent(projectRoot, {
-        kind: "preflight_block",
-        source: event.source === "team" ? "team" : "session",
-      });
-      break;
-    case "ledger_write":
-      recordMetricEvent(projectRoot, {
-        kind: "ledger_write",
-        verdict: event.kind === "approved" ? "approved" : "rejected",
-      });
-      break;
-    case "retrospective_recorded":
-      if (event.verdict === "right" || event.verdict === "wrong" || event.verdict === "mixed") {
-        recordMetricEvent(projectRoot, { kind: "retrospective", verdict: event.verdict });
-      }
-      break;
-    case "question_answered":
-      recordMetricEvent(projectRoot, { kind: "question_answered" });
-      break;
-    case "feedback_received":
-      if (event.intent === "question") {
-        recordMetricEvent(projectRoot, { kind: "question_asked" });
-      }
-      // Horizon-check requests come through as comments with a specific
-      // sectionId. The feedback_received broadcast carries only intent,
-      // not the full target, so routes.ts records this one inline.
-      break;
-    case "comment_added":
-      // Production telemetry — count HUMAN comments only (agent replies go
-      // through answer_question, a different surface). Tells us whether the
-      // human actually engages with the artifacts, not just the agent.
-      if (event.comment?.author === "human") {
-        recordMetricEvent(projectRoot, { kind: "comment_added" });
-      }
-      break;
-    case "artifact_created": {
-      // Does the agent actually produce the structured surface? Count by type,
-      // and count each attached visual by kind (the #29/#31 adoption question).
-      const a = event.artifact;
-      if (a?.type) recordMetricEvent(projectRoot, { kind: "artifact_created", artifactType: String(a.type) });
-      const visuals = a?.content?.visuals;
-      if (Array.isArray(visuals)) {
-        for (const v of visuals) {
-          if (v?.kind) recordMetricEvent(projectRoot, { kind: "visual_attached", visualKind: String(v.kind) });
-        }
-      }
-      break;
-    }
   }
 }
 

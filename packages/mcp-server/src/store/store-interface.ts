@@ -119,6 +119,15 @@ export interface IStore {
    * the next time a store is added.
    */
   renameSession?(title: string): MaybePromise<void>;
+  /**
+   * F1 — record a metric event the daemon's broadcast-tap can't see (because
+   * the emitting code runs in the MCP-server process, whose broadcast is a
+   * no-op in standalone). Today: real pre-flight blocks. Implemented by
+   * DaemonClient (POSTs to the daemon's /metrics sink); FileStore omits it
+   * (in a non-daemon deployment the broadcast tap already runs in-process).
+   * Fire-and-forget — must never throw into the caller.
+   */
+  recordMetric?(event: { kind: "preflight_block"; source: "session" | "team" }): MaybePromise<void>;
   listPastSessions?(): MaybePromise<Array<{
     id: string;
     createdAt: string;

@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { FileStore } from "./store/file-store.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { ERROR_CODES } from "./error-codes.js";
+import { recordMetricEvent } from "./store/metrics-store.js";
 
 // BB8 — wire-input validation for the typed-object signatures AA1
 // introduced. AA1's typing protected only in-process callers; routes
@@ -328,7 +329,33 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const { answerCommentId } = await c.req.json();
     r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
+    // F1 — record the metric HERE (daemon-side), the truth point for an
+    // answered question. The MCP server's question_answered broadcast is a
+    // no-op in standalone, so the prior daemon broadcast-tap never saw it.
+    if (daemonProjectRoot) {
+      try { recordMetricEvent(daemonProjectRoot, { kind: "question_answered" }); } catch {}
+    }
     return c.json({ status: "marked" });
+  });
+
+  // F1 — sink for metric events the MCP server knows about but the daemon's
+  // broadcast-tap can't see (the wrapper's broadcast is a no-op in standalone).
+  // Today: real pre-flight blocks (the demo's synthetic block is daemon-side and
+  // intentionally NOT counted). Whitelisted by kind so it can't be abused to
+  // forge arbitrary counters.
+  app.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (daemonProjectRoot && body?.kind === "preflight_block") {
+      try {
+        recordMetricEvent(daemonProjectRoot, {
+          kind: "preflight_block",
+          source: body.source === "team" ? "team" : "session",
+        });
+      } catch {}
+    }
+    return c.json({ ok: true });
   });
 
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
