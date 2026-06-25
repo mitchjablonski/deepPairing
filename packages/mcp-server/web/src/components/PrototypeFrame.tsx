@@ -44,7 +44,7 @@ function wrapHtml(html: string): string {
   );
 }
 
-export function PrototypeFrame({ html }: { html: string }) {
+export function PrototypeFrame({ html, readOnly = false }: { html: string; readOnly?: boolean }) {
   const [running, setRunning] = useState(false);
   const [showSource, setShowSource] = useState(false);
 
@@ -64,6 +64,12 @@ export function PrototypeFrame({ html }: { html: string }) {
       {tooBig ? (
         <div className="text-2xs text-accent-amber rounded border border-dashed border-border-default p-3 text-center">
           Prototype is too large to render safely ({Math.round(new Blob([html]).size / 1024)} KB &gt; 512 KB cap).
+        </div>
+      ) : readOnly ? (
+        // Preview (revision diff): static — don't offer to run it here (it would
+        // render a second live frame side-by-side). Source is still viewable below.
+        <div className="w-full rounded border border-dashed border-border-default bg-surface-elevated p-3 text-center text-2xs text-text-muted">
+          Prototype (preview) — open the live version to run it.
         </div>
       ) : running ? (
         <iframe

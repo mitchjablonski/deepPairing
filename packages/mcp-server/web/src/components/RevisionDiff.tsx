@@ -224,7 +224,7 @@ function VisualRow({ tag, visual, artifactId }: { tag: "added" | "removed"; visu
       </div>
       {/* Show the body of a removed-or-added visual so the change is concrete. */}
       <div className={tag === "removed" ? "opacity-60" : ""}>
-        <VisualBody artifactId={artifactId} visual={visual} />
+        <VisualBody artifactId={artifactId} visual={visual} readOnly />
       </div>
     </div>
   );
@@ -261,11 +261,11 @@ function ChangedVisual({ old, next, artifactId }: { old: PlanVisual; next: PlanV
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <div className="text-[9px] uppercase tracking-wide text-text-muted">Before</div>
-          <div className="opacity-70"><VisualBody artifactId={artifactId} visual={old} /></div>
+          <div className="opacity-70"><VisualBody artifactId={artifactId} visual={old} readOnly /></div>
         </div>
         <div className="space-y-1">
           <div className="text-[9px] uppercase tracking-wide text-accent-amber">After</div>
-          <VisualBody artifactId={artifactId} visual={next} />
+          <VisualBody artifactId={artifactId} visual={next} readOnly />
         </div>
       </div>
     </div>

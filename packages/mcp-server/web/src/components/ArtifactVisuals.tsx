@@ -87,7 +87,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
   );
 }
 
-export function VisualBody({ artifactId, visual }: { artifactId: string; visual: PlanVisual }) {
+export function VisualBody({ artifactId, visual, readOnly = false }: { artifactId: string; visual: PlanVisual; readOnly?: boolean }) {
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
@@ -104,18 +104,18 @@ export function VisualBody({ artifactId, visual }: { artifactId: string; visual:
 
   if (visual.kind === "annotated_code") {
     return typeof visual.code === "string" && visual.code.length > 0 ? (
-      <AnnotatedCode artifactId={artifactId} visual={visual} />
+      <AnnotatedCode artifactId={artifactId} visual={visual} readOnly={readOnly} />
     ) : (
       <div className="text-2xs text-text-muted">No code provided.</div>
     );
   }
 
   // prototype — agent-authored HTML, run in a hardened sandbox (see PrototypeFrame).
-  return <PrototypeFrame html={typeof visual.html === "string" ? visual.html : ""} />;
+  return <PrototypeFrame html={typeof visual.html === "string" ? visual.html : ""} readOnly={readOnly} />;
 }
 
 // --- annotated_code: real code + line-anchored agent notes, per-line commentable
-function AnnotatedCode({ artifactId, visual }: { artifactId: string; visual: PlanVisual }) {
+function AnnotatedCode({ artifactId, visual, readOnly = false }: { artifactId: string; visual: PlanVisual; readOnly?: boolean }) {
   const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
   const filePath = typeof visual.filePath === "string" ? visual.filePath : undefined;
   const lineStart = typeof visual.lineStart === "number" && Number.isFinite(visual.lineStart) ? visual.lineStart : 1;
@@ -123,8 +123,11 @@ function AnnotatedCode({ artifactId, visual }: { artifactId: string; visual: Pla
   // Existing human line-comments on THIS file, keyed by absolute line. Mirrors
   // the {lineStart,lineEnd,filePath} target shape LineComposer submits, and
   // scopes by filePath so two annotated_code visuals don't cross-show comments.
+  // Skipped entirely in readOnly (revision-diff preview): the diff is about the
+  // code+annotation delta, and showing the live artifact's comments on both the
+  // Before AND After panes (keyed by line, not version) makes them identical.
   const commentsByLine = new Map<number, Comment[]>();
-  for (const c of allComments) {
+  for (const c of readOnly ? [] : allComments) {
     const t = c.target as { lineStart?: number; lineEnd?: number; filePath?: string; findingIndex?: number; stepIndex?: number; evidenceIndex?: number };
     if (t?.lineStart == null || t.findingIndex != null || t.stepIndex != null || t.evidenceIndex != null) continue;
     if (filePath != null && t.filePath !== filePath) continue;
@@ -154,6 +157,7 @@ function AnnotatedCode({ artifactId, visual }: { artifactId: string; visual: Pla
       commentsByLine={commentsByLine}
       annotationsByLine={annotationsByLine}
       targetContext={{ visualId: visual.id }}
+      readOnly={readOnly}
     />
   );
 }
