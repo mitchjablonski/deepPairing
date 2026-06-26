@@ -482,10 +482,14 @@ export class FileStore implements IStore {
    */
   private static targetKey(target: Record<string, unknown> | undefined): string {
     const t = target ?? {};
+    // Every anchor field in CommentTargetSchema (comment.ts) except artifactId,
+    // which is compared separately. Listing them all — including ones the UI
+    // doesn't construct today (lineNumber) — guarantees no two distinct anchors
+    // ever collapse. `?? ""` (nullish, not ||) so index 0 stays distinct.
     return [
-      "lineStart", "lineEnd", "filePath",
-      "findingIndex", "evidenceIndex", "stepIndex",
-      "visualId", "sectionId",
+      "lineNumber", "lineStart", "lineEnd", "filePath",
+      "findingIndex", "evidenceIndex", "stepIndex", "alternativeIndex",
+      "optionId", "sectionId", "visualId",
     ].map((f) => `${f}=${t[f] ?? ""}`).join("|");
   }
 

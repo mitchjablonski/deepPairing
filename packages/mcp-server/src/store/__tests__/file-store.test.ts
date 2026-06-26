@@ -107,12 +107,18 @@ describe("FileStore", () => {
     store.addComment({ id: "c2", artifactId: "art_X", content: "why?", author: "human", target: { lineStart: 20, filePath: "a.ts" } });
     store.addComment({ id: "c3", artifactId: "art_X", content: "why?", author: "human", target: { findingIndex: 0 } });
     store.addComment({ id: "c4", artifactId: "art_X", content: "why?", author: "human", target: { findingIndex: 1 } });
-    expect(store.getCommentsForArtifact("art_X")).toHaveLength(4);
+    // decision-option and reasoning-alternative anchors ("ask why" per option) —
+    // these distinguish only by optionId / alternativeIndex / sectionId.
+    store.addComment({ id: "c5", artifactId: "art_X", content: "why?", author: "human", target: { optionId: "opt_a" } });
+    store.addComment({ id: "c6", artifactId: "art_X", content: "why?", author: "human", target: { optionId: "opt_b" } });
+    store.addComment({ id: "c7", artifactId: "art_X", content: "why?", author: "human", target: { alternativeIndex: 0 } });
+    store.addComment({ id: "c8", artifactId: "art_X", content: "why?", author: "human", target: { sectionId: "horizon_check:request:1y" } });
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(8);
 
     // ...but a genuine duplicate on the SAME anchor within the window still collapses.
-    const d = store.addComment({ id: "c5", artifactId: "art_X", content: "why?", author: "human", target: { lineStart: 10, filePath: "a.ts" } });
-    expect(d.id).toBe("c1");
-    expect(store.getCommentsForArtifact("art_X")).toHaveLength(4);
+    const d = store.addComment({ id: "c9", artifactId: "art_X", content: "why?", author: "human", target: { optionId: "opt_a" } });
+    expect(d.id).toBe("c5");
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(8);
   });
 
   it("round-trips comments", () => {
