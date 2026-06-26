@@ -319,8 +319,12 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
         </div>
       )}
 
-      {/* Custom approve with step deltas for plans */}
-      {artifact.status === "draft" && hasUnchecked ? (
+      {/* Custom approve-with-step-deltas for plans. U3 — this is ADDITIVE: it
+          used to REPLACE the whole action footer when any step was unchecked,
+          so the human couldn't reject / request revision / respond / ask while
+          a step was deselected. Now it sits above the standard actions, which
+          always render. */}
+      {artifact.status === "draft" && hasUnchecked && (
         <div className="pt-3 border-t border-border-default">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-2xs text-accent-amber">
@@ -335,9 +339,8 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             Approve with modifications
           </button>
         </div>
-      ) : (
-        <ArtifactStatusActions artifact={artifact} />
       )}
+      <ArtifactStatusActions artifact={artifact} />
     </div>
   );
 }

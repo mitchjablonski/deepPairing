@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
 import { SpecArtifact } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
@@ -100,5 +100,31 @@ describe("plan/spec visuals render end-to-end through the artifact", () => {
     }, { id: "planBadViz" });
     expect(() => render(<PlanArtifact artifact={plan} />)).not.toThrow();
     expect(screen.getByText("x")).toBeInTheDocument();
+  });
+});
+
+describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a footer takeover", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  it("unchecking a step keeps the standard actions (Reject/etc) available alongside 'Approve with modifications'", () => {
+    const plan = mk("plan", {
+      estimatedChanges: 2,
+      steps: [
+        { description: "step one", reasoning: "r" },
+        { description: "step two", reasoning: "r" },
+      ],
+    });
+    render(<PlanArtifact artifact={plan} />);
+
+    // standard actions present on a fresh draft (ArtifactStatusActions footer)
+    expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
+
+    // uncheck the first step → the additive mods button appears...
+    fireEvent.click(screen.getAllByTitle(/uncheck to skip this step/i)[0]);
+    expect(screen.getByRole("button", { name: /approve with modifications/i })).toBeInTheDocument();
+
+    // ...and the standard actions footer is STILL there (regression: it used to
+    // be replaced entirely, so you couldn't reject/respond while a step was off).
+    expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
   });
 });
