@@ -113,6 +113,18 @@ describe("RevisionDiff", () => {
     expect(screen.getByText("After")).toBeInTheDocument();
   });
 
+  it("U1 — a changed prototype shows a 'changed' notification (not two identical previews, not a Run button)", () => {
+    const v1 = mkArtifact({ id: "p1", version: 1, content: { steps: [], estimatedChanges: 0, visuals: [{ id: "proto", kind: "prototype", title: "Mock", html: "<button>a</button>" }] } });
+    const v2 = mkArtifact({ id: "p2", version: 2, parentId: "p1", content: { steps: [], estimatedChanges: 0, visuals: [{ id: "proto", kind: "prototype", title: "Mock", html: "<button>b</button>" }] } });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+
+    render(<RevisionDiff artifact={v2} />);
+    expect(screen.queryByRole("button", { name: /run prototype/i })).not.toBeInTheDocument();
+    expect(screen.getByText("changed")).toBeInTheDocument(); // the "it changed" signal
+    expect(screen.getByText(/open the live version/i)).toBeInTheDocument();
+  });
+
   it("marks an unchanged visual as unchanged (no noisy before/after)", () => {
     const visuals = [{ id: "arch", kind: "diagram" as const, title: "Arch", source: "graph TD; A-->B" }];
     const v1 = mkArtifact({ id: "u1", version: 1, content: { steps: [], estimatedChanges: 0, visuals } });

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { PlanVisual } from "@deeppairing/shared";
-import { ArtifactVisuals } from "../ArtifactVisuals";
+import { ArtifactVisuals, VisualBody } from "../ArtifactVisuals";
 import { useArtifactStore } from "../../stores/artifact";
 
 // Diagrams render through MermaidDiagram (lazy-imports mermaid); mock it so the
@@ -178,5 +178,37 @@ describe("ArtifactVisuals", () => {
       ] as unknown as PlanVisual[];
       expect(() => render(<ArtifactVisuals artifactId="a" visuals={junk} />)).not.toThrow();
     });
+  });
+});
+
+describe("VisualBody readOnly (revision-diff preview)", () => {
+  beforeEach(() => {
+    useArtifactStore.getState().reset();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  it("a readOnly prototype shows a static preview, NOT a Run button", () => {
+    render(<VisualBody artifactId="a" visual={{ id: "p", kind: "prototype", html: "<button>x</button>" }} readOnly />);
+    expect(screen.queryByRole("button", { name: /run prototype/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/preview/i)).toBeInTheDocument();
+  });
+
+  it("a readOnly annotated_code renders the code but no interactive comment gutter", () => {
+    const { container } = render(
+      <VisualBody artifactId="a" visual={{ id: "c", kind: "annotated_code", code: "const x = 1;", filePath: "x.ts", lineStart: 1 }} readOnly />,
+    );
+    expect(container.textContent).toContain("const x = 1;");
+    expect(screen.queryByLabelText(/add a comment on this line/i)).not.toBeInTheDocument();
+  });
+
+  it("a readOnly annotated_code STILL shows the agent's line annotations (they're part of the delta)", () => {
+    render(
+      <VisualBody
+        artifactId="a"
+        visual={{ id: "c", kind: "annotated_code", code: "const x = 1;", filePath: "x.ts", lineStart: 1, annotations: [{ line: 1, note: "the new value", kind: "add" }] }}
+        readOnly
+      />,
+    );
+    expect(screen.getByText("the new value")).toBeInTheDocument();
   });
 });

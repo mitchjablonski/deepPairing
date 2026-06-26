@@ -224,7 +224,7 @@ function VisualRow({ tag, visual, artifactId }: { tag: "added" | "removed"; visu
       </div>
       {/* Show the body of a removed-or-added visual so the change is concrete. */}
       <div className={tag === "removed" ? "opacity-60" : ""}>
-        <VisualBody artifactId={artifactId} visual={visual} />
+        <VisualBody artifactId={artifactId} visual={visual} readOnly />
       </div>
     </div>
   );
@@ -249,6 +249,23 @@ function ChangedVisual({ old, next, artifactId }: { old: PlanVisual; next: PlanV
     );
   }
 
+  // A prototype can't be meaningfully previewed in the diff (both panes would
+  // show the same static "preview" placeholder — see PrototypeFrame readOnly),
+  // so just NOTIFY that it changed and point the human at the live version to
+  // compare, instead of a pointless side-by-side of identical placeholders.
+  if (next.kind === "prototype") {
+    return (
+      <div className="flex items-center gap-1.5 text-2xs px-2 py-1 rounded border border-accent-amber/20">
+        <span className="text-accent-amber font-bold">~</span>
+        <span className="text-accent-amber">changed</span>
+        <span className="text-text-muted">·</span>
+        <span className="text-text-secondary">{label}</span>
+        {next.title && <span className="text-text-primary font-medium truncate">{next.title}</span>}
+        <span className="text-text-muted italic ml-auto whitespace-nowrap">open the live version to compare</span>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded border border-accent-amber/20 p-2 space-y-1.5">
       <div className="flex items-center gap-1.5 text-2xs">
@@ -261,11 +278,11 @@ function ChangedVisual({ old, next, artifactId }: { old: PlanVisual; next: PlanV
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <div className="text-[9px] uppercase tracking-wide text-text-muted">Before</div>
-          <div className="opacity-70"><VisualBody artifactId={artifactId} visual={old} /></div>
+          <div className="opacity-70"><VisualBody artifactId={artifactId} visual={old} readOnly /></div>
         </div>
         <div className="space-y-1">
           <div className="text-[9px] uppercase tracking-wide text-accent-amber">After</div>
-          <VisualBody artifactId={artifactId} visual={next} />
+          <VisualBody artifactId={artifactId} visual={next} readOnly />
         </div>
       </div>
     </div>

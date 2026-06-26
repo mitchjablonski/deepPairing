@@ -74,6 +74,22 @@ describe("coercePlanContent", () => {
     expect(coercePlanContent({ visuals: "nope" }).visuals).toBeUndefined();
   });
 
+  it("F4 — a visual without an id gets a CONTENT-stable fallback id (survives reorder)", () => {
+    const ids = (visuals: unknown[]) => coercePlanContent({ visuals }).visuals!;
+    const a = ids([{ kind: "diagram", source: "graph TD; A-->B" }, { kind: "file_map", files: [{ path: "x.ts" }] }]);
+    // same two visuals, reordered — the diagram's id must follow its CONTENT,
+    // not its index, so a revision diff matches it across versions.
+    const b = ids([{ kind: "file_map", files: [{ path: "x.ts" }] }, { kind: "diagram", source: "graph TD; A-->B" }]);
+    const aDia = a.find((v) => v.kind === "diagram")!.id;
+    const bDia = b.find((v) => v.kind === "diagram")!.id;
+    expect(aDia).toBe(bDia);
+    expect(a[0].id).not.toBe(a[1].id); // distinct visuals → distinct ids
+  });
+
+  it("F4 — an empty visual still falls back to the positional id", () => {
+    expect(coercePlanContent({ visuals: [{ kind: "diagram" }] }).visuals![0].id).toBe("visual_0");
+  });
+
   it("coerces an annotated_code visual: keeps code/filePath/lineStart, shapes annotations, drops junk", () => {
     const p = coercePlanContent({
       visuals: [

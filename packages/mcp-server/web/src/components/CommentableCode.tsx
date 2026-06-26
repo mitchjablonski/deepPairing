@@ -30,6 +30,10 @@ interface CommentableCodeProps {
     stepIndex?: number;
     visualId?: string;
   };
+  /** Render the code + annotations but WITHOUT the interactive comment gutter.
+   *  Used by the revision diff, which is a preview — a comment started there
+   *  would anchor to the wrong (new) artifact version. */
+  readOnly?: boolean;
 }
 
 export function CommentableCode({
@@ -41,6 +45,7 @@ export function CommentableCode({
   commentsByLine,
   annotationsByLine,
   targetContext,
+  readOnly = false,
 }: CommentableCodeProps) {
   // One open composer at a time across the whole block. Mode lives here too so
   // the gutter and composer agree on which tab is active.
@@ -73,15 +78,22 @@ export function CommentableCode({
           <div key={i} data-comment-anchor={anchorKey}>
             {/* Code line */}
             <div className="flex group">
-              <LineGutter
-                lineNum={lineNum}
-                commentCount={lineComments.length}
-                active={isCommentActive}
-                activeMode={mode}
-                onOpen={(m) => openLine(lineNum, m)}
-                onClose={closeLine}
-                className="w-14 shrink-0 pr-1"
-              />
+              {readOnly ? (
+                // Preview (revision diff): no interactive gutter — a comment
+                // here would anchor to the wrong version. Keep the width so the
+                // code stays aligned with the live view.
+                <div className="w-14 shrink-0 pr-1" />
+              ) : (
+                <LineGutter
+                  lineNum={lineNum}
+                  commentCount={lineComments.length}
+                  active={isCommentActive}
+                  activeMode={mode}
+                  onOpen={(m) => openLine(lineNum, m)}
+                  onClose={closeLine}
+                  className="w-14 shrink-0 pr-1"
+                />
+              )}
 
               {/* Line number */}
               <span className="w-8 shrink-0 text-right pr-2 py-0.5 text-text-muted select-none border-r border-border-subtle text-[11px]">
