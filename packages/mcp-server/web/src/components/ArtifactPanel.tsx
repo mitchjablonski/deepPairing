@@ -172,7 +172,10 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <ArtifactIcon type={artifact.type} className="text-text-secondary" />
           <EditableTitle artifact={artifact} />
           <span className={`px-1.5 py-0.5 text-2xs font-medium rounded ${statusColors[artifact.status]}`}>
-            {artifact.status}
+            {/* U6 — friendly label + glyph, matching the sidebar; not the raw
+                enum ("superseded"/"reviewing"). */}
+            {statusGlyph[artifact.status] ? `${statusGlyph[artifact.status]} ` : ""}
+            {statusLabels[artifact.status] ?? artifact.status}
           </span>
           {artifact.version > 1 && (
             <span className="text-2xs text-text-muted">v{artifact.version}</span>

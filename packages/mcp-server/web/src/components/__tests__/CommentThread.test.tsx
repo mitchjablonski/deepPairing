@@ -55,11 +55,18 @@ describe("CommentThread — renders replies under their parent", () => {
     expect(screen.getByText("Orphaned answer")).toBeInTheDocument();
   });
 
-  it("shows 'delivered · awaiting agent' on a human comment the agent hasn't drained", () => {
+  it("U8 — a plain human comment the agent hasn't drained shows just 'delivered' (not 'awaiting agent')", () => {
     const c = mk({ id: "c1", author: "human", content: "Looks good", acknowledged: false } as any);
     render(<CommentThread artifactId="art_1" comments={[c]} />);
-    expect(screen.getByText(/delivered · awaiting agent/i)).toBeInTheDocument();
+    expect(screen.getByText("delivered")).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting agent/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/seen by agent/i)).not.toBeInTheDocument();
+  });
+
+  it("U8 — an unanswered human QUESTION shows 'delivered · awaiting agent' (the agent owes a reply)", () => {
+    const c = mk({ id: "c1", author: "human", content: "Which index?", intent: "question", acknowledged: false } as any);
+    render(<CommentThread artifactId="art_1" comments={[c]} />);
+    expect(screen.getByText(/delivered · awaiting agent/i)).toBeInTheDocument();
   });
 
   it("shows 'seen by agent' once a human comment has been acknowledged (read-only, derived)", () => {

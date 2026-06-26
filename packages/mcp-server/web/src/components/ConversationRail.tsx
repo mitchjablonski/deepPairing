@@ -49,6 +49,24 @@ interface ThreadedRow {
   artifactId: string;
 }
 
+/**
+ * U5 — the single source of truth for "a human question still awaiting the
+ * agent". Pre-U5 the "Unanswered" pill COUNT and the "Unanswered" FILTER used
+ * different predicates (the filter omitted the answeredByCommentId /
+ * humanResolvedAt checks), so a question answered via answer_question showed in
+ * the filtered list while the pill read 0. Both now call this.
+ */
+function isUnansweredQuestion(comment: Comment, replies: Comment[]): boolean {
+  const c = comment as any;
+  return (
+    comment.author === "human" &&
+    c.intent === "question" &&
+    !c.answeredByCommentId &&
+    !c.humanResolvedAt &&
+    replies.length === 0
+  );
+}
+
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   if (!Number.isFinite(ms) || ms < 0) return "just now";
@@ -176,12 +194,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     return grouped
       .map((g) => ({
         ...g,
-        threads: g.threads.filter(
-          (t) =>
-            t.comment.author === "human" &&
-            (t.comment as any).intent === "question" &&
-            t.replies.length === 0,
-        ),
+        threads: g.threads.filter((t) => isUnansweredQuestion(t.comment, t.replies)),
       }))
       .filter((g) => g.threads.length > 0);
   }, [grouped, filter]);
@@ -190,13 +203,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     let n = 0;
     for (const g of grouped) {
       for (const t of g.threads) {
-        if (
-          t.comment.author === "human" &&
-          (t.comment as any).intent === "question" &&
-          !(t.comment as any).answeredByCommentId &&
-          !(t.comment as any).humanResolvedAt &&
-          t.replies.length === 0
-        ) {
+        if (isUnansweredQuestion(t.comment, t.replies)) {
           n++;
         }
       }

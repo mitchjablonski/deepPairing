@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
@@ -26,6 +26,24 @@ import { scrollToAnchor } from "./lib/comment-anchor";
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+
+  // U7 — at-rest signal on the Conversation button: how many human questions
+  // are still awaiting the agent (mirrors ConversationRail's isUnansweredQuestion:
+  // human + question intent + not answered/resolved + no reply). Without it the
+  // cross-artifact triage surface gave no hint there was anything to look at.
+  const comments = useArtifactStore((s) => s.comments);
+  const unansweredCount = useMemo(() => {
+    const all = Object.values(comments).flat();
+    const repliedTo = new Set(all.filter((c) => c.parentCommentId).map((c) => c.parentCommentId));
+    return all.filter(
+      (c) =>
+        c.author === "human" &&
+        (c as any).intent === "question" &&
+        !(c as any).answeredByCommentId &&
+        !(c as any).humanResolvedAt &&
+        !repliedTo.has(c.id),
+    ).length;
+  }, [comments]);
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -265,6 +283,14 @@ function App() {
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
             </svg>
             <span className="hidden min-[700px]:inline">Conversation</span>
+            {unansweredCount > 0 && (
+              <span
+                className="ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full bg-accent-blue text-white text-[9px] font-semibold leading-none"
+                aria-label={`${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`}
+              >
+                {unansweredCount}
+              </span>
+            )}
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           <HookStatus />

@@ -311,6 +311,28 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     expect(screen.getByText("Plan")).toBeInTheDocument();
   });
 
+  it("U5 — a question answered via answer_question (answeredByCommentId, no reply) is excluded from BOTH the pill count and the filtered list", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    s.addArtifact(artifact("a2", { title: "Plan" }));
+    // answered out-of-band: answeredByCommentId set, but NO threaded reply.
+    // Pre-U5 the COUNT excluded this (correct) but the FILTER didn't, so the
+    // pill read 1 while two rows showed — count and list disagreed.
+    s.addComment({
+      ...comment({ id: "q_answered", artifactId: "a1", author: "human", intent: "question", content: "answered out of band", createdAt: "2026-04-26T10:00:00.000Z" }),
+      answeredByCommentId: "ans_x",
+    });
+    s.addComment(comment({ id: "q_open", artifactId: "a2", author: "human", intent: "question", content: "still waiting", createdAt: "2026-04-26T10:03:00.000Z" }));
+
+    render(<ConversationRail onClose={() => {}} />);
+    // pill counts only the genuinely-open question...
+    expect(screen.getByText(/1 unanswered question/i)).toBeInTheDocument();
+    // ...and the filtered list agrees — the answered one does not leak in.
+    await userEvent.click(screen.getByRole("button", { name: /unanswered/i }));
+    expect(screen.queryByText("answered out of band")).not.toBeInTheDocument();
+    expect(screen.getByText("still waiting")).toBeInTheDocument();
+  });
+
   it("Unanswered filter empty-state when there are no open questions", async () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1"));
