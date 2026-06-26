@@ -116,15 +116,19 @@ describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a f
     });
     render(<PlanArtifact artifact={plan} />);
 
-    // standard actions present on a fresh draft (ArtifactStatusActions footer)
+    // fresh draft: standard approve is available
     expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
 
     // uncheck the first step → the additive mods button appears...
     fireEvent.click(screen.getAllByTitle(/uncheck to skip this step/i)[0]);
     expect(screen.getByRole("button", { name: /approve with modifications/i })).toBeInTheDocument();
 
-    // ...and the standard actions footer is STILL there (regression: it used to
-    // be replaced entirely, so you couldn't reject/respond while a step was off).
-    expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
+    // ...the rest of the standard footer is STILL there (regression: it used to
+    // be replaced entirely, so you couldn't reject/respond while a step was off)...
+    expect(screen.getByRole("button", { name: "Respond" })).toBeInTheDocument();
+
+    // ...but the plain "Approve" is suppressed, so it can't silently approve the
+    // plan as-is and discard the human's deselection (review QUESTION).
+    expect(screen.queryByTitle(/approve as-is/i)).not.toBeInTheDocument();
   });
 });

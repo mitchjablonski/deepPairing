@@ -5,13 +5,19 @@ import { useConnectionStore } from "../../stores/connection";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
+  /** Hide the plain Approve affordance (and disable auto-approve) when the
+   *  parent supplies its own approve path — e.g. PlanArtifact's "Approve with
+   *  modifications" while steps are unchecked. Without this, a plain Approve
+   *  would silently approve the plan as-is and discard the human's step
+   *  deselections. Reject / Request revision / Respond / Ask stay available. */
+  hideApprove?: boolean;
 }
 
 const COUNTDOWN_SECONDS = 10;
 
 const KEYBOARD_CONFIRM_SECONDS = 3;
 
-export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) {
+export function ArtifactStatusActions({ artifact, hideApprove = false }: ArtifactStatusActionsProps) {
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { updateArtifactStatus, submitComment } = useArtifactStore();
@@ -37,7 +43,8 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
     artifact.status === "draft" &&
     confidence === "high" &&
     autonomyLevel !== "supervised" &&
-    !countdownPaused;
+    !countdownPaused &&
+    !hideApprove; // parent owns approval (e.g. unchecked plan steps) — don't auto-approve as-is
 
   useEffect(() => {
     if (shouldAutoApprove && countdown === null && !comment) {
@@ -75,22 +82,23 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
       if (!detail || detail.artifactId !== artifact.id) return;
       if (artifact.status !== "draft") return;
 
-      if (detail.action === "approve") {
+      if (detail.action === "approve" && !hideApprove) {
         // Arm the same countdown UI used for confidence-auto-approve, but
         // shorter. User can press Esc (via Cancel) to bail.
         setCountdownPaused(false);
         setCountdownMax(KEYBOARD_CONFIRM_SECONDS);
         setCountdown(KEYBOARD_CONFIRM_SECONDS);
       } else {
-        // Focus the comment textarea — user has to type a reason before
-        // Request Revision becomes clickable.
+        // Request Revision (needs a reason), OR an approve shortcut while the
+        // parent owns approval (hideApprove) — either way, focus the comment
+        // textarea instead of approving as-is.
         commentRef.current?.focus();
         commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
       }
     };
     window.addEventListener("dp:artifact-shortcut", handler);
     return () => window.removeEventListener("dp:artifact-shortcut", handler);
-  }, [artifact.id, artifact.status]);
+  }, [artifact.id, artifact.status, hideApprove]);
 
   const cancelCountdown = () => {
     setCountdownPaused(true);
@@ -281,7 +289,7 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
             e.preventDefault();
             if (comment.trim()) {
               handleRespond();
-            } else {
+            } else if (!hideApprove) {
               handleAction("approved");
             }
           }
@@ -308,15 +316,17 @@ export function ArtifactStatusActions({ artifact }: ArtifactStatusActionsProps) 
 
         {/* Secondary terminal actions as outline pills */}
         <div className="flex gap-1.5">
-          <button
-            onClick={() => handleAction("approved")}
-            disabled={submitting}
-            className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
-                       hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-            title={comment.trim() ? "Approve and send this comment" : "Approve as-is"}
-          >
-            {comment.trim() ? "Approve with note" : "Approve"}
-          </button>
+          {!hideApprove && (
+            <button
+              onClick={() => handleAction("approved")}
+              disabled={submitting}
+              className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+                         hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+              title={comment.trim() ? "Approve and send this comment" : "Approve as-is"}
+            >
+              {comment.trim() ? "Approve with note" : "Approve"}
+            </button>
+          )}
           <button
             onClick={() => handleAction("revised")}
             disabled={submitting || !comment.trim()}

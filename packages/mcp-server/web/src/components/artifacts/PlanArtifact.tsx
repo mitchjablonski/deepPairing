@@ -340,7 +340,13 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
           </button>
         </div>
       )}
-      <ArtifactStatusActions artifact={artifact} />
+      {/* While steps are unchecked, the approve path is "Approve with
+          modifications" above — suppress the plain Approve so it can't silently
+          approve the plan as-is and discard the deselections. */}
+      <ArtifactStatusActions
+        artifact={artifact}
+        hideApprove={artifact.status === "draft" && hasUnchecked}
+      />
     </div>
   );
 }
