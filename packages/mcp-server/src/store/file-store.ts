@@ -471,6 +471,24 @@ export class FileStore implements IStore {
    */
   private static readonly DEDUPE_WINDOW_MS = 5000;
 
+  /**
+   * F3 — the dedupe must distinguish comments anchored to DIFFERENT parts of
+   * the same artifact. Pre-F3 the key was only (author, artifactId, content,
+   * parent), so two terse same-content comments ("why?", "fix this") posted on
+   * different lines / findings / steps / visuals within the 5s window silently
+   * collapsed to one — real human input lost (and not even broadcast). Fold the
+   * target's discriminating fields into the key. artifactId is compared
+   * separately, so it's excluded here.
+   */
+  private static targetKey(target: Record<string, unknown> | undefined): string {
+    const t = target ?? {};
+    return [
+      "lineStart", "lineEnd", "filePath",
+      "findingIndex", "evidenceIndex", "stepIndex",
+      "visualId", "sectionId",
+    ].map((f) => `${f}=${t[f] ?? ""}`).join("|");
+  }
+
   addComment(params: {
     id: string;
     artifactId: string;
@@ -482,11 +500,14 @@ export class FileStore implements IStore {
   }): Comment {
     const now = Date.now();
     const parentKey = params.parentCommentId ?? "";
+    const newTargetKey = FileStore.targetKey(params.target);
     const dupe = this.comments.find((c) => {
       if (c.author !== params.author) return false;
       if (c.target.artifactId !== params.artifactId) return false;
       if (c.content !== params.content) return false;
       if ((c.parentCommentId ?? "") !== parentKey) return false;
+      // F3 — only a dupe if it targets the SAME anchor (line/finding/step/etc).
+      if (FileStore.targetKey(c.target as Record<string, unknown>) !== newTargetKey) return false;
       const t = new Date(c.createdAt).getTime();
       return Number.isFinite(t) && now - t < FileStore.DEDUPE_WINDOW_MS;
     });

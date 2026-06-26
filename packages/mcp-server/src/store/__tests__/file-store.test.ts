@@ -99,6 +99,22 @@ describe("FileStore", () => {
     expect(store.getCommentsForArtifact("art_Y")).toHaveLength(1);
   });
 
+  it("F3 — does NOT dedupe same-content comments on DIFFERENT targets of one artifact", () => {
+    const store = createStore("dedupe-target");
+    // Same content/author/artifact, but anchored to different lines / findings —
+    // these are distinct human input and must all survive (pre-F3 they collapsed).
+    store.addComment({ id: "c1", artifactId: "art_X", content: "why?", author: "human", target: { lineStart: 10, filePath: "a.ts" } });
+    store.addComment({ id: "c2", artifactId: "art_X", content: "why?", author: "human", target: { lineStart: 20, filePath: "a.ts" } });
+    store.addComment({ id: "c3", artifactId: "art_X", content: "why?", author: "human", target: { findingIndex: 0 } });
+    store.addComment({ id: "c4", artifactId: "art_X", content: "why?", author: "human", target: { findingIndex: 1 } });
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(4);
+
+    // ...but a genuine duplicate on the SAME anchor within the window still collapses.
+    const d = store.addComment({ id: "c5", artifactId: "art_X", content: "why?", author: "human", target: { lineStart: 10, filePath: "a.ts" } });
+    expect(d.id).toBe("c1");
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(4);
+  });
+
   it("round-trips comments", () => {
     const store = createStore( "comments");
     store.addComment({
