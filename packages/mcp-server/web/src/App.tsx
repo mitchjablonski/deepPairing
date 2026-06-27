@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
@@ -22,10 +22,21 @@ import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
+import { countUnansweredQuestions } from "./lib/unanswered";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+
+  // U7 — at-rest signal on the Conversation button: how many human questions
+  // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
+  // that ConversationRail's pill/filter/marker use, so the badge can't drift
+  // from the rail. Without it the cross-artifact triage surface gave no hint.
+  const comments = useArtifactStore((s) => s.comments);
+  const unansweredCount = useMemo(
+    () => countUnansweredQuestions(Object.values(comments).flat()),
+    [comments],
+  );
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -265,6 +276,14 @@ function App() {
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
             </svg>
             <span className="hidden min-[700px]:inline">Conversation</span>
+            {unansweredCount > 0 && (
+              <span
+                className="ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full bg-accent-blue text-white text-[9px] font-semibold leading-none"
+                aria-label={`${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`}
+              >
+                {unansweredCount}
+              </span>
+            )}
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           <HookStatus />

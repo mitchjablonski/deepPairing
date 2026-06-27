@@ -3,6 +3,7 @@ import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { commentAnchorKey } from "../lib/comment-anchor";
+import { isUnansweredQuestion } from "../lib/unanswered";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
 // which comments arrived since the user last looked at the rail. Stored
@@ -176,12 +177,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     return grouped
       .map((g) => ({
         ...g,
-        threads: g.threads.filter(
-          (t) =>
-            t.comment.author === "human" &&
-            (t.comment as any).intent === "question" &&
-            t.replies.length === 0,
-        ),
+        threads: g.threads.filter((t) => isUnansweredQuestion(t.comment, t.replies)),
       }))
       .filter((g) => g.threads.length > 0);
   }, [grouped, filter]);
@@ -190,13 +186,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     let n = 0;
     for (const g of grouped) {
       for (const t of g.threads) {
-        if (
-          t.comment.author === "human" &&
-          (t.comment as any).intent === "question" &&
-          !(t.comment as any).answeredByCommentId &&
-          !(t.comment as any).humanResolvedAt &&
-          t.replies.length === 0
-        ) {
+        if (isUnansweredQuestion(t.comment, t.replies)) {
           n++;
         }
       }
@@ -384,10 +374,10 @@ function ThreadEntry({
 }) {
   const { comment, replies } = thread;
   const { submitComment } = useArtifactStore();
-  const isUnansweredQuestion =
-    comment.author === "human" &&
-    (comment as any).intent === "question" &&
-    replies.length === 0;
+  // U5 — use the SAME predicate as the pill/filter (it also drops questions the
+  // human resolved or the agent answered out-of-band), so the inline "awaiting
+  // agent answer" marker can't disagree with a "0 unanswered" header.
+  const isUnanswered = isUnansweredQuestion(comment, replies);
   // W2 — a thread is "fresh" if the parent OR any reply is unread. The
   // parent gets the dot regardless of which row is fresh; per-reply dots
   // make the diff readable when only the agent's answer is new.
@@ -445,7 +435,7 @@ function ThreadEntry({
             ))}
           </div>
         )}
-        {isUnansweredQuestion && (
+        {isUnanswered && (
           <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
             ⏳ awaiting agent answer (next check_feedback)
           </div>

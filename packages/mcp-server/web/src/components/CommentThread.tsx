@@ -73,7 +73,10 @@ function CommentBubble({ comment }: { comment: Comment }) {
             )
             : (
               <span className="text-accent-blue/70 text-2xs" title="Delivered to the session — the agent will see it on its next check_feedback">
-                delivered · awaiting agent
+                {/* U8 — only a QUESTION leaves the agent owing a reply; a plain
+                    comment/suggestion is just delivered, so don't imply the
+                    agent is on the hook for it. */}
+                {comment.intent === "question" ? "delivered · awaiting agent" : "delivered"}
               </span>
             ))}
         </div>
