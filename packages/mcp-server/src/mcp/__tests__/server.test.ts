@@ -767,6 +767,25 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Suggested action:");
     });
 
+    it("F1 — warns to WAIT while a code_change is still under review (never 'you may proceed')", async () => {
+      // confidence "low" keeps it a draft (no terminal quick-approve) → routed to UI.
+      await callTool("present_code_change", {
+        filePath: "/src/big.ts", changeType: "modify",
+        before: "const x = 1;", after: "const x = 2;", reasoning: "x", confidence: "low",
+      });
+      const art = store.getArtifacts()[0];
+      expect(art.type).toBe("code_change");
+      expect(art.status).toBe("draft");
+      // an immediate comment makes check_feedback return fast instead of long-polling;
+      // suggestedAction still reflects the pending code_change.
+      store.addComment({ id: "c_imm", artifactId: art.id, content: "noted", author: "human" });
+
+      const { text } = await callTool("check_feedback");
+      expect(text).toContain("Wait for the code change review");
+      expect(text).not.toContain("You may proceed with implementation.");
+      expect(text).toContain("(code_change)"); // appears in the WAITING line
+    });
+
     it("returns unacknowledged comments", async () => {
       // Create an artifact and add a comment
       await callTool("present_findings", {

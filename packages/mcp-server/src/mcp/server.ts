@@ -82,6 +82,20 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   reasoning: validateLogReasoningInput,
 };
 
+/**
+ * F1 — the draft artifact types that make check_feedback WAIT for the human and
+ * count toward "pending". These MUST stay in sync across the long-poll gate, the
+ * pendingCount/pendingArts tally, and the suggestedAction branch: pre-F1
+ * `code_change` was in the gate but absent from the others, so a lone pending
+ * code_change made check_feedback long-poll and then return "you may proceed"
+ * while the diff was still unreviewed — defeating the per-edit checkpoint.
+ */
+const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change"] as const;
+/** WAITING-line subset for the generic draft list: decisions get their own
+ *  dedicated WAITING line (getPendingDecisions), so they're excluded here.
+ *  (Matches the prior research/spec/plan list, plus code_change.) */
+const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"] as const;
+
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
     { name: "deeppairing", version: "0.1.0" },
@@ -1120,7 +1134,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           // Check if there are draft artifacts — if so, wait for human action
           const allArts = allArtsForScope;
           const hasDrafts = allArts.some(
-            (a) => a.status === "draft" && ["research", "spec", "plan", "decision", "code_change"].includes(a.type),
+            (a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type),
           );
           if (hasDrafts) {
             // Send progress heartbeats during the wait to keep the connection alive
@@ -1196,13 +1210,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const allArtifacts = await store.getArtifacts();
         const totalArtifacts = allArtifacts.length;
         const approvedCount = allArtifacts.filter((a) => a.status === "approved").length;
-        const pendingCount = allArtifacts.filter((a) => a.status === "draft" && ["research", "spec", "plan", "decision"].includes(a.type)).length;
+        const pendingCount = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type)).length;
         const totalComments = (await store.getUnacknowledgedComments()).length;
         const autonomyLabel = await store.getAutonomyLevel();
 
         // Find oldest pending artifact age
         let oldestPendingAge = "";
-        const pendingArts = allArtifacts.filter((a) => a.status === "draft" && ["research", "spec", "plan", "decision"].includes(a.type));
+        const pendingArts = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type));
         if (pendingArts.length > 0) {
           const oldestMs = Date.now() - new Date(pendingArts[0].createdAt).getTime();
           const mins = Math.floor(oldestMs / 60000);
@@ -1212,7 +1226,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         // Determine suggested action
         let suggestedAction = "You may proceed with implementation.";
-        if (pendingArts.some((a) => a.type === "decision")) {
+        if (pendingArts.some((a) => a.type === "code_change")) {
+          suggestedAction = "Wait for the code change review before applying the edit.";
+        } else if (pendingArts.some((a) => a.type === "decision")) {
           suggestedAction = "Wait for decision selection before proceeding.";
         } else if (pendingArts.some((a) => a.type === "plan")) {
           suggestedAction = "Wait for plan approval before implementing.";
@@ -1362,7 +1378,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         // Check for draft artifacts still awaiting human review
         const draftArtifacts = (await store.getArtifacts()).filter(
-          (a) => a.status === "draft" && ["research", "spec", "plan"].includes(a.type),
+          (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
         );
         if (draftArtifacts.length > 0) {
           const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
