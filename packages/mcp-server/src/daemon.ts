@@ -536,7 +536,12 @@ function cleanup(): void {
  *  NOT verify/throw on leaked bits — the caller decides where the secret-
  *  bearing file goes based on a measured FS-capability probe (III9). */
 function writeFile0600(file: string, obj: unknown): void {
-  const fd = fs.openSync(file, "w", 0o600);
+  // S1 — open with O_NOFOLLOW so a pre-placed symlink at this path can't
+  // redirect the write (the token goes into daemon.json in the in-repo case).
+  // Lower-risk than the /tmp sidecar since this is inside the user's own repo,
+  // but symmetric and cheap.
+  const O_NOFOLLOW = (fs.constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | O_NOFOLLOW, 0o600);
   try {
     fs.writeFileSync(fd, JSON.stringify(obj, null, 2));
   } finally {
@@ -581,7 +586,13 @@ function writeDaemonInfo(port: number): void {
     // lands somewhere only this uid can read.
     writeFile0600(daemonInfoFile, discovery); // token-less; world-readable is fine
     const sidecar = writeTokenSidecar(projectRoot, { authToken: daemonAuthToken, pid: process.pid, port });
-    if (sidecar.honored) {
+    if (sidecar.refused) {
+      // S1 — the sidecar dir/file was a symlink or owned by another uid; we
+      // fail-closed (didn't write the token) rather than leak it. Loud, because
+      // benign setups don't hit this — the per-user runtime dir is 0700.
+      log(`[token] SECURITY: refused to write the bearer token to ${sidecar.path} — the sidecar path is a symlink or owned by another user (possible token-capture attempt). Sidecar auth is unavailable until this is cleared.`);
+      process.stderr.write(`[deepPairing daemon] SECURITY: token sidecar path ${sidecar.path} is unsafe (symlink/foreign-owned); refused to write.\n`);
+    } else if (sidecar.honored) {
       // Log once (placement is decided once; heartbeats re-enter here but the
       // path doesn't change). Cheap and useful for `doctor` post-mortems.
       log(`[token] .deeppairing is non-POSIX (chmod 0600 ignored) — bearer token relocated to ${sidecar.path} (mode 0600). Discovery (pid/port) stays in .deeppairing/daemon.json.`);

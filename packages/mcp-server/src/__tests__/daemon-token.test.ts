@@ -100,6 +100,26 @@ describe("token sidecar IO", () => {
     expect(readTokenSidecar("/some/other/never-written")).toBeNull();
   });
 
+  // S1 — symlink/foreign-owned defense is POSIX-only (no symlinks / O_NOFOLLOW on win32).
+  (process.platform === "win32" ? it.skip : it)(
+    "S1 — refuses to write the token through a pre-placed symlink at the sidecar path (fail-closed)",
+    () => {
+      const sidecar = tokenSidecarPath(projectRoot);
+      const captured = path.join(runtimeDir, "captured-by-attacker.json");
+      fs.mkdirSync(path.dirname(sidecar), { recursive: true, mode: 0o700 });
+      // A different-uid attacker pre-creates the sidecar path as a symlink to a
+      // file they can read, hoping the daemon writes the token through it.
+      fs.symlinkSync(captured, sidecar);
+
+      const res = writeTokenSidecar(projectRoot, { authToken: "secret-xyz", pid: 1, port: 3847 });
+
+      expect(res.refused).toBe(true);
+      expect(res.honored).toBe(false);
+      // the token was NOT written through the symlink to the attacker's target
+      expect(fs.existsSync(captured)).toBe(false);
+    },
+  );
+
   it("isolates projects — one project's sidecar is invisible to another", () => {
     writeTokenSidecar(projectRoot, { authToken: "proj-a", pid: 1, port: 3847 });
     const other = "/mnt/c/Users/someone/other-project";
