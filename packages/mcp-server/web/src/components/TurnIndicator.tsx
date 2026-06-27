@@ -77,7 +77,9 @@ export function TurnIndicator() {
   const [idle, setIdle] = useState(false);
   useEffect(() => {
     setIdle(false);
-    if (!lastActivityMs) { setIdle(true); return; }
+    // No activity yet on a fresh session → the agent is spinning up its first
+    // artifact, so keep "Agent working" rather than claiming "Up to date".
+    if (!lastActivityMs) return;
     const remaining = AGENT_IDLE_MS - (Date.now() - lastActivityMs);
     if (remaining <= 0) { setIdle(true); return; }
     const t = setTimeout(() => setIdle(true), remaining);
