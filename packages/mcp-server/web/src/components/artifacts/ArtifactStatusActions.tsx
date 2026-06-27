@@ -58,10 +58,20 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     if (comment && countdown !== null) cancelCountdown();
   }, [comment]);
 
+  // U3 — if approval gets suppressed mid-countdown (e.g. the user unchecks a
+  // plan step after pressing `a`), cancel the armed countdown. Otherwise it
+  // would tick to 0 and approve the plan as-is, discarding the deselection —
+  // exactly the footgun hideApprove exists to prevent.
+  useEffect(() => {
+    if (hideApprove && countdown !== null) cancelCountdown();
+  }, [hideApprove]);
+
   useEffect(() => {
     if (countdown === null || countdown <= 0 || countdownPaused) {
       if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-      if (countdown !== null && countdown <= 0 && !countdownPaused) {
+      // The !hideApprove guard is belt-and-suspenders: the effect above already
+      // cancels on hideApprove, but never auto-approve while approval is suppressed.
+      if (countdown !== null && countdown <= 0 && !countdownPaused && !hideApprove) {
         updateArtifactStatus(artifact.id, "approved");
       }
       return;

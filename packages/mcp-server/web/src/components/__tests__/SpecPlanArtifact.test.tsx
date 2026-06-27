@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
 import { SpecArtifact } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
+import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
 
 /**
  * Regression for the "Failed to render" per-artifact crash. Two real shape-drift
@@ -130,5 +131,28 @@ describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a f
     // ...but the plain "Approve" is suppressed, so it can't silently approve the
     // plan as-is and discard the human's deselection (review QUESTION).
     expect(screen.queryByTitle(/approve as-is/i)).not.toBeInTheDocument();
+  });
+
+  it("cancels an armed approve-countdown when approval gets suppressed mid-countdown (2nd-pass review)", () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue(undefined);
+      const artifact = mk("plan", { estimatedChanges: 1, steps: [{ description: "do it", reasoning: "r" }] });
+
+      // hideApprove starts false → arm the 3s confirm countdown via the keyboard shortcut
+      const { rerender } = render(<ArtifactStatusActions artifact={artifact} hideApprove={false} />);
+      act(() => {
+        window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: artifact.id, action: "approve" } }));
+      });
+
+      // approval gets suppressed mid-countdown (user unchecks a step)
+      rerender(<ArtifactStatusActions artifact={artifact} hideApprove={true} />);
+
+      // run well past the countdown — it must NOT auto-approve as-is
+      act(() => { vi.advanceTimersByTime(6000); });
+      expect(spy).not.toHaveBeenCalledWith(artifact.id, "approved");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

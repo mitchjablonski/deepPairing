@@ -67,9 +67,13 @@ type DecisionPhase =
 
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const { resolveDecision, submitComment } = useArtifactStore();
-  const [focusedIndex, setFocusedIndex] = useState(
-    event.options.findIndex((o) => o.recommendation) ?? 0,
-  );
+  const [focusedIndex, setFocusedIndex] = useState(() => {
+    // findIndex returns -1 (not undefined) when nothing is recommended, so the
+    // old `?? 0` never fired and focusedIndex could be -1 → options[-1] throws
+    // on Enter. Default to the first option when there's no recommendation.
+    const i = event.options.findIndex((o) => o.recommendation);
+    return i < 0 ? 0 : i;
+  });
   const [reasoning, setReasoning] = useState(initialResolved?.reasoning ?? "");
   const [showReasoning, setShowReasoning] = useState(false);
   const [phase, setPhase] = useState<DecisionPhase>(
