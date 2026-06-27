@@ -67,9 +67,13 @@ type DecisionPhase =
 
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const { resolveDecision, submitComment } = useArtifactStore();
-  const [focusedIndex, setFocusedIndex] = useState(
-    event.options.findIndex((o) => o.recommendation) ?? 0,
-  );
+  const [focusedIndex, setFocusedIndex] = useState(() => {
+    // findIndex returns -1 (not undefined) when nothing is recommended, so the
+    // old `?? 0` never fired and focusedIndex could be -1 → options[-1] throws
+    // on Enter. Default to the first option when there's no recommendation.
+    const i = event.options.findIndex((o) => o.recommendation);
+    return i < 0 ? 0 : i;
+  });
   const [reasoning, setReasoning] = useState(initialResolved?.reasoning ?? "");
   const [showReasoning, setShowReasoning] = useState(false);
   const [phase, setPhase] = useState<DecisionPhase>(
@@ -237,13 +241,19 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // happy click.
   const requestHorizonCheck = async (horizon: "3mo" | "1y" | "2y") => {
     if (!artifactId || horizonRequested) return;
+    // Optimistic for a snappy "✓ Asked", but roll back on a failed POST — else
+    // the button is permanently stuck showing success with no way to retry.
     setHorizonRequested(horizon);
-    await submitComment(
-      artifactId,
-      `Please call request_horizon_check on this decision with horizon "${horizon}".`,
-      { sectionId: `horizon_check:request:${horizon}` } as any,
-      { intent: "question" },
-    );
+    try {
+      await submitComment(
+        artifactId,
+        `Please call request_horizon_check on this decision with horizon "${horizon}".`,
+        { sectionId: `horizon_check:request:${horizon}` } as any,
+        { intent: "question" },
+      );
+    } catch {
+      setHorizonRequested(null);
+    }
   };
 
   // Resolved state
@@ -508,6 +518,12 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                     : "border-white/[0.06] bg-surface-elevated hover:border-white/[0.1]"
               }`}
               onMouseEnter={() => setFocusedIndex(idx)}
+              // U4 — keep the visual highlight (focusedIndex) in lockstep with
+              // real DOM focus. Without this, Tab moves :focus into an option
+              // while the j/k-driven blue ring sat elsewhere, and the
+              // container's Enter handler (which selects options[focusedIndex])
+              // could fire a different option than the one the eye was on.
+              onFocus={() => !submitting && setFocusedIndex(idx)}
             >
               {/* Title + badges */}
               <div className="flex items-start justify-between gap-2 mb-1.5">

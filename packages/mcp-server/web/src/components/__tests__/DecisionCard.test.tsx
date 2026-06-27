@@ -308,6 +308,19 @@ describe("DecisionCard — horizon check trigger (Q3)", () => {
     expect(screen.queryByRole("button", { name: /request horizon check/i })).not.toBeInTheDocument();
     expect(screen.getByText(/✓ Asked \(3mo\)/)).toBeInTheDocument();
   });
+
+  it("U2 — rolls back to the buttons (not a stuck '✓ Asked') when the POST fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    render(
+      <DecisionCard event={event} artifactId="art_1" stakes="high" initialResolved={{ optionId: "o1" }} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /request horizon check at 1y/i }));
+    // optimistic "Asked" must roll back so the human can retry
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /request horizon check at 1y/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/✓ Asked/)).not.toBeInTheDocument();
+  });
 });
 
 describe("DecisionCard — keyboard navigation", () => {
@@ -338,6 +351,20 @@ describe("DecisionCard — keyboard navigation", () => {
     // behavior was covered above.
     expect(() => fireEvent.keyDown(container, { key: "ArrowDown" })).not.toThrow();
     expect(() => fireEvent.keyDown(container, { key: "ArrowUp" })).not.toThrow();
+  });
+
+  it("U4 — focusing an option (Tab) syncs the highlight so the container's Enter selects THAT option", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" />);
+    // o1 (Redis) is the recommended default at focusedIndex 0. Tab DOM-focus to
+    // o2 — pre-fix the j/k highlight stayed on o1, so Enter selected o1.
+    const opt2 = screen.getByText("CDN edge cache").closest('[role="button"]') as HTMLElement;
+    fireEvent.focus(opt2);
+    const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
+    fireEvent.keyDown(container, { key: "Enter" });
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/decisions/dec_abc"),
+      expect.objectContaining({ body: expect.stringContaining('"optionId":"o2"') }),
+    );
   });
 });
 

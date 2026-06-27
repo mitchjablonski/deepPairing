@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
 import { SpecArtifact } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
+import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
 
 /**
  * Regression for the "Failed to render" per-artifact crash. Two real shape-drift
@@ -100,5 +101,58 @@ describe("plan/spec visuals render end-to-end through the artifact", () => {
     }, { id: "planBadViz" });
     expect(() => render(<PlanArtifact artifact={plan} />)).not.toThrow();
     expect(screen.getByText("x")).toBeInTheDocument();
+  });
+});
+
+describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a footer takeover", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  it("unchecking a step keeps the standard actions (Reject/etc) available alongside 'Approve with modifications'", () => {
+    const plan = mk("plan", {
+      estimatedChanges: 2,
+      steps: [
+        { description: "step one", reasoning: "r" },
+        { description: "step two", reasoning: "r" },
+      ],
+    });
+    render(<PlanArtifact artifact={plan} />);
+
+    // fresh draft: standard approve is available
+    expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
+
+    // uncheck the first step → the additive mods button appears...
+    fireEvent.click(screen.getAllByTitle(/uncheck to skip this step/i)[0]);
+    expect(screen.getByRole("button", { name: /approve with modifications/i })).toBeInTheDocument();
+
+    // ...the rest of the standard footer is STILL there (regression: it used to
+    // be replaced entirely, so you couldn't reject/respond while a step was off)...
+    expect(screen.getByRole("button", { name: "Respond" })).toBeInTheDocument();
+
+    // ...but the plain "Approve" is suppressed, so it can't silently approve the
+    // plan as-is and discard the human's deselection (review QUESTION).
+    expect(screen.queryByTitle(/approve as-is/i)).not.toBeInTheDocument();
+  });
+
+  it("cancels an armed approve-countdown when approval gets suppressed mid-countdown (2nd-pass review)", () => {
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue(undefined);
+      const artifact = mk("plan", { estimatedChanges: 1, steps: [{ description: "do it", reasoning: "r" }] });
+
+      // hideApprove starts false → arm the 3s confirm countdown via the keyboard shortcut
+      const { rerender } = render(<ArtifactStatusActions artifact={artifact} hideApprove={false} />);
+      act(() => {
+        window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: artifact.id, action: "approve" } }));
+      });
+
+      // approval gets suppressed mid-countdown (user unchecks a step)
+      rerender(<ArtifactStatusActions artifact={artifact} hideApprove={true} />);
+
+      // run well past the countdown — it must NOT auto-approve as-is
+      act(() => { vi.advanceTimersByTime(6000); });
+      expect(spy).not.toHaveBeenCalledWith(artifact.id, "approved");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
