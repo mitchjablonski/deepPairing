@@ -29,6 +29,44 @@ const RecordApprovedBody = z.object({
   concept: z.string().optional(),
 });
 
+// S2 — parity: the internal mutating routes (createArtifact / addComment /
+// recordDecisionRequest) used to forward `await c.req.json()` straight to the
+// store with no validation, so a malformed body (non-string title, etc.) hit a
+// `.trim()` and 500'd instead of a clean 400. Bearer-gated and no injection
+// sink (the store builds objects field-by-field), so this is robustness, not a
+// live vuln — but it brings them up to the same tier as the memory routes.
+// `.passthrough()` keeps every optional field the store reads (parentId,
+// version, target, intent, …) untouched.
+const CreateArtifactBody = z
+  .object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    title: z.string().min(1),
+    content: z.record(z.unknown()),
+  })
+  .passthrough();
+const AddCommentBody = z
+  .object({
+    id: z.string().min(1),
+    artifactId: z.string().min(1),
+    content: z.string(),
+    author: z.enum(["human", "agent"]),
+  })
+  .passthrough();
+const RecordDecisionBody = z.record(z.unknown()); // must be an object; shape is the store's concern
+
+async function parseJsonBody<T>(
+  c: Context,
+  schema: z.ZodType<T>,
+): Promise<{ ok: true; data: T } | { ok: false; res: Response }> {
+  try {
+    return { ok: true, data: schema.parse(await c.req.json()) };
+  } catch (err) {
+    const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
+    return { ok: false, res: c.json({ error: message, code: ERROR_CODES.validation_error }, 400) };
+  }
+}
+
 type SessionMap = Map<string, FileStore>;
 type BroadcastFn = (sessionId: string, event: any) => void;
 type LogFn = (msg: string) => void;
@@ -238,8 +276,9 @@ export function createDaemonRoutes(
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const params = await c.req.json();
-    const artifact = r.store.createArtifact(params);
+    const parsed = await parseJsonBody(c, CreateArtifactBody);
+    if (!parsed.ok) return parsed.res;
+    const artifact = r.store.createArtifact(parsed.data as Parameters<typeof r.store.createArtifact>[0]);
     broadcast(sessionId, { type: "artifact_created", artifact });
     return c.json({ artifact });
   });
@@ -284,7 +323,9 @@ export function createDaemonRoutes(
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const params = await c.req.json();
+    const parsed = await parseJsonBody(c, AddCommentBody);
+    if (!parsed.ok) return parsed.res;
+    const params = parsed.data as Parameters<typeof r.store.addComment>[0];
     // params already has intent/parentCommentId when the MCP wrapper sends them
     const requestedId = params.id;
     const comment = r.store.addComment(params);
@@ -371,8 +412,9 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/decisions", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const params = await c.req.json();
-    r.store.recordDecisionRequest(params);
+    const parsed = await parseJsonBody(c, RecordDecisionBody);
+    if (!parsed.ok) return parsed.res;
+    r.store.recordDecisionRequest(parsed.data as Parameters<typeof r.store.recordDecisionRequest>[0]);
     return c.json({ status: "recorded" });
   });
 

@@ -99,6 +99,10 @@ export interface SidecarWriteResult {
   mode: number;
   /** True when the sidecar landed at a real 0600 (no group/other bits). */
   honored: boolean;
+  /** S1 — true when we REFUSED to write because the sidecar dir/file was a
+   *  symlink or owned by another uid (possible token-capture). Fail-closed:
+   *  the token is NOT written rather than leaked through an attacker's symlink. */
+  refused?: boolean;
 }
 
 /**
@@ -112,11 +116,37 @@ export function writeTokenSidecar(
   payload: { authToken: string; pid: number; port: number },
 ): SidecarWriteResult {
   const file = tokenSidecarPath(projectRoot);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
-    fs.chmodSync(path.dirname(file), 0o700);
+    fs.chmodSync(dir, 0o700);
   } catch {}
-  const fd = fs.openSync(file, "w", 0o600);
+
+  // S1 — this sidecar lives in a SHARED directory (os.tmpdir() when
+  // $XDG_RUNTIME_DIR is unset), so a different-uid local user could pre-create
+  // the dir or file as a symlink to capture or redirect the bearer token. Two
+  // defenses, both fail-CLOSED (refuse to write rather than leak):
+  //   1. the dir must be a real directory we own (not a symlink, not foreign);
+  //   2. open the file with O_NOFOLLOW so a pre-placed file-symlink can't
+  //      redirect the write (throws ELOOP instead of following it).
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  try {
+    const dstat = fs.lstatSync(dir);
+    if (dstat.isSymbolicLink() || (uid !== undefined && dstat.uid !== uid)) {
+      return { path: file, mode: dstat.mode & 0o777, honored: false, refused: true };
+    }
+  } catch {
+    return { path: file, mode: 0o777, honored: false, refused: true };
+  }
+
+  const O_NOFOLLOW = (fs.constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | O_NOFOLLOW, 0o600);
+  } catch {
+    // Pre-existing symlink (ELOOP) or a race — refuse rather than follow it.
+    return { path: file, mode: 0o777, honored: false, refused: true };
+  }
   try {
     fs.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot }, null, 2));
   } finally {

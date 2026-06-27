@@ -77,6 +77,28 @@ describe("F1 — daemon-side metric recording", () => {
   });
 });
 
+describe("S2 — internal mutators reject malformed bodies with 400 (not 500)", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("createArtifact / addComment 400 on bad input but succeed on valid input", async () => {
+    await app.request(`/api/internal/sessions/s_s2/register`, j({}));
+
+    // missing title → 400 (pre-S2 this hit a .trim() and 500'd)
+    const bad1 = await app.request(`/api/internal/sessions/s_s2/artifacts`, j({ id: "a", type: "plan" }));
+    expect(bad1.status).toBe(400);
+
+    // non-string comment content → 400
+    const bad2 = await app.request(`/api/internal/sessions/s_s2/comments`, j({ id: "c", artifactId: "a1", author: "human", content: 123 }));
+    expect(bad2.status).toBe(400);
+
+    // valid payloads still go through
+    const ok1 = await app.request(`/api/internal/sessions/s_s2/artifacts`, j({ id: "a1", type: "plan", title: "T", content: {} }));
+    expect(ok1.status).toBe(200);
+    const ok2 = await app.request(`/api/internal/sessions/s_s2/comments`, j({ id: "c1", artifactId: "a1", author: "human", content: "looks good" }));
+    expect(ok2.status).toBe(200);
+  });
+});
+
 // --- Daemon Routes (direct Hono request) ---
 
 describe("Daemon Routes", () => {
