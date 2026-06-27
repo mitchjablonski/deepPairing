@@ -363,7 +363,6 @@ export function createHttpRoutes(
       : undefined;
     await store.resolveDecision(decisionId, optionId, reasoning, prediction);
 
-    // Flip the decision ARTIFACT to approved so it leaves the "waiting" set.
     // Prefer the decision RECORD's artifactId, but fall back to the decision
     // artifact carrying this decisionId when no record is found. The daemon
     // and the MCP server are separate processes sharing the file store (see
@@ -372,6 +371,20 @@ export function createHttpRoutes(
     // returns 200 "resolved" yet leaves the artifact stuck in draft, so it
     // keeps showing as "waiting for you" even though the choice was made.
     const decision = await store.getDecision(decisionId);
+
+    // F2 — when a record EXISTS, resolveDecision ignores an optionId that isn't
+    // one of its options (fail-closed). Honor that: don't flip the artifact to
+    // approved (a split state — artifact approved, record eternally pending);
+    // surface a 400 instead of a misleading 200. When there's NO record (the
+    // artifact-only fallback above), skip the guard and let the flip proceed.
+    if (decision && (await store.getDecisionResponse(decisionId))?.optionId !== optionId) {
+      return c.json(
+        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+        400,
+      );
+    }
+
+    // Flip the decision ARTIFACT to approved so it leaves the "waiting" set.
     let targetArtifactId = decision?.artifactId;
     if (!targetArtifactId) {
       const artifacts = await store.getArtifacts();

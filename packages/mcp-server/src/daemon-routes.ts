@@ -424,8 +424,14 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const { optionId, reasoning, confidence, predictedOutcome } = await c.req.json();
     const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
-    r.store.resolveDecision(c.req.param("decisionId"), optionId, reasoning, prediction);
-    broadcast(sessionId, { type: "decision_resolved", decisionId: c.req.param("decisionId"), optionId, reasoning, confidence, predictedOutcome });
+    const decisionId = c.req.param("decisionId");
+    r.store.resolveDecision(decisionId, optionId, reasoning, prediction);
+    // F2 — honor resolveDecision's fail-closed rejection of an unknown optionId
+    // (only when the decision RECORD exists; a missing record is a no-op here).
+    if (r.store.getDecision(decisionId) && r.store.getDecisionResponse(decisionId)?.optionId !== optionId) {
+      return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
+    }
+    broadcast(sessionId, { type: "decision_resolved", decisionId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
 
