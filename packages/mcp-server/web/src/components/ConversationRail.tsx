@@ -391,10 +391,10 @@ function ThreadEntry({
 }) {
   const { comment, replies } = thread;
   const { submitComment } = useArtifactStore();
-  const isUnansweredQuestion =
-    comment.author === "human" &&
-    (comment as any).intent === "question" &&
-    replies.length === 0;
+  // U5 — use the SAME predicate as the pill/filter (it also drops questions the
+  // human resolved or the agent answered out-of-band), so the inline "awaiting
+  // agent answer" marker can't disagree with a "0 unanswered" header.
+  const isUnanswered = isUnansweredQuestion(comment, replies);
   // W2 — a thread is "fresh" if the parent OR any reply is unread. The
   // parent gets the dot regardless of which row is fresh; per-reply dots
   // make the diff readable when only the agent's answer is new.
@@ -452,7 +452,7 @@ function ThreadEntry({
             ))}
           </div>
         )}
-        {isUnansweredQuestion && (
+        {isUnanswered && (
           <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
             ⏳ awaiting agent answer (next check_feedback)
           </div>

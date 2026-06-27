@@ -149,6 +149,9 @@ describe("ConversationRail (W1)", () => {
     s.addComment(q);
     render(<ConversationRail onClose={() => {}} />);
     expect(screen.queryByText(/1 unanswered question/i)).not.toBeInTheDocument();
+    // U5 — the inline thread marker must agree with the pill: a resolved
+    // question is NOT "awaiting agent answer" (the shadowed predicate bug).
+    expect(screen.queryByText(/awaiting agent answer/i)).not.toBeInTheDocument();
   });
 
   it("does NOT flag a question once an agent reply exists for it", () => {

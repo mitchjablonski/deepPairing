@@ -39,6 +39,7 @@ const statusColors: Record<string, string> = {
   rejected: "bg-accent-red-dim text-accent-red",
   superseded: "bg-surface-elevated text-text-muted",
   retracted: "bg-surface-elevated text-text-muted",
+  obsolete: "bg-surface-elevated text-text-muted",
 };
 
 /**
@@ -54,6 +55,7 @@ const statusGlyph: Record<string, string> = {
   rejected: "✗",   // cross — dead
   superseded: "⇈", // double up — replaced by newer version
   retracted: "↩",  // return arrow — agent backed out
+  obsolete: "⊘",   // circled slash — overcome by new information
 };
 
 const statusLabels: Record<string, string> = {
@@ -64,6 +66,7 @@ const statusLabels: Record<string, string> = {
   rejected: "Rejected",
   superseded: "Superseded by newer version",
   retracted: "Retracted by agent",
+  obsolete: "Overcome by new information",
 };
 
 const typeLabels: Record<string, string> = {
