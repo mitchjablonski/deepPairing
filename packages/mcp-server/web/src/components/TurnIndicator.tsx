@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -54,6 +54,36 @@ export function TurnIndicator() {
     return out;
   }, [comments]);
 
+  // U2 — liveness: the newest artifact/comment timestamp. After AGENT_IDLE_MS
+  // with no new activity we stop claiming "Agent working" (the old behavior
+  // pulsed forever, telling the human to keep waiting on an idle/finished
+  // agent). A timer flips `idle` so it updates even without a re-render.
+  const lastActivityMs = useMemo(() => {
+    let max = 0;
+    for (const a of artifacts) {
+      const t = new Date(a.createdAt).getTime();
+      if (Number.isFinite(t) && t > max) max = t;
+    }
+    for (const list of Object.values(comments)) {
+      for (const c of list as Comment[]) {
+        const t = new Date(c.createdAt).getTime();
+        if (Number.isFinite(t) && t > max) max = t;
+      }
+    }
+    return max;
+  }, [artifacts, comments]);
+
+  const AGENT_IDLE_MS = 45_000;
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    setIdle(false);
+    if (!lastActivityMs) { setIdle(true); return; }
+    const remaining = AGENT_IDLE_MS - (Date.now() - lastActivityMs);
+    if (remaining <= 0) { setIdle(true); return; }
+    const t = setTimeout(() => setIdle(true), remaining);
+    return () => clearTimeout(t);
+  }, [lastActivityMs]);
+
   if (!connected) return null;
 
   const draftResearch = artifacts.filter(
@@ -96,7 +126,7 @@ export function TurnIndicator() {
     }
 
     return (
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse" />
           Your turn — {parts.join(", ")}
@@ -106,15 +136,25 @@ export function TurnIndicator() {
     );
   }
 
-  // Agent's turn — show a narration line if we have one, otherwise a quiet pulse
+  // Agent's turn. While there's recent activity, show "Agent working" + a
+  // narration line ("watch your peer think"); once idle past the threshold,
+  // switch to a neutral "Up to date" so we don't pulse forever at an agent
+  // that's finished or gone.
   return (
-    <div className="flex items-center gap-2 min-w-0">
-      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
-        <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
-        Agent working
-      </div>
+    <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
+      {idle ? (
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50" />
+          Up to date
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
+          Agent working
+        </div>
+      )}
       {questionsBadge}
-      {latestReasoningAction && (
+      {!idle && latestReasoningAction && (
         <span
           className="text-2xs text-text-muted truncate italic min-w-0 max-w-md"
           title={latestReasoningAction}

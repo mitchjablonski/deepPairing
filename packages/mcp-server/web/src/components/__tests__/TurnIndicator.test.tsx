@@ -129,3 +129,22 @@ describe("TurnIndicator — Q4 unanswered-questions badge", () => {
     expect(screen.getByText(/1 question waiting/i)).toBeInTheDocument();
   });
 });
+
+describe("TurnIndicator — U2 agent liveness", () => {
+  it("shows 'Up to date' (not a forever 'Agent working' pulse) once activity is stale", () => {
+    seedConnected();
+    seedArtifact({ status: "approved", createdAt: "2026-04-20T10:00:00Z", updatedAt: "2026-04-20T10:00:00Z" });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/up to date/i)).toBeInTheDocument();
+    expect(screen.queryByText(/agent working/i)).not.toBeInTheDocument();
+  });
+
+  it("shows 'Agent working' while there is recent activity", () => {
+    seedConnected();
+    const now = new Date().toISOString();
+    seedArtifact({ status: "approved", createdAt: now, updatedAt: now });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/agent working/i)).toBeInTheDocument();
+    expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
+  });
+});
