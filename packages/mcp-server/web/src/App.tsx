@@ -22,28 +22,21 @@ import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
+import { countUnansweredQuestions } from "./lib/unanswered";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
 
   // U7 — at-rest signal on the Conversation button: how many human questions
-  // are still awaiting the agent (mirrors ConversationRail's isUnansweredQuestion:
-  // human + question intent + not answered/resolved + no reply). Without it the
-  // cross-artifact triage surface gave no hint there was anything to look at.
+  // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
+  // that ConversationRail's pill/filter/marker use, so the badge can't drift
+  // from the rail. Without it the cross-artifact triage surface gave no hint.
   const comments = useArtifactStore((s) => s.comments);
-  const unansweredCount = useMemo(() => {
-    const all = Object.values(comments).flat();
-    const repliedTo = new Set(all.filter((c) => c.parentCommentId).map((c) => c.parentCommentId));
-    return all.filter(
-      (c) =>
-        c.author === "human" &&
-        (c as any).intent === "question" &&
-        !(c as any).answeredByCommentId &&
-        !(c as any).humanResolvedAt &&
-        !repliedTo.has(c.id),
-    ).length;
-  }, [comments]);
+  const unansweredCount = useMemo(
+    () => countUnansweredQuestions(Object.values(comments).flat()),
+    [comments],
+  );
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);

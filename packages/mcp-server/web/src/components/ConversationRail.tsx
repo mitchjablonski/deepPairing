@@ -3,6 +3,7 @@ import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { commentAnchorKey } from "../lib/comment-anchor";
+import { isUnansweredQuestion } from "../lib/unanswered";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
 // which comments arrived since the user last looked at the rail. Stored
@@ -47,24 +48,6 @@ interface ThreadedRow {
   comment: Comment;
   replies: Comment[];
   artifactId: string;
-}
-
-/**
- * U5 — the single source of truth for "a human question still awaiting the
- * agent". Pre-U5 the "Unanswered" pill COUNT and the "Unanswered" FILTER used
- * different predicates (the filter omitted the answeredByCommentId /
- * humanResolvedAt checks), so a question answered via answer_question showed in
- * the filtered list while the pill read 0. Both now call this.
- */
-function isUnansweredQuestion(comment: Comment, replies: Comment[]): boolean {
-  const c = comment as any;
-  return (
-    comment.author === "human" &&
-    c.intent === "question" &&
-    !c.answeredByCommentId &&
-    !c.humanResolvedAt &&
-    replies.length === 0
-  );
 }
 
 function timeAgo(iso: string): string {

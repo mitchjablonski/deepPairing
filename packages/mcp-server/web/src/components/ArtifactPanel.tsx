@@ -29,6 +29,7 @@ const statusDots: Record<string, string> = {
   rejected: "bg-accent-red",
   superseded: "bg-text-muted opacity-40",
   retracted: "bg-text-muted opacity-60",
+  obsolete: "bg-text-muted opacity-40",
 };
 
 const statusColors: Record<string, string> = {
