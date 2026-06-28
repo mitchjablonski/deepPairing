@@ -40,6 +40,24 @@ describe("SpecArtifact — tolerates missing optional arrays", () => {
     expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Respond" })).toBeInTheDocument();
   });
+
+  it("UX7c — checkedSteps resyncs when the same plan's steps grow in place (new step not struck-through)", () => {
+    const planV1 = mk("plan", { estimatedChanges: 2, steps: [
+      { description: "step one", reasoning: "r" },
+      { description: "step two", reasoning: "r" },
+    ] });
+    const { rerender } = render(<PlanArtifact artifact={planV1} />);
+    // same artifact id, a third step appended in place
+    const planV2 = mk("plan", { estimatedChanges: 3, steps: [
+      { description: "step one", reasoning: "r" },
+      { description: "step two", reasoning: "r" },
+      { description: "step three", reasoning: "r" },
+    ] });
+    rerender(<PlanArtifact artifact={planV2} />);
+    // pre-fix: checkedSteps[2] was undefined → the new step rendered struck-through/skipped
+    const newStep = screen.getByText("step three").closest("div")!;
+    expect(newStep.className).not.toMatch(/line-through/);
+  });
 });
 
 describe("PlanArtifact — MotivatedByBadges tolerates unresolved / odd data", () => {

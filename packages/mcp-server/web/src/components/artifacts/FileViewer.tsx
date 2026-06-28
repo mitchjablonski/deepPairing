@@ -224,7 +224,7 @@ export function FileViewer({
 
         {/* Instruction hint */}
         {!selectionRange && (
-          <div className="px-4 py-1.5 bg-accent-blue-dim border-b border-blue-100 text-xs text-accent-blue">
+          <div className="px-4 py-1.5 bg-accent-blue-dim border-b border-accent-blue/20 text-xs text-accent-blue">
             Click a line number to select it. Shift-click to select a range. Then add a comment.
           </div>
         )}
@@ -250,9 +250,9 @@ export function FileViewer({
                   ref={isEvidenceHighlight && lineNum === highlightStart ? highlightRef : undefined}
                   className={`flex ${
                     isSelected
-                      ? "bg-accent-blue-dim border-l-2 border-blue-500"
+                      ? "bg-accent-blue-dim border-l-2 border-accent-blue"
                       : isEvidenceHighlight
-                        ? "bg-accent-amber-dim border-l-2 border-amber-400"
+                        ? "bg-accent-amber-dim border-l-2 border-accent-amber"
                         : "hover:bg-surface-secondary border-l-2 border-transparent"
                   }`}
                 >
@@ -301,14 +301,17 @@ export function FileViewer({
                 }}
                 disabled={submitting}
                 autoFocus
-                className="flex-1 px-3 py-2 border border-gray-300 rounded text-xs
-                           focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                // UX3 — themed tokens; the old gray border + no bg/text rendered
+                // black-on-dark (invisible while typing) in the dark theme.
+                className="flex-1 px-3 py-2 bg-surface-secondary border border-border-default rounded text-xs
+                           text-text-primary placeholder-text-muted
+                           focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-transparent"
               />
               <button
                 onClick={handleSubmitComment}
                 disabled={!commentText.trim() || submitting}
-                className="px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded
-                           hover:bg-blue-700 disabled:bg-gray-300 transition-colors"
+                className="px-3 py-2 bg-accent-blue text-white text-xs font-medium rounded
+                           hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
               >
                 Comment
               </button>

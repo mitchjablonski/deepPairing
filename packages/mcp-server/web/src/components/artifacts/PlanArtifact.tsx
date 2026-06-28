@@ -7,7 +7,7 @@ import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 /** Clickable badges that link to the finding artifacts that motivated a step */
 function MotivatedByBadges({ labels }: { labels: string[] }) {
@@ -147,6 +147,16 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   const [checkedSteps, setCheckedSteps] = useState<boolean[]>(
     () => steps.map(() => true),
   );
+
+  // UX7c — reconcile to steps.length if the same artifact's steps change in
+  // place (normally a revision supersedes into a new id + remounts, but an
+  // in-place content update would otherwise leave new steps `undefined` →
+  // struck-through/skipped). Preserve existing checks; default new steps to on.
+  useEffect(() => {
+    setCheckedSteps((prev) =>
+      prev.length === steps.length ? prev : steps.map((_, i) => prev[i] ?? true),
+    );
+  }, [steps.length]);
 
   const toggleStep = (index: number) => {
     if (artifact.status !== "draft") return;
