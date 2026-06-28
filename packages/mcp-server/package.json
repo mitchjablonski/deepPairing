@@ -42,12 +42,12 @@
   },
   "dependencies": {
     "@deeppairing/shared": "workspace:*",
-    "@hono/node-server": "^1.19.12",
+    "@hono/node-server": "^1.19.13",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "hono": "^4.12.10",
+    "hono": "^4.12.25",
     "mermaid": "^11.15.0",
     "nanoid": "^5.1.7",
-    "ws": "^8.20.0",
+    "ws": "^8.21.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
