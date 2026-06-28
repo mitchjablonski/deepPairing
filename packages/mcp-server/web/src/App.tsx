@@ -24,6 +24,7 @@ import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
+import { usePreloadErrorReload } from "./hooks/usePreloadErrorReload";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
@@ -71,6 +72,10 @@ function App() {
   const overlayOpenRef = useRef(false);
   overlayOpenRef.current =
     overlayCount > 0 || showHelp || showPalette || showSettings || showTaste || showConversation;
+
+  // Mermaid resilience — sticky "reload" prompt when a lazy chunk fails to load
+  // (daemon rebuilt/restarted → stale tab). See the hook for details.
+  usePreloadErrorReload();
 
   // Fetch active sessions on mount, auto-connect to the first one (or to the
   // session named in ?session=... — used by `npx deeppairing demo` to land

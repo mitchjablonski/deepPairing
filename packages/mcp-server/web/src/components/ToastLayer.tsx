@@ -157,39 +157,52 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
 export function ToastLayer() {
   const { toasts, dismiss } = useToastStore();
 
-  if (toasts.length === 0) return null;
-
+  // U1 — the live region is ALWAYS mounted (not gated on toasts.length), so a
+  // screen reader has an existing region to announce into; returning null when
+  // empty meant the region was inserted together with its first toast and SRs
+  // skipped it. U2 — z-[60] sits above modals/drawers (z-50) so a failure toast
+  // fired while an overlay is open is visible, not painted behind the backdrop.
+  // pointer-events-none on the (wide) wrapper + auto per toast so the always-
+  // present empty region never intercepts clicks.
   return (
     <div
-      className="fixed bottom-4 right-4 z-40 flex flex-col gap-2 max-w-[420px] w-[calc(100vw-2rem)]"
+      className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-[420px] w-[calc(100vw-2rem)] pointer-events-none"
       role="status"
       aria-live="polite"
     >
       {toasts.map((t) => {
+        // error / blocked are assertive — they interrupt rather than queue
+        // behind polite chatter.
+        const assertive = t.kind === "error" || t.kind === "block" || t.kind === "preflight-block";
         // Hero shape for the rejection-block moment — the most distinctive
         // thing deepPairing does; it deserves the larger card.
         if (t.kind === "preflight-block" && t.hero) {
+          // PreflightBlockHeroCard is already role="alert" internally — the
+          // wrapper only restores pointer events (parent is pointer-events-none).
           return (
-            <PreflightBlockHeroCard
-              key={t.id}
-              hero={t.hero}
-              onDismiss={() => dismiss(t.id)}
-              action={t.action}
-              onOverride={() =>
-                void useLedgerStore.getState().overrideStance({
-                  source: t.hero!.source,
-                  description: t.hero!.description,
-                  concept: t.hero!.concept,
-                })
-              }
-            />
+            <div key={t.id} className="pointer-events-auto">
+              <PreflightBlockHeroCard
+                hero={t.hero}
+                onDismiss={() => dismiss(t.id)}
+                action={t.action}
+                onOverride={() =>
+                  void useLedgerStore.getState().overrideStance({
+                    source: t.hero!.source,
+                    description: t.hero!.description,
+                    concept: t.hero!.concept,
+                  })
+                }
+              />
+            </div>
           );
         }
         const style = kindStyles[t.kind];
         return (
           <div
             key={t.id}
-            className={`flex items-start gap-2 px-3 py-2.5 rounded-lg border shadow-lg backdrop-blur-sm animate-fade-in ${style.bg} ${style.border}`}
+            role={assertive ? "alert" : "status"}
+            aria-live={assertive ? "assertive" : "polite"}
+            className={`pointer-events-auto flex items-start gap-2 px-3 py-2.5 rounded-lg border shadow-lg backdrop-blur-sm animate-fade-in ${style.bg} ${style.border}`}
           >
             <span className={`text-sm font-semibold shrink-0 ${style.accent}`}>{style.icon}</span>
             <div className="min-w-0 flex-1">
