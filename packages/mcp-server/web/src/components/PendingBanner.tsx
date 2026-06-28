@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { computePending } from "../lib/pending";
 
@@ -17,6 +18,9 @@ export function PendingBanner() {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  // UX5 — dismissing marks a draft obsolete, which the API can't undo back to
+  // draft, so require a two-step confirm instead of a one-click destructive ✕.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const { drafts, total } = computePending(artifacts);
   if (total === 0) return null;
@@ -37,14 +41,27 @@ export function PendingBanner() {
             >
               {a.title.slice(0, 28)}{a.title.length > 28 ? "…" : ""}
             </button>
-            {/* Quick dismiss — clears an abandoned/moot draft without opening it. */}
+            {/* Quick dismiss — clears an abandoned/moot draft without opening it.
+                Two-step: first click asks to confirm (obsolete can't be undone). */}
             <button
-              onClick={() => void updateArtifactStatus(a.id, "obsolete")}
-              className="px-1.5 py-0.5 text-accent-amber/70 hover:text-accent-amber hover:bg-accent-amber-dim/80 rounded-r text-2xs border-l border-accent-amber/20"
-              title="Dismiss — overcome by new information"
-              aria-label={`Dismiss ${a.title}`}
+              onClick={() => {
+                if (confirmingId === a.id) {
+                  void updateArtifactStatus(a.id, "obsolete");
+                  setConfirmingId(null);
+                } else {
+                  setConfirmingId(a.id);
+                }
+              }}
+              onBlur={() => setConfirmingId((id) => (id === a.id ? null : id))}
+              className={`px-1.5 py-0.5 rounded-r text-2xs border-l border-accent-amber/20 transition-colors ${
+                confirmingId === a.id
+                  ? "text-accent-amber font-semibold bg-accent-amber-dim"
+                  : "text-accent-amber/70 hover:text-accent-amber hover:bg-accent-amber-dim/80"
+              }`}
+              title={confirmingId === a.id ? "Click again to dismiss (can't be undone)" : "Dismiss — overcome by new information"}
+              aria-label={confirmingId === a.id ? `Confirm dismiss ${a.title}` : `Dismiss ${a.title}`}
             >
-              ✕
+              {confirmingId === a.id ? "Dismiss?" : "✕"}
             </button>
           </span>
         ))}

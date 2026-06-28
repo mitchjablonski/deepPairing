@@ -130,6 +130,9 @@ export function LineCommentChips({
         { parentCommentId: parent.id },
       );
       cancelReply();
+    } catch {
+      // UX7d — store surfaced the error toast; keep the draft for retry and
+      // (via finally) re-enable the composer instead of an unhandled rejection.
     } finally {
       setReplySubmitting(false);
     }
@@ -386,38 +389,35 @@ export function LineComposer({
     if (submitting) return;
     const rawEnd = canSpan ? lineEnd : lineNum;
     const safeEnd = Math.max(lineNum, Math.min(rawEnd, spanMax));
+    if (mode === "suggest" ? !suggestionText.trim() : !commentText.trim()) return;
 
-    if (mode === "suggest") {
-      if (!suggestionText.trim()) return;
-      setSubmitting(true);
-      const original = lineText ?? "";
-      await submitComment(
-        artifactId,
-        `Suggestion: replace line ${lineNum}\n\`\`\`\n${original}\n\`\`\`\nwith:\n\`\`\`\n${suggestionText}\n\`\`\``,
-        {
-          lineStart: lineNum,
-          lineEnd: lineNum,
-          filePath,
-          suggestion: suggestionText,
-          ...targetContext,
-        },
-      );
-    } else {
-      if (!commentText.trim()) return;
-      setSubmitting(true);
-      await submitComment(
-        artifactId,
-        commentText.trim(),
-        {
-          lineStart: lineNum,
-          lineEnd: safeEnd,
-          filePath,
-          ...targetContext,
-        },
-        mode === "ask" ? { intent: "question" } : undefined,
-      );
+    // UX7d — wrap in try/catch/finally: pre-fix a thrown submitComment left
+    // `submitting` true forever (composer permanently disabled) and skipped
+    // onClose. Now we always re-enable, only close on success, and keep the
+    // typed text on failure (the store rolls back + toasts + re-throws).
+    setSubmitting(true);
+    try {
+      if (mode === "suggest") {
+        const original = lineText ?? "";
+        await submitComment(
+          artifactId,
+          `Suggestion: replace line ${lineNum}\n\`\`\`\n${original}\n\`\`\`\nwith:\n\`\`\`\n${suggestionText}\n\`\`\``,
+          { lineStart: lineNum, lineEnd: lineNum, filePath, suggestion: suggestionText, ...targetContext },
+        );
+      } else {
+        await submitComment(
+          artifactId,
+          commentText.trim(),
+          { lineStart: lineNum, lineEnd: safeEnd, filePath, ...targetContext },
+          mode === "ask" ? { intent: "question" } : undefined,
+        );
+      }
+      onClose();
+    } catch {
+      /* store surfaced the error toast; keep the composer open + text for retry */
+    } finally {
+      setSubmitting(false);
     }
-    onClose();
   };
 
   return (

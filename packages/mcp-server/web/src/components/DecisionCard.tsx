@@ -270,6 +270,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       setPhase({ kind: "sentBack" });
       setShowSendBack(false);
       setSendBackText("");
+    } catch {
+      // UX7d — store surfaced the error toast; keep the composer open + text for
+      // retry (don't advance to sentBack) instead of an unhandled rejection.
     } finally {
       inFlightRef.current = false;
     }

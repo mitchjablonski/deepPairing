@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
@@ -58,6 +58,15 @@ function App() {
   // header button toggles, dp:open-conversation event lets toasts open it,
   // Esc closes via the drawer's own keydown.
   const [showConversation, setShowConversation] = useState(false);
+
+  // UX4 — the global keydown handler is registered once (stable []), so it reads
+  // "is any overlay open?" through this ref. While an overlay is open the
+  // artifact shortcuts (j/k/a/r/q) must NOT act on the obscured artifact behind
+  // it (e.g. `a` arming an approve on a hidden artifact).
+  const overlayOpenRef = useRef(false);
+  useEffect(() => {
+    overlayOpenRef.current = showHelp || showPalette || showSettings || showTaste || showConversation;
+  }, [showHelp, showPalette, showSettings, showTaste, showConversation]);
 
   // Fetch active sessions on mount, auto-connect to the first one (or to the
   // session named in ?session=... — used by `npx deeppairing demo` to land
@@ -123,6 +132,11 @@ function App() {
         closeTaste(); // CC9 — also clears tasteOpts
         setShowConversation(false);
       }
+
+      // UX4 — beyond this point are the ARTIFACT shortcuts (j/k/a/r/q). Suppress
+      // them while an overlay/drawer is open (the toggles + Escape above still
+      // work) so they don't drive the artifact hidden behind it.
+      if (overlayOpenRef.current) return;
 
       const store = useArtifactStore.getState();
 

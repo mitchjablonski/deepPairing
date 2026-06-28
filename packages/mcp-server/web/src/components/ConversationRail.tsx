@@ -410,6 +410,9 @@ function ThreadEntry({
       );
       setReplyOpen(false);
       setReplyText("");
+    } catch {
+      // UX7d — store surfaced the error toast; keep the reply open + text for
+      // retry instead of an unhandled rejection.
     } finally {
       setReplySubmitting(false);
     }
