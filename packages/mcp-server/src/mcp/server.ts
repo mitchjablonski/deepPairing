@@ -1018,6 +1018,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   // to the first artifact's title" behavior the closure used to handle.
   const sessionNameLatch = new SessionNameLatch(store);
   let checkFeedbackPollCount = 0;
+  // FN2 — artifact ids whose rejection verdict has already been surfaced by
+  // check_feedback, so a rejected code_change/spec/research is reported exactly
+  // once. Comment-independent (catches feedback-less rejects) and self-limiting
+  // (a rejected artifact is terminal — revise mints a new id).
+  const reportedRejectedVerdicts = new Set<string>();
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: rawArgs } = request.params;
@@ -1211,8 +1216,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const totalArtifacts = allArtifacts.length;
         const approvedCount = allArtifacts.filter((a) => a.status === "approved").length;
         const pendingCount = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type)).length;
-        const totalComments = (await store.getUnacknowledgedComments()).length;
+        const allComments = await store.getUnacknowledgedComments();
+        const totalComments = allComments.length;
         const autonomyLabel = await store.getAutonomyLevel();
+
+        // FN2 — artifacts the human REJECTED that check_feedback hasn't reported
+        // yet. Without this, suggestedAction falls through to "you may proceed"
+        // right after a human rejects a code_change/spec/research (only decisions
+        // & plans had verdict reporting). Comment-independent (a feedback-less
+        // reject still triggers it) and reported exactly once via the
+        // reportedRejectedVerdicts set.
+        const freshlyRejected = allArtifacts.filter(
+          (a) =>
+            a.status === "rejected" &&
+            ["code_change", "spec", "research"].includes(a.type) &&
+            !reportedRejectedVerdicts.has(a.id),
+        );
+        for (const a of freshlyRejected) reportedRejectedVerdicts.add(a.id);
 
         // Find oldest pending artifact age
         let oldestPendingAge = "";
@@ -1226,7 +1246,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         // Determine suggested action
         let suggestedAction = "You may proceed with implementation.";
-        if (pendingArts.some((a) => a.type === "code_change")) {
+        if (freshlyRejected.length > 0) {
+          suggestedAction = `Do NOT apply — the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
+        } else if (pendingArts.some((a) => a.type === "code_change")) {
           suggestedAction = "Wait for the code change review before applying the edit.";
         } else if (pendingArts.some((a) => a.type === "decision")) {
           suggestedAction = "Wait for decision selection before proceeding.";
@@ -1240,8 +1262,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
         parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
 
-        // Unacknowledged comments
-        const allComments = await store.getUnacknowledgedComments();
+        // Unacknowledged comments (reuse the single drain snapshot fetched above)
         const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
         const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
 
@@ -1289,6 +1310,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           if (otherLines.length > 0) {
             parts.push(`Human comments (${otherLines.length}):\n${otherLines.join("\n")}`);
           }
+        }
+
+        // FN2 — explicit rejection verdict for non-plan/non-decision artifacts
+        // (those don't have a dedicated verdict path). The reason is in the
+        // human-comments block above; this makes the verdict unmissable so the
+        // agent doesn't apply a rejected change.
+        if (freshlyRejected.length > 0) {
+          const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
+          parts.push(
+            `❌ REJECTED (${freshlyRejected.length}): ${list}\nThe human rejected ${freshlyRejected.length === 1 ? "this" : "these"} — do NOT apply. Revise the approach or propose a different one (see their comment above for why).`,
+          );
         }
 
         // Resolved decisions (acknowledge so they don't repeat)
@@ -1481,6 +1513,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               .filter((e: any) => e.filePath)
           : undefined;
 
+        // FN1 — pass codeReferences as a first-class param so it survives the
+        // DaemonClient HTTP round-trip in production. Pre-FN1 it was mutated
+        // onto the returned object, which is a throwaway copy in daemon mode →
+        // the agent's code evidence never reached the store or the UI.
         const answerComment = await store.addComment({
           id: answerId,
           artifactId: parent.target?.artifactId ?? "__session__",
@@ -1488,12 +1524,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           author: "agent",
           target: parent.target ?? { artifactId: "__session__" },
           parentCommentId: commentId,
+          ...(codeRefs && codeRefs.length > 0 ? { codeReferences: codeRefs } : {}),
         } as any);
-
-        // Attach code references if the agent supplied evidence
-        if (codeRefs && codeRefs.length > 0) {
-          (answerComment as any).codeReferences = codeRefs;
-        }
 
         // AA7b — markCommentAnswered is required on IStore.
         await store.markCommentAnswered(commentId, answerId);

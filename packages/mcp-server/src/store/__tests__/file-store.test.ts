@@ -121,6 +121,18 @@ describe("FileStore", () => {
     expect(store.getCommentsForArtifact("art_X")).toHaveLength(8);
   });
 
+  it("FN1 — addComment persists codeReferences (answer_question evidence)", () => {
+    const store = createStore("coderefs");
+    store.addComment({
+      id: "a1", artifactId: "art_1", content: "see here", author: "agent",
+      codeReferences: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 3, snippet: "const x = 1;" }],
+    });
+    store.forceFlush();
+    const reread = createStore("coderefs");
+    const c = reread.getCommentsForArtifact("art_1")[0];
+    expect((c as any).codeReferences).toEqual([{ filePath: "src/x.ts", lineStart: 1, lineEnd: 3, snippet: "const x = 1;" }]);
+  });
+
   it("round-trips comments", () => {
     const store = createStore( "comments");
     store.addComment({

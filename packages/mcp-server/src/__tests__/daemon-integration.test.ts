@@ -77,6 +77,20 @@ describe("F1 — daemon-side metric recording", () => {
   });
 });
 
+describe("FN1 — codeReferences survive the comment HTTP round-trip", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("persists codeReferences posted via the internal /comments route (not just standalone)", async () => {
+    await app.request(`/api/internal/sessions/s_fn1/register`, j({}));
+    await app.request(`/api/internal/sessions/s_fn1/comments`, j({
+      id: "ans1", artifactId: "art_x", author: "agent", content: "see here",
+      codeReferences: [{ filePath: "a.ts", lineStart: 2, lineEnd: 4, snippet: "x()" }],
+    }));
+    const stored = sessions.get("s_fn1")!.getCommentsForArtifact("art_x")[0];
+    expect((stored as any).codeReferences).toEqual([{ filePath: "a.ts", lineStart: 2, lineEnd: 4, snippet: "x()" }]);
+  });
+});
+
 describe("F2 — decision resolve route rejects an unknown optionId (no split state)", () => {
   const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
