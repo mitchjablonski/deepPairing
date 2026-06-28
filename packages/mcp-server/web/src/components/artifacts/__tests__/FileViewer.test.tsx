@@ -16,6 +16,28 @@ beforeEach(() => {
   apiGet.mockReset();
 });
 
+describe("FileViewer — a11y line selection is keyboard-operable", () => {
+  it("Enter on a line gutter selects that line for commenting (was mouse-only)", async () => {
+    apiGet.mockResolvedValue(okResponse("line one\nline two\nline three"));
+    render(<FileViewer filePath="/src/x.ts" artifactId="art_1" onClose={() => {}} />);
+    const g2 = await screen.findByRole("button", { name: /comment on line 2/i });
+    expect(g2).toHaveAttribute("aria-pressed", "false");
+    fireEvent.keyDown(g2, { key: "Enter" });
+    // selection registered → the gutter is now marked selected
+    expect(screen.getByRole("button", { name: /comment on line 2 \(selected\)/i })).toBeInTheDocument();
+  });
+
+  it("Shift+Enter extends the selection range (mirrors shift-click)", async () => {
+    apiGet.mockResolvedValue(okResponse("line one\nline two\nline three\nline four"));
+    render(<FileViewer filePath="/src/x.ts" artifactId="art_1" onClose={() => {}} />);
+    fireEvent.keyDown(await screen.findByRole("button", { name: /comment on line 1/i }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: /comment on line 3/i }), { key: "Enter", shiftKey: true });
+    // lines 1–3 are now all selected
+    expect(screen.getByRole("button", { name: /comment on line 1 \(selected\)/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /comment on line 3 \(selected\)/i })).toBeInTheDocument();
+  });
+});
+
 describe("FileViewer — UX4 overlay presence (suppresses global shortcuts)", () => {
   it("registers as an overlay while mounted and clears on unmount", () => {
     apiGet.mockReturnValue(new Promise(() => {}));

@@ -10,6 +10,7 @@ import { MessageInput } from "./components/MessageInput";
 import { AutonomySlider } from "./components/AutonomySlider";
 import { CompoundingBadge } from "./components/CompoundingBadge";
 import { CommandPalette } from "./components/CommandPalette";
+import { QuickAskModal } from "./components/QuickAskModal";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ToastLayer } from "./components/ToastLayer";
@@ -60,6 +61,8 @@ function App() {
   // header button toggles, dp:open-conversation event lets toasts open it,
   // Esc closes via the drawer's own keydown.
   const [showConversation, setShowConversation] = useState(false);
+  // U3 — themed "ask about this artifact" composer for the `q` shortcut.
+  const [askArtifact, setAskArtifact] = useState<{ id: string; title: string } | null>(null);
 
   // UX4 — the global keydown handler is registered once (stable []), so it reads
   // "is any overlay open?" through this ref. While an overlay is open the
@@ -178,13 +181,10 @@ function App() {
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
         if (!selected) return;
         e.preventDefault();
-        // Ask the user for a question and submit it with intent: "question".
-        // A richer input affordance lives on findings via AskTrigger — this
-        // is the artifact-root equivalent for keyboard users.
-        const question = window.prompt(`Ask the agent about "${selected.title}":`);
-        if (question && question.trim()) {
-          store.submitComment(selected.id, question.trim(), undefined, { intent: "question" });
-        }
+        // U3 — open the themed ask composer (setter is referentially stable).
+        // Was window.prompt, a no-op inside the VS Code webview that embeds this
+        // UI (and a jarring native dialog in the browser).
+        setAskArtifact({ id: selected.id, title: selected.title });
       }
     };
 
@@ -462,6 +462,17 @@ function App() {
         />
       )}
       {showConversation && <ConversationRail onClose={() => setShowConversation(false)} />}
+
+      {/* U3 — themed "ask the agent about this artifact" composer (q shortcut) */}
+      {askArtifact && (
+        <QuickAskModal
+          artifactTitle={askArtifact.title}
+          onSubmit={(q) =>
+            useArtifactStore.getState().submitComment(askArtifact.id, q, undefined, { intent: "question" })
+          }
+          onClose={() => setAskArtifact(null)}
+        />
+      )}
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
       <ToastLayer />
