@@ -496,9 +496,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               tabIndex={submitting ? -1 : 0}
               aria-disabled={submitting}
               // U5e — expose the keyboard/hover selection to assistive tech; the
-              // focus ring (idx === focusedIndex) was color-only before.
+              // focus ring (idx === focusedIndex) was color-only before. No
+              // aria-label here on purpose: it would become the element's entire
+              // accessible name and suppress the description/pros/cons a SR user
+              // needs to choose — let the descendant content form the name.
               aria-current={idx === focusedIndex}
-              aria-label={`Option ${idx + 1}: ${option.title}${option.recommendation ? " (recommended)" : ""}`}
               onClick={() => !submitting && handleSelect(option.id)}
               onKeyDown={(e) => {
                 if (submitting) return;
