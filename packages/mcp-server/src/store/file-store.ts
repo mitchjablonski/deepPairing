@@ -734,6 +734,8 @@ export class FileStore implements IStore {
     // Exclude draft (undecided) and the agent-driven terminal states
     // (superseded/retracted/obsolete) — they aren't human approve/reject calls,
     // so counting them in the denominator depressed the rate artificially.
+    // Keep this status-set in sync with the reason-based recordArtifactReviewed
+    // gate above (agent_*/demo_script there ↔ the agent terminal states here).
     const reviewed = this.artifacts.filter(
       (a) => a.status !== "draft" && a.status !== "superseded" && a.status !== "retracted" && a.status !== "obsolete",
     );

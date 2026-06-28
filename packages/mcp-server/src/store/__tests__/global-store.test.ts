@@ -353,6 +353,9 @@ describe("GlobalStore — SEC1: reserved-name concepts don't crash or pollute", 
     for (const key of ["__proto__", "constructor", "prototype"]) {
       expect(() => store.recordInstance(key, { project: "p", sessionId: "s", verdict: "rejected" })).not.toThrow();
     }
+    // the reserved-key concept is stored as a real own entry (not lost to the
+    // prototype) and retrievable — proves the null-proto map works, not just "didn't crash"
+    expect(store.get("__proto__")?.instances?.length).toBeGreaterThan(0);
     // a normal concept still records after, and nothing leaked onto Object.prototype
     store.recordInstance("use redis", { project: "p", sessionId: "s", verdict: "rejected" });
     expect(({} as any).polluted).toBeUndefined();

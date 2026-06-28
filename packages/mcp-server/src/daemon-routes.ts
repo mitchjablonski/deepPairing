@@ -561,8 +561,9 @@ export function createDaemonRoutes(
     // FN3 — record the metric HERE (daemon-side truth point). Decision-resolution
     // ledger writes come through this route via DaemonClient; the MCP wrapper's
     // broadcast is a no-op, so the broadcast-tap never saw them (ledgerWrites
-    // sat ~0 in prod). Mirrors the /metrics + /answered F1 pattern.
-    if (daemonProjectRoot) {
+    // sat ~0 in prod). Mirrors the /metrics + /answered F1 pattern. Exclude
+    // demo sessions, matching the broadcast tap's demo guard.
+    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
       try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "rejected" }); } catch {}
     }
     return c.json({ status: "recorded" });
@@ -579,7 +580,7 @@ export function createDaemonRoutes(
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
     r.store.recordApprovedPattern(parsed);
-    if (daemonProjectRoot) {
+    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
       try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
     }
     return c.json({ status: "recorded" });
