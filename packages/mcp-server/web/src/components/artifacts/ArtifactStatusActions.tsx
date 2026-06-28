@@ -144,7 +144,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   if (artifact.status === "revised") {
     return (
       <div className="flex items-center gap-2 pt-2 border-t border-border-default">
-        <span className="text-accent-amber text-sm">&#x270E;</span>
+        {/* UX7b — same glyph as the sidebar/header statusGlyph.revised (↻),
+            not a pencil, so "revised" reads consistently across surfaces. */}
+        <span className="text-accent-amber text-sm">↻</span>
         <span className="text-xs text-accent-amber font-medium">Revision requested</span>
         <span className="text-2xs text-text-muted ml-1">awaiting agent</span>
       </div>
