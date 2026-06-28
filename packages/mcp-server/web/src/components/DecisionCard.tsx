@@ -495,6 +495,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               role="button"
               tabIndex={submitting ? -1 : 0}
               aria-disabled={submitting}
+              // U5e — expose the keyboard/hover selection to assistive tech; the
+              // focus ring (idx === focusedIndex) was color-only before.
+              aria-current={idx === focusedIndex}
+              aria-label={`Option ${idx + 1}: ${option.title}${option.recommendation ? " (recommended)" : ""}`}
               onClick={() => !submitting && handleSelect(option.id)}
               onKeyDown={(e) => {
                 if (submitting) return;
