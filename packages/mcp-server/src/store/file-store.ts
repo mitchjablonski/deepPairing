@@ -501,6 +501,7 @@ export class FileStore implements IStore {
     target?: Record<string, unknown>;
     intent?: "comment" | "question" | "suggestion";
     parentCommentId?: string | null;
+    codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
   }): Comment {
     const now = Date.now();
     const parentKey = params.parentCommentId ?? "";
@@ -531,6 +532,11 @@ export class FileStore implements IStore {
       author: params.author,
       content: params.content,
       intent: params.intent,
+      // FN1 — persist attached code evidence (answer_question). Spread so the
+      // field is simply absent when there's none (back-compat with stored data).
+      ...(params.codeReferences && params.codeReferences.length > 0
+        ? { codeReferences: params.codeReferences }
+        : {}),
       answeredByCommentId: null,
       acknowledged: params.author === "agent",
       createdAt: new Date(now).toISOString(),

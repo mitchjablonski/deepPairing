@@ -79,6 +79,10 @@ export interface AddCommentParams {
   target?: Record<string, unknown>;
   intent?: "comment" | "question" | "suggestion";
   parentCommentId?: string | null;
+  /** FN1 — code evidence attached to the comment (answer_question's `evidence`).
+   *  Must be a first-class param so it survives the DaemonClient HTTP round-trip;
+   *  pre-FN1 it was mutated onto the returned object and lost in daemon mode. */
+  codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
 }
 
 export interface RecordDecisionParams {
