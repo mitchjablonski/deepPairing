@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
-import { applyTopLevelGuards, isLoopbackHost } from "../guards.js";
+import { applyTopLevelGuards, isLoopbackHost, projectHashGate } from "../guards.js";
 
 /**
  * The top-level guards are what make the DNS-rebinding Host check and the body
@@ -80,5 +80,36 @@ describe("applyTopLevelGuards — body cap (chunked-safe)", () => {
     });
     expect(res.status).toBe(200);
     expect((await res.json()).got).toBe("hi");
+  });
+});
+
+describe("projectHashGate (S1 — gates root-app reads that bypass the publicRoutes hash check)", () => {
+  function gatedApp(daemonHash: string | undefined): Hono {
+    const app = new Hono();
+    app.use("/api/live-session/*", projectHashGate(daemonHash));
+    app.get("/api/live-session/:id", (c) => c.json({ secret: "full session state" }));
+    return app;
+  }
+
+  it("403s a request whose X-Project-Hash doesn't match the daemon's (stale tab on the wrong daemon)", async () => {
+    const res = await gatedApp("hashA").request("/api/live-session/s1", { headers: { "X-Project-Hash": "hashB" } });
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe("project_hash_mismatch");
+  });
+
+  it("403s a request with NO X-Project-Hash", async () => {
+    const res = await gatedApp("hashA").request("/api/live-session/s1");
+    expect(res.status).toBe(403);
+  });
+
+  it("passes when the hash matches", async () => {
+    const res = await gatedApp("hashA").request("/api/live-session/s1", { headers: { "X-Project-Hash": "hashA" } });
+    expect(res.status).toBe(200);
+    expect((await res.json()).secret).toBe("full session state");
+  });
+
+  it("no-ops when the daemon has no hash (test fixtures without a projectRoot)", async () => {
+    const res = await gatedApp(undefined).request("/api/live-session/s1");
+    expect(res.status).toBe(200);
   });
 });

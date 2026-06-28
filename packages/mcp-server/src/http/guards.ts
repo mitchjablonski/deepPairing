@@ -1,6 +1,27 @@
-import type { Hono } from "hono";
+import type { Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { ERROR_CODES } from "../error-codes.js";
+
+/**
+ * S1 — X-Project-Hash gate for ROOT-app routes that bypass the publicRoutes
+ * hash middleware (sub-app middleware only covers sub-app routes). A stale tab
+ * pointed at a daemon serving a DIFFERENT project would otherwise read this
+ * project's data; the SPA seeds its hash from the served HTML, so a correctly-
+ * bound tab always passes and a wrong-daemon tab 403s → BB10 "reload to re-bind".
+ * No-op when daemonHash is undefined (test fixtures without a projectRoot).
+ */
+export function projectHashGate(daemonHash: string | undefined): MiddlewareHandler {
+  return async (c, next) => {
+    const sent = c.req.header("X-Project-Hash");
+    if (daemonHash && sent !== daemonHash) {
+      return c.json(
+        { error: "Project hash mismatch — reload to re-bind.", code: ERROR_CODES.project_hash_mismatch, expected: daemonHash },
+        403,
+      );
+    }
+    return next();
+  };
+}
 
 /**
  * Is the request's Host header a loopback name? The Host header is the

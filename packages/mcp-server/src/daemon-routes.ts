@@ -9,6 +9,7 @@ import type { FileStore } from "./store/file-store.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { ERROR_CODES } from "./error-codes.js";
 import { recordMetricEvent } from "./store/metrics-store.js";
+import { projectHashGate } from "./http/guards.js";
 
 // BB8 — wire-input validation for the typed-object signatures AA1
 // introduced. AA1's typing protected only in-process callers; routes
@@ -91,6 +92,49 @@ export interface SessionMeta {
   title: string;
   project: string;
   registeredAt: string;
+}
+
+/**
+ * S1 — the two root-app session READS (the multi-session companion UI uses
+ * these to merge artifacts across sessions). Factored out of daemon.ts so the
+ * X-Project-Hash gate is wired together with the handlers in ONE testable unit:
+ * previously they lived as bare app.use/app.get on daemon.ts's import-time app,
+ * untestable, so a reorder/typo could silently un-gate the full-state read.
+ * /api/live-session returns getFullState() — every artifact, comment, decision —
+ * so a stale tab on a daemon serving a DIFFERENT project must not read it.
+ */
+export function createActiveSessionRoutes(
+  sessions: SessionMap,
+  sessionMeta: Map<string, SessionMeta>,
+  daemonHash: string | undefined,
+): Hono {
+  const app = new Hono();
+  const gate = projectHashGate(daemonHash);
+  app.use("/api/active-sessions", gate);
+  app.use("/api/live-session/*", gate);
+
+  app.get("/api/active-sessions", (c) => {
+    const list = Array.from(sessions.entries()).map(([id, store]) => {
+      const meta = sessionMeta.get(id);
+      return {
+        sessionId: id,
+        title: meta?.title ?? id,
+        project: meta?.project ?? "",
+        artifactCount: store.getArtifacts().length,
+      };
+    });
+    return c.json({ sessions: list });
+  });
+
+  // A6a — serve a single live session's state directly from the in-memory store
+  // so the companion UI's MultiAgentSync can merge artifacts across sessions.
+  app.get("/api/live-session/:sessionId", (c) => {
+    const store = sessions.get(c.req.param("sessionId"));
+    if (!store) return c.json({ error: "unknown_session" }, 404);
+    return c.json(store.getFullState());
+  });
+
+  return app;
 }
 
 export function createDaemonRoutes(

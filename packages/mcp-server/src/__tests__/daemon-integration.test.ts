@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { createDaemonRoutes } from "../daemon-routes.js";
+import { createDaemonRoutes, createActiveSessionRoutes } from "../daemon-routes.js";
 import { DaemonClient } from "../daemon-client.js";
 import { FileStore } from "../store/file-store.js";
 import { setGlobalStoreForTests } from "../store/global-store.js";
@@ -74,6 +74,36 @@ describe("F1 — daemon-side metric recording", () => {
     await app.request(`/api/internal/sessions/s2/register`, j({}));
     const res = await app.request(`/api/internal/sessions/s2/metrics`, j({ kind: "preflight_block", source: "team" }));
     expect(res.status).toBe(200); // succeeds, just a no-op
+  });
+});
+
+describe("S1 — createActiveSessionRoutes gates the root-app session reads (real wiring)", () => {
+  // exercises the ACTUAL builder daemon.ts mounts, so a reorder/typo that
+  // un-gates the full-state read would fail here (not just the helper unit test).
+  it("403s /api/live-session on a hash mismatch, 200s on match (full state), 404s unknown", async () => {
+    createTestSession("s_live");
+    sessions.get("s_live")!.createArtifact({ id: "a1", type: "research", title: "secret", content: {} });
+    const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
+
+    const wrong = await routes.request("/api/live-session/s_live", { headers: { "X-Project-Hash": "hashB" } });
+    expect(wrong.status).toBe(403);
+    expect((await wrong.json()).code).toBe("project_hash_mismatch");
+
+    const missing = await routes.request("/api/live-session/s_live");
+    expect(missing.status).toBe(403);
+
+    const ok = await routes.request("/api/live-session/s_live", { headers: { "X-Project-Hash": "hashA" } });
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).artifacts).toHaveLength(1);
+
+    const unknown = await routes.request("/api/live-session/nope", { headers: { "X-Project-Hash": "hashA" } });
+    expect(unknown.status).toBe(404);
+  });
+
+  it("also gates /api/active-sessions", async () => {
+    const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
+    expect((await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashB" } })).status).toBe(403);
+    expect((await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } })).status).toBe(200);
   });
 });
 

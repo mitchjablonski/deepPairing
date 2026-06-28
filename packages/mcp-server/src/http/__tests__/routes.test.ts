@@ -372,6 +372,17 @@ describe("HTTP Routes", () => {
       expect(res.status).toBe(200);
       expect((await res.json()).content).toBe("hi there\n");
     });
+
+    it("S2 — a file over the size cap is rejected with 413, not buffered into memory", async () => {
+      // 6 MiB > the 5 MiB ceiling
+      fs.writeFileSync(path.join(tmpDir, "huge.txt"), Buffer.alloc(6 * 1024 * 1024, "x"));
+      const authed = withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-files"), tmpDir);
+      const res = await authed.request("/api/files?path=huge.txt", {
+        headers: { Authorization: "Bearer tok-files" },
+      });
+      expect(res.status).toBe(413);
+      expect((await res.json()).code).toBe("body_too_large");
+    });
   });
 
   describe("GET /api/search", () => {

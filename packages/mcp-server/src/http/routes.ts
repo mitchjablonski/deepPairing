@@ -1053,6 +1053,19 @@ export function createHttpRoutes(
       return c.json({ error: "Path outside project root" }, 403);
     }
     try {
+      // S2 — size-cap the read. The viewer only ever shows source files; without
+      // a ceiling a (bearer-holding, same-uid) client could point this at a
+      // multi-GB file and OOM the daemon — the whole content is buffered into a
+      // string AND split into a lines array. 5 MiB comfortably covers any real
+      // source file; larger → 413 rather than a heap blow-up.
+      const MAX_FILE_BYTES = 5 * 1024 * 1024;
+      const size = fs.statSync(realResolved).size;
+      if (size > MAX_FILE_BYTES) {
+        return c.json(
+          { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
+          413,
+        );
+      }
       const content = fs.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err: any) {
