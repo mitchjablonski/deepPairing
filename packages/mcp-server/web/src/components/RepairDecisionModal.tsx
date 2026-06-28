@@ -110,6 +110,7 @@ export function RepairDecisionModal({
       <div
         ref={panelRef}
         role="dialog"
+        aria-modal="true"
         aria-label="Re-pair decision"
         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
         className="fixed top-[10%] left-1/2 -translate-x-1/2 z-50 w-[720px] max-w-[92vw] max-h-[80vh]

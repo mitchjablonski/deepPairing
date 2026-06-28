@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useSentFlash } from "../hooks/useSentFlash";
@@ -113,9 +114,14 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
   const handleSubmit = async () => {
     if (!input.trim() || submitting) return;
     setSubmitting(true);
-    await submitComment(artifactId, input.trim(), target);
-    setInput("");
-    setSubmitting(false);
+    try {
+      await submitComment(artifactId, input.trim(), target);
+      setInput(""); // clear only on success; keep the draft for retry on failure
+    } catch {
+      /* store surfaced the error toast */
+    } finally {
+      setSubmitting(false); // never strand the composer disabled
+    }
   };
 
   // Render the full thread: root comments plus their replies nested beneath.
@@ -250,11 +256,19 @@ export function AskTrigger({
     const trimmed = question.trim();
     if (!trimmed || sending) return;
     setSending(true);
-    await submitComment(artifactId, trimmed, target, { intent: "question" });
-    setQuestion("");
-    flash();
-    setOpen(false);
-    setSending(false);
+    try {
+      await submitComment(artifactId, trimmed, target, { intent: "question" });
+      // only clear/close on success — same U4 fix as FileViewer: the store
+      // rolls back + toasts + re-throws, so on failure keep the text and the
+      // open popover for retry instead of stranding `sending=true` forever.
+      setQuestion("");
+      flash();
+      setOpen(false);
+    } catch {
+      /* store surfaced the error; keep the draft + popover for retry */
+    } finally {
+      setSending(false);
+    }
   };
 
   const classes =
@@ -270,8 +284,11 @@ export function AskTrigger({
       ? "bg-accent-violet-dim/40 text-accent-violet hover:bg-accent-violet-dim/60"
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  useDismissOnOutside(rootRef, open, () => setOpen(false));
+
   return (
-    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
+    <div ref={rootRef} className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={unanswered > 0 ? `${unanswered} unanswered question` : "Ask the agent about this"}
@@ -413,8 +430,11 @@ export function CommentTrigger({
       ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary";
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  useDismissOnOutside(rootRef, open, () => setOpen(false));
+
   return (
-    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
+    <div ref={rootRef} className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={label ?? "Add a comment here"}

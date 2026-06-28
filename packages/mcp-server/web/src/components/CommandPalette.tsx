@@ -116,6 +116,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       <div
         ref={panelRef}
         role="dialog"
+        aria-modal="true"
         aria-label="Command palette"
         className="fixed top-[20%] left-1/2 -translate-x-1/2 z-50 w-[500px] max-w-[90vw]
                       bg-surface-elevated border border-border-default rounded-xl shadow-2xl overflow-hidden"

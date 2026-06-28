@@ -241,6 +241,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
         tabIndex={-1}
         onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
         role="dialog"
+        aria-modal="true"
         aria-label="Conversation"
         className="fixed top-0 right-0 bottom-0 z-50 w-[480px] max-w-[92vw]
                    bg-surface-elevated border-l border-border-default shadow-2xl

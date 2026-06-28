@@ -25,6 +25,7 @@ export function KeyboardShortcutHelp({ onClose }: { onClose: () => void }) {
       <div
         ref={panelRef}
         role="dialog"
+        aria-modal="true"
         aria-label="Keyboard shortcuts"
         className="bg-surface-elevated border border-border-default rounded-xl shadow-2xl p-6 max-w-sm w-full"
         onClick={(e) => e.stopPropagation()}>
