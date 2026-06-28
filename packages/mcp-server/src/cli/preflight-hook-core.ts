@@ -62,9 +62,22 @@ export function readTeamPreferences(projectRoot: string): TeamPreference[] {
       .join("\n");
     const raw = JSON.parse(stripped);
     if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) return [];
-    return raw.preferences.filter(
-      (x: any) => x && typeof x.kind === "string" && typeof x.concept === "string",
-    ) as TeamPreference[];
+    // ALL-OR-NOTHING, mirroring the canonical parseTeamPreferencesFile (zod
+    // safeParse of the whole file): if ANY entry is malformed the MCP loader
+    // returns [] and does NOT enforce, so the hook must do the same — otherwise
+    // it would block on a rule the MCP side ignores (an over-block for a gate
+    // that's meant to mirror the existing preflight).
+    const KINDS = new Set(["require", "prefer", "avoid"]);
+    const valid = raw.preferences.every(
+      (x: any) =>
+        x &&
+        typeof x.id === "string" &&
+        typeof x.concept === "string" &&
+        x.concept.length > 0 &&
+        typeof x.rationale === "string" &&
+        KINDS.has(x.kind),
+    );
+    return valid ? (raw.preferences as TeamPreference[]) : [];
   } catch {
     return [];
   }

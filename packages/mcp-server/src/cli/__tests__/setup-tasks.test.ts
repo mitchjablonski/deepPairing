@@ -834,12 +834,13 @@ describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", 
     });
   };
 
-  it.skipIf(!builtCoreExists)("e2e — the generated hook DENIES an Edit matching a rejected approach", () => {
+  it.skipIf(!builtCoreExists)("e2e — the generated hook surfaces (ask) an Edit matching a rejected approach", () => {
     seedRejected();
     ensurePreflightHook(tmpDir);
     const out = runHook({ file_path: "/c.ts", new_string: "export let cfg = {}; // global mutable state singleton" });
     const parsed = JSON.parse(out);
-    expect(parsed.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask");
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toMatch(/REJECTED_APPROACH_BLOCKED/);
   });
 

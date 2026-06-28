@@ -71,6 +71,15 @@ describe("readTeamPreferences — JSONC", () => {
     writeTeam(`{ "version": 99, "preferences": [] }`);
     expect(readTeamPreferences(dir)).toEqual([]);
   });
+  it("returns [] on broken JSON (never throws)", () => {
+    writeTeam("{ not json at all");
+    expect(readTeamPreferences(dir)).toEqual([]);
+  });
+  it("is all-or-nothing — one malformed entry drops the whole file (matches the MCP loader)", () => {
+    writeTeam(`{ "version": 1, "preferences": [ { "id": "ok", "kind": "avoid", "concept": "inline styles", "rationale": "r" }, { "kind": "avoid" } ] }`);
+    // the MCP side returns [] (zod safeParse fails) and doesn't enforce; so must we
+    expect(readTeamPreferences(dir)).toEqual([]);
+  });
 });
 
 describe("evaluatePreflightHook — the platform-level gate", () => {

@@ -621,14 +621,17 @@ const PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
  *  runs via plain `node` from .deeppairing/hooks/) can import it regardless of
  *  install layout. Prefers the built dist/cli copy; falls back gracefully. If
  *  none exists (e.g. an unbuilt dev tree) the hook fails OPEN at import time. */
-function resolvePreflightCoreUrl(): string {
+function resolvePreflightCoreUrl(): { url: string; exists: boolean } {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.join(here, "preflight-hook-core.js"), // dist/cli (built / prod)
     path.join(here, "../../dist/cli/preflight-hook-core.js"), // src/cli via tsx, after a build
   ];
-  const found = candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
-  return pathToFileURL(found).href;
+  const found = candidates.find((c) => fs.existsSync(c));
+  // Stamp the best-guess path even when missing so a later build self-heals on
+  // the next daemon startup (re-stamp); `exists` lets the installer report
+  // honestly that the gate is inactive until then.
+  return { url: pathToFileURL(found ?? candidates[0]).href, exists: Boolean(found) };
 }
 
 function preflightHookScript(coreUrl: string): string {
@@ -636,8 +639,12 @@ function preflightHookScript(coreUrl: string): string {
 // deepPairing PreToolUse preflight hook — installed by ensurePreflightHook.
 // GENERATED, do not edit. ESM (.mjs): use import, not require.
 // Runs the SAME rejected-approach matcher the MCP-side preflight uses, against
-// the agent's actual Edit/Write/MultiEdit, and DENIES at the platform level so
-// "refuses on your behalf" holds even when the present_* protocol is skipped.
+// the agent's actual Edit/Write/MultiEdit, so a direct edit that matches a
+// previously-rejected approach can't silently bypass the gate. It surfaces the
+// match to the HUMAN (permissionDecision: "ask") rather than hard-denying:
+// matching raw file content is noisier than the agent's reasoning prose, and a
+// change the human already approved in the UI must not be auto-blocked when
+// applied. "ask" keeps the human in the loop (pairing) and is recoverable.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -676,12 +683,12 @@ process.stdin.on("end", async () => {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: decision.reason || "Blocked by a previously-rejected approach.",
+          permissionDecision: "ask",
+          permissionDecisionReason: decision.reason || "This change matches a previously-rejected approach.",
         },
       }));
     }
-    // allow = exit 0 with no decision JSON
+    // no match = exit 0 with no decision JSON (tool proceeds)
     process.exit(0);
   } catch (err) {
     // FAIL OPEN — a broken hook must never block the user's edits.
@@ -700,9 +707,13 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
   const settingsPath = path.join(claudeDir, "settings.local.json");
   const scriptPath = path.join(projectRoot, PREFLIGHT_SCRIPT_REL_PATH);
   try {
+    const core = resolvePreflightCoreUrl();
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, preflightHookScript(resolvePreflightCoreUrl()));
+    fs.writeFileSync(scriptPath, preflightHookScript(core.url));
     fs.chmodSync(scriptPath, 0o755);
+    // Honest signal — if the matcher core isn't built, the hook installs but
+    // fails open (gate inactive) until a build + re-stamp on next startup.
+    const inactiveNote = core.exists ? "" : " (matcher core not built yet — gate inactive until next build)";
 
     let settings: any = {};
     if (fs.existsSync(settingsPath)) {
@@ -731,7 +742,7 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
 
     const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
     if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
-      return { ok: true, changed: false, message: "PreToolUse preflight hook already configured" };
+      return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
     }
     settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e: any) => !isDpEntry(e));
     settings.hooks.PreToolUse.push({
@@ -740,7 +751,7 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
     });
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    return { ok: true, changed: true, message: "Installed PreToolUse preflight hook" };
+    return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
   }
