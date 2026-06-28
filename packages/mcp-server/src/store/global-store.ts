@@ -93,19 +93,25 @@ export class GlobalStore {
 
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   private read(): LedgerFile {
+    // SEC1 — the concepts map is keyed by user/agent-supplied concept names.
+    // Use a null-prototype map so a key of `__proto__`/`constructor` is a normal
+    // own property (not Object.prototype / the constructor), which otherwise made
+    // `concepts[key]` truthy-but-malformed and 500'd recordInstance.
+    const emptyConcepts = (): Record<string, PhilosophyEntry> => Object.create(null);
     try {
       if (!fs.existsSync(this.ledgerPath)) {
-        return { version: LEDGER_VERSION, concepts: {} };
+        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
       }
       const raw = fs.readFileSync(this.ledgerPath, "utf-8");
       const parsed = JSON.parse(raw) as Partial<LedgerFile>;
       if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
-        return { version: LEDGER_VERSION, concepts: {} };
+        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
       }
-      return { version: LEDGER_VERSION, concepts: parsed.concepts };
+      // JSON.parse yields an Object.prototype-backed map; reparent to null.
+      return { version: LEDGER_VERSION, concepts: Object.assign(emptyConcepts(), parsed.concepts) };
     } catch {
       // Corrupted or unreadable — return empty rather than crash.
-      return { version: LEDGER_VERSION, concepts: {} };
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
   }
 

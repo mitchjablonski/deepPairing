@@ -121,6 +121,27 @@ describe("FileStore", () => {
     expect(store.getCommentsForArtifact("art_X")).toHaveLength(8);
   });
 
+  it("FN4 — agent self-supersede of a draft is NOT counted as a human review; a UI approve is", () => {
+    const store = createStore("fn4-review");
+    store.createArtifact({ id: "a1", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });
+    store.updateArtifactStatus("a1", "superseded", "agent_supersede");
+    expect(Object.keys(store.getEngagementMetrics().reviewsByType)).toHaveLength(0);
+
+    store.createArtifact({ id: "a2", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });
+    store.updateArtifactStatus("a2", "approved", "ui_approve_button");
+    expect(store.getEngagementMetrics().reviewsByType.plan?.count).toBe(1);
+  });
+
+  it("FN4 — approvalRate excludes agent-driven terminal states (retracted/obsolete)", () => {
+    const store = createStore("fn4-rate");
+    store.createArtifact({ id: "a1", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });
+    store.updateArtifactStatus("a1", "approved", "ui_approve_button");
+    store.createArtifact({ id: "a2", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });
+    store.updateArtifactStatus("a2", "retracted", "agent_retract");
+    // retracted is excluded from the denominator → 1/1, not 1/2
+    expect(store.getEngagementMetrics().approvalRate).toBe(1);
+  });
+
   it("FN1 — addComment persists codeReferences (answer_question evidence)", () => {
     const store = createStore("coderefs");
     store.addComment({

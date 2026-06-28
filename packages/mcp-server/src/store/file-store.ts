@@ -442,7 +442,12 @@ export class FileStore implements IStore {
         );
       }
 
-      if (wasDraft && status !== "draft") {
+      // FN4 — only count HUMAN reviews. An agent self-superseding/retracting/
+      // obsoleting its own still-draft artifact (agent_*), or the demo script,
+      // is not a review — counting it inflated avgReviewLatency/reviewsByType
+      // with agent-paced, non-human samples.
+      const agentDriven = reason.startsWith("agent_") || reason === "demo_script";
+      if (wasDraft && status !== "draft" && !agentDriven) {
         this.recordArtifactReviewed(artifactId);
       }
       this.scheduleFlush();
@@ -725,7 +730,13 @@ export class FileStore implements IStore {
     decisionsWithPredictions: number;
     highStakesDecisions: number;
   } {
-    const reviewed = this.artifacts.filter((a) => a.status !== "draft" && a.status !== "superseded");
+    // FN4 — approvalRate = approved / (artifacts the human actually decided on).
+    // Exclude draft (undecided) and the agent-driven terminal states
+    // (superseded/retracted/obsolete) — they aren't human approve/reject calls,
+    // so counting them in the denominator depressed the rate artificially.
+    const reviewed = this.artifacts.filter(
+      (a) => a.status !== "draft" && a.status !== "superseded" && a.status !== "retracted" && a.status !== "obsolete",
+    );
     const approved = this.artifacts.filter((a) => a.status === "approved");
     const approvalRate = reviewed.length > 0 ? approved.length / reviewed.length : 1;
 
