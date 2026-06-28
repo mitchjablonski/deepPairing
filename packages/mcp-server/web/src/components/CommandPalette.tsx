@@ -30,7 +30,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     // Actions
     items.push({
       id: "action_approve_all",
-      label: "Approve all draft findings, specs & plans",
+      label: "Approve all draft artifacts (except decisions)",
       type: "action",
       // F2 — decisions are intentionally EXCLUDED: a blanket "approved" flip
       // records no optionId, so the agent never learns which option was picked

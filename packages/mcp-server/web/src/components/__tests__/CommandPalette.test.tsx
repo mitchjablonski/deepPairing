@@ -18,7 +18,7 @@ describe("CommandPalette — F2 'Approve all' excludes decisions", () => {
     const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
 
     render(<CommandPalette onClose={() => {}} />);
-    await userEvent.click(screen.getByText(/approve all draft findings/i));
+    await userEvent.click(screen.getByText(/approve all draft artifacts/i));
 
     await waitFor(() => expect(spy).toHaveBeenCalledWith("p1", "approved"));
     // the decision must NOT be blanket-approved (it needs an explicit optionId via the card)
