@@ -24,7 +24,7 @@ import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
 import { mountStaticUi } from "./http/static-ui.js";
 import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
-import { applyTopLevelGuards } from "./http/guards.js";
+import { applyTopLevelGuards, projectHashGate } from "./http/guards.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
@@ -478,6 +478,15 @@ app.post("/api/demo/run", (c) => {
   runDemoScript({ sessionId, store, broadcast });
   return c.json({ sessionId, startedAt: new Date().toISOString() });
 });
+
+// S1 — these two reads live on the ROOT app, so they bypass the publicRoutes
+// X-Project-Hash gate (sub-app middleware only covers sub-app routes). Without
+// this, a stale tab pointed at a daemon serving a DIFFERENT project could read
+// this project's session list + full state (getFullState = every artifact,
+// comment, decision). Gate registered BEFORE the handlers so Hono applies it.
+const rootHashGate = projectHashGate(daemonProjectHash);
+app.use("/api/active-sessions", rootHashGate);
+app.use("/api/live-session/*", rootHashGate);
 
 // Active sessions endpoint for the web UI
 app.get("/api/active-sessions", (c) => {
