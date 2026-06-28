@@ -16,6 +16,18 @@ beforeEach(() => {
   apiGet.mockReset();
 });
 
+describe("FileViewer — a11y line selection is keyboard-operable", () => {
+  it("Enter on a line gutter selects that line for commenting (was mouse-only)", async () => {
+    apiGet.mockResolvedValue(okResponse("line one\nline two\nline three"));
+    render(<FileViewer filePath="/src/x.ts" artifactId="art_1" onClose={() => {}} />);
+    const g2 = await screen.findByRole("button", { name: /comment on line 2/i });
+    expect(g2).toHaveAttribute("aria-pressed", "false");
+    fireEvent.keyDown(g2, { key: "Enter" });
+    // selection registered → the gutter is now marked selected
+    expect(screen.getByRole("button", { name: /comment on line 2 \(selected\)/i })).toBeInTheDocument();
+  });
+});
+
 describe("FileViewer — UX4 overlay presence (suppresses global shortcuts)", () => {
   it("registers as an overlay while mounted and clears on unmount", () => {
     apiGet.mockReturnValue(new Promise(() => {}));

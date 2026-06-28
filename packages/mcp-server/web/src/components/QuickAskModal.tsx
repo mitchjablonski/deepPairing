@@ -1,0 +1,83 @@
+import { useRef, useState } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useOverlayPresence } from "../stores/overlay";
+
+interface QuickAskModalProps {
+  artifactTitle: string;
+  onSubmit: (question: string) => void;
+  onClose: () => void;
+}
+
+/**
+ * U3 — themed "ask the agent about this artifact" composer for the global `q`
+ * shortcut. Replaces window.prompt, which is a no-op inside the VS Code webview
+ * that embeds this UI (and a jarring native dialog everywhere else). Keyboard-
+ * first: autofocused textarea, ⌘/Ctrl+Enter or the button submits, Esc cancels.
+ */
+export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModalProps) {
+  const [text, setText] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, true);
+  useOverlayPresence(); // suppress global artifact shortcuts while open
+
+  const submit = () => {
+    const q = text.trim();
+    if (!q) return;
+    onSubmit(q);
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 pt-[15vh] px-4"
+      onClick={onClose}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Ask the agent about ${artifactTitle}`}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+        className="bg-surface-primary rounded-lg shadow-xl w-full max-w-lg p-4"
+      >
+        <div className="text-xs text-text-muted mb-2">
+          Ask the agent about <span className="font-medium text-text-primary">{artifactTitle}</span>
+        </div>
+        <textarea
+          autoFocus
+          rows={3}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="Your question… (⌘⏎ to send, Esc to cancel)"
+          className="w-full px-2.5 py-2 bg-surface-secondary border border-border-default rounded text-sm text-text-primary
+                     placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet resize-none"
+        />
+        <div className="flex justify-end gap-2 mt-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs text-text-muted hover:text-text-secondary transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!text.trim()}
+            className="px-3 py-1.5 bg-accent-violet text-white text-xs font-medium rounded
+                       hover:bg-accent-violet/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+          >
+            Ask
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

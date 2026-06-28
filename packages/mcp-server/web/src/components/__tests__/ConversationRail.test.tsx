@@ -10,7 +10,7 @@
  *   - Esc closes; click-outside closes.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { ConversationRail } from "../ConversationRail";
@@ -181,6 +181,19 @@ describe("ConversationRail (W1)", () => {
     const focus = calls.find((e) => e.type === "dp:focus-artifact");
     expect(focus).toBeDefined();
     expect((focus as any).detail).toEqual({ artifactId: "a_focus" });
+  });
+
+  it("a11y — the thread row jump is keyboard-operable (Enter dispatches dp:focus-artifact)", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a_kbd", { title: "Pick me" }));
+    s.addComment(comment({ id: "ck", artifactId: "a_kbd", author: "human", content: "jump via keyboard", createdAt: "2026-04-26T10:00:00.000Z" }));
+
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(<ConversationRail onClose={() => {}} />);
+    const row = screen.getByRole("button", { name: /jump to this comment/i });
+    fireEvent.keyDown(row, { key: "Enter" });
+    const focus = dispatchSpy.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.type === "dp:focus-artifact");
+    expect((focus as any)?.detail).toEqual({ artifactId: "a_kbd" });
   });
 
   // X10 — rail row click carries the comment's anchor key so App.tsx can

@@ -257,8 +257,20 @@ export function FileViewer({
                   }`}
                 >
                   <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Comment on line ${lineNum}${isSelected ? " (selected)" : ""} — Shift+Enter to extend the range`}
+                    aria-pressed={isSelected}
                     onClick={(e) => handleLineClick(lineNum, e.shiftKey)}
-                    className={`w-12 shrink-0 text-right pr-3 py-0.5 select-none border-r border-border-subtle cursor-pointer hover:bg-accent-blue-dim hover:text-accent-blue transition-colors ${
+                    onKeyDown={(e) => {
+                      // a11y — line selection was mouse-only; Enter selects this
+                      // line, Shift+Enter extends the range (mirrors shift-click).
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleLineClick(lineNum, e.shiftKey);
+                      }
+                    }}
+                    className={`w-12 shrink-0 text-right pr-3 py-0.5 select-none border-r border-border-subtle cursor-pointer hover:bg-accent-blue-dim hover:text-accent-blue transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue focus:ring-inset ${
                       isSelected ? "text-accent-blue font-semibold" : "text-text-muted"
                     }`}
                   >

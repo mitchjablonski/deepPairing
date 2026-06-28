@@ -424,7 +424,22 @@ function ThreadEntry({
         threadHasUnread ? "bg-accent-blue-dim/10" : ""
       }`}
     >
-      <div onClick={onFocus} className="cursor-pointer hover:bg-surface-hover -mx-3 -my-2 px-3 py-2" title="Click to open this artifact">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onFocus}
+        onKeyDown={(e) => {
+          // W1 a11y — the precise-anchor jump was mouse-only (bare onClick div).
+          // Make it keyboard-operable: Enter/Space activates like a button.
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onFocus();
+          }
+        }}
+        aria-label={`Open ${targetLabel(comment, artifact)} — jump to this comment`}
+        className="cursor-pointer hover:bg-surface-hover -mx-3 -my-2 px-3 py-2 rounded focus:outline-none focus:ring-1 focus:ring-accent-blue"
+        title="Click to open this artifact"
+      >
         <CommentRow comment={comment} location={targetLabel(comment, artifact)} unread={isUnread(comment)} />
         {replies.length > 0 && (
           <div className="ml-4 mt-1.5 pl-3 border-l-2 border-border-default space-y-1.5">
