@@ -786,19 +786,22 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("(code_change)"); // appears in the WAITING line
     });
 
-    it("FN2 — warns 'do NOT apply' (not 'proceed') after a human rejects a code_change", async () => {
+    it("FN2 — warns 'do NOT apply' (not 'proceed') after a human rejects a code_change, exactly once", async () => {
       await callTool("present_code_change", {
         filePath: "/src/x.ts", changeType: "modify", before: "a", after: "b", reasoning: "x", confidence: "low",
       });
       const art = store.getArtifacts()[0];
       expect(art.type).toBe("code_change");
+      // reject with NO feedback comment — detection must still fire (comment-independent)
       store.updateArtifactStatus(art.id, "rejected", "ui_reject");
-      // the human's reject reason — a drained comment ties the rejection to this cycle
-      store.addComment({ id: "rej", artifactId: art.id, content: "no — reuse the existing limiter", author: "human" });
 
-      const { text } = await callTool("check_feedback");
-      expect(text).toContain("REJECTED");
-      expect(text).not.toContain("You may proceed with implementation.");
+      const first = await callTool("check_feedback");
+      expect(first.text).toContain("REJECTED");
+      expect(first.text).not.toContain("You may proceed with implementation.");
+
+      // reported exactly once — the next check no longer re-emits the rejection
+      const second = await callTool("check_feedback");
+      expect(second.text).not.toContain("REJECTED");
     });
 
     it("returns unacknowledged comments", async () => {

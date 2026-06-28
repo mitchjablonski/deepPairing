@@ -1018,6 +1018,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   // to the first artifact's title" behavior the closure used to handle.
   const sessionNameLatch = new SessionNameLatch(store);
   let checkFeedbackPollCount = 0;
+  // FN2 — artifact ids whose rejection verdict has already been surfaced by
+  // check_feedback, so a rejected code_change/spec/research is reported exactly
+  // once. Comment-independent (catches feedback-less rejects) and self-limiting
+  // (a rejected artifact is terminal — revise mints a new id).
+  const reportedRejectedVerdicts = new Set<string>();
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: rawArgs } = request.params;
@@ -1215,21 +1220,19 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         const totalComments = allComments.length;
         const autonomyLabel = await store.getAutonomyLevel();
 
-        // FN2 — artifacts the human REJECTED that the agent hasn't seen yet:
-        // status flipped to `rejected` AND their feedback comment is in this
-        // drain. Without this, suggestedAction falls through to "you may
-        // proceed" right after a human rejects a code_change/spec/research
-        // (only decisions & plans had verdict reporting). Tied to the drained
-        // comments so each rejection is reported exactly once.
-        const drainedArtifactIds = new Set(
-          allComments.filter((c) => c.target.artifactId !== "__session__").map((c) => c.target.artifactId),
-        );
+        // FN2 — artifacts the human REJECTED that check_feedback hasn't reported
+        // yet. Without this, suggestedAction falls through to "you may proceed"
+        // right after a human rejects a code_change/spec/research (only decisions
+        // & plans had verdict reporting). Comment-independent (a feedback-less
+        // reject still triggers it) and reported exactly once via the
+        // reportedRejectedVerdicts set.
         const freshlyRejected = allArtifacts.filter(
           (a) =>
             a.status === "rejected" &&
             ["code_change", "spec", "research"].includes(a.type) &&
-            drainedArtifactIds.has(a.id),
+            !reportedRejectedVerdicts.has(a.id),
         );
+        for (const a of freshlyRejected) reportedRejectedVerdicts.add(a.id);
 
         // Find oldest pending artifact age
         let oldestPendingAge = "";
