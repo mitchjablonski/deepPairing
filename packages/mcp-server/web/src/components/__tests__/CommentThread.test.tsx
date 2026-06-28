@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { Comment } from "@deeppairing/shared";
-import { CommentThread } from "../CommentThread";
+import { CommentThread, AskTrigger } from "../CommentThread";
 
 /**
  * Regression: CommentThread rendered ONLY root comments and dropped every
@@ -82,5 +83,31 @@ describe("CommentThread — renders replies under their parent", () => {
     const strong = screen.getByText("important");
     expect(strong.tagName).toBe("STRONG"); // rendered, not literal
     expect(screen.queryByText(/\*\*important\*\*/)).not.toBeInTheDocument(); // no raw asterisks
+  });
+});
+
+describe("AskTrigger popover — U3 outside-click / Escape dismiss", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  it("closes on an outside click and on Escape", async () => {
+    render(
+      <div>
+        <AskTrigger artifactId="art_1" target={{ stepIndex: 0 }} />
+        <button>outside</button>
+      </div>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /ask the agent/i }));
+    expect(screen.getByPlaceholderText(/ask the agent to explain/i)).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole("button", { name: "outside" }));
+    expect(screen.queryByPlaceholderText(/ask the agent to explain/i)).not.toBeInTheDocument();
+
+    // reopen, then Escape
+    await userEvent.click(screen.getByRole("button", { name: /ask the agent/i }));
+    expect(screen.getByPlaceholderText(/ask the agent to explain/i)).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByPlaceholderText(/ask the agent to explain/i)).not.toBeInTheDocument();
   });
 });

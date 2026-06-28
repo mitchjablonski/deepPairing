@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useSentFlash } from "../hooks/useSentFlash";
@@ -270,8 +271,11 @@ export function AskTrigger({
       ? "bg-accent-violet-dim/40 text-accent-violet hover:bg-accent-violet-dim/60"
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  useDismissOnOutside(rootRef, open, () => setOpen(false));
+
   return (
-    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
+    <div ref={rootRef} className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={unanswered > 0 ? `${unanswered} unanswered question` : "Ask the agent about this"}
@@ -413,8 +417,11 @@ export function CommentTrigger({
       ? "bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80"
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-text-secondary";
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  useDismissOnOutside(rootRef, open, () => setOpen(false));
+
   return (
-    <div className={fullWidth ? "flex-1 min-w-0" : undefined}>
+    <div ref={rootRef} className={fullWidth ? "flex-1 min-w-0" : undefined}>
       <button
         onClick={() => setOpen(!open)}
         title={label ?? "Add a comment here"}

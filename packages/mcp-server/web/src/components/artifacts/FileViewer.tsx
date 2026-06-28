@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { apiGet } from "../../lib/api";
 import { useArtifactStore } from "../../stores/artifact";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 
 interface FileViewerProps {
   filePath: string;
@@ -31,6 +32,23 @@ export function FileViewer({
   const [submitting, setSubmitting] = useState(false);
 
   const { submitComment } = useArtifactStore();
+
+  // U3 — the modal was a keyboard trap: no Escape, no backdrop-dismiss, and the
+  // loading branch had no Close, so a hung /api/files fetch stranded the user.
+  // A document-level Escape closes it from any branch; the main panel also traps
+  // Tab + restores focus to the trigger on unmount.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, !loading && !error && !!content);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        // If a line selection is open, let the input's own Escape clear it first.
+        if (selectStart == null) onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, selectStart]);
 
   useEffect(() => {
     setLoading(true);
@@ -93,35 +111,61 @@ export function FileViewer({
   const handleSubmitComment = async () => {
     if (!commentText.trim() || !artifactId || !selectionRange) return;
     setSubmitting(true);
-
-    await submitComment(
-      artifactId,
-      commentText.trim(),
-      {
-        lineStart: selectionRange.start,
-        lineEnd: selectionRange.end,
-        filePath,
-      },
-    );
-
-    setCommentText("");
-    setSubmitting(false);
-    clearSelection();
+    try {
+      await submitComment(
+        artifactId,
+        commentText.trim(),
+        {
+          lineStart: selectionRange.start,
+          lineEnd: selectionRange.end,
+          filePath,
+        },
+      );
+      // U4 — only clear on success. The store already rolls back + toasts on
+      // failure (and re-throws), so on error we keep the typed text and the
+      // selection so the user can retry instead of losing their comment.
+      setCommentText("");
+      clearSelection();
+    } catch {
+      /* store surfaced the error toast; leave text + selection intact for retry */
+    } finally {
+      // Always re-enable — pre-U4 a thrown POST left `submitting` true forever,
+      // permanently disabling the composer.
+      setSubmitting(false);
+    }
   };
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-        <div className="bg-surface-primary rounded-lg p-8 text-sm text-text-muted">Loading file...</div>
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Loading ${filePath}`}
+          onClick={(e) => e.stopPropagation()}
+          className="bg-surface-primary rounded-lg p-6 flex items-center gap-4"
+        >
+          <span className="text-sm text-text-muted">Loading {filePath}…</span>
+          {/* U3 — a Close even while loading, so a hung fetch can't trap the user. */}
+          <button onClick={onClose} className="px-2 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-surface-hover rounded">
+            Close
+          </button>
+        </div>
       </div>
     );
   }
 
   if (error || !content) {
     return (
-      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-        <div className="bg-surface-primary rounded-lg p-6 max-w-sm">
-          <p className="text-sm text-red-600 mb-3">
+      <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="File unavailable"
+          onClick={(e) => e.stopPropagation()}
+          className="bg-surface-primary rounded-lg p-6 max-w-sm"
+        >
+          <p className="text-sm text-accent-red mb-3">
             {error ?? "File not available"} — the agent hasn't read this file yet.
           </p>
           <button onClick={onClose} className="px-3 py-1.5 bg-surface-elevated text-sm rounded hover:bg-surface-hover">
@@ -133,8 +177,15 @@ export function FileViewer({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-8">
-      <div className="bg-surface-primary rounded-lg shadow-xl flex flex-col max-w-4xl w-full max-h-[85vh]">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-8" onClick={onClose}>
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${filePath} (file viewer)`}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-surface-primary rounded-lg shadow-xl flex flex-col max-w-4xl w-full max-h-[85vh]"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-default bg-surface-secondary rounded-t-lg">
           <div className="flex items-center gap-2">

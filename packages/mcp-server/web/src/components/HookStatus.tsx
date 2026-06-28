@@ -97,6 +97,7 @@ export function HookStatus() {
         <div
           ref={popoverRef}
           role="dialog"
+          aria-modal="true"
           aria-label="Recent hook fires"
           className="absolute right-0 mt-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-border-default bg-surface-elevated shadow-lg z-50 overflow-hidden"
         >
