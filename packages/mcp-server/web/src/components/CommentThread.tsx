@@ -114,9 +114,14 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
   const handleSubmit = async () => {
     if (!input.trim() || submitting) return;
     setSubmitting(true);
-    await submitComment(artifactId, input.trim(), target);
-    setInput("");
-    setSubmitting(false);
+    try {
+      await submitComment(artifactId, input.trim(), target);
+      setInput(""); // clear only on success; keep the draft for retry on failure
+    } catch {
+      /* store surfaced the error toast */
+    } finally {
+      setSubmitting(false); // never strand the composer disabled
+    }
   };
 
   // Render the full thread: root comments plus their replies nested beneath.
@@ -251,11 +256,19 @@ export function AskTrigger({
     const trimmed = question.trim();
     if (!trimmed || sending) return;
     setSending(true);
-    await submitComment(artifactId, trimmed, target, { intent: "question" });
-    setQuestion("");
-    flash();
-    setOpen(false);
-    setSending(false);
+    try {
+      await submitComment(artifactId, trimmed, target, { intent: "question" });
+      // only clear/close on success — same U4 fix as FileViewer: the store
+      // rolls back + toasts + re-throws, so on failure keep the text and the
+      // open popover for retry instead of stranding `sending=true` forever.
+      setQuestion("");
+      flash();
+      setOpen(false);
+    } catch {
+      /* store surfaced the error; keep the draft + popover for retry */
+    } finally {
+      setSending(false);
+    }
   };
 
   const classes =

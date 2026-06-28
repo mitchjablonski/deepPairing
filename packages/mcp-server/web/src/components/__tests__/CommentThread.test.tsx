@@ -110,4 +110,18 @@ describe("AskTrigger popover — U3 outside-click / Escape dismiss", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByPlaceholderText(/ask the agent to explain/i)).not.toBeInTheDocument();
   });
+
+  it("keeps the popover open + text on a failed send (no stuck 'sending')", async () => {
+    const { useArtifactStore } = await import("../../stores/artifact");
+    vi.spyOn(useArtifactStore.getState(), "submitComment").mockRejectedValue(new Error("network"));
+    render(<AskTrigger artifactId="art_1" target={{ stepIndex: 0 }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /ask the agent/i }));
+    const input = screen.getByPlaceholderText(/ask the agent to explain/i);
+    await userEvent.type(input, "why?{Enter}");
+
+    // popover stays open and the draft survives so the user can retry
+    expect(screen.getByPlaceholderText(/ask the agent to explain/i)).toBeInTheDocument();
+    expect((screen.getByPlaceholderText(/ask the agent to explain/i) as HTMLInputElement).value).toBe("why?");
+  });
 });
