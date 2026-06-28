@@ -423,8 +423,15 @@ export function createDaemonRoutes(
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
     const { optionId, reasoning, confidence, predictedOutcome } = await c.req.json();
-    const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
     const decisionId = c.req.param("decisionId");
+    // FN5 — require a non-empty optionId. Without this, a missing optionId
+    // no-ops resolveDecision but the F2 guard (undefined !== undefined → false)
+    // skipped its 400, so the route returned 200 "resolved" + broadcast
+    // optionId:undefined while nothing was resolved.
+    if (typeof optionId !== "string" || optionId.length === 0) {
+      return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
+    }
+    const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
     r.store.resolveDecision(decisionId, optionId, reasoning, prediction);
     // F2 — honor resolveDecision's fail-closed rejection of an unknown optionId
     // (only when the decision RECORD exists; a missing record is a no-op here).
@@ -551,6 +558,14 @@ export function createDaemonRoutes(
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
     r.store.recordRejectedApproach(parsed);
+    // FN3 — record the metric HERE (daemon-side truth point). Decision-resolution
+    // ledger writes come through this route via DaemonClient; the MCP wrapper's
+    // broadcast is a no-op, so the broadcast-tap never saw them (ledgerWrites
+    // sat ~0 in prod). Mirrors the /metrics + /answered F1 pattern. Exclude
+    // demo sessions, matching the broadcast tap's demo guard.
+    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+      try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "rejected" }); } catch {}
+    }
     return c.json({ status: "recorded" });
   });
 
@@ -565,6 +580,9 @@ export function createDaemonRoutes(
       return c.json({ error: message, code: ERROR_CODES.validation_error }, 400);
     }
     r.store.recordApprovedPattern(parsed);
+    if (daemonProjectRoot && !c.req.param("sessionId").startsWith("demo_")) {
+      try { recordMetricEvent(daemonProjectRoot, { kind: "ledger_write", verdict: "approved" }); } catch {}
+    }
     return c.json({ status: "recorded" });
   });
 

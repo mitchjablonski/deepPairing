@@ -77,6 +77,32 @@ describe("F1 — daemon-side metric recording", () => {
   });
 });
 
+describe("FN3 — ledger_write metric recorded daemon-side in /memory routes", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("counts approved + rejected ledger writes (was ~0 in prod — wrapper broadcast is a no-op)", async () => {
+    const localApp = createDaemonRoutes(sessions, sessionMeta, createTestSession, () => {}, undefined, tmpDir);
+    await localApp.request(`/api/internal/sessions/s_fn3/register`, j({}));
+    await localApp.request(`/api/internal/sessions/s_fn3/memory/rejected`, j({ description: "use redis" }));
+    await localApp.request(`/api/internal/sessions/s_fn3/memory/approved`, j({ description: "service layer" }));
+    const m = readMetrics(tmpDir);
+    expect(m.counts.ledgerWrites.total).toBe(2);
+    expect(m.counts.ledgerWrites.rejected).toBe(1);
+    expect(m.counts.ledgerWrites.approved).toBe(1);
+  });
+});
+
+describe("FN5 — decision resolve route requires an optionId", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("400s on a missing optionId (was 200 'resolved' + broadcast optionId:undefined)", async () => {
+    await app.request(`/api/internal/sessions/s_fn5/register`, j({}));
+    await app.request(`/api/internal/sessions/s_fn5/decisions`, j({ decisionId: "d1", artifactId: "a1", context: "?", options: [{ id: "a", title: "A" }] }));
+    const res = await app.request(`/api/internal/sessions/s_fn5/decisions/d1/resolve`, j({ reasoning: "oops, no optionId" }));
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("FN1 — codeReferences survive the comment HTTP round-trip", () => {
   const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
