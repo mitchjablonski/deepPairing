@@ -30,11 +30,22 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     // Actions
     items.push({
       id: "action_approve_all",
-      label: "Approve all draft artifacts",
+      label: "Approve all draft artifacts (except decisions)",
       type: "action",
-      action: () => {
-        const drafts = artifacts.filter((a) => a.status === "draft");
-        for (const a of drafts) updateArtifactStatus(a.id, "approved");
+      // F2 — decisions are intentionally EXCLUDED: a blanket "approved" flip
+      // records no optionId, so the agent never learns which option was picked
+      // (and resolveDecision never runs). They must be resolved individually via
+      // the decision card. Await sequentially so a flaky daemon surfaces one
+      // error toast, not N parallel ones, and a mid-batch failure stops cleanly.
+      action: async () => {
+        const drafts = artifacts.filter((a) => a.status === "draft" && a.type !== "decision");
+        for (const a of drafts) {
+          try {
+            await updateArtifactStatus(a.id, "approved");
+          } catch {
+            break; // store already toasted; don't fire a cascade of failures
+          }
+        }
         onClose();
       },
     });

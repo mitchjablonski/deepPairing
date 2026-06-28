@@ -1863,6 +1863,43 @@ describe("MCP Tool Handlers", () => {
       expect(store.getPendingDecisions().map((d) => d.artifactId)).not.toContain(oldDec.id);
     });
 
+    it("F1 — superseding a decision WITHOUT a decisionId mints one + records the request (the human's pick isn't lost)", async () => {
+      await callTool("present_options", {
+        context: "pick a cache",
+        options: [
+          { id: "a", title: "Redis", description: "shared", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Memcached", description: "simple", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const oldDec = store.getArtifacts()[0];
+
+      await callTool("revise_artifact", {
+        artifactId: oldDec.id,
+        mode: "supersede",
+        // NOTE: no decisionId — mirrors the REAL agent input shape (present_options
+        // doesn't expose it; it's server-minted). Pre-fix this left no DecisionRecord,
+        // so the human's subsequent selection resolved to nothing.
+        content: {
+          context: "pick a cache",
+          options: [
+            { id: "a", title: "Redis", description: "shared + TTL", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+            { id: "c", title: "In-process LRU", description: "no deps", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+          ],
+        },
+        reason: "swapped memcached for an in-process option",
+      });
+
+      const newDec = store.getArtifacts().find((a) => a.id !== oldDec.id)!;
+      const newDecisionId = (newDec.content as any).decisionId;
+      // a server-minted id is baked into content...
+      expect(typeof newDecisionId).toBe("string");
+      expect(newDecisionId).toMatch(/^dec_/);
+      // ...and a backing DecisionRecord exists, so a human selection actually resolves
+      expect(store.getDecision(newDecisionId)).toBeTruthy();
+      store.resolveDecision(newDecisionId, "a", "stick with Redis");
+      expect(store.getDecisionResponse(newDecisionId)?.optionId).toBe("a");
+    });
+
     it("F3 — rejects malformed supersede content via the same validator present_* uses", async () => {
       await callTool("present_findings", {
         summary: "x",

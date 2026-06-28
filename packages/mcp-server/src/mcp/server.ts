@@ -1598,6 +1598,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
           const title = String(args?.title ?? old.title);
           const newId = `art_${nanoid(10)}`;
+          // F1 — a superseded decision needs a fresh server-minted decisionId
+          // baked into content BEFORE persistence. The supersede input shape
+          // (present_options) carries none, so without this the new decision had
+          // no DecisionRecord and the human's later selection was silently
+          // dropped (resolve no-ops → no resolved report, no ledger learning).
+          if (old.type === "decision" && Array.isArray((content as any).options)) {
+            (content as any).decisionId = `dec_${nanoid(10)}`;
+            if ((content as any).stakes === undefined && (old.content as any)?.stakes !== undefined) {
+              (content as any).stakes = (old.content as any).stakes;
+            }
+          }
           const newArtifact = await store.createArtifact({
             id: newId,
             type: old.type,
@@ -1623,7 +1634,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               artifactId: newId,
               context: (content as any).context ?? title,
               options: (content as any).options,
-            });
+              stakes: (content as any).stakes,
+            } as any);
           }
           if (old.type === "plan") {
             await store.recordPlanReview(newId);
