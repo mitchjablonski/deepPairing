@@ -286,7 +286,7 @@ function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: D
           {expanded ? "Collapse unchanged lines" : "Show all lines"}
         </button>
       )}
-      <div className="grid grid-cols-2 divide-x divide-border-subtle">
+      <div className="grid grid-cols-1 min-[900px]:grid-cols-2 divide-y min-[900px]:divide-y-0 min-[900px]:divide-x divide-border-subtle">
         <div className="text-2xs font-semibold text-accent-red px-2 py-1 bg-surface-elevated border-b border-border-subtle">
           Before
         </div>
@@ -318,7 +318,7 @@ function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: D
             const isActive = commentable && activeLine === newLine;
             return (
               <div key={i} data-comment-anchor={commentable ? `line:${filePath ?? ""}:${newLine}` : undefined}>
-                <div className="grid grid-cols-2 divide-x divide-border-subtle">
+                <div className="grid grid-cols-1 min-[900px]:grid-cols-2 divide-y min-[900px]:divide-y-0 min-[900px]:divide-x divide-border-subtle">
                   <SplitCellView cell={row.left} />
                   <SplitCellView
                     cell={right}

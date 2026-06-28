@@ -49,7 +49,7 @@ export function LineGutter({
     <div className={`flex items-center justify-end gap-0.5 select-none ${className ?? ""}`}>
       <button
         onClick={() => (askActive ? onClose() : onOpen("ask"))}
-        className={`w-4 h-4 flex items-center justify-center rounded text-[10px] font-semibold transition-all ${
+        className={`w-6 h-6 flex items-center justify-center rounded text-[10px] font-semibold transition-all ${
           askActive
             ? "bg-accent-violet text-white"
             // Faint at rest so it's discoverable that lines are commentable
@@ -64,7 +64,7 @@ export function LineGutter({
       </button>
       <button
         onClick={() => (commentActive ? onClose() : onOpen("comment"))}
-        className={`w-4 h-4 flex items-center justify-center rounded text-[10px] transition-all ${
+        className={`w-6 h-6 flex items-center justify-center rounded text-[10px] transition-all ${
           commentActive || commentCount > 0
             ? "bg-accent-blue text-white"
             : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue"

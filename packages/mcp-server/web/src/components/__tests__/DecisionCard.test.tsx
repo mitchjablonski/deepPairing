@@ -366,6 +366,15 @@ describe("DecisionCard — keyboard navigation", () => {
       expect.objectContaining({ body: expect.stringContaining('"optionId":"o2"') }),
     );
   });
+
+  it("U5e — marks the focused option with aria-current for assistive tech", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" />);
+    // o1 (Redis) is the recommended default → focusedIndex 0 → aria-current
+    const o1 = screen.getByText("Redis").closest('[role="button"]')!;
+    const o2 = screen.getByText("CDN edge cache").closest('[role="button"]')!;
+    expect(o1).toHaveAttribute("aria-current", "true");
+    expect(o2).toHaveAttribute("aria-current", "false");
+  });
 });
 
 describe("DecisionCard — Send back for revision (Fix B)", () => {
