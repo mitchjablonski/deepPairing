@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
+import { computePending } from "../lib/pending";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -88,17 +89,17 @@ export function TurnIndicator() {
 
   if (!connected) return null;
 
-  const draftResearch = artifacts.filter(
-    (a) => (a.type === "research" || a.type === "spec") && a.status === "draft",
-  );
-  const pendingDecisions = artifacts.filter(
-    (a) => a.type === "decision" && a.status === "draft",
-  );
-  const pendingPlans = artifacts.filter(
-    (a) => a.type === "plan" && a.status === "draft",
-  );
+  // UX1 — derive the whose-turn signal from the SAME predicate PendingBanner
+  // uses (lib/pending), so the header can't disagree with the banner. Pre-UX1
+  // this used an inline filter that omitted code_change, so a draft code change
+  // showed "1 waiting" in the banner but "Agent working"/"Up to date" here.
+  const pending = computePending(artifacts).drafts;
+  const draftResearch = pending.filter((a) => a.type === "research" || a.type === "spec");
+  const pendingDecisions = pending.filter((a) => a.type === "decision");
+  const pendingPlans = pending.filter((a) => a.type === "plan");
+  const pendingChanges = pending.filter((a) => a.type === "code_change");
 
-  const totalPending = draftResearch.length + pendingDecisions.length + pendingPlans.length;
+  const totalPending = pending.length;
 
   // Q4 — badge rendered alongside the turn pill. Violet = "waiting on agent"
   // (inverse of the amber "your turn"). Click jumps to the oldest unanswered
@@ -122,6 +123,9 @@ export function TurnIndicator() {
     }
     if (pendingDecisions.length > 0) {
       parts.push(`${pendingDecisions.length} decision${pendingDecisions.length > 1 ? "s" : ""}`);
+    }
+    if (pendingChanges.length > 0) {
+      parts.push(`${pendingChanges.length} change${pendingChanges.length > 1 ? "s" : ""}`);
     }
     if (pendingPlans.length > 0) {
       parts.push(`${pendingPlans.length} plan${pendingPlans.length > 1 ? "s" : ""}`);

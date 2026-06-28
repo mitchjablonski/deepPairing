@@ -375,6 +375,36 @@ describe("DecisionCard — keyboard navigation", () => {
     expect(o1).toHaveAttribute("aria-current", "true");
     expect(o2).toHaveAttribute("aria-current", "false");
   });
+
+  it("UX2 — a draft decision auto-focuses + stops j from bubbling to the global handler", () => {
+    const { container } = render(<DecisionCard event={event} decisionId="dec_abc" />);
+    const card = container.firstElementChild as HTMLElement;
+    // auto-focused so its ↑↓/Enter nav is live without a Tab first
+    expect(card.contains(document.activeElement)).toBe(true);
+    // j is handled + stopPropagation'd → a document-level listener (App's global
+    // nav) does not also receive it
+    const docSpy = vi.fn();
+    document.addEventListener("keydown", docSpy);
+    fireEvent.keyDown(card, { key: "j" });
+    document.removeEventListener("keydown", docSpy);
+    expect(docSpy).not.toHaveBeenCalled();
+  });
+
+  it("UX6 — the global approve shortcut selects the focused option on a decision", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_x" />);
+    fireEvent(window, new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/decisions/dec_abc"),
+      expect.objectContaining({ body: expect.stringContaining('"optionId":"o1"') }),
+    );
+  });
+
+  it("UX6 — the global revise shortcut opens the send-back composer on a decision", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_x" />);
+    expect(screen.queryByPlaceholderText(/all 4 are matchers/i)).not.toBeInTheDocument();
+    fireEvent(window, new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "revise" } }));
+    expect(screen.getByPlaceholderText(/all 4 are matchers/i)).toBeInTheDocument();
+  });
 });
 
 describe("DecisionCard — Send back for revision (Fix B)", () => {
