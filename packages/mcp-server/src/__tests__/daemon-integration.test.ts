@@ -77,6 +77,24 @@ describe("F1 — daemon-side metric recording", () => {
   });
 });
 
+describe("F2 — decision resolve route rejects an unknown optionId (no split state)", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("400s on an optionId not among the decision's options, 200s on a valid one", async () => {
+    await app.request(`/api/internal/sessions/s_f2/register`, j({}));
+    await app.request(`/api/internal/sessions/s_f2/decisions`, j({
+      decisionId: "dec_f2", artifactId: "art_f2", context: "Which?",
+      options: [{ id: "a", title: "A" }, { id: "b", title: "B" }],
+    }));
+
+    const bad = await app.request(`/api/internal/sessions/s_f2/decisions/dec_f2/resolve`, j({ optionId: "nope" }));
+    expect(bad.status).toBe(400);
+
+    const ok = await app.request(`/api/internal/sessions/s_f2/decisions/dec_f2/resolve`, j({ optionId: "a" }));
+    expect(ok.status).toBe(200);
+  });
+});
+
 describe("S2 — internal mutators reject malformed bodies with 400 (not 500)", () => {
   const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 

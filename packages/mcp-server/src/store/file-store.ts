@@ -599,17 +599,26 @@ export class FileStore implements IStore {
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ): void {
     const dec = this.decisions.get(decisionId);
-    if (dec) {
-      dec.response = {
-        optionId,
-        reasoning,
-        confidence: prediction?.confidence,
-        predictedOutcome: prediction?.predictedOutcome,
-      };
-      dec.resolvedAt = new Date().toISOString();
-      this.scheduleFlush();
-      this.notifyFeedbackWaiters();
+    if (!dec) return;
+    // F2 — reject an optionId that isn't one of this decision's options. The
+    // public/internal HTTP routes pass optionId straight through unvalidated; if
+    // a malformed/buggy client sent an unknown id we'd set a response that
+    // check_feedback then acknowledges (consuming the decision) but can't match
+    // to an option, silently dropping the ledger learning. Fail-closed: leave it
+    // pending so it re-surfaces rather than vanishing.
+    const opts = (dec as { options?: Array<{ id?: string }> }).options;
+    if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
+      return;
     }
+    dec.response = {
+      optionId,
+      reasoning,
+      confidence: prediction?.confidence,
+      predictedOutcome: prediction?.predictedOutcome,
+    };
+    dec.resolvedAt = new Date().toISOString();
+    this.scheduleFlush();
+    this.notifyFeedbackWaiters();
   }
 
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {

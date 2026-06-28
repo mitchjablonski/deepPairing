@@ -217,6 +217,21 @@ describe("FileStore", () => {
     expect(resp?.reasoning).toBe("Seems best");
   });
 
+  it("F2 — resolveDecision ignores an optionId not among the decision's options (stays pending, not silently consumed)", () => {
+    const store = createStore("resolve-guard");
+    store.recordDecisionRequest({
+      decisionId: "dec_g",
+      artifactId: "art_g",
+      context: "Which?",
+      options: [{ id: "a", title: "A" }, { id: "b", title: "B" }],
+    });
+    store.resolveDecision("dec_g", "nonexistent", "oops");
+    expect(store.getDecisionResponse("dec_g")).toBeFalsy(); // not set → re-surfaces, no ledger drop
+    // a valid option still resolves normally
+    store.resolveDecision("dec_g", "b", "ok");
+    expect(store.getDecisionResponse("dec_g")?.optionId).toBe("b");
+  });
+
   it("backs up corrupted JSON files", () => {
     // Create a session with valid data
     const store = createStore( "corrupt");
