@@ -3,6 +3,7 @@ import { coerceSpecContent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { ArtifactVisuals } from "../ArtifactVisuals";
+import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useArtifactStore } from "../../stores/artifact";
 
 interface Props {
@@ -117,6 +118,11 @@ export function SpecArtifact({ artifact }: Props) {
           </ul>
         </div>
       )}
+
+      {/* U1 — a draft spec is counted as "your turn" (REVIEWABLE_TYPES), so it
+          must offer the review actions; without this it nagged forever with no
+          way to approve/revise/reject. Mirrors ResearchArtifact. */}
+      <ArtifactStatusActions artifact={artifact} />
     </div>
   );
 }

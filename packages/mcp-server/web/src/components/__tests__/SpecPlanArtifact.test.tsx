@@ -33,6 +33,13 @@ describe("SpecArtifact — tolerates missing optional arrays", () => {
     })} />);
     expect(screen.getByText("do the thing")).toBeInTheDocument();
   });
+
+  it("U1 — a draft spec renders the review actions (approve/respond/reject), not a dead-end", () => {
+    render(<SpecArtifact artifact={mk("spec", { objective: "ship it" })} />);
+    // ArtifactStatusActions footer is present for a draft (was missing entirely)
+    expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Respond" })).toBeInTheDocument();
+  });
 });
 
 describe("PlanArtifact — MotivatedByBadges tolerates unresolved / odd data", () => {

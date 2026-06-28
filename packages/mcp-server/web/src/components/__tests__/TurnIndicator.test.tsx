@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TurnIndicator } from "../TurnIndicator";
 import { useArtifactStore } from "../../stores/artifact";
@@ -127,5 +127,44 @@ describe("TurnIndicator — Q4 unanswered-questions badge", () => {
     seedComment("art_1"); // still open
     render(<TurnIndicator />);
     expect(screen.getByText(/1 question waiting/i)).toBeInTheDocument();
+  });
+});
+
+describe("TurnIndicator — U2 agent liveness", () => {
+  it("shows 'Up to date' (not a forever 'Agent working' pulse) once activity is stale", () => {
+    seedConnected();
+    seedArtifact({ status: "approved", createdAt: "2026-04-20T10:00:00Z", updatedAt: "2026-04-20T10:00:00Z" });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/up to date/i)).toBeInTheDocument();
+    expect(screen.queryByText(/agent working/i)).not.toBeInTheDocument();
+  });
+
+  it("shows 'Agent working' while there is recent activity", () => {
+    seedConnected();
+    const now = new Date().toISOString();
+    seedArtifact({ status: "approved", createdAt: now, updatedAt: now });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/agent working/i)).toBeInTheDocument();
+    expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
+  });
+
+  it("a freshly-connected session with nothing yet shows 'Agent working' (not 'Up to date')", () => {
+    seedConnected(); // no artifacts/comments
+    render(<TurnIndicator />);
+    expect(screen.getByText(/agent working/i)).toBeInTheDocument();
+    expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
+  });
+
+  it("re-arms: new activity flips a stale 'Up to date' back to 'Agent working'", () => {
+    seedConnected();
+    seedArtifact({ id: "old", status: "approved", createdAt: "2026-04-20T10:00:00Z", updatedAt: "2026-04-20T10:00:00Z" });
+    const { rerender } = render(<TurnIndicator />);
+    expect(screen.getByText(/up to date/i)).toBeInTheDocument();
+    // fresh activity arrives
+    const now = new Date().toISOString();
+    act(() => { seedArtifact({ id: "fresh", status: "approved", createdAt: now, updatedAt: now }); });
+    rerender(<TurnIndicator />);
+    expect(screen.getByText(/agent working/i)).toBeInTheDocument();
+    expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
   });
 });
