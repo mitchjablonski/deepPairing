@@ -26,17 +26,19 @@ function heroOf(overrides: Partial<PreflightBlockHero> = {}): PreflightBlockHero
 }
 
 describe("ToastLayer", () => {
-  it("U1 — keeps the live region mounted (but empty) when the queue is empty, so SRs announce reliably", () => {
+  it("U1 — the toast region stays mounted (but empty) when the queue is empty", () => {
     const { container } = render(<ToastLayer />);
-    const region = container.querySelector('[role="status"]');
-    expect(region).toBeInTheDocument(); // always present (not gated on toast count)
-    expect(region?.children.length).toBe(0); // but no toasts yet
+    const region = container.querySelector('[data-testid="toast-region"]');
+    expect(region).toBeInTheDocument(); // container always present
+    expect(region?.children.length).toBe(0); // no toasts yet
   });
 
-  it("U1 — error toasts are assertive (role=alert) so they interrupt rather than queue", () => {
+  it("U1 — error toasts are assertive (role=alert); info toasts are polite (role=status)", () => {
     push("error", { title: "Send failed", body: "the daemon rejected it" });
+    push("info", { title: "Heads up" });
     render(<ToastLayer />);
     expect(screen.getByRole("alert")).toHaveTextContent("Send failed");
+    expect(screen.getByRole("status")).toHaveTextContent("Heads up");
   });
 
   it("renders a generic toast with title + body", () => {

@@ -157,18 +157,21 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
 export function ToastLayer() {
   const { toasts, dismiss } = useToastStore();
 
-  // U1 — the live region is ALWAYS mounted (not gated on toasts.length), so a
-  // screen reader has an existing region to announce into; returning null when
-  // empty meant the region was inserted together with its first toast and SRs
-  // skipped it. U2 — z-[60] sits above modals/drawers (z-50) so a failure toast
-  // fired while an overlay is open is visible, not painted behind the backdrop.
-  // pointer-events-none on the (wide) wrapper + auto per toast so the always-
-  // present empty region never intercepts clicks.
+  // U1 — announcement is per-toast, NOT via an outer live region: error/block/
+  // preflight toasts are role=alert (assertive, announced on insertion); the
+  // rest are role=status (polite). The wrapper is a plain positioning container
+  // — making it ALSO an aria-live region would nest live regions, which double-
+  // announces and downgrades the assertive toasts to the wrapper's politeness.
+  // (The robust-but-heavier alternative is two persistent sr-only regions,
+  // polite + assertive, with text routed in; per-toast roles suffice here.)
+  // U2 — z-[60] sits above modals/drawers (z-50) so a failure toast fired while
+  // an overlay is open is visible, not painted behind the backdrop.
+  // pointer-events-none on the (wide) wrapper + auto per toast so it never
+  // intercepts clicks over content behind it.
   return (
     <div
+      data-testid="toast-region"
       className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-[420px] w-[calc(100vw-2rem)] pointer-events-none"
-      role="status"
-      aria-live="polite"
     >
       {toasts.map((t) => {
         // error / blocked are assertive — they interrupt rather than queue
