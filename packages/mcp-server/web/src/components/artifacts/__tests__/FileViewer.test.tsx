@@ -7,12 +7,24 @@ vi.mock("../../../lib/api", () => ({ apiGet }));
 
 import { FileViewer } from "../FileViewer";
 import { useArtifactStore } from "../../../stores/artifact";
+import { useOverlayStore } from "../../../stores/overlay";
 
 const okResponse = (content: string) => ({ ok: true, json: async () => ({ content }) });
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
   apiGet.mockReset();
+});
+
+describe("FileViewer — UX4 overlay presence (suppresses global shortcuts)", () => {
+  it("registers as an overlay while mounted and clears on unmount", () => {
+    apiGet.mockReturnValue(new Promise(() => {}));
+    expect(useOverlayStore.getState().count).toBe(0);
+    const { unmount } = render(<FileViewer filePath="/src/x.ts" onClose={() => {}} />);
+    expect(useOverlayStore.getState().count).toBeGreaterThan(0);
+    unmount();
+    expect(useOverlayStore.getState().count).toBe(0);
+  });
 });
 
 describe("FileViewer — U3 dismissability", () => {

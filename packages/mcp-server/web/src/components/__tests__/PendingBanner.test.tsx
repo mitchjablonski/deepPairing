@@ -24,11 +24,18 @@ describe("PendingBanner", () => {
     expect(screen.getByText(/1 item waiting for you/i)).toBeInTheDocument();
   });
 
-  it("a draft's quick Dismiss marks it obsolete via the store", async () => {
+  it("UX5 — quick Dismiss is two-step: first click confirms, second marks obsolete", async () => {
     useArtifactStore.getState().addArtifact(art({ id: "d1", type: "decision", title: "pick a cache", status: "draft", content: { context: "x", options: [], decisionId: "dec" } }));
     const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
     render(<PendingBanner />);
+
+    // first click only asks to confirm — the irreversible obsolete is NOT fired
     await userEvent.click(screen.getByRole("button", { name: /dismiss pick a cache/i }));
+    expect(spy).not.toHaveBeenCalled();
+    expect(screen.getByText("Dismiss?")).toBeInTheDocument();
+
+    // second click commits
+    await userEvent.click(screen.getByRole("button", { name: /confirm dismiss pick a cache/i }));
     expect(spy).toHaveBeenCalledWith("d1", "obsolete");
   });
 });
