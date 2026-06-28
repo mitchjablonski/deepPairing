@@ -23,8 +23,8 @@ import { ERROR_CODES } from "./error-codes.js";
 import { FileStore } from "./store/file-store.js";
 import { createHttpRoutes } from "./http/routes.js";
 import { mountStaticUi } from "./http/static-ui.js";
-import { createDaemonRoutes, type SessionMeta } from "./daemon-routes.js";
-import { applyTopLevelGuards, projectHashGate } from "./http/guards.js";
+import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./daemon-routes.js";
+import { applyTopLevelGuards } from "./http/guards.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
@@ -479,37 +479,11 @@ app.post("/api/demo/run", (c) => {
   return c.json({ sessionId, startedAt: new Date().toISOString() });
 });
 
-// S1 — these two reads live on the ROOT app, so they bypass the publicRoutes
-// X-Project-Hash gate (sub-app middleware only covers sub-app routes). Without
-// this, a stale tab pointed at a daemon serving a DIFFERENT project could read
-// this project's session list + full state (getFullState = every artifact,
-// comment, decision). Gate registered BEFORE the handlers so Hono applies it.
-const rootHashGate = projectHashGate(daemonProjectHash);
-app.use("/api/active-sessions", rootHashGate);
-app.use("/api/live-session/*", rootHashGate);
-
-// Active sessions endpoint for the web UI
-app.get("/api/active-sessions", (c) => {
-  const list = Array.from(sessions.entries()).map(([id, store]) => {
-    const meta = sessionMeta.get(id);
-    return {
-      sessionId: id,
-      title: meta?.title ?? id,
-      project: meta?.project ?? "",
-      artifactCount: store.getArtifacts().length,
-    };
-  });
-  return c.json({ sessions: list });
-});
-
-// A6a: serve a single live session's state directly from the in-memory store
-// so the companion UI's MultiAgentSync can merge artifacts across sessions.
-app.get("/api/live-session/:sessionId", (c) => {
-  const sessionId = c.req.param("sessionId");
-  const store = sessions.get(sessionId);
-  if (!store) return c.json({ error: "unknown_session" }, 404);
-  return c.json(store.getFullState());
-});
+// S1 — the two root-app session reads + their X-Project-Hash gate, factored into
+// a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
+// daemon serving a DIFFERENT project could read this project's session list +
+// full state. Mounted on "/" like the other route groups.
+app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash));
 
 // --- Serve static web UI ---
 // Extracted to http/static-ui.ts so the bootstrap-injection contract (the
