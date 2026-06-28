@@ -187,14 +187,20 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         target?.isContentEditable === true
       ) return;
 
+      // UX2 — stopPropagation so App's document-level j/k (artifact navigation)
+      // doesn't ALSO fire while the card has focus, which would advance the
+      // option highlight AND navigate to a different artifact (unmounting the card).
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
+        e.stopPropagation();
         setFocusedIndex((i) => Math.min(i + 1, event.options.length - 1));
       } else if (e.key === "ArrowUp" || e.key === "k") {
         e.preventDefault();
+        e.stopPropagation();
         setFocusedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
+        e.stopPropagation();
         if (showReasoning) return; // Let the reasoning input handle Enter
         handleSelect(event.options[focusedIndex].id);
       }
@@ -203,6 +209,31 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
   }, [focusedIndex, resolved, showReasoning, event.options]);
+
+  // UX2 — auto-focus the card when a draft decision is shown, so its keyboard
+  // nav (↑↓/Enter, advertised in the footer) is live without a Tab/click first.
+  useEffect(() => {
+    if (!resolved) containerRef.current?.focus();
+  }, [resolved]);
+
+  // UX6 — the global a/r shortcuts (App dispatches dp:artifact-shortcut) did
+  // nothing on a decision: only ArtifactStatusActions listened, and a decision
+  // renders DecisionCard. Map approve → select the focused option, revise →
+  // open the send-back composer.
+  useEffect(() => {
+    if (!artifactId || resolved) return;
+    const onShortcut = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail as { artifactId?: string; action?: string } | undefined;
+      if (!detail || detail.artifactId !== artifactId) return;
+      if (detail.action === "approve") {
+        handleSelect(event.options[focusedIndex]?.id ?? event.options[0]?.id);
+      } else if (detail.action === "revise") {
+        setShowSendBack(true);
+      }
+    };
+    window.addEventListener("dp:artifact-shortcut", onShortcut);
+    return () => window.removeEventListener("dp:artifact-shortcut", onShortcut);
+  }, [artifactId, resolved, focusedIndex, event.options]);
 
   // Send-back-with-comment: posts a tagged question comment that the
   // server's firstCallHint promotes to "REVISION REQUEST" priority. Agent

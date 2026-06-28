@@ -130,6 +130,17 @@ describe("TurnIndicator — Q4 unanswered-questions badge", () => {
   });
 });
 
+describe("TurnIndicator — UX1: a draft code_change is 'your turn' (matches PendingBanner)", () => {
+  it("shows 'Your turn — 1 change' for a draft code_change (was 'Agent working')", () => {
+    seedConnected();
+    seedArtifact({ id: "cc", type: "code_change", status: "draft" });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/your turn/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 change/i)).toBeInTheDocument();
+    expect(screen.queryByText(/agent working/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("TurnIndicator — U2 agent liveness", () => {
   it("shows 'Up to date' (not a forever 'Agent working' pulse) once activity is stale", () => {
     seedConnected();
