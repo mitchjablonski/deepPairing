@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { apiGet } from "../../lib/api";
 import { useArtifactStore } from "../../stores/artifact";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
+import { useOverlayPresence } from "../../stores/overlay";
 
 interface FileViewerProps {
   filePath: string;
@@ -32,6 +33,7 @@ export function FileViewer({
   const [submitting, setSubmitting] = useState(false);
 
   const { submitComment } = useArtifactStore();
+  useOverlayPresence(); // UX4 — suppress global artifact shortcuts while this modal is up
 
   // U3 — the modal was a keyboard trap: no Escape, no backdrop-dismiss, and the
   // loading branch had no Close, so a hung /api/files fetch stranded the user.

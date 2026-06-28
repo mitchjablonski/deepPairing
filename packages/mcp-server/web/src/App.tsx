@@ -23,6 +23,7 @@ import { useArtifactStore } from "./stores/artifact";
 import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { countUnansweredQuestions } from "./lib/unanswered";
+import { useOverlayStore } from "./stores/overlay";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
@@ -62,11 +63,14 @@ function App() {
   // UX4 — the global keydown handler is registered once (stable []), so it reads
   // "is any overlay open?" through this ref. While an overlay is open the
   // artifact shortcuts (j/k/a/r/q) must NOT act on the obscured artifact behind
-  // it (e.g. `a` arming an approve on a hidden artifact).
+  // it (e.g. `a` arming an approve on a hidden artifact). overlayCount covers
+  // component-internal modals App can't see (FileViewer/RepairDecisionModal/
+  // HookStatus) via the overlay-presence store; the booleans cover App-owned
+  // overlays. Assigned in render (not an effect) so it's never a frame stale.
+  const overlayCount = useOverlayStore((s) => s.count);
   const overlayOpenRef = useRef(false);
-  useEffect(() => {
-    overlayOpenRef.current = showHelp || showPalette || showSettings || showTaste || showConversation;
-  }, [showHelp, showPalette, showSettings, showTaste, showConversation]);
+  overlayOpenRef.current =
+    overlayCount > 0 || showHelp || showPalette || showSettings || showTaste || showConversation;
 
   // Fetch active sessions on mount, auto-connect to the first one (or to the
   // session named in ?session=... — used by `npx deeppairing demo` to land

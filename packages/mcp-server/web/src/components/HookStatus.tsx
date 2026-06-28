@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useHookStatusStore, type HookFire } from "../stores/hookStatus";
+import { useOverlayPresence } from "../stores/overlay";
 
 /**
  * X7 — header chip + popover surfacing recent hook fires.
@@ -38,6 +39,7 @@ function fireKindLabel(fire: HookFire): { label: string; tone: "nag" | "pass" } 
 export function HookStatus() {
   const fires = useHookStatusStore((s) => s.fires);
   const [open, setOpen] = useState(false);
+  useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 

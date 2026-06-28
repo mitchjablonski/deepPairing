@@ -46,7 +46,9 @@ export function PendingBanner() {
             <button
               onClick={() => {
                 if (confirmingId === a.id) {
-                  void updateArtifactStatus(a.id, "obsolete");
+                  // store rolls back + toasts on failure; swallow so a failed
+                  // POST isn't an unhandled rejection (UX7d theme)
+                  void updateArtifactStatus(a.id, "obsolete").catch(() => {});
                   setConfirmingId(null);
                 } else {
                   setConfirmingId(a.id);

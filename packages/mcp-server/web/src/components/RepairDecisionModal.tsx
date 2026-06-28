@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { buildRepairPrompt } from "../lib/repairPrompt";
 import { apiBase } from "../lib/api";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useOverlayPresence } from "../stores/overlay";
 
 interface Props {
   sessionId: string;
@@ -41,6 +42,7 @@ export function RepairDecisionModal({
 }: Props) {
   const [userNote, setUserNote] = useState("");
   const [copied, setCopied] = useState(false);
+  useOverlayPresence(); // UX4 — suppress global artifact shortcuts while this modal is up
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
