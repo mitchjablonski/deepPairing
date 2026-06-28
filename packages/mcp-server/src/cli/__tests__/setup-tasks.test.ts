@@ -8,11 +8,16 @@ import {
   ensureGitignoreEntry,
   ensureStopHook,
   ensureCheckpointHook,
+  ensurePreflightHook,
   detectCrossScopeDpEntries,
   cleanDpEntriesFromScope,
   HOOK_MARKERS,
   runDaemonStartupSetup,
 } from "../setup-tasks.js";
+
+// The e2e hook run imports the BUILT matcher core; skip those cases on an
+// unbuilt tree (the unit cases still cover registration/idempotency).
+const builtCoreExists = fs.existsSync(path.join(process.cwd(), "dist/cli/preflight-hook-core.js"));
 
 let tmpDir: string;
 let homeDir: string;
@@ -635,10 +640,10 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
 });
 
 describe("runDaemonStartupSetup", () => {
-  it("runs all four idempotent setup tasks", () => {
+  it("runs all idempotent setup tasks", () => {
     fs.writeFileSync(path.join(tmpDir, ".gitignore"), "node_modules/\n");
     const results = runDaemonStartupSetup(tmpDir);
-    expect(results).toHaveLength(4);
+    expect(results).toHaveLength(5); // dir, gitignore, stop, checkpoint, preflight
     expect(results.every((r) => r.ok)).toBe(true);
     // Re-running is a no-op
     const second = runDaemonStartupSetup(tmpDir);
@@ -777,5 +782,72 @@ describe("Cross-scope hook dedup (X2)", () => {
     const r = ensureCheckpointHook(tmpDir);
     expect(r.ok).toBe(true);
     expect(r.ok && r.message).toMatch(/cross-scope.*checkpoint/i);
+  });
+});
+
+describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", () => {
+  it("writes the hook script + registers a canonical PreToolUse entry", () => {
+    const r = ensurePreflightHook(tmpDir);
+    expect(r.ok).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".deeppairing/hooks/preflight.mjs"))).toBe(true);
+    const settings = JSON.parse(fs.readFileSync(path.join(tmpDir, ".claude/settings.local.json"), "utf-8"));
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
+    expect(settings.hooks.PreToolUse[0].matcher).toBe("Write|Edit|MultiEdit");
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("preflight.mjs");
+  });
+
+  it("owns the row — re-running is idempotent (exactly one DP entry)", () => {
+    ensurePreflightHook(tmpDir);
+    const r = ensurePreflightHook(tmpDir);
+    expect(r.ok && r.changed).toBe(false);
+    const settings = JSON.parse(fs.readFileSync(path.join(tmpDir, ".claude/settings.local.json"), "utf-8"));
+    const dp = settings.hooks.PreToolUse.filter((e: any) => HOOK_MARKERS.PreToolUse(e.hooks?.[0]?.command ?? ""));
+    expect(dp).toHaveLength(1);
+  });
+
+  it("leaves a non-deepPairing PreToolUse entry untouched", () => {
+    const claudeDir = path.join(tmpDir, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.local.json"),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo other" }] }] } }),
+    );
+    ensurePreflightHook(tmpDir);
+    const settings = JSON.parse(fs.readFileSync(path.join(claudeDir, "settings.local.json"), "utf-8"));
+    expect(settings.hooks.PreToolUse.some((e: any) => e.hooks?.[0]?.command === "echo other")).toBe(true);
+    expect(settings.hooks.PreToolUse.some((e: any) => HOOK_MARKERS.PreToolUse(e.hooks?.[0]?.command ?? ""))).toBe(true);
+  });
+
+  const seedRejected = () => {
+    fs.mkdirSync(path.join(tmpDir, ".deeppairing"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".deeppairing/preferences.json"),
+      JSON.stringify({ rejectedApproaches: [{ description: "global config", concept: "global mutable state" }] }),
+    );
+  };
+  const runHook = (toolInput: unknown) => {
+    const hookPath = path.join(tmpDir, ".deeppairing/hooks/preflight.mjs");
+    return execSync(`node ${JSON.stringify(hookPath)}`, {
+      input: JSON.stringify({ tool_name: "Edit", tool_input: toolInput, cwd: tmpDir }),
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir },
+    });
+  };
+
+  it.skipIf(!builtCoreExists)("e2e — the generated hook surfaces (ask) an Edit matching a rejected approach", () => {
+    seedRejected();
+    ensurePreflightHook(tmpDir);
+    const out = runHook({ file_path: "/c.ts", new_string: "export let cfg = {}; // global mutable state singleton" });
+    const parsed = JSON.parse(out);
+    expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toMatch(/REJECTED_APPROACH_BLOCKED/);
+  });
+
+  it.skipIf(!builtCoreExists)("e2e — the generated hook ALLOWS (empty stdout) an unrelated edit", () => {
+    seedRejected();
+    ensurePreflightHook(tmpDir);
+    const out = runHook({ file_path: "/u.ts", new_string: "export const add = (a, b) => a + b;" });
+    expect(out.trim()).toBe("");
   });
 });

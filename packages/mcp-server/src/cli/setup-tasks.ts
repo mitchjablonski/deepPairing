@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
@@ -133,7 +134,12 @@ export function cleanDpEntriesFromScope(
 const STOP_HOOK_MARKER = (cmd: string) =>
   cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
 const CHECKPOINT_HOOK_MARKER = (cmd: string) => cmd.includes("checkpoint.mjs");
-export const HOOK_MARKERS = { Stop: STOP_HOOK_MARKER, PostToolUse: CHECKPOINT_HOOK_MARKER } as const;
+const PREFLIGHT_HOOK_MARKER = (cmd: string) => cmd.includes("preflight.mjs");
+export const HOOK_MARKERS = {
+  Stop: STOP_HOOK_MARKER,
+  PostToolUse: CHECKPOINT_HOOK_MARKER,
+  PreToolUse: PREFLIGHT_HOOK_MARKER,
+} as const;
 
 export function ensureDeepPairingDir(projectRoot: string): SetupResult {
   const dpDir = path.join(projectRoot, ".deeppairing");
@@ -600,11 +606,163 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
  * a user's CLAUDE.md from a background daemon spawned by an MCP install
  * would surprise people. That stays opt-in via `npx deeppairing init`.
  */
+// ---------------------------------------------------------------------------
+// WP5 — PreToolUse preflight hook. The MCP-side preflight only fires when the
+// agent voluntarily announces intent via a present_* tool; a model that calls
+// Edit/Write directly sails past the gate. This hook runs the SAME matcher
+// against the actual tool call at the platform level, so the rejected-approach
+// block holds even when the protocol is skipped.
+// ---------------------------------------------------------------------------
+const PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
+const PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
+const PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
+
+/** Absolute file URL of the built matcher core, so the generated hook (which
+ *  runs via plain `node` from .deeppairing/hooks/) can import it regardless of
+ *  install layout. Prefers the built dist/cli copy; falls back gracefully. If
+ *  none exists (e.g. an unbuilt dev tree) the hook fails OPEN at import time. */
+function resolvePreflightCoreUrl(): { url: string; exists: boolean } {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(here, "preflight-hook-core.js"), // dist/cli (built / prod)
+    path.join(here, "../../dist/cli/preflight-hook-core.js"), // src/cli via tsx, after a build
+  ];
+  const found = candidates.find((c) => fs.existsSync(c));
+  // Stamp the best-guess path even when missing so a later build self-heals on
+  // the next daemon startup (re-stamp); `exists` lets the installer report
+  // honestly that the gate is inactive until then.
+  return { url: pathToFileURL(found ?? candidates[0]).href, exists: Boolean(found) };
+}
+
+function preflightHookScript(coreUrl: string): string {
+  return `#!/usr/bin/env node
+// deepPairing PreToolUse preflight hook — installed by ensurePreflightHook.
+// GENERATED, do not edit. ESM (.mjs): use import, not require.
+// Runs the SAME rejected-approach matcher the MCP-side preflight uses, against
+// the agent's actual Edit/Write/MultiEdit, so a direct edit that matches a
+// previously-rejected approach can't silently bypass the gate. It surfaces the
+// match to the HUMAN (permissionDecision: "ask") rather than hard-denying:
+// matching raw file content is noisier than the agent's reasoning prose, and a
+// change the human already approved in the UI must not be auto-blocked when
+// applied. "ask" keeps the human in the loop (pairing) and is recoverable.
+import fs from "node:fs";
+import path from "node:path";
+
+// Built matcher core, stamped at install time (see resolvePreflightCoreUrl).
+const CORE_URL = ${JSON.stringify(coreUrl)};
+
+function recordFire(projectRoot, reason) {
+  try {
+    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
+    let s = { version: 1, fires: [] };
+    if (fs.existsSync(sp)) { try { s = JSON.parse(fs.readFileSync(sp, "utf-8")); } catch {} }
+    const fires = Array.isArray(s.fires) ? s.fires : [];
+    fires.push({ at: new Date().toISOString(), hook: "preflight", reason: reason });
+    s.fires = fires.slice(-50);
+    s.version = 1;
+    fs.writeFileSync(sp, JSON.stringify(s));
+  } catch {}
+}
+
+let input = "";
+process.stdin.setEncoding("utf-8");
+process.stdin.on("data", (d) => { input += d; });
+process.stdin.on("end", async () => {
+  try {
+    const ev = JSON.parse(input || "{}");
+    const toolName = ev.tool_name || "";
+    const toolInput = ev.tool_input || ev.input || {};
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+      process.exit(0);
+    }
+    const mod = await import(CORE_URL);
+    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
+    if (decision && decision.deny) {
+      recordFire(projectRoot, decision.source || "blocked");
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "ask",
+          permissionDecisionReason: decision.reason || "This change matches a previously-rejected approach.",
+        },
+      }));
+    }
+    // no match = exit 0 with no decision JSON (tool proceeds)
+    process.exit(0);
+  } catch (err) {
+    // FAIL OPEN — a broken hook must never block the user's edits.
+    try { process.stderr.write("[deepPairing] preflight hook error: " + String((err && err.message) || err) + "\\n"); } catch {}
+    process.exit(0);
+  }
+});
+`;
+}
+
+/** Install the PreToolUse preflight hook (matcher Write|Edit|MultiEdit). Owns
+ *  the deepPairing PreToolUse row: drops any prior DP entry and writes exactly
+ *  one canonical entry (same own-the-row discipline as the Stop hook). */
+export function ensurePreflightHook(projectRoot: string): SetupResult {
+  const claudeDir = path.join(projectRoot, ".claude");
+  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const scriptPath = path.join(projectRoot, PREFLIGHT_SCRIPT_REL_PATH);
+  try {
+    const core = resolvePreflightCoreUrl();
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, preflightHookScript(core.url));
+    fs.chmodSync(scriptPath, 0o755);
+    // Honest signal — if the matcher core isn't built, the hook installs but
+    // fails open (gate inactive) until a build + re-stamp on next startup.
+    const inactiveNote = core.exists ? "" : " (matcher core not built yet — gate inactive until next build)";
+
+    let settings: any = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+      }
+    }
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
+
+    const isDpEntry = (entry: any) => {
+      if (typeof entry?.command === "string" && PREFLIGHT_HOOK_MARKER(entry.command)) return true;
+      if (Array.isArray(entry?.hooks)) {
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && PREFLIGHT_HOOK_MARKER(h.command));
+      }
+      return false;
+    };
+    const isCanonical = (entry: any) =>
+      Array.isArray(entry?.hooks) &&
+      entry.hooks.length === 1 &&
+      entry.hooks[0]?.type === "command" &&
+      entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND &&
+      entry?.matcher === PREFLIGHT_MATCHER;
+
+    const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
+    if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
+      return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
+    }
+    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e: any) => !isDpEntry(e));
+    settings.hooks.PreToolUse.push({
+      matcher: PREFLIGHT_MATCHER,
+      hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }],
+    });
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
+  } catch (err) {
+    return { ok: false, message: `Failed to install preflight hook: ${err}` };
+  }
+}
+
 export function runDaemonStartupSetup(projectRoot: string): SetupResult[] {
   return [
     ensureDeepPairingDir(projectRoot),
     ensureGitignoreEntry(projectRoot),
     ensureStopHook(projectRoot),
     ensureCheckpointHook(projectRoot),
+    ensurePreflightHook(projectRoot),
   ];
 }
