@@ -26,6 +26,16 @@ describe("FileViewer — a11y line selection is keyboard-operable", () => {
     // selection registered → the gutter is now marked selected
     expect(screen.getByRole("button", { name: /comment on line 2 \(selected\)/i })).toBeInTheDocument();
   });
+
+  it("Shift+Enter extends the selection range (mirrors shift-click)", async () => {
+    apiGet.mockResolvedValue(okResponse("line one\nline two\nline three\nline four"));
+    render(<FileViewer filePath="/src/x.ts" artifactId="art_1" onClose={() => {}} />);
+    fireEvent.keyDown(await screen.findByRole("button", { name: /comment on line 1/i }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: /comment on line 3/i }), { key: "Enter", shiftKey: true });
+    // lines 1–3 are now all selected
+    expect(screen.getByRole("button", { name: /comment on line 1 \(selected\)/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /comment on line 3 \(selected\)/i })).toBeInTheDocument();
+  });
 });
 
 describe("FileViewer — UX4 overlay presence (suppresses global shortcuts)", () => {

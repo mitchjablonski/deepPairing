@@ -4,7 +4,7 @@ import { useOverlayPresence } from "../stores/overlay";
 
 interface QuickAskModalProps {
   artifactTitle: string;
-  onSubmit: (question: string) => void;
+  onSubmit: (question: string) => void | Promise<void>;
   onClose: () => void;
 }
 
@@ -20,11 +20,17 @@ export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModa
   useFocusTrap(panelRef, true);
   useOverlayPresence(); // suppress global artifact shortcuts while open
 
-  const submit = () => {
+  const submit = async () => {
     const q = text.trim();
     if (!q) return;
-    onSubmit(q);
-    onClose();
+    try {
+      // only close on success — on a failed send the store toasts + re-throws,
+      // so we keep the composer open with the typed question for retry.
+      await onSubmit(q);
+      onClose();
+    } catch {
+      /* store surfaced the error toast; leave the question intact */
+    }
   };
 
   return (
@@ -47,7 +53,10 @@ export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModa
           Ask the agent about <span className="font-medium text-text-primary">{artifactTitle}</span>
         </div>
         <textarea
-          autoFocus
+          // no autoFocus — useFocusTrap focuses this (first focusable) AND
+          // captures the trigger first, so focus returns to the artifact card on
+          // close. autoFocus commits before the trap's passive effect, stealing
+          // that capture (focus would drop to <body> on close).
           rows={3}
           value={text}
           onChange={(e) => setText(e.target.value)}
