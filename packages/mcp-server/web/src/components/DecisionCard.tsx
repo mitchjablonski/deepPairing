@@ -187,14 +187,18 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         target?.isContentEditable === true
       ) return;
 
-      // UX2 — stopPropagation so App's document-level j/k (artifact navigation)
-      // doesn't ALSO fire while the card has focus, which would advance the
-      // option highlight AND navigate to a different artifact (unmounting the card).
+      // UX2 — within the card, j/k move the option highlight and we
+      // stopPropagation so App's document-level j/k doesn't ALSO navigate
+      // artifacts (which would unmount the card). AT THE BOUNDARY (already on
+      // the last/first option) we let the key BUBBLE instead, so a keyboard
+      // user can still escape past the decision to the next/prev artifact.
       if (e.key === "ArrowDown" || e.key === "j") {
+        if (focusedIndex >= event.options.length - 1) return; // at last → bubble to App nav
         e.preventDefault();
         e.stopPropagation();
         setFocusedIndex((i) => Math.min(i + 1, event.options.length - 1));
       } else if (e.key === "ArrowUp" || e.key === "k") {
+        if (focusedIndex <= 0) return; // at first → bubble to App nav
         e.preventDefault();
         e.stopPropagation();
         setFocusedIndex((i) => Math.max(i - 1, 0));
@@ -213,7 +217,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // UX2 — auto-focus the card when a draft decision is shown, so its keyboard
   // nav (↑↓/Enter, advertised in the footer) is live without a Tab/click first.
   useEffect(() => {
-    if (!resolved) containerRef.current?.focus();
+    // preventScroll — the breadcrumb + artifact header render above the card;
+    // a scrolling focus would jump the view past them on mount.
+    if (!resolved) containerRef.current?.focus({ preventScroll: true });
   }, [resolved]);
 
   // UX6 — the global a/r shortcuts (App dispatches dp:artifact-shortcut) did
@@ -228,12 +234,16 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       if (detail.action === "approve") {
         handleSelect(event.options[focusedIndex]?.id ?? event.options[0]?.id);
       } else if (detail.action === "revise") {
+        // mirror the footer button — the two composers are mutually exclusive
         setShowSendBack(true);
+        setShowReasoning(false);
       }
     };
     window.addEventListener("dp:artifact-shortcut", onShortcut);
     return () => window.removeEventListener("dp:artifact-shortcut", onShortcut);
-  }, [artifactId, resolved, focusedIndex, event.options]);
+    // handleSelect closes over phase/stakes/predictOptIn/reasoning — keep it in
+    // deps so the approve shortcut never fires with stale selection state.
+  }, [artifactId, resolved, focusedIndex, event.options, handleSelect]);
 
   // Send-back-with-comment: posts a tagged question comment that the
   // server's firstCallHint promotes to "REVISION REQUEST" priority. Agent
