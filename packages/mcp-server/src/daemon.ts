@@ -308,8 +308,11 @@ function computeDaemonPendingCount(): number {
   let n = 0;
   for (const store of sessions.values()) {
     try {
-      const st: any = store.getFullState();
-      for (const a of st.artifacts ?? []) {
+      // PP4 — getArtifacts() is the in-memory array; getFullState() additionally
+      // re-read preferences.json from disk per session (via getSessionMemory) +
+      // ran getEngagementMetrics — all unused here, and this runs per
+      // /api/daemon-info poll across every session.
+      for (const a of store.getArtifacts()) {
         if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
       }
     } catch { /* skip a store that can't render state */ }
@@ -867,9 +870,17 @@ async function main() {
     });
 
     // A2: write daemon.json on startup AND on a recurring heartbeat so a
-    // missing/stale info file self-heals without user intervention.
+    // missing info file self-heals without user intervention.
     writeDaemonInfo(port);
-    const heartbeat = setInterval(() => writeDaemonInfo(port), 30000);
+    // PP4 — self-heal ONLY: pid/port/token are fixed for the daemon's life, so
+    // an existing daemon.json is already correct. Re-writing it (plus a token
+    // sidecar on non-POSIX FS like WSL /mnt/c) every 30s was pure idle disk
+    // churn; only rewrite when the discovery file has actually gone missing.
+    const heartbeat = setInterval(() => {
+      try {
+        if (!fs.existsSync(daemonInfoFile)) writeDaemonInfo(port);
+      } catch { /* a stat failure shouldn't kill the heartbeat */ }
+    }, 30000);
     heartbeat.unref?.();
 
     // X7 — watch .deeppairing/hooks-state.json for new hook fires; broadcast
