@@ -870,17 +870,15 @@ async function main() {
     });
 
     // A2: write daemon.json on startup AND on a recurring heartbeat so a
-    // missing info file self-heals without user intervention.
+    // missing/stale info file self-heals without user intervention.
+    // PP4 note: the 30s rewrite looks like idle churn, but the periodic write is
+    // load-bearing on two paths a stat-and-skip would silently break — (1) on
+    // non-POSIX FS (WSL /mnt/c) the bearer token lives in an EPHEMERAL runtime/
+    // tmp sidecar that the rewrite refreshes so it doesn't age out (else
+    // DaemonClient auth dies after days); (2) the VS Code extension picks the
+    // daemon.json with the freshest mtime as the "active" project. Left as-is.
     writeDaemonInfo(port);
-    // PP4 — self-heal ONLY: pid/port/token are fixed for the daemon's life, so
-    // an existing daemon.json is already correct. Re-writing it (plus a token
-    // sidecar on non-POSIX FS like WSL /mnt/c) every 30s was pure idle disk
-    // churn; only rewrite when the discovery file has actually gone missing.
-    const heartbeat = setInterval(() => {
-      try {
-        if (!fs.existsSync(daemonInfoFile)) writeDaemonInfo(port);
-      } catch { /* a stat failure shouldn't kill the heartbeat */ }
-    }, 30000);
+    const heartbeat = setInterval(() => writeDaemonInfo(port), 30000);
     heartbeat.unref?.();
 
     // X7 — watch .deeppairing/hooks-state.json for new hook fires; broadcast
