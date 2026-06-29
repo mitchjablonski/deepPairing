@@ -862,10 +862,23 @@ describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", 
     expect(out.trim()).toBe("");
   });
 
-  it.skipIf(!builtCoreExists)("PP1 — short-circuits (allows) with NO ledgers at all, without importing the matcher", () => {
-    // no preferences.json, no team.json → ledgersPresent() false → exit before import
+  it("PP1 — short-circuits (allows) with NO ledgers, without touching the matcher core", () => {
+    // No skipIf: the short-circuit runs BEFORE the dynamic import, so it works
+    // even when the core is absent — which is exactly what lets us assert it
+    // didn't fail-open (a fail-open import error would print to stderr).
     ensurePreflightHook(tmpDir);
-    const out = runHook({ file_path: "/x.ts", new_string: "global mutable state singleton" });
-    expect(out.trim()).toBe(""); // allowed; matcher core never imported
+    const hookPath = path.join(tmpDir, ".deeppairing/hooks/preflight.mjs");
+    let stdout = "";
+    let stderr = "";
+    try {
+      stdout = execSync(`node ${JSON.stringify(hookPath)} 2>/tmp/dp-pf-stderr.txt`, {
+        input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "/x.ts", new_string: "global mutable state singleton" }, cwd: tmpDir }),
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir },
+      });
+      stderr = fs.readFileSync("/tmp/dp-pf-stderr.txt", "utf-8");
+    } catch { /* non-zero exit shouldn't happen here */ }
+    expect(stdout.trim()).toBe(""); // allowed (no deny/ask emitted)
+    expect(stderr).not.toMatch(/preflight hook error/); // clean short-circuit, not a fail-open
   });
 });

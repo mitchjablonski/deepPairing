@@ -47,6 +47,12 @@ describe("FileStore", () => {
     expect(fs.existsSync(markerPath)).toBe(true);
     const at1 = JSON.parse(fs.readFileSync(markerPath, "utf-8")).at;
     expect(typeof at1).toBe("string");
+
+    // last-write-wins = most-recent code_change (the property the checkpoint relies on)
+    const at2 = JSON.parse(fs.readFileSync(markerPath, "utf-8")).at;
+    store.createArtifact({ id: "c2", type: "code_change", title: "edit2", content: { filePath: "y", changeType: "modify", before: "a", after: "b", reasoning: "r" } });
+    const at3 = JSON.parse(fs.readFileSync(markerPath, "utf-8")).at;
+    expect(at3 >= at2).toBe(true); // advanced (or equal within the same ms)
   });
 
   it("rejects sessionId with path traversal characters", () => {

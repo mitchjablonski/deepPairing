@@ -407,10 +407,12 @@ export class FileStore implements IStore {
    */
   private touchCodeChangeMarker(at: string): void {
     try {
-      fs.mkdirSync(this.basePath, { recursive: true });
-      fs.writeFileSync(path.join(this.basePath, "last-code-change.json"), JSON.stringify({ at }));
+      // atomic (temp+rename) so a concurrent checkpoint read can't see a torn
+      // file; basePath already exists (constructor). Best-effort — never let a
+      // marker write break artifact creation.
+      writeJsonAtomic(path.join(this.basePath, "last-code-change.json"), { at });
     } catch {
-      /* hint only — never let a marker write break artifact creation */
+      /* hint only */
     }
   }
 
