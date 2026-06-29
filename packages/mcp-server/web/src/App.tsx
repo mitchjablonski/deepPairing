@@ -26,6 +26,7 @@ import { scrollToAnchor } from "./lib/comment-anchor";
 import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
 import { usePreloadErrorReload } from "./hooks/usePreloadErrorReload";
+import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
@@ -103,10 +104,11 @@ function App() {
       }
     };
     init();
-    // Poll for new sessions every 10s
-    const timer = setInterval(refreshSessions, 10000);
-    return () => clearInterval(timer);
   }, []);
+
+  // PP3 — poll for new sessions only while the tab is visible AND connected
+  // (was a bare 10s setInterval that fired forever, even hidden/disconnected).
+  usePollingWhenVisible(refreshSessions, 10000, connected);
 
   // Global keyboard shortcuts
   useEffect(() => {
