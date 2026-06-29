@@ -33,7 +33,14 @@ async function getHighlighter(): Promise<Highlighter> {
       themes: ["vitesse-dark", "vitesse-light"],
       langs: [...PRELOAD_LANGS],
     });
-  })();
+  })().catch((err) => {
+    // PP3 — the lazy chunk can 404 (stale tab after a daemon rebuild). Don't
+    // cache the rejected promise: reset so a later render retries instead of
+    // highlighting being permanently dead. (A reload prompt also fires via
+    // vite:preloadError.)
+    initPromise = null;
+    throw err;
+  });
 
   highlighter = await initPromise;
   return highlighter;
