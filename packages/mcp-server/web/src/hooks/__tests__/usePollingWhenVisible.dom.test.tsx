@@ -55,4 +55,28 @@ describe("usePollingWhenVisible", () => {
     act(() => vi.advanceTimersByTime(5000));
     expect(cb).not.toHaveBeenCalled();
   });
+
+  it("calls the LATEST callback without resubscribing (cbRef) on re-render", () => {
+    const cb1 = vi.fn();
+    const cb2 = vi.fn();
+    const { rerender } = render(<Harness cb={cb1} ms={1000} />);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(cb1).toHaveBeenCalledTimes(1);
+    rerender(<Harness cb={cb2} ms={1000} />); // same interval/enabled → no resubscribe
+    act(() => vi.advanceTimersByTime(1000));
+    expect(cb2).toHaveBeenCalledTimes(1);
+    expect(cb1).toHaveBeenCalledTimes(1); // old callback no longer fires
+  });
+
+  it("clears the interval + visibility listener on unmount (no leak)", () => {
+    const cb = vi.fn();
+    const removeSpy = vi.spyOn(document, "removeEventListener");
+    const { unmount } = render(<Harness cb={cb} ms={1000} />);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(cb).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(removeSpy).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    act(() => vi.advanceTimersByTime(5000)); // timer cleared → no further calls
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
 });
