@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiBase, getCurrentHost } from "../lib/api";
 import { useConnectionStore } from "../stores/connection";
+import { usePollingWhenVisible } from "../hooks/usePollingWhenVisible";
 
 /**
  * MP1 (multi-project spike) — bare project switcher. Lists every live
@@ -36,9 +37,9 @@ export function ProjectSwitcher() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
   }, []);
+  // PP3 — pause the 5s project poll while the tab is hidden.
+  usePollingWhenVisible(refresh, 5000);
 
   // The currently-selected project: match by the host we're pointed at, else
   // by the active projectHash from the connection store.

@@ -560,6 +560,9 @@ function MultiAgentSync() {
     let cancelled = false;
 
     const sync = async () => {
+      // PP3 — skip the fetch + parse + cross-session merge when the tab is
+      // hidden (the timer keeps ticking but does no work / triggers no renders).
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await apiGet(`${apiBase()}/api/active-sessions`);
         const data = await res.json();
