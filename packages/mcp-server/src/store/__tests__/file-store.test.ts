@@ -36,6 +36,19 @@ describe("FileStore", () => {
     expect(fs.existsSync(sessionDir)).toBe(true);
   });
 
+  it("PP1 — writes a last-code-change marker only for code_change artifacts (for the checkpoint hook)", () => {
+    const store = createStore("pp1_marker");
+    const markerPath = path.join(tmpDir, ".deeppairing", "last-code-change.json");
+
+    store.createArtifact({ id: "r1", type: "research", title: "t", content: {} });
+    expect(fs.existsSync(markerPath)).toBe(false); // non-code_change doesn't touch it
+
+    store.createArtifact({ id: "c1", type: "code_change", title: "edit", content: { filePath: "x", changeType: "modify", before: "a", after: "b", reasoning: "r" } });
+    expect(fs.existsSync(markerPath)).toBe(true);
+    const at1 = JSON.parse(fs.readFileSync(markerPath, "utf-8")).at;
+    expect(typeof at1).toBe("string");
+  });
+
   it("rejects sessionId with path traversal characters", () => {
     expect(() => createStore( "../../etc")).toThrow("Invalid session ID");
     expect(() => createStore( "foo/bar")).toThrow("Invalid session ID");

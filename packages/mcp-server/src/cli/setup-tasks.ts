@@ -475,22 +475,19 @@ process.stdin.on("end", () => {
     // V2.1 — trivial files (gitignore, lockfiles, generated paths) auto-pass.
     if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
 
-    const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "sessions");
-    if (!fs.existsSync(sessionsDir)) exit(0, "skip: no sessions dir");
+    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing");
+    if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
 
+    // PP1 — read the most-recent code_change timestamp from a tiny marker the
+    // store writes on each present_code_change, instead of readdir-ing +
+    // JSON.parsing every session's (multi-MB, diff-bearing) artifacts.json on
+    // every Write/Edit. Absent marker → 0 → falls through to the nag (safe).
     let mostRecentCheckpoint = 0;
-    for (const id of fs.readdirSync(sessionsDir)) {
-      const af = path.join(sessionsDir, id, "artifacts.json");
-      if (!fs.existsSync(af)) continue;
-      try {
-        const arr = JSON.parse(fs.readFileSync(af, "utf-8"));
-        for (const a of arr) {
-          if (a.type !== "code_change") continue;
-          const t = new Date(a.createdAt).getTime();
-          if (t > mostRecentCheckpoint) mostRecentCheckpoint = t;
-        }
-      } catch { /* skip malformed session */ }
-    }
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(dpDir, "last-code-change.json"), "utf-8"));
+      const t = new Date(m.at).getTime();
+      if (Number.isFinite(t)) mostRecentCheckpoint = t;
+    } catch { /* no marker yet — treat as no recent checkpoint */ }
 
     // Threshold rule: every Write needs a code_change artifact created in
     // the last FRESH_MS window.
@@ -664,6 +661,21 @@ function recordFire(projectRoot, reason) {
   } catch {}
 }
 
+// PP1 — cheap pre-check so the common case (no rejections seeded, no team.json)
+// skips the ~40ms dynamic import of the matcher core entirely. Reading the small
+// preferences.json is ms; the import is the cost. If there's nothing to match
+// against, exit before importing.
+function ledgersPresent(projectRoot) {
+  try {
+    const prefs = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), "utf-8"));
+    if (Array.isArray(prefs && prefs.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
+  } catch {}
+  try {
+    if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
+  } catch {}
+  return false;
+}
+
 let input = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { input += d; });
@@ -675,6 +687,9 @@ process.stdin.on("end", async () => {
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
+    }
+    if (!ledgersPresent(projectRoot)) {
+      process.exit(0); // nothing to match against — skip the matcher import
     }
     const mod = await import(CORE_URL);
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
