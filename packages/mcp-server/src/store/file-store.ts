@@ -4,7 +4,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
-import { writeJsonAtomic } from "./atomic-write.js";
+import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -143,6 +143,11 @@ export class FileStore implements IStore {
    */
   private fileMtimeMs: Record<string, number> = {};
   private fileSizes: Record<string, number> = {};
+  // PP2 — last serialized bytes we wrote per file, so flush() can skip the disk
+  // write (and the temp+rename) when a file is byte-identical to what's already
+  // there. Kills the write-amplification where a single comment rewrote the
+  // multi-MB artifacts.json: now only the file(s) that actually changed hit disk.
+  private lastSerialized: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -275,7 +280,16 @@ export class FileStore implements IStore {
    *  Refreshes mtime+size watermark after rename so the next external-change
    *  check uses the new baseline. */
   private atomicWrite(filePath: string, data: unknown): void {
-    writeJsonAtomic(filePath, data);
+    // PP2 — serialize once, and skip the disk write entirely when the bytes are
+    // identical to our last write. A debounced flush re-writes ALL session files
+    // on every mutation; this means a comment only rewrites comments.json, not
+    // the (often multi-MB, diff-bearing) artifacts.json that didn't change.
+    // Safe: we only skip when the content is byte-for-byte what we already
+    // persisted — never a real change. Same indent (2) as writeJsonAtomic.
+    const serialized = JSON.stringify(data, null, 2);
+    if (this.lastSerialized[filePath] === serialized) return;
+    writeStringAtomic(filePath, serialized);
+    this.lastSerialized[filePath] = serialized;
     try {
       const stat = fs.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;

@@ -37,7 +37,15 @@ import { randomBytes } from "node:crypto";
  * `fs.writeFileSync` contract this replaces).
  */
 export function writeJsonAtomic(filePath: string, value: unknown, indent = 2): void {
-  const data = JSON.stringify(value, null, indent);
+  writeStringAtomic(filePath, JSON.stringify(value, null, indent));
+}
+
+/**
+ * Atomic write of an already-serialized string. Same temp+rename guarantee as
+ * writeJsonAtomic; split out so a caller that has already stringified (e.g. to
+ * compare against a skip-unchanged cache) doesn't pay JSON.stringify twice.
+ */
+export function writeStringAtomic(filePath: string, data: string): void {
   // Sibling temp path so the rename is on the same filesystem (cross-fs
   // renames are NOT atomic; a tmp under /tmp would defeat the purpose
   // when filePath is on a different volume).
