@@ -421,6 +421,22 @@ describe("HTTP Routes", () => {
       const res = await authed().request("/api/state");
       expect(res.status).toBe(200);
     });
+
+    it("gates non-POST mutating verbs too (DELETE annotations 401s without the bearer)", async () => {
+      const res = await authed().request("/api/sessions/s1/annotations/an1", { method: "DELETE" });
+      expect(res.status).toBe(401);
+    });
+
+    it("leaves /api/demo/run exempt (no 401 even under authToken)", async () => {
+      // demo/run lives on the root app, not here, so it 404s — the point is the
+      // SP1 middleware does NOT 401 it (the cold-clone entry stays open).
+      const res = await authed().request("/api/demo/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(res.status).not.toBe(401);
+    });
   });
 
   describe("GET /api/search", () => {
