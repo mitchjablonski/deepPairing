@@ -1373,9 +1373,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                 const pickContext = d.response?.reasoning
                   ? ` — picked "${option.title}": ${d.response.reasoning}`
                   : "";
-                const rejectReason = optionCons.length > 0
+                const composedReason = optionCons.length > 0
                   ? `${optionCons.join("; ")}${pickContext}`
                   : d.response?.reasoning;
+                // SP2 — bound the composed reason so a verbose option (many cons
+                // + long reasoning) doesn't crowd the preflight memory's
+                // contextual budget. Display/recall only; matching is on
+                // description/concept, so truncation is lossless for the gate.
+                const rejectReason =
+                  composedReason && composedReason.length > 240
+                    ? `${composedReason.slice(0, 237)}…`
+                    : composedReason;
                 await store.recordRejectedApproach({
                   description: rejectedDescription,
                   reason: rejectReason,

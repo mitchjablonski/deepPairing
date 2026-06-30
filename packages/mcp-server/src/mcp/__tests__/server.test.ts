@@ -1220,6 +1220,23 @@ describe("MCP Tool Handlers", () => {
       expect(b?.reason).toContain("Redis is already in our stack");
     });
 
+    it("SP2 — a rejected option with NO cons falls back to the human's pick-reasoning", async () => {
+      await callTool("present_options", {
+        context: "Pick a queue",
+        options: [
+          { id: "a", title: "SQS", description: "managed", pros: ["managed"], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "Roll our own", description: "in-house", pros: ["control"], cons: [], effort: "high", risk: "high", recommendation: false },
+        ],
+      });
+      const dec = (store.getArtifacts()[0].content as any).decisionId;
+      store.resolveDecision(dec, "a", "not worth building queueing ourselves");
+      await callTool("check_feedback", {});
+
+      const b = store.getSessionMemory().rejectedApproaches.find((r) => r.description.includes("Roll our own"));
+      // no cons → the overall reasoning is the only signal we have.
+      expect(b?.reason).toBe("not worth building queueing ourselves");
+    });
+
     it("approved option's concept.name flows through too (symmetric with rejection)", async () => {
       // Same options shape; assert the WINNER's concept lands as a
       // pattern in the global ledger via the approved path.
