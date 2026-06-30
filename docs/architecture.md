@@ -2,7 +2,7 @@
 
 > Last updated: 2026-05. For day-to-day project conventions see
 > [CLAUDE.md](CLAUDE.md). For research notes from project inception see
-> [RESEARCH.md](RESEARCH.md) (historical, not current).
+> [research-brief.md](research-brief.md) (historical, not current).
 
 ## One-paragraph summary
 
@@ -110,6 +110,15 @@ artifact is never created. Near-misses (50%-100% token coverage) get
 recorded in a sidecar trace so the breadcrumb in the UI can render
 "Almost flagged this — your past stance on X is adjacent."
 
+This used to be voluntary: the gate only fired when the agent
+*announced* intent through a `present_*` tool, so a direct `Edit`/`Write`
+sailed past it. A **PreToolUse hook** (`src/cli/preflight-hook-core.ts`,
+installed into `.claude/settings.local.json` by `src/cli/setup-tasks.ts`)
+now runs the *same* `runPreflight` matcher against the actual tool call
+and surfaces a match for the human's decision — so skipping the protocol
+no longer skips the gate. The hook fails open (a broken hook never blocks
+an edit) and short-circuits cheaply when there are no rejections seeded.
+
 ## Persistence layout
 
 ```
@@ -193,7 +202,7 @@ directly off disk.
   for fast tests; full HTTP integration tests for the daemon-routes
   surface.
 - **Atomic suite**: `pnpm --filter @deeppairing/mcp-server test`
-  (~1000 tests, ~70s on a modern laptop).
+  (~1,300 tests, ~70s on a modern laptop).
 - **Component tests** in `web/src/components/__tests__/` use happy-dom
   via the workspace vitest config; pure tests run in node.
 
