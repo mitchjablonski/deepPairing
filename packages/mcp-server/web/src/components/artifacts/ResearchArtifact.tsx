@@ -94,7 +94,7 @@ function FindingTriage({
 
   // Look up any existing verdict (latest one with sectionId === "verdict")
   const latestVerdict = useMemo<Verdict | null>(() => {
-    const verdicts = comments.filter((c) => (c.target as any).sectionId === "verdict");
+    const verdicts = comments.filter((c) => c.target.sectionId === "verdict");
     const newest = verdicts[verdicts.length - 1];
     if (!newest) return null;
     const content = newest.content.toLowerCase();
@@ -294,7 +294,7 @@ function EvidenceItem({
           c.target?.lineStart == null
         ) continue;
         const startN = Number(c.target.lineStart);
-        const endRaw = (c.target as any).lineEnd;
+        const endRaw = c.target.lineEnd;
         const endN = endRaw == null ? startN : Number(endRaw);
         // Skip bad numerics rather than crashing the render.
         if (!Number.isFinite(startN) || !Number.isFinite(endN)) continue;
