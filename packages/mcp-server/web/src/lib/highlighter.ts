@@ -1,4 +1,8 @@
-import { createHighlighter, type Highlighter } from "shiki";
+// PP3 — type-only import (erased at build): shiki + its Oniguruma regex engine
+// must NOT land in the eager entry bundle. createHighlighter is dynamically
+// imported in getHighlighter so the engine code-splits into its own chunk,
+// loaded only when the first code block actually renders (like MermaidDiagram).
+import type { Highlighter } from "shiki";
 
 let highlighter: Highlighter | null = null;
 let initPromise: Promise<Highlighter> | null = null;
@@ -23,9 +27,19 @@ async function getHighlighter(): Promise<Highlighter> {
   if (highlighter) return highlighter;
   if (initPromise) return initPromise;
 
-  initPromise = createHighlighter({
-    themes: ["vitesse-dark", "vitesse-light"],
-    langs: [...PRELOAD_LANGS],
+  initPromise = (async () => {
+    const { createHighlighter } = await import("shiki");
+    return createHighlighter({
+      themes: ["vitesse-dark", "vitesse-light"],
+      langs: [...PRELOAD_LANGS],
+    });
+  })().catch((err) => {
+    // PP3 — the lazy chunk can 404 (stale tab after a daemon rebuild). Don't
+    // cache the rejected promise: reset so a later render retries instead of
+    // highlighting being permanently dead. (A reload prompt also fires via
+    // vite:preloadError.)
+    initPromise = null;
+    throw err;
   });
 
   highlighter = await initPromise;
