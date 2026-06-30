@@ -135,8 +135,16 @@ daily Claude Code loop.
 
 ## Use it in Claude Code
 
+Install it as a plugin from this repo's marketplace:
+
+```
+/plugin marketplace add mitchjablonski/deepPairing
+/plugin install deeppairing@deeppairing
+```
+
+Or run it straight from a clone without installing:
+
 ```bash
-# from the cloned repo
 claude --plugin-dir ./claude-plugin
 ```
 

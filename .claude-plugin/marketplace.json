@@ -1,0 +1,28 @@
+{
+  "name": "deeppairing",
+  "owner": {
+    "name": "mitchjablonski",
+    "url": "https://github.com/mitchjablonski"
+  },
+  "metadata": {
+    "description": "Pair with Claude Code instead of reviewing its output after the fact.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "deeppairing",
+      "source": "./claude-plugin",
+      "description": "Turn Claude Code into a thinking partner: structured findings / specs / options / plans you shape in a local companion UI, concept-naming for learning, and a cross-project philosophy ledger that remembers your rejections so your taste compounds.",
+      "homepage": "https://github.com/mitchjablonski/deepPairing",
+      "license": "MIT",
+      "keywords": [
+        "pairing",
+        "pair-programming",
+        "collaboration",
+        "code-review",
+        "philosophy-ledger",
+        "mcp"
+      ]
+    }
+  ]
+}
