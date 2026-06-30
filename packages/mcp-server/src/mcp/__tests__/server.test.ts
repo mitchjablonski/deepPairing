@@ -211,6 +211,32 @@ describe("MCP Tool Handlers", () => {
       expect(store.getArtifacts()[0].type).toBe("decision");
       expect(store.getPendingDecisions()).toHaveLength(1);
     });
+
+    it("DV1 — per-option visuals survive validation and reach the stored content + the broadcast", async () => {
+      broadcasts.length = 0;
+      await callTool("present_options", {
+        context: "Which cache topology?",
+        options: [
+          {
+            id: "a", title: "Sidecar", description: "per-pod", pros: ["isolated"], cons: ["mem"],
+            effort: "low", risk: "low", recommendation: true,
+            visuals: [{ kind: "diagram", source: "graph TD; App-->Sidecar" }], // id omitted on purpose
+          },
+          { id: "b", title: "Central", description: "shared", pros: ["one"], cons: ["spof"], effort: "medium", risk: "medium", recommendation: false },
+        ],
+      });
+
+      // Stored content keeps the visual + a stamped, option-scoped id.
+      const content = store.getArtifacts()[0].content as any;
+      expect(content.options[0].visuals).toHaveLength(1);
+      expect(content.options[0].visuals[0].source).toBe("graph TD; App-->Sidecar");
+      expect(content.options[0].visuals[0].id).toContain("a");
+      expect(content.options[1].visuals).toBeUndefined();
+
+      // The live decision_request event carries them too (was args?.options raw pre-DV1).
+      const event = broadcasts.find((b) => b.type === "decision_request");
+      expect(event.options[0].visuals[0].source).toBe("graph TD; App-->Sidecar");
+    });
   });
 
   describe("present_plan", () => {

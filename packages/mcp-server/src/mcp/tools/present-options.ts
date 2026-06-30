@@ -7,7 +7,16 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
-  const { context, options: proposedOptions, stakes } = validated.data;
+  const { context, options: validatedOptions, stakes } = validated.data;
+  // DV1 — stamp stable option-scoped ids on any per-option visuals the agent
+  // sent id-less, so the stored content AND the broadcast event carry the same
+  // canonical shape (and future comment threads anchor consistently). Mirrors
+  // coerceOption's fallback so a write and a later coerced read agree.
+  const proposedOptions = validatedOptions.map((o) =>
+    o.visuals?.length
+      ? { ...o, visuals: o.visuals.map((v, i) => ({ ...v, id: v.id ?? `${o.id}_visual_${i}` })) }
+      : o,
+  );
   const proposals: string[] = [
     context,
     ...proposedOptions.map((o) => o.title),
@@ -41,8 +50,11 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     type: "decision_request",
     decisionId,
     artifactId: id,
-    context: args?.context,
-    options: args?.options,
+    context,
+    // DV1 — broadcast the validated+id-stamped options (was args?.options, the
+    // raw pre-validation input). This makes the live event match the stored
+    // artifact content and carries per-option visuals to the live DecisionCard.
+    options: proposedOptions,
     stakes,
   });
 

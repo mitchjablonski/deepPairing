@@ -275,6 +275,12 @@ function coerceOption(v: unknown): DecisionContent["options"][number] {
   };
   const concept = coerceConcept(o.concept);
   if (concept) out.concept = concept;
+  // DV1 — per-option visuals. Scope the fallback id by option id so two
+  // options that both omit visual ids don't collide on `visual_0` (which would
+  // cross-anchor their comment threads once those land).
+  if (Array.isArray(o.visuals)) {
+    out.visuals = o.visuals.map((vis, i) => coerceVisual(vis, `${out.id}_visual_${i}`));
+  }
   return out;
 }
 

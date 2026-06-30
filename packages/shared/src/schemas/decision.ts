@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PlanVisualSchema } from "./content-types.js";
 
 export const DecisionStakesSchema = z.enum(["low", "medium", "high"]);
 export type DecisionStakes = z.infer<typeof DecisionStakesSchema>;
@@ -26,6 +27,14 @@ export const DecisionOptionSchema = z.object({
   risk: z.enum(["low", "medium", "high"]),
   recommendation: z.boolean(),
   concept: DecisionOptionConceptSchema.optional(),
+  /**
+   * DV1 — optional per-option visuals (Mermaid diagram / file map / annotated
+   * code), reusing PlanVisualSchema so the whole render + comment stack applies.
+   * Shown behind an expand-on-demand disclosure in each option card so the grid
+   * stays scannable. Same field on DecisionOptionContentSchema (artifact.ts) —
+   * the Z5 wire/stored split.
+   */
+  visuals: z.array(PlanVisualSchema).optional(),
 });
 
 export type DecisionOption = z.infer<typeof DecisionOptionSchema>;

@@ -4,6 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
 
+// DV1 — stub Mermaid so the diagram disclosure test is deterministic (no async
+// mermaid render in jsdom). VisualBody's diagram branch renders this.
+vi.mock("../MermaidDiagram", () => ({
+  MermaidDiagram: ({ source }: { source: string }) => <div data-testid="mermaid">{source}</div>,
+}));
+
 const event = {
   type: "decision_request" as const,
   decisionId: "dec_abc",
@@ -630,5 +636,42 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     // would be eaten and the value would be a subset of the typed string.
     await userEvent.type(textarea, "knock knock — just checking");
     expect(textarea.value).toBe("knock knock — just checking");
+  });
+});
+
+describe("DV1 — per-option diagram disclosure", () => {
+  const eventWithDiagram = {
+    ...event,
+    options: [
+      {
+        ...event.options[0],
+        visuals: [{ id: "o1_v0", kind: "diagram" as const, source: "graph TD; A-->B", title: "Redis topology" }],
+      },
+      event.options[1], // no visuals
+    ],
+  };
+
+  it("hides the diagram behind a 'Show diagram' toggle; expanding renders it", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
+    expect(screen.queryByTestId("mermaid")).not.toBeInTheDocument(); // collapsed
+    await user.click(screen.getByRole("button", { name: /^show diagram/i }));
+    expect(screen.getByTestId("mermaid")).toBeInTheDocument(); // expanded
+    expect(screen.getByText("Redis topology")).toBeInTheDocument();
+  });
+
+  it("only the option WITH visuals gets a toggle", () => {
+    render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
+    expect(screen.getAllByRole("button", { name: /^show diagram/i })).toHaveLength(1);
+  });
+
+  it("toggling the diagram does NOT select the option (stopPropagation)", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchSpy);
+    render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
+    await user.click(screen.getByRole("button", { name: /^show diagram/i }));
+    const resolveCalls = fetchSpy.mock.calls.filter(([url]) => String(url).includes("/api/decisions"));
+    expect(resolveCalls).toHaveLength(0); // the click never bubbled to the option card
   });
 });

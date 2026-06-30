@@ -29,6 +29,7 @@ import {
   DecisionContentSchema,
   CodeChangeContentSchema,
   ReasoningContentSchema,
+  PlanVisualSchema,
 } from "@deeppairing/shared";
 
 export type ToolErrorResponse = {
@@ -184,6 +185,10 @@ const PresentOptionsInputSchema = z.object({
       name: z.string().min(1),
       oneLineExplanation: z.string().optional(),
     }).optional(),
+    // DV1 — optional per-option visuals (e.g. a Mermaid diagram of this option's
+    // architecture). id is optional on input — coerceOption assigns a stable
+    // option-scoped one if omitted, so the agent can just send {kind, source}.
+    visuals: z.array(PlanVisualSchema.extend({ id: z.string().optional() })).optional(),
   })).min(2).max(4),
   stakes: z.enum(["low", "medium", "high"]).optional(),
 });

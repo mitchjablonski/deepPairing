@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PlanVisualSchema } from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
   "research",
@@ -97,6 +98,8 @@ export const DecisionOptionContentSchema = z.object({
   risk: z.enum(["low", "medium", "high"]),
   recommendation: z.boolean(),
   concept: DecisionOptionConceptSchema.optional(),
+  /** DV1 — optional per-option visuals (mirrors DecisionOptionSchema, decision.ts). */
+  visuals: z.array(PlanVisualSchema).optional(),
 });
 
 export const DecisionContentSchema = z.object({
