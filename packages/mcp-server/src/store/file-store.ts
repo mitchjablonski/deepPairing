@@ -4,7 +4,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
-import { writeJsonAtomic } from "./atomic-write.js";
+import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -143,6 +143,15 @@ export class FileStore implements IStore {
    */
   private fileMtimeMs: Record<string, number> = {};
   private fileSizes: Record<string, number> = {};
+  // PP2 — last serialized bytes we wrote per file, so flush() can skip the disk
+  // write (and the temp+rename) when a file is byte-identical to what's already
+  // there. Kills the write-amplification where a single comment rewrote the
+  // multi-MB artifacts.json: now only the file(s) that actually changed hit disk.
+  // Cost: holds a serialized copy of each session file in RAM (grows with
+  // artifacts.json size) — an accepted trade for the I/O savings. flush() drops
+  // an entry whenever readIfChanged detects an external write, so the skip can
+  // never defeat the U1 merge self-heal.
+  private lastSerialized: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -275,7 +284,16 @@ export class FileStore implements IStore {
    *  Refreshes mtime+size watermark after rename so the next external-change
    *  check uses the new baseline. */
   private atomicWrite(filePath: string, data: unknown): void {
-    writeJsonAtomic(filePath, data);
+    // PP2 — serialize once, and skip the disk write entirely when the bytes are
+    // identical to our last write. A debounced flush re-writes ALL session files
+    // on every mutation; this means a comment only rewrites comments.json, not
+    // the (often multi-MB, diff-bearing) artifacts.json that didn't change.
+    // Safe: we only skip when the content is byte-for-byte what we already
+    // persisted — never a real change. Same indent (2) as writeJsonAtomic.
+    const serialized = JSON.stringify(data, null, 2);
+    if (this.lastSerialized[filePath] === serialized) return;
+    writeStringAtomic(filePath, serialized);
+    this.lastSerialized[filePath] = serialized;
     try {
       const stat = fs.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
@@ -313,13 +331,21 @@ export class FileStore implements IStore {
     // each file. The deterministic-sessionId fix from U0.6 already makes
     // intra-daemon races vanishingly rare, but CLI commands and a daemon
     // restart race could still touch the same files.
+    // PP2 — when readIfChanged detects an external write, drop that file's
+    // skip-cache entry so atomicWrite CANNOT skip below. Critical for the U1
+    // self-heal: an external writer that shrank/clobbered the file is merged
+    // into memory here, but if the merge nets back to our last-written bytes the
+    // skip would leave the external (lossy) version on disk and our merged copy
+    // only in RAM. Forcing the rewrite restores it (and keeps in-memory-wins).
     const diskArtifacts = this.readIfChanged<Artifact[]>(artifactsPath);
     if (diskArtifacts) {
       this.artifacts = this.mergeArrayById(this.artifacts, diskArtifacts, "id");
+      delete this.lastSerialized[artifactsPath];
     }
     const diskComments = this.readIfChanged<Comment[]>(commentsPath);
     if (diskComments) {
       this.comments = this.mergeArrayById(this.comments, diskComments, "id");
+      delete this.lastSerialized[commentsPath];
     }
     const diskDecisions = this.readIfChanged<DecisionRecord[]>(decisionsPath);
     if (diskDecisions && Array.isArray(diskDecisions)) {
@@ -328,6 +354,7 @@ export class FileStore implements IStore {
           this.decisions.set(d.decisionId, d);
         }
       }
+      delete this.lastSerialized[decisionsPath];
     }
     const diskPlans = this.readIfChanged<PlanReviewRecord[]>(plansPath);
     if (diskPlans && Array.isArray(diskPlans)) {
@@ -336,6 +363,7 @@ export class FileStore implements IStore {
           this.planReviews.set(p.artifactId, p);
         }
       }
+      delete this.lastSerialized[plansPath];
     }
 
     this.atomicWrite(artifactsPath, this.artifacts);

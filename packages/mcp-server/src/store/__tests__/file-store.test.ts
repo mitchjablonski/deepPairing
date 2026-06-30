@@ -61,6 +61,53 @@ describe("FileStore", () => {
     expect(() => createStore( "foo\\bar")).toThrow("Invalid session ID");
   });
 
+  it("PP2 — a comment-only change skips rewriting the unchanged artifacts.json", () => {
+    const store = createStore("pp2-skip");
+    store.createArtifact({ id: "a1", type: "research", title: "t", content: { summary: "s" } });
+    store.forceFlush();
+    const artPath = path.join(tmpDir, ".deeppairing", "sessions", "pp2-skip", "artifacts.json");
+    const commentsPath = path.join(tmpDir, ".deeppairing", "sessions", "pp2-skip", "comments.json");
+
+    // Backdate artifacts.json so a (skipped) flush is unambiguously distinguishable
+    // from a rewrite, independent of filesystem mtime resolution.
+    const OLD = new Date("2020-01-01T00:00:00Z").getTime() / 1000;
+    fs.utimesSync(artPath, OLD, OLD);
+
+    store.addComment({ id: "c1", artifactId: "a1", content: "hi", author: "human" });
+    store.forceFlush();
+
+    // artifacts.json untouched (still 2020) — only comments.json was rewritten.
+    expect(fs.statSync(artPath).mtime.getUTCFullYear()).toBe(2020);
+    expect(JSON.parse(fs.readFileSync(commentsPath, "utf-8"))).toHaveLength(1);
+
+    // ...but a status change DOES rewrite artifacts.json (skip isn't over-eager).
+    store.updateArtifactStatus("a1", "approved", "ui_approve_button");
+    store.forceFlush();
+    expect(fs.statSync(artPath).mtime.getUTCFullYear()).toBeGreaterThan(2020);
+  });
+
+  it("PP2 — skip does NOT defeat the U1 external-merge self-heal (no data loss)", () => {
+    const store = createStore("pp2-merge");
+    store.createArtifact({ id: "A", type: "research", title: "A", content: {} });
+    store.createArtifact({ id: "B", type: "research", title: "B", content: {} });
+    store.forceFlush(); // disk = [A, B], lastSerialized = S([A,B])
+    const artPath = path.join(tmpDir, ".deeppairing", "sessions", "pp2-merge", "artifacts.json");
+
+    // A stale external writer clobbers the file back to just [A] (B survives
+    // only in our RAM). The next flush must merge B back AND actually rewrite —
+    // a naive skip-cache would see in-memory still serializes to S([A,B]) and
+    // skip, leaving B lost on disk.
+    fs.writeFileSync(artPath, JSON.stringify([{ id: "A", type: "research", title: "A", content: {} }]));
+
+    // touch the store so it flushes; the comment change is unrelated to artifacts
+    store.addComment({ id: "c1", artifactId: "A", content: "hi", author: "human" });
+    store.forceFlush();
+
+    // B must be back on disk (self-heal preserved despite the skip-cache).
+    const onDisk = JSON.parse(fs.readFileSync(artPath, "utf-8")).map((a: any) => a.id).sort();
+    expect(onDisk).toEqual(["A", "B"]);
+  });
+
   it("round-trips artifacts through flush + reload", () => {
     const store = createStore( "roundtrip");
     store.createArtifact({
