@@ -385,6 +385,44 @@ describe("HTTP Routes", () => {
     });
   });
 
+  describe("SP1 — public mutation routes require the bearer token", () => {
+    const authed = () => withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-mut"), tmpDir);
+
+    it("401s a status mutation with NO Authorization (the forge-an-approval vector)", async () => {
+      const res = await authed().request("/api/artifacts/a1/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "approved" }),
+      });
+      expect(res.status).toBe(401);
+      expect((await res.json()).code).toBe("daemon_auth_required");
+    });
+
+    it("401s a ledger seed with NO Authorization (the poison-the-ledger vector)", async () => {
+      const res = await authed().request("/api/philosophy/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ concept: "anything", verdict: "rejected" }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("allows the mutation WITH the correct bearer token", async () => {
+      store.createArtifact({ id: "a1", type: "research", title: "t", content: {} });
+      const res = await authed().request("/api/artifacts/a1/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer tok-mut" },
+        body: JSON.stringify({ status: "approved" }),
+      });
+      expect(res.status).not.toBe(401);
+    });
+
+    it("does NOT gate reads — GET /api/state works without the bearer (still hash-gated)", async () => {
+      const res = await authed().request("/api/state");
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe("GET /api/search", () => {
     it("returns empty results for empty query", async () => {
       const res = await app.request("/api/search?q=");

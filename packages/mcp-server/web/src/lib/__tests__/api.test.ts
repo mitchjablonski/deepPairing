@@ -54,6 +54,20 @@ describe("sessionHeaders", () => {
     expect(h["X-Session-Id"]).toBe("sess_abc");
   });
 
+  it("SP1 — carries the bearer token (window.__deepPairingToken) so mutations pass the gate", () => {
+    vi.stubGlobal("window", {
+      __dpConnectionStore: { getState: () => ({ sessionId: "s1", projectHash: "h1" }) },
+      __deepPairingToken: "tok-xyz",
+    });
+    const h = sessionHeaders();
+    expect(h["Authorization"]).toBe("Bearer tok-xyz");
+  });
+
+  it("SP1 — omits Authorization when no token is injected", () => {
+    vi.stubGlobal("window", { __dpConnectionStore: { getState: () => ({ sessionId: "s1" }) } });
+    expect(sessionHeaders()["Authorization"]).toBeUndefined();
+  });
+
   it("omits X-Session-Id when connection store has no sessionId", () => {
     vi.stubGlobal("window", {
       __dpConnectionStore: {

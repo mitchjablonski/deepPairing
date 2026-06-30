@@ -229,6 +229,32 @@ export function createHttpRoutes(
     return next();
   });
 
+  // SP1 — bearer-gate every public MUTATION (non-GET) route. Pre-SP1 these were
+  // gated only by the non-secret X-Project-Hash (handed out unauthenticated via
+  // /api/daemon-info), so a same-uid sandboxed process — network, no filesystem,
+  // the exact II1/III5 adversary — could forge "a human approved this"
+  // (POST /api/artifacts/:id/status), forge a decision pick, inject comments, or
+  // poison the cross-project ledger (POST /api/philosophy/seed). The same bearer
+  // /api/files + /api/prompts already require now covers the whole mutation
+  // surface. Reads stay hash-gated (the browser holds the token via
+  // window.__deepPairingToken → Authorization, added to sessionHeaders). No-op
+  // when authToken is undefined (test fixtures); /api/demo/run stays exempt
+  // (intentionally unauthenticated cold-clone entry point).
+  app.use("*", async (c, next) => {
+    const method = c.req.method;
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+    if (c.req.path === "/api/demo/run") return next();
+    if (authToken) {
+      if (c.req.header("Authorization") !== `Bearer ${authToken}`) {
+        return c.json(
+          { error: "Authorization required for this action.", code: ERROR_CODES.daemon_auth_required },
+          401,
+        );
+      }
+    }
+    return next();
+  });
+
   app.use("/*", cors({
     origin: (origin) => {
       if (!origin) return origin as string;

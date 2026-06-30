@@ -55,6 +55,13 @@ export function sessionHeaders(): Record<string, string> {
     if (connState?.projectHash) {
       headers["X-Project-Hash"] = connState.projectHash;
     }
+    // SP1 — carry the daemon's bearer token (injected into the served HTML as
+    // window.__deepPairingToken) so the now-bearer-gated MUTATION routes accept
+    // browser writes. Reads ignore it. Same token /api/files + /api/prompts use.
+    const token = (window as any).__deepPairingToken;
+    if (typeof token === "string" && token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
   } catch {}
   return headers;
 }
