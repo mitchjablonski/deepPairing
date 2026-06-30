@@ -3,6 +3,7 @@ import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
 import { GlobalStore, getGlobalStore, setGlobalStoreForTests } from "../../store/global-store.js";
 import { projectHashOf } from "../../project-root.js";
+import { __resetMetricsCacheForTests } from "../../store/metrics-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +38,7 @@ afterEach(() => {
   // Force flush so the FileStore's debounced writer doesn't fire after rmSync
   // removes tmpDir (that race surfaces as an unhandled ENOENT in the runner).
   store.forceFlush();
+  __resetMetricsCacheForTests(); // SP3 — clear debounced metrics timers before rmSync
   fs.rmSync(tmpDir, { recursive: true, force: true });
   setGlobalStoreForTests(null);
 });

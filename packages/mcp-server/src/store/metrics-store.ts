@@ -169,13 +169,7 @@ function scheduleFlush(projectRoot: string, entry: MetricsCacheEntry): void {
   // event stream still persists at most once per FLUSH_DEBOUNCE_MS rather than
   // never (a pure trailing debounce would starve a perpetually-busy session).
   if (entry.timer) return;
-  entry.timer = setTimeout(() => {
-    entry.timer = null;
-    if (entry.dirty) {
-      entry.dirty = false;
-      writeMetrics(projectRoot, entry.data);
-    }
-  }, FLUSH_DEBOUNCE_MS);
+  entry.timer = setTimeout(() => flushEntry(projectRoot, entry), FLUSH_DEBOUNCE_MS);
   // Don't keep the event loop alive just to flush metrics — shutdown flush
   // (flushAllMetrics) is the durability path on a clean exit.
   entry.timer.unref?.();

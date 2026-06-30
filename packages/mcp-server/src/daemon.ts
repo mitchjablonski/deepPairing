@@ -628,10 +628,14 @@ async function main() {
   const REJECTION_WINDOW_MS = 60_000;
   const rejectionTimes: number[] = [];
   // SP3 — persist any debounced-but-unflushed metrics on a clean exit. Covers
-  // every process.exit() path (idle auto-shutdown, cooperative AA3 endpoint,
-  // the fatal handlers below). Synchronous (writeJsonAtomic), so it's safe in
-  // an 'exit' listener. A SIGKILL bypasses this and loses <1s of counts — an
-  // accepted trade for non-critical display telemetry.
+  // every process.exit() path: idle auto-shutdown, cooperative AA3 evict, the
+  // fatal handlers below, AND SIGTERM/SIGINT (both route through
+  // process.exit(0)). Synchronous (writeJsonAtomic), so it's safe in an 'exit'
+  // listener. Only SIGKILL/SIGHUP/power-loss bypass it, losing <1s of counts —
+  // accepted for non-critical display telemetry. (A genuinely-concurrent second
+  // daemon — port-collision/sleep-handoff — can clobber a flush batch, but the
+  // cooperative evict flushes+exits before handoff, so only true concurrent
+  // writers lose updates, a class that predates SP3.)
   process.on("exit", () => {
     try { flushAllMetrics(); } catch {}
   });
