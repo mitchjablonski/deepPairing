@@ -1360,9 +1360,33 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                 // concept, not the winner's.
                 const rejectedConcept: string | undefined =
                   (rej as any)?.concept?.name ?? rej?.description ?? undefined;
+                // SP2 — per-option rejection reason. Pre-SP2 every rejected
+                // option was stamped with the human's single overall
+                // pick-reasoning ("why I chose the winner"), so B and C — often
+                // rejected for DIFFERENT reasons — compounded the same blurred
+                // signal in the ledger. Prefer THIS option's own cons (its
+                // specific "why it's the worse fit"); keep the winner + the
+                // human's reasoning as shared context when present.
+                const optionCons: string[] = Array.isArray((rej as any)?.cons)
+                  ? (rej as any).cons.filter((x: unknown) => typeof x === "string" && x.trim())
+                  : [];
+                const pickContext = d.response?.reasoning
+                  ? ` — picked "${option.title}": ${d.response.reasoning}`
+                  : "";
+                const composedReason = optionCons.length > 0
+                  ? `${optionCons.join("; ")}${pickContext}`
+                  : d.response?.reasoning;
+                // SP2 — bound the composed reason so a verbose option (many cons
+                // + long reasoning) doesn't crowd the preflight memory's
+                // contextual budget. Display/recall only; matching is on
+                // description/concept, so truncation is lossless for the gate.
+                const rejectReason =
+                  composedReason && composedReason.length > 240
+                    ? `${composedReason.slice(0, 237)}…`
+                    : composedReason;
                 await store.recordRejectedApproach({
                   description: rejectedDescription,
-                  reason: d.response?.reasoning,
+                  reason: rejectReason,
                   sourceArtifactId: d.artifactId,
                   concept: rejectedConcept,
                 });
@@ -1371,7 +1395,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                   kind: "rejected",
                   description: rejectedDescription,
                   concept: rejectedConcept,
-                  reason: d.response?.reasoning,
+                  reason: rejectReason,
                   sourceArtifactId: d.artifactId,
                 });
               }
