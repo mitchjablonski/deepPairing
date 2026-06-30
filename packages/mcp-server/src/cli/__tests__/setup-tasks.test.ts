@@ -528,6 +528,14 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify(artifacts));
   }
 
+  // PP1 — the checkpoint now reads a tiny project-level marker instead of
+  // scanning every session's artifacts.json. Ensure the sessions dir exists
+  // (so the "no sessions → skip" guard doesn't fire) + stamp the marker.
+  function writeMarker(at: string) {
+    fs.mkdirSync(path.join(tmpDir, ".deeppairing", "sessions"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".deeppairing", "last-code-change.json"), JSON.stringify({ at }));
+  }
+
   it("exits 0 when the tool is not Write/Edit/MultiEdit (Read/Bash etc. are no-ops)", () => {
     const r = runHookWith({ tool_name: "Read", tool_input: { file_path: "x.ts" } });
     expect(r.exitCode).toBe(0);
@@ -543,22 +551,25 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     expect(r.stdout).toContain("src/new.ts");
   });
 
-  it("exits 0 when a code_change artifact was created in the last minute (fresh checkpoint)", () => {
-    writeArtifacts("s1", [
-      { id: "art_cc", type: "code_change", status: "approved", createdAt: new Date().toISOString() },
-    ]);
+  it("PP1 — exits 0 (no nag) when the marker shows a fresh code_change", () => {
+    writeMarker(new Date().toISOString());
     const r = runHookWith({ tool_name: "Edit", tool_input: { file_path: "src/x.ts" } });
     expect(r.exitCode).toBe(0);
+    expect(r.stdout).not.toContain("present_code_change");
   });
 
-  it("nags when the most-recent code_change is older than the freshness window", () => {
-    const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    writeArtifacts("s1", [
-      { id: "art_cc", type: "code_change", status: "approved", createdAt: stale },
-    ]);
+  it("PP1 — nags when the marker's code_change is older than the freshness window", () => {
+    writeMarker(new Date(Date.now() - 5 * 60 * 1000).toISOString());
     const r = runHookWith({ tool_name: "MultiEdit", tool_input: { file_path: "src/y.ts" } });
     expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
     expect(r.stdout).toMatch(/Per-Edit Checkpoint/i);
+  });
+
+  it("PP1 — nags when the sessions dir exists but there's no marker yet", () => {
+    fs.mkdirSync(path.join(tmpDir, ".deeppairing", "sessions"), { recursive: true });
+    const r = runHookWith({ tool_name: "Write", tool_input: { file_path: "src/z.ts" } });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("present_code_change");
   });
 
   it("exits 0 when there are no sessions at all (fresh project, nothing to enforce yet)", () => {
@@ -849,5 +860,25 @@ describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", 
     ensurePreflightHook(tmpDir);
     const out = runHook({ file_path: "/u.ts", new_string: "export const add = (a, b) => a + b;" });
     expect(out.trim()).toBe("");
+  });
+
+  it("PP1 — short-circuits (allows) with NO ledgers, without touching the matcher core", () => {
+    // No skipIf: the short-circuit runs BEFORE the dynamic import, so it works
+    // even when the core is absent — which is exactly what lets us assert it
+    // didn't fail-open (a fail-open import error would print to stderr).
+    ensurePreflightHook(tmpDir);
+    const hookPath = path.join(tmpDir, ".deeppairing/hooks/preflight.mjs");
+    let stdout = "";
+    let stderr = "";
+    try {
+      stdout = execSync(`node ${JSON.stringify(hookPath)} 2>/tmp/dp-pf-stderr.txt`, {
+        input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "/x.ts", new_string: "global mutable state singleton" }, cwd: tmpDir }),
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: tmpDir },
+      });
+      stderr = fs.readFileSync("/tmp/dp-pf-stderr.txt", "utf-8");
+    } catch { /* non-zero exit shouldn't happen here */ }
+    expect(stdout.trim()).toBe(""); // allowed (no deny/ask emitted)
+    expect(stderr).not.toMatch(/preflight hook error/); // clean short-circuit, not a fail-open
   });
 });

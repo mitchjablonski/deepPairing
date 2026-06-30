@@ -392,8 +392,28 @@ export class FileStore implements IStore {
       updatedAt: now,
     };
     this.artifacts.push(artifact);
+    if (params.type === "code_change") this.touchCodeChangeMarker(now);
     this.scheduleFlush();
     return artifact;
+  }
+
+  /**
+   * PP1 — a tiny project-level marker the per-edit checkpoint hook reads instead
+   * of readdir-ing + JSON.parsing every session's (potentially multi-MB,
+   * diff-bearing) artifacts.json on every Write/Edit. Last write wins = the
+   * most-recent code_change across all sessions, which is exactly what the
+   * checkpoint's freshness rule needs. Best-effort: if it's missing the hook
+   * just falls back to nagging (the safe default).
+   */
+  private touchCodeChangeMarker(at: string): void {
+    try {
+      // atomic (temp+rename) so a concurrent checkpoint read can't see a torn
+      // file; basePath already exists (constructor). Best-effort — never let a
+      // marker write break artifact creation.
+      writeJsonAtomic(path.join(this.basePath, "last-code-change.json"), { at });
+    } catch {
+      /* hint only */
+    }
   }
 
   renameArtifact(artifactId: string, title: string): void {
