@@ -1196,6 +1196,30 @@ describe("MCP Tool Handlers", () => {
       expect(rejected?.concept).toBe("pay-per-request hosting");
     });
 
+    it("SP2 — each rejected option records its OWN cons, not the human's single pick-reasoning", async () => {
+      await callTool("present_options", {
+        context: "Pick a cache",
+        options: [
+          { id: "a", title: "Redis", description: "shared store", pros: ["exact"], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "In-process LRU", description: "no deps", pros: ["simple"], cons: ["drifts across instances", "lost on restart"], effort: "low", risk: "medium", recommendation: false },
+          { id: "c", title: "Memcached", description: "another service", pros: [], cons: ["one more thing to run"], effort: "medium", risk: "low", recommendation: false },
+        ],
+      });
+      const dec = (store.getArtifacts()[0].content as any).decisionId;
+      store.resolveDecision(dec, "a", "Redis is already in our stack");
+      await callTool("check_feedback", {});
+
+      const rejected = store.getSessionMemory().rejectedApproaches;
+      const b = rejected.find((r) => r.description.includes("In-process LRU"));
+      const c = rejected.find((r) => r.description.includes("Memcached"));
+      // Each carries its OWN cons (distinct), not the same blurred string.
+      expect(b?.reason).toContain("drifts across instances");
+      expect(c?.reason).toContain("one more thing to run");
+      expect(b?.reason).not.toBe(c?.reason);
+      // ...with the human's pick-reasoning + winner as shared context.
+      expect(b?.reason).toContain("Redis is already in our stack");
+    });
+
     it("approved option's concept.name flows through too (symmetric with rejection)", async () => {
       // Same options shape; assert the WINNER's concept lands as a
       // pattern in the global ledger via the approved path.
