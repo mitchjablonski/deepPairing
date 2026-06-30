@@ -15,7 +15,7 @@ coordination, and a real CVE pipeline if one ends up warranted.
 ## Supported versions
 
 deepPairing is pre-1.0. We support and accept security fixes only on
-the `master` branch. Once 1.0 ships we will publish a versioned
+the `main` branch. Once 1.0 ships we will publish a versioned
 support policy here.
 
 ## Threat model
@@ -94,5 +94,5 @@ model assumes:
 ## Disclosure timeline (template)
 
 For accepted reports we'll confirm within 5 business days, fix on
-master within 14 days where feasible, publish a fix advisory at the
+main within 14 days where feasible, publish a fix advisory at the
 same time, and credit the reporter (unless they prefer anonymity).

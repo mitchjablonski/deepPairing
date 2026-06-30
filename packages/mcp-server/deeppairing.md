@@ -361,17 +361,6 @@ Unified memory lookup across both layers. Takes `{ query?, mode?, stance?, limit
 - `mode: "any"` (default) — union of both. Requires a query; returns
   philosophy hits first (highest-signal) then session hits.
 
-### request_horizon_check
-Call SPARINGLY, only on architecturally-significant artifacts where a
-failure mode 3 months / 1 year / 2 years out would be non-obvious. Takes
-`{ artifactId, horizon, prompt? }`. Posts an agent-authored question to the
-artifact — the human's answer becomes craft-development material they can
-look back on. Not a checkbox.
-
-Good candidates: auth / session flows, caching strategies, schema changes,
-queue semantics, data pipelines, infrastructure choices.
-Bad candidates: local refactors, style choices, test changes.
-
 ## High-stakes decisions — set `stakes: "high"` on present_options
 
 Set `stakes: "high"` on present_options when the decision is architecturally

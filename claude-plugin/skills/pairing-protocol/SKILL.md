@@ -1,6 +1,6 @@
 ---
 name: pairing-protocol
-description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, present_code_change, log_reasoning, recall, revise_artifact, request_horizon_check, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
+description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, present_code_change, log_reasoning, recall, revise_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
 ---
 
 # deepPairing Collaboration Protocol
@@ -111,9 +111,6 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   - `mode: "retract"` → marks the artifact retracted with your reason. Use
     when you realize mid-flight you shouldn't have presented something.
     Graceful exit without breaking the polling loop.
-- **`request_horizon_check`** — sparingly, on architecturally significant
-  artifacts. Captures the human's prediction about what will fail in 3mo /
-  1y / 2y.
 - **`recall`** — unified memory lookup across two layers:
   - `mode: "philosophy"` — the user's cross-project stances on concepts
     (avoid / prefer / mixed). Use before proposing when a concept comes up
@@ -189,11 +186,10 @@ to supervised for changes touching these paths.
 ## Craft-development surfaces (sparingly)
 
 - On architecturally-significant decisions, set `stakes: "high"` on
-  `present_options`. The UI captures the user's prediction — calibration
-  material for future sessions.
-- After a significant plan / code change, you may call
-  `request_horizon_check` to ask the user about a failure mode 3mo / 1y /
-  2y out. Use sparingly; this is not a checkbox.
+  `present_options`. The UI captures the user's prediction (what will this
+  look like in 3mo / 1y / 2y) — calibration material for future sessions.
+  Reserve it for genuinely significant, hard-to-reverse calls; it's not a
+  checkbox.
 
 ## Don't
 
@@ -201,4 +197,4 @@ to supervised for changes touching these paths.
 - Propose anything matching a rejected approach.
 - Stop polling and ask the human in the terminal.
 - Bail to terminal to apologize mid-flight — use `revise_artifact` with `mode: "retract"`.
-- Call `request_horizon_check` on every artifact.
+- Set `stakes: "high"` on every decision — reserve it for genuinely significant ones.

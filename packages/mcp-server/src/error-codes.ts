@@ -1,16 +1,16 @@
 /**
  * IV7 — single source of truth for the error `code` field returned by
- * deepPairing's HTTP routes and surfaced in TROUBLESHOOTING.md.
+ * deepPairing's HTTP routes and surfaced in docs/troubleshooting.md.
  *
  * Failure mode this closes: the same code string was previously
  * hand-typed at every emission site (`routes.ts`, `daemon-routes.ts`,
- * `daemon.ts`) AND referenced as an H2 in TROUBLESHOOTING.md. A typo
+ * `daemon.ts`) AND referenced as an H2 in docs/troubleshooting.md. A typo
  * at any site or in the doc silently drifted the contract — a user
  * who pasted the daemon's "code: session_not_registereed" string into
  * their search bar would not find the troubleshooting entry.
  *
  * Now: every site imports from this module, and a regression test
- * (`error-codes.test.ts`) asserts that every TROUBLESHOOTING.md H2
+ * (`error-codes.test.ts`) asserts that every docs/troubleshooting.md H2
  * matches a key here. A typo at any of those four surfaces fails the
  * test before it can ship.
  *
@@ -43,7 +43,7 @@ export const ERROR_CODES = {
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
 /**
- * Subset of ERROR_CODES that's documented in TROUBLESHOOTING.md. The
+ * Subset of ERROR_CODES that's documented in docs/troubleshooting.md. The
  * regression test asserts every key here has a matching `## <code>` H2
  * in the doc AND every H2 in the doc that looks like a code appears
  * here. Codes not in this set are internal — they may be returned over

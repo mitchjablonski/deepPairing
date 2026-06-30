@@ -16,7 +16,9 @@ What makes it work isn't ML magic; it's that the match happens
 agent has to react to. Cursor's canvases let the agent ship the
 artifact and ask the human to reject again. Claude Code's auto-memory
 hopes the model consults the right context. deepPairing makes the
-rejection a return value.
+rejection a hard gate: the `present_*` tool refuses
+(`REJECTED_APPROACH_BLOCKED`), and a PreToolUse hook catches a *direct*
+edit that tries to skip the protocol and surfaces it for your decision.
 
 The "ledger is a JSON file" critique is the same critique you could
 level at git ("a tree of text diffs"), `package.json` ("a JSON
@@ -134,7 +136,7 @@ desktop. Slower hardware (or first-time `pnpm setup`) adds maybe
 ## "Is it stable enough for daily use?"
 
 Pre-1.0 honest answer: it works for the team that built it on real
-projects, but it's not battle-tested. 998 tests, an explicit threat
+projects, but it's not battle-tested. ~1,300 tests, an explicit threat
 model in SECURITY.md, atomic writes on the data plane, structured
 error codes — the foundations are solid. The next ~weeks are about
 real-user signals telling us where the false-positive rate, the

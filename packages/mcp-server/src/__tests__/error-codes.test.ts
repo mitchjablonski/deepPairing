@@ -4,7 +4,7 @@
  * The same code string lives in four places:
  *   1. routes.ts / daemon-routes.ts / daemon.ts emit them.
  *   2. error-codes.ts is the single source of truth.
- *   3. TROUBLESHOOTING.md keys H2 headers off the user-facing subset.
+ *   3. docs/troubleshooting.md keys H2 headers off the user-facing subset.
  *   4. DaemonClient (and future MCP clients) match on them to decide retry.
  *
  * Pre-IV7 a typo at any of those four surfaces silently broke the
@@ -35,14 +35,14 @@ describe("IV7 — ERROR_CODES drift protection", () => {
     }
   });
 
-  it("TROUBLESHOOTING.md has an H2 entry for every USER_FACING_ERROR_CODES code", () => {
-    const troubleshooting = fs.readFileSync(path.join(repoRoot, "TROUBLESHOOTING.md"), "utf-8");
+  it("docs/troubleshooting.md has an H2 entry for every USER_FACING_ERROR_CODES code", () => {
+    const troubleshooting = fs.readFileSync(path.join(repoRoot, "docs", "troubleshooting.md"), "utf-8");
     for (const code of USER_FACING_ERROR_CODES) {
       // Match either `## \`code\` — ...` or `## code — ...` so future
       // editorial restyling doesn't break the test. The code itself
       // (verbatim, including underscores) must appear in an H2 line.
       const h2Re = new RegExp(`^##\\s+\\\`?${code}\\\`?\\b`, "m");
-      expect(troubleshooting, `TROUBLESHOOTING.md missing H2 entry for "${code}"`).toMatch(h2Re);
+      expect(troubleshooting, `docs/troubleshooting.md missing H2 entry for "${code}"`).toMatch(h2Re);
     }
   });
 
