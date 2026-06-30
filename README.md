@@ -18,6 +18,8 @@ different words.
 *An MCP server + companion web UI that runs inside Claude Code. MIT-licensed,
 no account, no telemetry — everything lives on your disk.*
 
+![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
+
 ## Why this exists
 
 Today's AI coding tools push you to two unhappy ends: full autonomy (review 500
@@ -69,7 +71,7 @@ separate orchestrator) and serves the UI on a deterministic per-project port.
   questions-waiting badge, a turn indicator that's honest about whose move it
   is. The collaboration is *felt*, not just logged.
 
-![A finding in the companion UI — structured evidence, inline comments, and the concept named.](docs/assets/hero.svg)
+![A reasoning artifact — the concept named for learning ("the pattern at play: single-flight / request coalescing"), the roads not taken, and an "Ask why" on each.](docs/assets/reasoning-card.png)
 
 ## Your taste compounds
 
@@ -96,6 +98,8 @@ the collaboration, not the headline:
 - **A calibration loop.** High-stakes decisions capture your prediction +
   confidence; later a breadcrumb shows what you predicted before, with a ✓/✗/◐
   retrospective to close the loop.
+
+![The "Your Taste" drawer — cross-project stances, each with the reason you gave when you rejected it.](docs/assets/ledger.png)
 
 > **See it in ~90 seconds.** The [demo command](#try-the-demo) fires the live
 > flow against a real companion UI.
