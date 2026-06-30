@@ -292,7 +292,10 @@ describe("DecisionCard — horizon check trigger (Q3)", () => {
     expect(body.artifactId).toBe("art_1");
     expect(body.intent).toBe("question");
     expect(body.target?.sectionId).toBe("horizon_check:request:1y");
-    expect(body.content).toMatch(/request_horizon_check/);
+    // III12 — asks for a horizon prediction the agent ANSWERS directly; it must
+    // NOT tell the agent to call the removed `request_horizon_check` tool.
+    expect(body.content).toMatch(/1y out/);
+    expect(body.content).not.toMatch(/request_horizon_check/);
   });
 
   it("replaces the buttons with an 'Asked' confirmation after click (prevents double-fire)", async () => {
