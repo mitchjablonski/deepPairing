@@ -6,7 +6,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readMetrics, recordMetricEvent, type MetricsFile } from "../metrics-store.js";
+import {
+  readMetrics,
+  recordMetricEvent,
+  flushAllMetrics,
+  __resetMetricsCacheForTests,
+  type MetricsFile,
+} from "../metrics-store.js";
 
 let tmpDir: string;
 
@@ -15,6 +21,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // SP3 — clear the in-memory cache + its debounce timers so module state
+  // (and pending writes to the about-to-be-removed tmpDir) don't leak.
+  __resetMetricsCacheForTests();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -151,8 +160,42 @@ describe("recordMetricEvent", () => {
 
   it("persists atomically (re-read returns written values)", () => {
     recordMetricEvent(tmpDir, { kind: "preflight_block", source: "team" });
+    flushAllMetrics(); // SP3 — writes are debounced; force the flush to read disk
     const fileContent = fs.readFileSync(path.join(tmpDir, ".deeppairing", "metrics.json"), "utf-8");
     const parsed = JSON.parse(fileContent) as MetricsFile;
     expect(parsed.counts.preflightBlocks.bySource.team).toBe(1);
+  });
+});
+
+describe("SP3 — debounced flush (write coalescing)", () => {
+  const metricsFile = () => path.join(tmpDir, ".deeppairing", "metrics.json");
+
+  it("does NOT write to disk on each event, but readMetrics reflects them immediately", () => {
+    recordMetricEvent(tmpDir, { kind: "comment_added" });
+    recordMetricEvent(tmpDir, { kind: "comment_added" });
+    recordMetricEvent(tmpDir, { kind: "artifact_created", artifactType: "research" });
+    // No flush yet → nothing on disk (the per-event RMW is gone)...
+    expect(fs.existsSync(metricsFile())).toBe(false);
+    // ...but the in-memory working copy is authoritative for the /metrics route.
+    const m = readMetrics(tmpDir);
+    expect(m.counts.comments).toBe(2);
+    expect(m.counts.artifacts.total).toBe(1);
+  });
+
+  it("flushAllMetrics persists the coalesced counts to disk", () => {
+    recordMetricEvent(tmpDir, { kind: "ledger_write", verdict: "rejected" });
+    recordMetricEvent(tmpDir, { kind: "ledger_write", verdict: "approved" });
+    flushAllMetrics();
+    const parsed = JSON.parse(fs.readFileSync(metricsFile(), "utf-8")) as MetricsFile;
+    expect(parsed.counts.ledgerWrites.total).toBe(2);
+    expect(parsed.counts.ledgerWrites.rejected).toBe(1);
+    expect(parsed.counts.ledgerWrites.approved).toBe(1);
+  });
+
+  it("a fresh read after reset reloads the flushed value from disk (no stale cache)", () => {
+    recordMetricEvent(tmpDir, { kind: "question_asked" });
+    flushAllMetrics();
+    __resetMetricsCacheForTests(); // drop the in-memory copy
+    expect(readMetrics(tmpDir).counts.questions.asked).toBe(1); // reloaded from disk
   });
 });

@@ -3,11 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { recordBroadcastMetric } from "../metrics-tap.js";
-import { readMetrics } from "../metrics-store.js";
+import { readMetrics, __resetMetricsCacheForTests } from "../metrics-store.js";
 
 let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-tap-")); });
-afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+afterEach(() => { __resetMetricsCacheForTests(); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 describe("recordBroadcastMetric (the daemon's broadcast tap)", () => {
   it("counts an ORIGINAL artifact by type + each visual by kind", () => {

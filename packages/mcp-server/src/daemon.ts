@@ -28,7 +28,7 @@ import { applyTopLevelGuards } from "./http/guards.js";
 import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
-import { recordMetricEvent } from "./store/metrics-store.js";
+import { recordMetricEvent, flushAllMetrics } from "./store/metrics-store.js";
 import { recordBroadcastMetric } from "./store/metrics-tap.js";
 import { buildPingPayload, decidePing, sendPing } from "./ping.js";
 import {
@@ -627,6 +627,14 @@ async function main() {
   const REJECTION_THRESHOLD = 100;
   const REJECTION_WINDOW_MS = 60_000;
   const rejectionTimes: number[] = [];
+  // SP3 — persist any debounced-but-unflushed metrics on a clean exit. Covers
+  // every process.exit() path (idle auto-shutdown, cooperative AA3 endpoint,
+  // the fatal handlers below). Synchronous (writeJsonAtomic), so it's safe in
+  // an 'exit' listener. A SIGKILL bypasses this and loses <1s of counts — an
+  // accepted trade for non-critical display telemetry.
+  process.on("exit", () => {
+    try { flushAllMetrics(); } catch {}
+  });
   process.on("unhandledRejection", (reason: any) => {
     const msg = reason?.stack ?? reason?.message ?? String(reason);
     log(`[unhandledRejection] ${msg}`);
