@@ -308,8 +308,11 @@ function computeDaemonPendingCount(): number {
   let n = 0;
   for (const store of sessions.values()) {
     try {
-      const st: any = store.getFullState();
-      for (const a of st.artifacts ?? []) {
+      // PP4 — getArtifacts() is the in-memory array; getFullState() additionally
+      // re-read preferences.json from disk per session (via getSessionMemory) +
+      // ran getEngagementMetrics — all unused here, and this runs per
+      // /api/daemon-info poll across every session.
+      for (const a of store.getArtifacts()) {
         if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
       }
     } catch { /* skip a store that can't render state */ }
@@ -868,6 +871,12 @@ async function main() {
 
     // A2: write daemon.json on startup AND on a recurring heartbeat so a
     // missing/stale info file self-heals without user intervention.
+    // PP4 note: the 30s rewrite looks like idle churn, but the periodic write is
+    // load-bearing on two paths a stat-and-skip would silently break — (1) on
+    // non-POSIX FS (WSL /mnt/c) the bearer token lives in an EPHEMERAL runtime/
+    // tmp sidecar that the rewrite refreshes so it doesn't age out (else
+    // DaemonClient auth dies after days); (2) the VS Code extension picks the
+    // daemon.json with the freshest mtime as the "active" project. Left as-is.
     writeDaemonInfo(port);
     const heartbeat = setInterval(() => writeDaemonInfo(port), 30000);
     heartbeat.unref?.();
