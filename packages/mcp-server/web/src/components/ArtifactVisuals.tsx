@@ -43,7 +43,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
         Visuals ({visuals.length})
       </h4>
       {visuals.map((v) => {
-        const existing = comments.filter((c) => (c.target as { visualId?: string }).visualId === v.id).length;
+        const existing = comments.filter((c) => c.target.visualId === v.id).length;
         const noun = kindNoun[v.kind] ?? "visual";
         return (
           <div
@@ -128,7 +128,7 @@ function AnnotatedCode({ artifactId, visual, readOnly = false }: { artifactId: s
   // Before AND After panes (keyed by line, not version) makes them identical.
   const commentsByLine = new Map<number, Comment[]>();
   for (const c of readOnly ? [] : allComments) {
-    const t = c.target as { lineStart?: number; lineEnd?: number; filePath?: string; findingIndex?: number; stepIndex?: number; evidenceIndex?: number };
+    const t = c.target;
     if (t?.lineStart == null || t.findingIndex != null || t.stepIndex != null || t.evidenceIndex != null) continue;
     if (filePath != null && t.filePath !== filePath) continue;
     const start = Math.floor(Number(t.lineStart));

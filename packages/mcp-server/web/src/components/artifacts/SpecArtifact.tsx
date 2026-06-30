@@ -138,7 +138,7 @@ function RequirementRow({
 }) {
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const reqComments = comments.filter(
-    (c) => (c.target as any).stepIndex === index && (c.target as any).sectionId === "requirement",
+    (c) => c.target.stepIndex === index && c.target.sectionId === "requirement",
   );
 
   return (

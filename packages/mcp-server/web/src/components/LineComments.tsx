@@ -143,7 +143,7 @@ export function LineCommentChips({
   const continuations: Comment[] = [];
   const primary: Comment[] = [];
   for (const c of comments) {
-    const cStart = (c.target as any).lineStart as number | undefined;
+    const cStart = c.target.lineStart;
     if (cStart != null && cStart !== lineNum) continuations.push(c);
     else primary.push(c);
   }
@@ -181,8 +181,8 @@ export function LineCommentChips({
   }
 
   const renderChip = (c: Comment, isReply: boolean) => {
-    const cStart = (c.target as any).lineStart as number | undefined;
-    const cEnd = (c.target as any).lineEnd as number | undefined;
+    const cStart = c.target.lineStart;
+    const cEnd = c.target.lineEnd;
     const spanLabel = cStart != null && cEnd != null && cStart !== cEnd ? ` (lines ${cStart}–${cEnd})` : "";
     // Turn-state surfacing (mirrors CommentThread): an unanswered human
     // QUESTION can be marked resolved by the human; a posted human comment
@@ -301,8 +301,8 @@ export function LineCommentChips({
       data-comment-anchor={`line:${filePath ?? ""}:${lineNum}`}
     >
       {continuations.map((c) => {
-        const cStart = (c.target as any).lineStart as number | undefined;
-        const cEnd = (c.target as any).lineEnd as number | undefined;
+        const cStart = c.target.lineStart;
+        const cEnd = c.target.lineEnd;
         return (
           <div key={c.id} className="flex items-center gap-2 px-3 py-0.5 text-2xs text-text-muted">
             <span aria-hidden>↳</span>

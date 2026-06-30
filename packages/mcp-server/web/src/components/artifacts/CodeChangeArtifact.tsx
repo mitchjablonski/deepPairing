@@ -434,7 +434,7 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
     const map = new Map<number, Comment[]>();
     for (const c of allComments) {
       try {
-        const t = c.target as any;
+        const t = c.target;
         if (t?.lineStart == null || t?.findingIndex != null || t?.stepIndex != null || t?.evidenceIndex != null) continue;
         const startN = Number(t.lineStart);
         const endN = t.lineEnd == null ? startN : Number(t.lineEnd);

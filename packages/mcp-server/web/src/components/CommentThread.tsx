@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
-import type { Comment } from "@deeppairing/shared";
+import type { Comment, CommentTarget } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
@@ -8,7 +8,9 @@ import { SimpleMarkdown } from "./SimpleMarkdown";
 interface CommentThreadProps {
   artifactId: string;
   comments: Comment[];
-  target?: { lineNumber?: number; findingIndex?: number; stepIndex?: number; visualId?: string };
+  // SP4 — Partial<CommentTarget> instead of a hand-rolled subset that drifted
+  // from the schema and forced `as any` reads on optionId/sectionId/visualId.
+  target?: Partial<CommentTarget>;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -233,16 +235,16 @@ export function AskTrigger({
   const { submitComment, comments, markQuestionResolved } = useArtifactStore();
 
   // Look up existing question(s) + their answers for this target
-  const artifactComments = (comments[artifactId] ?? []) as any[];
+  const artifactComments = comments[artifactId] ?? [];
   const matching = artifactComments.filter((c) => {
     if (c.intent !== "question") return false;
     if (target.findingIndex != null && c.target.findingIndex !== target.findingIndex) return false;
     if (target.stepIndex != null && c.target.stepIndex !== target.stepIndex) return false;
     if (target.evidenceIndex != null && c.target.evidenceIndex !== target.evidenceIndex) return false;
     if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
-    if (target.optionId != null && (c.target as any).optionId !== target.optionId) return false;
-    if (target.sectionId != null && (c.target as any).sectionId !== target.sectionId) return false;
-    if (target.visualId != null && (c.target as any).visualId !== target.visualId) return false;
+    if (target.optionId != null && c.target.optionId !== target.optionId) return false;
+    if (target.sectionId != null && c.target.sectionId !== target.sectionId) return false;
+    if (target.visualId != null && c.target.visualId !== target.visualId) return false;
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
   });
@@ -398,7 +400,7 @@ export function CommentTrigger({
   fullWidth = false,
 }: {
   artifactId: string;
-  target: { lineNumber?: number; findingIndex?: number; evidenceIndex?: number; stepIndex?: number; visualId?: string };
+  target: Partial<CommentTarget>;
   existingCount: number;
   variant?: "inline" | "pill";
   label?: string;
@@ -415,7 +417,7 @@ export function CommentTrigger({
     }
     if (target.findingIndex != null) return c.target.findingIndex === target.findingIndex;
     if (target.stepIndex != null) return c.target.stepIndex === target.stepIndex;
-    if (target.visualId != null) return (c.target as any).visualId === target.visualId;
+    if (target.visualId != null) return c.target.visualId === target.visualId;
     return false;
   });
 
