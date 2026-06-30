@@ -278,11 +278,13 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     }
   };
 
-  // Q3: file a comment that nudges the agent to call request_horizon_check.
-  // The comment carries intent:"question" and sectionId="horizon_check:request"
-  // so check_feedback surfaces it prominently; SKILL.md tells the agent how
-  // to respond. Tracks local state to prevent double-firing from a trigger-
-  // happy click.
+  // Q3: file a question-intent comment asking the agent for a horizon
+  // prediction. The comment carries intent:"question" + sectionId
+  // "horizon_check:request" so check_feedback surfaces it prominently and the
+  // agent answers it directly (via answer_question). NOTE: this used to ask the
+  // agent to call a `request_horizon_check` tool — removed in III12; the live
+  // workflow is a plain question the agent answers. Local state prevents
+  // double-firing from a trigger-happy click.
   const requestHorizonCheck = async (horizon: "3mo" | "1y" | "2y") => {
     if (!artifactId || horizonRequested) return;
     // Optimistic for a snappy "✓ Asked", but roll back on a failed POST — else
@@ -291,7 +293,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     try {
       await submitComment(
         artifactId,
-        `Please call request_horizon_check on this decision with horizon "${horizon}".`,
+        `Looking ${horizon} out: what's the most likely way this decision causes pain, and what would you watch for? Answer here so it's captured for later.`,
         { sectionId: `horizon_check:request:${horizon}` } as any,
         { intent: "question" },
       );
@@ -443,11 +445,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             )}
           </div>
 
-          {/* Q3: horizon-check trigger — only on high-stakes decisions.
-              Fires a question-intent comment telling the agent to call
-              request_horizon_check. The tool is most useful for schema,
-              auth, caching, pipeline, and queue semantics — exactly what
-              `stakes: "high"` flags. */}
+          {/* Q3: horizon-check trigger — only on high-stakes decisions. Fires a
+              question-intent comment asking the agent for a failure-mode
+              prediction at the chosen horizon (the agent answers it directly).
+              Most useful for schema, auth, caching, pipeline, and queue
+              semantics — exactly what `stakes: "high"` flags. */}
           {stakes === "high" && artifactId && (
             <div className="mt-2 pt-2 border-t border-accent-green/15">
               <div className="flex items-center gap-2 flex-wrap">
