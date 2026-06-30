@@ -6,6 +6,7 @@ import { SimpleMarkdown } from "./SimpleMarkdown";
 import { AskTrigger } from "./CommentThread";
 import { RepairDecisionModal } from "./RepairDecisionModal";
 import { ConceptBadge } from "./ConceptBadge";
+import { VisualBody } from "./ArtifactVisuals";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -86,6 +87,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // Resolved-card disclosure: review each option's full detail (description,
   // concept, pros/cons) in place, without the heavyweight Re-pair flow.
   const [showOptions, setShowOptions] = useState(false);
+  // DV1 — per-option diagram disclosure (expand-on-demand keeps the grid scannable).
+  const [openDiagrams, setOpenDiagrams] = useState<Record<string, boolean>>({});
   /** Q3: horizon-check request state — one request per artifact view. */
   const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
@@ -186,6 +189,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         tag === "SELECT" ||
         target?.isContentEditable === true
       ) return;
+      // DV1 — bail when focus is on a NESTED interactive control (the
+      // "Show diagram" disclosure, the AskTrigger button, …). This is a NATIVE
+      // keydown listener, so it fires during native bubbling BEFORE React's
+      // synthetic dispatch — a child's React onKeyDown stopPropagation can't
+      // cancel it. Without this, Enter on "Show diagram" resolved the focused
+      // decision instead of expanding (the same exposure AskTrigger had). The
+      // option card itself is a role="button" *div* (tag DIV), so its own
+      // Enter/Space selection still flows through below.
+      if (tag === "BUTTON" || tag === "A") return;
 
       // UX2 — within the card, j/k move the option highlight and we
       // stopPropagation so App's document-level j/k doesn't ALSO navigate
@@ -655,6 +667,47 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   {option.risk} risk
                 </span>
               </div>
+
+              {/* DV1 — per-option diagram(s), expand-on-demand so the grid stays
+                  scannable. stopPropagation so toggling / interacting with the
+                  diagram never selects the option. Read-only: VisualBody renders
+                  Mermaid (and the other visual kinds) without comment affordances. */}
+              {Array.isArray(option.visuals) && option.visuals.length > 0 && (
+                <div
+                  className="mt-2 pt-2 border-t border-white/[0.05]"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setOpenDiagrams((m) => ({ ...m, [option.id]: !m[option.id] }))}
+                    aria-expanded={!!openDiagrams[option.id]}
+                    className="text-2xs font-medium text-text-muted hover:text-text-primary transition-colors"
+                  >
+                    {openDiagrams[option.id]
+                      ? "Hide diagram ▴"
+                      : `Show diagram${option.visuals.length > 1 ? `s (${option.visuals.length})` : ""} ▾`}
+                  </button>
+                  {openDiagrams[option.id] && (
+                    <div className="mt-2 space-y-2">
+                      {option.visuals.map((v) => (
+                        <div
+                          key={v.id}
+                          className="bg-surface-secondary rounded-lg border border-white/[0.06] p-2 space-y-1"
+                        >
+                          {v.title && (
+                            <div className="text-2xs font-semibold text-text-muted">{v.title}</div>
+                          )}
+                          <VisualBody artifactId={artifactId} visual={v} readOnly />
+                          {v.caption && (
+                            <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </motion.div>
           ))}
         </AnimatePresence>

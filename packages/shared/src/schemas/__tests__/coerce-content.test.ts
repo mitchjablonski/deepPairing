@@ -157,6 +157,28 @@ describe("coerceDecisionContent", () => {
     expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "" } }] }).options[0].concept).toBeUndefined();
     expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "DI" } }] }).options[0].concept).toEqual({ name: "DI" });
   });
+
+  it("DV1 — coerces per-option visuals, keeping an agent-provided id", () => {
+    const d = coerceDecisionContent({
+      options: [{ id: "o1", visuals: [{ id: "v_custom", kind: "diagram", source: "graph TD; A-->B" }] }],
+    });
+    expect(d.options[0].visuals).toHaveLength(1);
+    expect(d.options[0].visuals![0]).toMatchObject({ id: "v_custom", kind: "diagram", source: "graph TD; A-->B" });
+  });
+
+  it("DV1 — id-less visuals get distinct ids (content-hashed), and a content-less one falls back to the option-scoped index", () => {
+    const d = coerceDecisionContent({
+      options: [
+        { id: "o1", visuals: [{ kind: "diagram", source: "a" }] },
+        { id: "o2", visuals: [{ kind: "diagram", source: "b" }] },
+        { id: "o3", visuals: [{ kind: "diagram" }] }, // no content → option-scoped index id
+      ],
+    });
+    // Different content → different ids: comment threads won't cross-anchor.
+    expect(d.options[0].visuals![0].id).not.toBe(d.options[1].visuals![0].id);
+    // The degenerate content-less visual falls back to the option-scoped index.
+    expect(d.options[2].visuals![0].id).toBe("o3_visual_0");
+  });
 });
 
 describe("coerceCodeChangeContent", () => {

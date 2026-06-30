@@ -196,6 +196,21 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                     },
                     required: ["name"],
                   },
+                  visuals: {
+                    type: "array",
+                    description: "DV1 — optional diagram(s) illustrating THIS option (e.g. its architecture). Shown behind an expand-on-demand 'Show diagram' toggle in the option card. Most useful with kind='diagram' (Mermaid). `id` optional — one is assigned if omitted.",
+                    items: {
+                      type: "object",
+                      properties: {
+                        id: { type: "string", description: "Optional stable id (assigned if omitted)" },
+                        kind: { type: "string", enum: ["diagram", "file_map", "prototype", "annotated_code"] },
+                        title: { type: "string" },
+                        caption: { type: "string" },
+                        source: { type: "string", description: "kind='diagram': Mermaid source" },
+                      },
+                      required: ["kind"],
+                    },
+                  },
                 },
                 required: ["id", "title", "description", "pros", "cons", "effort", "risk", "recommendation"],
               },
