@@ -77,8 +77,8 @@ function metricsPath(projectRoot: string): string {
   return path.join(projectRoot, ".deeppairing", "metrics.json");
 }
 
-/** Read the metrics file, creating a fresh shape if missing/corrupt. */
-export function readMetrics(projectRoot: string): MetricsFile {
+/** Read the metrics file from DISK, creating a fresh shape if missing/corrupt. */
+function readMetricsFromDisk(projectRoot: string): MetricsFile {
   const file = metricsPath(projectRoot);
   try {
     if (!fs.existsSync(file)) {
@@ -127,9 +127,78 @@ function writeMetrics(projectRoot: string, data: MetricsFile): void {
   }
 }
 
-/** Apply an event to the metrics file. Atomic read-modify-write. */
+/**
+ * SP3 — in-memory write coalescing. Pre-SP3 every recordMetricEvent did a full
+ * read-parse-modify-atomic-write of metrics.json. metrics-tap fires one event
+ * per broadcast (+ one per visual), so a busy session paid an O(file) RMW on
+ * every artifact / comment / ledger write — pure overhead for non-critical
+ * display telemetry. Now events mutate an in-memory working copy (authoritative
+ * — the daemon is the only writer) and a single debounced flush persists the
+ * batch. readMetrics returns the working copy so the /metrics route stays
+ * fresh; flushAllMetrics() on shutdown is the durability backstop.
+ */
+interface MetricsCacheEntry {
+  data: MetricsFile;
+  dirty: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+const FLUSH_DEBOUNCE_MS = 1000;
+const metricsCache = new Map<string, MetricsCacheEntry>();
+
+function loadEntry(projectRoot: string): MetricsCacheEntry {
+  let entry = metricsCache.get(projectRoot);
+  if (!entry) {
+    entry = { data: readMetricsFromDisk(projectRoot), dirty: false, timer: null };
+    metricsCache.set(projectRoot, entry);
+  }
+  return entry;
+}
+
+function flushEntry(projectRoot: string, entry: MetricsCacheEntry): void {
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+  if (!entry.dirty) return;
+  entry.dirty = false;
+  writeMetrics(projectRoot, entry.data);
+}
+
+function scheduleFlush(projectRoot: string, entry: MetricsCacheEntry): void {
+  // Coalesce: if a flush is already pending, let it fire — so a continuous
+  // event stream still persists at most once per FLUSH_DEBOUNCE_MS rather than
+  // never (a pure trailing debounce would starve a perpetually-busy session).
+  if (entry.timer) return;
+  entry.timer = setTimeout(() => flushEntry(projectRoot, entry), FLUSH_DEBOUNCE_MS);
+  // Don't keep the event loop alive just to flush metrics — shutdown flush
+  // (flushAllMetrics) is the durability path on a clean exit.
+  entry.timer.unref?.();
+}
+
+/** Flush every dirty project's metrics synchronously. Call on daemon shutdown. */
+export function flushAllMetrics(): void {
+  for (const [projectRoot, entry] of metricsCache) {
+    flushEntry(projectRoot, entry);
+  }
+}
+
+/** Test-only: clear timers + cache so module state doesn't leak across tests. */
+export function __resetMetricsCacheForTests(): void {
+  for (const entry of metricsCache.values()) {
+    if (entry.timer) clearTimeout(entry.timer);
+  }
+  metricsCache.clear();
+}
+
+/** Read the metrics (in-memory working copy; loaded from disk on first access). */
+export function readMetrics(projectRoot: string): MetricsFile {
+  return loadEntry(projectRoot).data;
+}
+
+/** Apply an event to the in-memory metrics; a debounced flush persists it. */
 export function recordMetricEvent(projectRoot: string, event: MetricsEvent): void {
-  const data = readMetrics(projectRoot);
+  const entry = loadEntry(projectRoot);
+  const data = entry.data;
   const now = new Date().toISOString();
   data.lastActivityAt = now;
 
@@ -173,5 +242,6 @@ export function recordMetricEvent(projectRoot: string, event: MetricsEvent): voi
       break;
   }
 
-  writeMetrics(projectRoot, data);
+  entry.dirty = true;
+  scheduleFlush(projectRoot, entry);
 }

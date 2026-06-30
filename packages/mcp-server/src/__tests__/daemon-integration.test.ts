@@ -10,7 +10,7 @@ import { createDaemonRoutes, createActiveSessionRoutes } from "../daemon-routes.
 import { DaemonClient } from "../daemon-client.js";
 import { FileStore } from "../store/file-store.js";
 import { setGlobalStoreForTests } from "../store/global-store.js";
-import { readMetrics } from "../store/metrics-store.js";
+import { readMetrics, __resetMetricsCacheForTests } from "../store/metrics-store.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +47,7 @@ beforeEach(() => {
 
 afterAll(() => {
   // Clean up any leftover temp dirs
+  __resetMetricsCacheForTests(); // SP3 — clear debounced metrics timers
 });
 
 // --- F1: metrics recorded at daemon-side truth points ---
