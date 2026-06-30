@@ -665,13 +665,31 @@ describe("DV1 — per-option diagram disclosure", () => {
     expect(screen.getAllByRole("button", { name: /^show diagram/i })).toHaveLength(1);
   });
 
-  it("toggling the diagram does NOT select the option (stopPropagation)", async () => {
+  const resolveCalls = (spy: ReturnType<typeof vi.fn>) =>
+    spy.mock.calls.filter(([url]) => String(url).includes("/api/decisions"));
+
+  it("toggling the diagram via MOUSE does not select the option", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchSpy);
     render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
     await user.click(screen.getByRole("button", { name: /^show diagram/i }));
-    const resolveCalls = fetchSpy.mock.calls.filter(([url]) => String(url).includes("/api/decisions"));
-    expect(resolveCalls).toHaveLength(0); // the click never bubbled to the option card
+    expect(screen.getByTestId("mermaid")).toBeInTheDocument();
+    expect(resolveCalls(fetchSpy)).toHaveLength(0); // click never bubbled to the card
+  });
+
+  it("toggling the diagram via KEYBOARD (Enter) expands it, NOT resolves the decision", async () => {
+    // Regression: the card's NATIVE keydown listener fired Enter → handleSelect
+    // before React's synthetic stopPropagation could cancel it, so Enter on the
+    // toggle silently resolved the decision instead of showing the diagram.
+    const user = userEvent.setup();
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchSpy);
+    render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
+    const toggle = screen.getByRole("button", { name: /^show diagram/i });
+    toggle.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("mermaid")).toBeInTheDocument(); // expanded
+    expect(resolveCalls(fetchSpy)).toHaveLength(0); // decision NOT resolved
   });
 });

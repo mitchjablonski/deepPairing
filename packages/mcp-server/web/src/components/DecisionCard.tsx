@@ -189,6 +189,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         tag === "SELECT" ||
         target?.isContentEditable === true
       ) return;
+      // DV1 — bail when focus is on a NESTED interactive control (the
+      // "Show diagram" disclosure, the AskTrigger button, …). This is a NATIVE
+      // keydown listener, so it fires during native bubbling BEFORE React's
+      // synthetic dispatch — a child's React onKeyDown stopPropagation can't
+      // cancel it. Without this, Enter on "Show diagram" resolved the focused
+      // decision instead of expanding (the same exposure AskTrigger had). The
+      // option card itself is a role="button" *div* (tag DIV), so its own
+      // Enter/Space selection still flows through below.
+      if (tag === "BUTTON" || tag === "A") return;
 
       // UX2 — within the card, j/k move the option highlight and we
       // stopPropagation so App's document-level j/k doesn't ALSO navigate

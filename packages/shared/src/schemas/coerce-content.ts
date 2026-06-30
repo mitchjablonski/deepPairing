@@ -275,9 +275,12 @@ function coerceOption(v: unknown): DecisionContent["options"][number] {
   };
   const concept = coerceConcept(o.concept);
   if (concept) out.concept = concept;
-  // DV1 — per-option visuals. Scope the fallback id by option id so two
-  // options that both omit visual ids don't collide on `visual_0` (which would
-  // cross-anchor their comment threads once those land).
+  // DV1 — per-option visuals. The option-scoped fallback id (`${id}_visual_${i}`)
+  // only kicks in for a CONTENT-LESS visual; coerceVisual content-hashes when
+  // there's content, which already distinguishes distinct diagrams. In the
+  // present_options flow the write path stamps this same option-scoped id before
+  // persistence, so a re-coerce keeps it (no drift); the scoping just guarantees
+  // two options that both omit ids + content can't collide on `visual_0`.
   if (Array.isArray(o.visuals)) {
     out.visuals = o.visuals.map((vis, i) => coerceVisual(vis, `${out.id}_visual_${i}`));
   }
