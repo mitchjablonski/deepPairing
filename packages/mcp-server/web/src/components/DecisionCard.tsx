@@ -698,7 +698,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                           {v.title && (
                             <div className="text-2xs font-semibold text-text-muted">{v.title}</div>
                           )}
-                          <VisualBody artifactId={artifactId} visual={v} readOnly />
+                          {/* artifactId is optional on DecisionCard; VisualBody
+                              only uses it for comment anchoring, which readOnly
+                              skips — so "" is safe when it's absent. */}
+                          <VisualBody artifactId={artifactId ?? ""} visual={v} readOnly />
                           {v.caption && (
                             <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>
                           )}
