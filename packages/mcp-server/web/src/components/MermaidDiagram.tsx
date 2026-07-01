@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useOverlayPresence } from "../stores/overlay";
 
 /**
  * Renders agent-authored Mermaid source to an SVG. Lazy-loads the (sizable)
@@ -37,21 +39,13 @@ export function MermaidDiagram({ source }: { source: string }) {
   // Fullscreen lightbox — a diagram squeezed into a narrow column (e.g. one of
   // 3-4 decision options side by side) is unreadable; "Expand" opens it big.
   const [fullscreen, setFullscreen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Match the app's modal conventions: suppress the global j/k/a/r/q artifact
+  // shortcuts while the lightbox is up (UX4), and trap + restore focus (DD7).
+  useOverlayPresence(fullscreen);
+  useFocusTrap(panelRef, fullscreen);
   // Stable per-instance id prefix so concurrent diagrams don't collide.
   const idPrefix = useRef(`dp-mmd-${++renderSeq}`);
-
-  // Esc closes the lightbox (backdrop click + the ✕ button also close it).
-  useEffect(() => {
-    if (!fullscreen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setFullscreen(false);
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [fullscreen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,15 +119,21 @@ export function MermaidDiagram({ source }: { source: string }) {
       )}
       {fullscreen &&
         createPortal(
+          // z-50 matches the app's modal tier (toasts sit at z-[60] ABOVE modals
+          // on purpose, so a failure toast raised over the lightbox stays visible).
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Diagram — fullscreen"
-            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
             onClick={() => setFullscreen(false)}
           >
             <div
-              className="relative bg-surface-primary border border-white/10 rounded-lg shadow-2xl p-8 flex items-center justify-center"
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Diagram — fullscreen"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setFullscreen(false);
+              }}
+              className="relative bg-surface-primary border border-white/10 rounded-lg shadow-2xl p-6 sm:p-8 max-w-[96vw] max-h-[94vh] overflow-auto flex items-center justify-center"
               onClick={(e) => e.stopPropagation()}
             >
               <button
@@ -143,12 +143,17 @@ export function MermaidDiagram({ source }: { source: string }) {
               >
                 ✕
               </button>
-              {/* Fit the WHOLE diagram to the screen: target ~80vh tall (big +
+              {/* Same sanitized SVG string as the inline copy. Note: mermaid ids
+                  (incl. arrowhead <marker> defs) are duplicated across the two
+                  copies; url(#id) resolves to the first in document order (the
+                  always-mounted inline copy), so this copy's arrowheads render
+                  fine as long as the inline one stays mounted (it always does).
+                  Fit the WHOLE diagram to the screen: target ~80vh tall (big +
                   crisp — it's vector) with width following the aspect ratio and
                   capped at the viewport so it never overflows or clips. The `!`
                   beats mermaid's own inline max-width. */}
               <div
-                className="dp-mermaid-full [&_svg]:!h-[80vh] [&_svg]:!w-auto [&_svg]:!max-w-[92vw]"
+                className="dp-mermaid-full [&_svg]:!h-[80vh] [&_svg]:!w-auto [&_svg]:!max-w-[88vw]"
                 dangerouslySetInnerHTML={{ __html: svg }}
               />
             </div>
