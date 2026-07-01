@@ -639,7 +639,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
   });
 });
 
-describe("DV1 — per-option diagram disclosure", () => {
+describe("DV1 — decision-level 'Compare diagrams' bar", () => {
   const eventWithDiagram = {
     ...event,
     options: [
@@ -651,45 +651,46 @@ describe("DV1 — per-option diagram disclosure", () => {
     ],
   };
 
-  it("hides the diagram behind a 'Show diagram' toggle; expanding renders it", async () => {
+  it("shows diagrams BY DEFAULT; the bar toggles them off and back on", async () => {
     const user = userEvent.setup();
     render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
-    expect(screen.queryByTestId("mermaid")).not.toBeInTheDocument(); // collapsed
-    await user.click(screen.getByRole("button", { name: /^show diagram/i }));
-    expect(screen.getByTestId("mermaid")).toBeInTheDocument(); // expanded
+    expect(screen.getByTestId("mermaid")).toBeInTheDocument(); // shown by default
     expect(screen.getByText("Redis topology")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /hide diagrams/i }));
+    expect(screen.queryByTestId("mermaid")).not.toBeInTheDocument(); // collapsed
+    await user.click(screen.getByRole("button", { name: /compare diagrams/i }));
+    expect(screen.getByTestId("mermaid")).toBeInTheDocument(); // back
   });
 
-  it("only the option WITH visuals gets a toggle", () => {
-    render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
-    expect(screen.getAllByRole("button", { name: /^show diagram/i })).toHaveLength(1);
+  it("shows the bar when ANY option has a visual; omits it when none do", () => {
+    const { unmount } = render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
+    expect(screen.getByRole("button", { name: /hide diagrams|compare diagrams/i })).toBeInTheDocument();
+    unmount();
+    render(<DecisionCard event={event} decisionId="dec_abc" />); // no visuals
+    expect(screen.queryByRole("button", { name: /hide diagrams|compare diagrams/i })).not.toBeInTheDocument();
   });
 
   const resolveCalls = (spy: ReturnType<typeof vi.fn>) =>
     spy.mock.calls.filter(([url]) => String(url).includes("/api/decisions"));
 
-  it("toggling the diagram via MOUSE does not select the option", async () => {
+  it("the bar lives OUTSIDE the option cards — toggling never resolves the decision (mouse + keyboard)", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchSpy);
     render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
-    await user.click(screen.getByRole("button", { name: /^show diagram/i }));
-    expect(screen.getByTestId("mermaid")).toBeInTheDocument();
-    expect(resolveCalls(fetchSpy)).toHaveLength(0); // click never bubbled to the card
-  });
 
-  it("toggling the diagram via KEYBOARD (Enter) expands it, NOT resolves the decision", async () => {
-    // Regression: the card's NATIVE keydown listener fired Enter → handleSelect
-    // before React's synthetic stopPropagation could cancel it, so Enter on the
-    // toggle silently resolved the decision instead of showing the diagram.
-    const user = userEvent.setup();
-    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchSpy);
-    render(<DecisionCard event={eventWithDiagram} decisionId="dec_abc" />);
-    const toggle = screen.getByRole("button", { name: /^show diagram/i });
-    toggle.focus();
+    // Mouse: collapse via the default "Hide diagrams" bar.
+    await user.click(screen.getByRole("button", { name: /hide diagrams/i }));
+    expect(resolveCalls(fetchSpy)).toHaveLength(0);
+
+    // Keyboard: Enter on the (now "Compare diagrams") bar re-expands, doesn't
+    // resolve. (Regression: the card's native keydown Enter → handleSelect fired
+    // before React's synthetic stopPropagation; the bail-on-nested-button guard
+    // covers this bar.)
+    const bar = screen.getByRole("button", { name: /compare diagrams/i });
+    bar.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByTestId("mermaid")).toBeInTheDocument(); // expanded
-    expect(resolveCalls(fetchSpy)).toHaveLength(0); // decision NOT resolved
+    expect(screen.getByTestId("mermaid")).toBeInTheDocument();
+    expect(resolveCalls(fetchSpy)).toHaveLength(0);
   });
 });
