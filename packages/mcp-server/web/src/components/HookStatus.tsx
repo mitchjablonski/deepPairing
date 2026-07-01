@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useHookStatusStore, type HookFire } from "../stores/hookStatus";
 import { useOverlayPresence } from "../stores/overlay";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 /**
  * X7 — header chip + popover surfacing recent hook fires.
@@ -41,6 +42,9 @@ export function HookStatus() {
   const [open, setOpen] = useState(false);
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  // UM — the popover declares role="dialog" aria-modal, so trap+restore focus to
+  // match (was claiming modality Tab could escape). Only while open.
+  useFocusTrap(popoverRef, open);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Click-outside + Esc dismissal. The popover has no actions inside it

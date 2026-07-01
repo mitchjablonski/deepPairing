@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useModal } from "../hooks/useModal";
 import { commentAnchorKey } from "../lib/comment-anchor";
 import { isUnansweredQuestion } from "../lib/unanswered";
 
@@ -84,7 +84,7 @@ function targetLabel(c: Comment, artifact?: Artifact): string {
 type FilterMode = "all" | "unanswered";
 
 export function ConversationRail({ onClose }: ConversationRailProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const { dialogProps } = useModal({ onClose });
   const artifacts = useArtifactStore((s) => s.artifacts);
   const commentsByArtifact = useArtifactStore((s) => s.comments);
   // W2 — filter state for the unanswered-only view. Default to "all" so a
@@ -101,8 +101,6 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
   const [previousLastOpenedAt] = useState<number>(() => loadLastOpenedAt());
   useEffect(() => { saveLastOpenedAt(Date.now()); }, []);
 
-  useFocusTrap(panelRef, true);
-  useEffect(() => { panelRef.current?.focus(); }, []);
 
   // Build the threaded view:
   //   - Group comments by artifactId
@@ -237,11 +235,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     <>
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <div
-        ref={panelRef}
-        tabIndex={-1}
-        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-        role="dialog"
-        aria-modal="true"
+        {...dialogProps}
         aria-label="Conversation"
         className="fixed top-0 right-0 bottom-0 z-50 w-[480px] max-w-[92vw]
                    bg-surface-elevated border-l border-border-default shadow-2xl

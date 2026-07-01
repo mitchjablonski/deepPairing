@@ -1,5 +1,4 @@
-import { useRef } from "react";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useModal } from "../hooks/useModal";
 
 const shortcuts = [
   { keys: "⌘K", description: "Command palette" },
@@ -14,18 +13,14 @@ const shortcuts = [
 ];
 
 export function KeyboardShortcutHelp({ onClose }: { onClose: () => void }) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(panelRef, true);
+  const { dialogProps } = useModal({ onClose });
   return (
     <div
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
       onClick={onClose}
-      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
     >
       <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
+        {...dialogProps}
         aria-label="Keyboard shortcuts"
         className="bg-surface-elevated border border-border-default rounded-xl shadow-2xl p-6 max-w-sm w-full"
         onClick={(e) => e.stopPropagation()}>

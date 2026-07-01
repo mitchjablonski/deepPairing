@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, sessionHeaders, apiBase } from "../lib/api";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useModal } from "../hooks/useModal";
 import { useArtifactStore } from "../stores/artifact";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 
@@ -122,7 +122,7 @@ export function YourTasteDrawer({
   initialTab?: Tab;
   highlightConcept?: string;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const { dialogProps } = useModal({ onClose });
   const [tab, setTab] = useState<Tab>(initialTab ?? "stances");
   const [entries, setEntries] = useState<PhilosophyEntry[] | null>(null);
   const [digest, setDigest] = useState<DigestData | null>(null);
@@ -140,11 +140,6 @@ export function YourTasteDrawer({
   const [teamError, setTeamError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
 
-  useFocusTrap(panelRef, true);
-
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,11 +214,7 @@ export function YourTasteDrawer({
     <>
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <div
-        ref={panelRef}
-        tabIndex={-1}
-        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-        role="dialog"
-        aria-modal="true"
+        {...dialogProps}
         aria-label="Your taste"
         className="fixed top-0 right-0 bottom-0 z-50 w-[420px] max-w-[90vw]
                    bg-surface-elevated border-l border-border-default shadow-2xl
