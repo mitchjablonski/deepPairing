@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useFocusTrap } from "../hooks/useFocusTrap";
-import { useOverlayPresence } from "../stores/overlay";
+import { useModal } from "../hooks/useModal";
 
 /**
  * Renders agent-authored Mermaid source to an SVG. Lazy-loads the (sizable)
@@ -72,11 +71,9 @@ export function MermaidDiagram({ source }: { source: string }) {
   // Fullscreen lightbox — a diagram squeezed into a narrow column (e.g. one of
   // 3-4 decision options side by side) is unreadable; "Expand" opens it big.
   const [fullscreen, setFullscreen] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  // Match the app's modal conventions: suppress the global j/k/a/r/q artifact
-  // shortcuts while the lightbox is up (UX4), and trap + restore focus (DD7).
-  useOverlayPresence(fullscreen);
-  useFocusTrap(panelRef, fullscreen);
+  // The lightbox is a modal: useModal gives it presence-suppression, focus
+  // trap+restore, role/aria-modal, and Esc — active only while fullscreen.
+  const { dialogProps } = useModal({ active: fullscreen, onClose: () => setFullscreen(false) });
   // Stable per-instance id prefix so concurrent diagrams don't collide.
   const idPrefix = useRef(`dp-mmd-${++renderSeq}`);
 
@@ -184,13 +181,8 @@ export function MermaidDiagram({ source }: { source: string }) {
             onClick={() => setFullscreen(false)}
           >
             <div
-              ref={panelRef}
-              role="dialog"
-              aria-modal="true"
+              {...dialogProps}
               aria-label="Diagram — fullscreen"
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setFullscreen(false);
-              }}
               className="relative bg-surface-primary border border-white/10 rounded-lg shadow-2xl p-6 sm:p-8 max-w-[96vw] max-h-[94vh] overflow-auto flex items-center justify-center"
               onClick={(e) => e.stopPropagation()}
             >

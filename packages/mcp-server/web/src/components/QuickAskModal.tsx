@@ -1,6 +1,5 @@
-import { useRef, useState } from "react";
-import { useFocusTrap } from "../hooks/useFocusTrap";
-import { useOverlayPresence } from "../stores/overlay";
+import { useState } from "react";
+import { useModal } from "../hooks/useModal";
 
 interface QuickAskModalProps {
   artifactTitle: string;
@@ -16,9 +15,7 @@ interface QuickAskModalProps {
  */
 export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModalProps) {
   const [text, setText] = useState("");
-  const panelRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(panelRef, true);
-  useOverlayPresence(); // suppress global artifact shortcuts while open
+  const { dialogProps } = useModal({ onClose });
 
   const submit = async () => {
     const q = text.trim();
@@ -39,14 +36,9 @@ export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModa
       onClick={onClose}
     >
       <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
+        {...dialogProps}
         aria-label={`Ask the agent about ${artifactTitle}`}
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
         className="bg-surface-primary rounded-lg shadow-xl w-full max-w-lg p-4"
       >
         <div className="text-xs text-text-muted mb-2">

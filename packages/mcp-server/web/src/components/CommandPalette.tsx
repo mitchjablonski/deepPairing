@@ -1,8 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore } from "../stores/preferences";
-import { useFocusTrap } from "../hooks/useFocusTrap";
-import { useOverlayPresence } from "../stores/overlay";
+import { useModal } from "../hooks/useModal";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
 
@@ -19,12 +18,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(panelRef, true);
-  // UM — report overlay presence so App suppresses the global shortcuts (was
-  // covered by App.tsx's hand-list, now deleted). Full useModal migration is a
-  // follow-up — this component's custom arrow-key handler makes it non-trivial.
-  useOverlayPresence();
+  const { dialogProps } = useModal({ onClose });
   const { artifacts, selectArtifact, updateArtifactStatus } = useArtifactStore();
   const { theme, setTheme, toggleSidebar } = usePreferencesStore();
 
@@ -118,9 +112,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     } else if (e.key === "Enter") {
       e.preventDefault();
       results[selectedIndex]?.action();
-    } else if (e.key === "Escape") {
-      onClose();
     }
+    // Escape is handled by useModal's dialogProps.onKeyDown on the panel (the
+    // input's keydown bubbles to it) — no branch here, or it'd double-close.
   };
 
   return (
@@ -130,9 +124,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
       {/* Palette */}
       <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
+        {...dialogProps}
         aria-label="Command palette"
         className="fixed top-[20%] left-1/2 -translate-x-1/2 z-50 w-[500px] max-w-[90vw]
                       bg-surface-elevated border border-border-default rounded-xl shadow-2xl overflow-hidden"
