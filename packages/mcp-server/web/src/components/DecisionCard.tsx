@@ -87,8 +87,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // Resolved-card disclosure: review each option's full detail (description,
   // concept, pros/cons) in place, without the heavyweight Re-pair flow.
   const [showOptions, setShowOptions] = useState(false);
-  // DV1 — per-option diagram disclosure (expand-on-demand keeps the grid scannable).
-  const [openDiagrams, setOpenDiagrams] = useState<Record<string, boolean>>({});
+  // DV1 — decision-level "Compare diagrams" bar below the option grid (kept out
+  // of the cards to avoid misclick-selects). Shown by DEFAULT — when the agent
+  // drew diagrams they're usually the whole point of the comparison; the bar
+  // stays as a collapse toggle for anyone who wants the grid alone.
+  const [showDiagrams, setShowDiagrams] = useState(true);
   /** Q3: horizon-check request state — one request per artifact view. */
   const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
@@ -190,11 +193,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         target?.isContentEditable === true
       ) return;
       // DV1 — bail when focus is on a NESTED interactive control (the
-      // "Show diagram" disclosure, the AskTrigger button, …). This is a NATIVE
+      // "Compare diagrams" bar, the AskTrigger button, …). This is a NATIVE
       // keydown listener, so it fires during native bubbling BEFORE React's
       // synthetic dispatch — a child's React onKeyDown stopPropagation can't
-      // cancel it. Without this, Enter on "Show diagram" resolved the focused
-      // decision instead of expanding (the same exposure AskTrigger had). The
+      // cancel it. Without this, Enter on a nested button resolved the focused
+      // decision instead of activating it (the same exposure AskTrigger had). The
       // option card itself is a role="button" *div* (tag DIV), so its own
       // Enter/Space selection still flows through below.
       if (tag === "BUTTON" || tag === "A") return;
@@ -667,54 +670,60 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   {option.risk} risk
                 </span>
               </div>
-
-              {/* DV1 — per-option diagram(s), expand-on-demand so the grid stays
-                  scannable. stopPropagation so toggling / interacting with the
-                  diagram never selects the option. Read-only: VisualBody renders
-                  Mermaid (and the other visual kinds) without comment affordances. */}
-              {Array.isArray(option.visuals) && option.visuals.length > 0 && (
-                <div
-                  className="mt-2 pt-2 border-t border-white/[0.05]"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setOpenDiagrams((m) => ({ ...m, [option.id]: !m[option.id] }))}
-                    aria-expanded={!!openDiagrams[option.id]}
-                    className="text-2xs font-medium text-text-muted hover:text-text-primary transition-colors"
-                  >
-                    {openDiagrams[option.id]
-                      ? "Hide diagram ▴"
-                      : `Show diagram${option.visuals.length > 1 ? `s (${option.visuals.length})` : ""} ▾`}
-                  </button>
-                  {openDiagrams[option.id] && (
-                    <div className="mt-2 space-y-2">
-                      {option.visuals.map((v) => (
-                        <div
-                          key={v.id}
-                          className="bg-surface-secondary rounded-lg border border-white/[0.06] p-2 space-y-1"
-                        >
-                          {v.title && (
-                            <div className="text-2xs font-semibold text-text-muted">{v.title}</div>
-                          )}
-                          {/* artifactId is optional on DecisionCard; VisualBody
-                              only uses it for comment anchoring, which readOnly
-                              skips — so "" is safe when it's absent. */}
-                          <VisualBody artifactId={artifactId ?? ""} visual={v} readOnly />
-                          {v.caption && (
-                            <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
             </motion.div>
           ))}
         </AnimatePresence>
       </div>
+
+      {/* DV1 — diagrams live in a SEPARATE full-width bar BELOW the option grid,
+          not inside the cards: an in-card toggle is a big misclick target that
+          would resolve the decision. This bar is outside every selectable card,
+          so it can be full-width + prominent with zero misclick risk. Expanding
+          shows each option's diagram(s) in a column that lines up under the
+          option above (read-only VisualBody). */}
+      {event.options.some((o) => Array.isArray(o.visuals) && o.visuals.length > 0) && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowDiagrams((v) => !v)}
+            aria-expanded={showDiagrams}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-xs font-semibold border border-accent-blue/40 bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 hover:border-accent-blue/60 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true" className="shrink-0">
+              <rect x="1.5" y="6" width="5" height="4" rx="1" />
+              <rect x="9.5" y="1.5" width="5" height="4" rx="1" />
+              <rect x="9.5" y="10.5" width="5" height="4" rx="1" />
+              <path d="M6.5 8H8M8 8V3.5H9.5M8 8V12.5H9.5" />
+            </svg>
+            {showDiagrams ? "Hide diagrams" : "Compare diagrams"}
+            <span aria-hidden="true">{showDiagrams ? "▴" : "▾"}</span>
+          </button>
+          {showDiagrams && (
+            <div className={`mt-2 grid gap-2 ${gridCols}`}>
+              {event.options.map((option) => (
+                <div key={option.id} className="space-y-2 min-w-0">
+                  <div className="text-2xs font-semibold text-text-muted truncate">{option.title}</div>
+                  {Array.isArray(option.visuals) && option.visuals.length > 0 ? (
+                    option.visuals.map((v) => (
+                      <div key={v.id} className="bg-surface-secondary rounded-lg border border-white/[0.06] p-2 space-y-1">
+                        {v.title && <div className="text-2xs text-text-muted">{v.title}</div>}
+                        {/* artifactId optional on DecisionCard; VisualBody only
+                            uses it for comment anchoring, skipped under readOnly. */}
+                        <VisualBody artifactId={artifactId ?? ""} visual={v} readOnly />
+                        {v.caption && (
+                          <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-2xs text-text-muted italic px-1">No diagram for this option.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Prediction capture — only on high-stakes decisions, only after the
           user has tentatively picked. Raw material for calibration tracking. */}

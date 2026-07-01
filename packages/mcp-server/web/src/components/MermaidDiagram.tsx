@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useOverlayPresence } from "../stores/overlay";
 
 /**
  * Renders agent-authored Mermaid source to an SVG. Lazy-loads the (sizable)
@@ -33,6 +36,14 @@ export function MermaidDiagram({ source }: { source: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  // Fullscreen lightbox — a diagram squeezed into a narrow column (e.g. one of
+  // 3-4 decision options side by side) is unreadable; "Expand" opens it big.
+  const [fullscreen, setFullscreen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Match the app's modal conventions: suppress the global j/k/a/r/q artifact
+  // shortcuts while the lightbox is up (UX4), and trap + restore focus (DD7).
+  useOverlayPresence(fullscreen);
+  useFocusTrap(panelRef, fullscreen);
   // Stable per-instance id prefix so concurrent diagrams don't collide.
   const idPrefix = useRef(`dp-mmd-${++renderSeq}`);
 
@@ -83,17 +94,72 @@ export function MermaidDiagram({ source }: { source: string }) {
         // mermaid output is sanitized at securityLevel "strict".
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-      <button
-        onClick={() => setShowSource((s) => !s)}
-        className="text-[10px] text-text-muted hover:text-text-secondary"
-      >
-        {showSource ? "Hide source" : "View source"}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setFullscreen(true)}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-2xs font-medium text-text-secondary border border-white/10 hover:text-text-primary hover:bg-white/[0.06] hover:border-white/20 transition-colors"
+          title="View this diagram fullscreen"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true" className="shrink-0">
+            <path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4" />
+          </svg>
+          Expand
+        </button>
+        <button
+          onClick={() => setShowSource((s) => !s)}
+          className="text-[10px] text-text-muted hover:text-text-secondary px-1"
+        >
+          {showSource ? "Hide source" : "View source"}
+        </button>
+      </div>
       {showSource && (
         <pre className="text-2xs font-mono bg-surface-code rounded p-2 overflow-x-auto whitespace-pre text-text-secondary">
           {source}
         </pre>
       )}
+      {fullscreen &&
+        createPortal(
+          // z-50 matches the app's modal tier (toasts sit at z-[60] ABOVE modals
+          // on purpose, so a failure toast raised over the lightbox stays visible).
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
+            onClick={() => setFullscreen(false)}
+          >
+            <div
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Diagram — fullscreen"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setFullscreen(false);
+              }}
+              className="relative bg-surface-primary border border-white/10 rounded-lg shadow-2xl p-6 sm:p-8 max-w-[96vw] max-h-[94vh] overflow-auto flex items-center justify-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setFullscreen(false)}
+                aria-label="Close fullscreen diagram"
+                className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-white/10 transition-colors z-10"
+              >
+                ✕
+              </button>
+              {/* Same sanitized SVG string as the inline copy. Note: mermaid ids
+                  (incl. arrowhead <marker> defs) are duplicated across the two
+                  copies; url(#id) resolves to the first in document order (the
+                  always-mounted inline copy), so this copy's arrowheads render
+                  fine as long as the inline one stays mounted (it always does).
+                  Fit the WHOLE diagram to the screen: target ~80vh tall (big +
+                  crisp — it's vector) with width following the aspect ratio and
+                  capped at the viewport so it never overflows or clips. The `!`
+                  beats mermaid's own inline max-width. */}
+              <div
+                className="dp-mermaid-full [&_svg]:!h-[80vh] [&_svg]:!w-auto [&_svg]:!max-w-[88vw]"
+                dangerouslySetInnerHTML={{ __html: svg }}
+              />
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
