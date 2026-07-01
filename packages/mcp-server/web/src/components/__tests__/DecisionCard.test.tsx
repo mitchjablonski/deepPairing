@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
+import { useLedgerStore, resetLedgerStoreForTests } from "../../stores/ledger";
 
 // DV1 — stub Mermaid so the diagram disclosure test is deterministic (no async
 // mermaid render in jsdom). VisualBody's diagram branch renders this.
@@ -712,5 +713,45 @@ describe("DV1 — decision-level 'Compare diagrams' bar", () => {
     await user.keyboard("{Enter}");
     expect(screen.getByTestId("mermaid")).toBeInTheDocument();
     expect(resolveCalls(fetchSpy)).toHaveLength(0);
+  });
+});
+
+describe("B4 review — Enter on a nested concept badge must not resolve the decision", () => {
+  it("expands the badge instead of submitting (the option onKeyDown bails on BUTTON targets)", async () => {
+    resetLedgerStoreForTests();
+    const user = userEvent.setup();
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchSpy);
+    // Ledger knows the concept → the badge is expandable even without an explanation.
+    useLedgerStore.setState({
+      digest: {
+        shapedThisProject: 0, nearMissesThisProject: 0, blockedThisProject: 0, sessionsTouched: 1,
+        topCitedStances: [], seededStances: [{ concept: "external cache service", stance: "avoid", citedTimesElsewhere: 2 }],
+        globalLedger: { concepts: 1, projects: 1, multiProjectConcepts: 0 },
+      } as any,
+    });
+    const eventWithConcept = {
+      ...event,
+      options: [
+        { ...event.options[0], concept: { name: "external cache service" } },
+        event.options[1],
+      ],
+    };
+    render(<DecisionCard event={eventWithConcept} decisionId="dec_abc" />);
+
+    // Keydown path: Enter on the focused badge must NOT reach the option's
+    // Enter→handleSelect (pre-fix this POSTed /api/decisions and suppressed the
+    // badge's native Enter→click via the card's preventDefault).
+    const badge = screen.getByRole("button", { name: /Concept: external cache service/i });
+    badge.focus();
+    fireEvent.keyDown(badge, { key: "Enter" });
+    const resolveCalls = fetchSpy.mock.calls.filter(([u]) => String(u).includes("/api/decisions"));
+    expect(resolveCalls).toHaveLength(0);
+
+    // The badge still expands (click path — what a real browser's Enter→click
+    // synthesis lands on) with the deep-link visible.
+    await user.click(badge);
+    expect(screen.getByRole("button", { name: /^view in your ledger/i })).toBeInTheDocument();
+    expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes("/api/decisions"))).toHaveLength(0);
   });
 });

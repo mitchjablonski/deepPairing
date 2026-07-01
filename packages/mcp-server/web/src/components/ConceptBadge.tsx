@@ -27,7 +27,14 @@ import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
 interface ConceptRecurrence {
   stance: "avoid" | "prefer" | "mixed" | null;
   count: number;
+  /** The ledger's canonical display name — dispatch THIS to the drawer so its
+   *  exact-match highlight finds the row regardless of the badge's casing. */
+  canonicalName: string;
 }
+
+/** Mirror the server's normalizeKey (global-store.ts): trim, lowercase,
+ *  collapse internal whitespace — so an agent-emitted double-space matches. */
+const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
 function useConceptRecurrence(name: string): ConceptRecurrence | null {
   const digest = useLedgerStore((s) => s.digest);
@@ -38,17 +45,17 @@ function useConceptRecurrence(name: string): ConceptRecurrence | null {
     ensureLedgerSubscriptions();
   }, []);
   if (!digest) return null;
-  const needle = name.trim().toLowerCase();
+  const needle = normalize(name);
   // Defensive — the digest is network data; a partial shape must degrade to
   // "unknown concept", never crash the badge.
-  const seeded = (digest.seededStances ?? []).find((s) => s.concept.trim().toLowerCase() === needle);
-  const cited = (digest.topCitedStances ?? []).find((s) => s.concept.trim().toLowerCase() === needle);
+  const seeded = (digest.seededStances ?? []).find((s) => normalize(s.concept) === needle);
+  const cited = (digest.topCitedStances ?? []).find((s) => normalize(s.concept) === needle);
   if (!seeded && !cited) return null;
   const count = Math.max(
     cited?.globalCitationCount ?? cited?.citationCount ?? 0,
     seeded?.citedTimesElsewhere ?? 0,
   );
-  return { stance: seeded?.stance ?? null, count };
+  return { stance: seeded?.stance ?? null, count, canonicalName: (seeded ?? cited)!.concept };
 }
 
 const STANCE_LABELS: Record<string, { text: string; cls: string }> = {
@@ -79,9 +86,21 @@ export function ConceptBadge({
   const openInLedger = () => {
     window.dispatchEvent(
       new CustomEvent("dp:open-your-taste", {
-        detail: { initialTab: "ledger", highlightConcept: name },
+        // The LEDGER'S casing, not the badge's — the drawer highlight matches
+        // against ledger rows.
+        detail: { initialTab: "ledger", highlightConcept: recurrence?.canonicalName ?? name },
       }),
     );
+  };
+
+  // Review-caught BLOCKER: inside a DecisionCard option, the card's REACT
+  // onKeyDown selects the option on Enter/Space with no target guard (the DV1
+  // tag-guard only covers the card's NATIVE listener). Without stopping the
+  // synthetic keydown here, Enter on this badge SUBMITTED THE DECISION instead
+  // of expanding. Stop Enter/Space at the badge + panel so keyboard users get
+  // the same behavior mouse users do.
+  const stopActivationKeys = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
   };
 
   return (
@@ -92,12 +111,15 @@ export function ConceptBadge({
           e.stopPropagation();
           if (expandable) setOpen((v) => !v);
         }}
+        onKeyDown={stopActivationKeys}
         className={`inline-flex items-center gap-1 ${padding} rounded text-2xs font-medium bg-accent-violet-dim/40 text-accent-violet border border-accent-violet/20 ${
           expandable ? "hover:bg-accent-violet-dim/60 cursor-pointer" : "cursor-default"
         } transition-colors`}
         title={expandable ? "Click to see why this concept applies" : "Concept tag"}
         aria-expanded={expandable ? open : undefined}
-        aria-label={`Concept: ${name}`}
+        aria-label={`Concept: ${name}${
+          recurrence && recurrence.count >= 2 ? `, seen ${recurrence.count} times` : ""
+        }${stanceInfo ? `, ${stanceInfo.text}` : ""}`}
       >
         <span aria-hidden className="text-[10px] opacity-80">◆</span>
         <span className="truncate max-w-[220px]">{name}</span>
@@ -118,6 +140,7 @@ export function ConceptBadge({
           className="text-2xs text-text-secondary leading-relaxed pl-2 border-l-2 border-accent-violet/30 space-y-1"
           // Inside a clickable option card — the panel must never select it.
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={stopActivationKeys}
         >
           {hasExplanation && <div>{explanation}</div>}
           {recurrence && (

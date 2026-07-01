@@ -110,8 +110,10 @@ describe("B4 — ledger-aware ConceptBadge (the learning loop)", () => {
     const listener = (e: Event) => { detail = (e as CustomEvent).detail; };
     window.addEventListener("dp:open-your-taste", listener);
 
-    render(<ConceptBadge name="pay-per-request hosting" />);
-    await user.click(screen.getByRole("button", { name: /Concept: pay-per-request hosting/i }));
+    // Badge casing differs from the ledger's — the dispatch must carry the
+    // LEDGER's canonical name so the drawer's row highlight finds it.
+    render(<ConceptBadge name="Pay-Per-Request Hosting" />);
+    await user.click(screen.getByRole("button", { name: /Concept: Pay-Per-Request Hosting/i }));
     await user.click(screen.getByRole("button", { name: /view in your ledger/i }));
     expect(detail).toMatchObject({ initialTab: "ledger", highlightConcept: "pay-per-request hosting" });
 
@@ -130,5 +132,29 @@ describe("B4 — ledger-aware ConceptBadge (the learning loop)", () => {
     await user.click(screen.getByRole("button", { name: /Concept: pay-per-request hosting/i }));
     await user.click(screen.getByRole("button", { name: /view in your ledger/i }));
     expect(parentClicked).toBe(false);
+  });
+});
+
+describe("B4 review — keyboard safety inside activation-hungry parents", () => {
+  it("Enter on the badge stops at the badge (parent keydown handler never fires)", async () => {
+    const user = userEvent.setup();
+    useLedgerStore.setState({ digest: DIGEST as any });
+    let parentKeydown = false;
+    render(
+      <div onKeyDown={() => { parentKeydown = true; }}>
+        <ConceptBadge name="pay-per-request hosting" />
+      </div>,
+    );
+    screen.getByRole("button", { name: /Concept: pay-per-request hosting/i }).focus();
+    await user.keyboard("{Enter}");
+    expect(parentKeydown).toBe(false);
+  });
+
+  it("SR label carries the recurrence + stance payload", () => {
+    useLedgerStore.setState({ digest: DIGEST as any });
+    render(<ConceptBadge name="pay-per-request hosting" />);
+    expect(
+      screen.getByRole("button", { name: /Concept: pay-per-request hosting, seen 3 times, you avoid this/i }),
+    ).toBeInTheDocument();
   });
 });
