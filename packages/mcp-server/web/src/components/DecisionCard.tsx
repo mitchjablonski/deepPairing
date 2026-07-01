@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "motion/react";
+// B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
+// `motion` component: drops ~40kB gzip of animation features nothing uses
+// from the ENTRY bundle. Same animations.
+import { m, AnimatePresence } from "motion/react";
 import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
@@ -67,7 +70,8 @@ type DecisionPhase =
   | { kind: "sentBack" };
 
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
-  const { resolveDecision, submitComment } = useArtifactStore();
+  const resolveDecision = useArtifactStore((s) => s.resolveDecision);
+  const submitComment = useArtifactStore((s) => s.submitComment);
   const [focusedIndex, setFocusedIndex] = useState(() => {
     // findIndex returns -1 (not undefined) when nothing is recommended, so the
     // old `?? 0` never fired and focusedIndex could be -1 → options[-1] throws
@@ -330,7 +334,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
     return (
       <>
-        <motion.div
+        <m.div
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
@@ -499,7 +503,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               </div>
             </div>
           )}
-        </motion.div>
+        </m.div>
 
         {showRepair && sessionId && (
           <RepairDecisionModal
@@ -556,7 +560,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       <div className={`grid gap-2 ${gridCols}`}>
         <AnimatePresence>
           {event.options.map((option, idx) => (
-            <motion.div
+            <m.div
               key={option.id}
               layout
               role="button"
@@ -683,7 +687,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   {option.risk} risk
                 </span>
               </div>
-            </motion.div>
+            </m.div>
           ))}
         </AnimatePresence>
       </div>

@@ -110,7 +110,7 @@ function CommentBubble({ comment }: { comment: Comment }) {
 export function CommentThread({ artifactId, comments, target }: CommentThreadProps) {
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const { submitComment } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
   
 
   const handleSubmit = async () => {
@@ -232,7 +232,9 @@ export function AskTrigger({
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
   const { sent, flash } = useSentFlash();
-  const { submitComment, comments, markQuestionResolved } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
+  const comments = useArtifactStore((s) => s.comments);
+  const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
 
   // Look up existing question(s) + their answers for this target
   const artifactComments = comments[artifactId] ?? [];

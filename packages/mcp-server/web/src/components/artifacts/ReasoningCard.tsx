@@ -32,7 +32,9 @@ export function ReasoningCard({ artifact }: Props) {
   // Coercion boundary: a fully-shaped ReasoningContent so the renderer can
   // trust the shape (arrays are arrays, action/reasoning are strings).
   const rc = coerceReasoningContent(artifact.content);
-  const { artifacts, selectArtifact, submitComment } = useArtifactStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const submitComment = useArtifactStore((s) => s.submitComment);
 
   const relatedArtifact = useMemo(
     () => (rc.relatesTo ? artifacts.find((a) => a.id === rc.relatesTo?.artifactId) : undefined),

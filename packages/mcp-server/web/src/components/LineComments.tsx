@@ -101,7 +101,8 @@ export function LineCommentChips({
   filePath,
   onOpenLine,
 }: LineCommentChipsProps) {
-  const { submitComment, markQuestionResolved } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
+  const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replySubmitting, setReplySubmitting] = useState(false);
@@ -375,7 +376,7 @@ export function LineComposer({
   targetContext,
   onClose,
 }: LineComposerProps) {
-  const { submitComment } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
   const [commentText, setCommentText] = useState("");
   const [suggestionText, setSuggestionText] = useState("");
   const [lineEnd, setLineEnd] = useState<number>(lineNum);

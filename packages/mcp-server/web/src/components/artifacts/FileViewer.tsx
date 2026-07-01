@@ -32,7 +32,7 @@ export function FileViewer({
   const [commentText, setCommentText] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const { submitComment } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
   useOverlayPresence(); // UX4 — suppress global artifact shortcuts while this modal is up
 
   // U3 — the modal was a keyboard trap: no Escape, no backdrop-dismiss, and the

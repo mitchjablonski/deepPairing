@@ -30,7 +30,12 @@ import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
 
 function App() {
-  const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
+  const connected = useConnectionStore((s) => s.connected);
+  const connect = useConnectionStore((s) => s.connect);
+  const sessionId = useConnectionStore((s) => s.sessionId);
+  const activeSessions = useConnectionStore((s) => s.activeSessions);
+  const switchSession = useConnectionStore((s) => s.switchSession);
+  const refreshSessions = useConnectionStore((s) => s.refreshSessions);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
 
   // U7 — at-rest signal on the Conversation button: how many human questions

@@ -12,7 +12,14 @@ import { SessionMetrics } from "./SessionMetrics";
  * Invoked with Cmd/Ctrl+, or the ⚙ button in the header.
  */
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
-  const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth, sidebarWidth, setSidebarWidth } = usePreferencesStore();
+  const theme = usePreferencesStore((s) => s.theme);
+  const setTheme = usePreferencesStore((s) => s.setTheme);
+  const fontSize = usePreferencesStore((s) => s.fontSize);
+  const setFontSize = usePreferencesStore((s) => s.setFontSize);
+  const contentWidth = usePreferencesStore((s) => s.contentWidth);
+  const toggleContentWidth = usePreferencesStore((s) => s.toggleContentWidth);
+  const sidebarWidth = usePreferencesStore((s) => s.sidebarWidth);
+  const setSidebarWidth = usePreferencesStore((s) => s.setSidebarWidth);
   const { dialogProps } = useModal({ onClose });
 
   return (

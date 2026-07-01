@@ -31,7 +31,8 @@ export function OpenInEditorLink({
 
 /** Editor picker dropdown for settings */
 export function EditorPicker() {
-  const { editorScheme, setEditorScheme } = usePreferencesStore();
+  const editorScheme = usePreferencesStore((s) => s.editorScheme);
+  const setEditorScheme = usePreferencesStore((s) => s.setEditorScheme);
   const [showCustom, setShowCustom] = useState(false);
   const [customTemplate, setCustomTemplate] = useState(editorScheme);
 

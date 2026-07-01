@@ -11,7 +11,8 @@ import { useEffect, useMemo, useState } from "react";
 
 /** Clickable badges that link to the finding artifacts that motivated a step */
 function MotivatedByBadges({ labels }: { labels: string[] }) {
-  const { artifacts, selectArtifact } = useArtifactStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
 
   return (
     <div className="flex flex-wrap gap-1 mt-1.5">
@@ -141,7 +142,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   // Local PlanStep adds the UI-only condition/branches the coercer preserves.
   const steps = content.steps as unknown as PlanStep[];
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
-  const { updateArtifactStatus } = useArtifactStore();
+  const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
 
   // Step acceptance state (only editable when draft)
   const [checkedSteps, setCheckedSteps] = useState<boolean[]>(

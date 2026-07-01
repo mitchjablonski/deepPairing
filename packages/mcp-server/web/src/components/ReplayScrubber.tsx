@@ -80,11 +80,18 @@ const kindLabel: Record<string, string> = {
  * we're viewing, easy to step back and reconsider.
  */
 export function ReplayScrubber() {
-  const {
-    active, events, cursor, playing, speed,
-    exitReplay, setCursor, stepForward, stepBackward,
-    play, pause, setSpeed,
-  } = useReplayStore();
+  const active = useReplayStore((s) => s.active);
+  const events = useReplayStore((s) => s.events);
+  const cursor = useReplayStore((s) => s.cursor);
+  const playing = useReplayStore((s) => s.playing);
+  const speed = useReplayStore((s) => s.speed);
+  const exitReplay = useReplayStore((s) => s.exitReplay);
+  const setCursor = useReplayStore((s) => s.setCursor);
+  const stepForward = useReplayStore((s) => s.stepForward);
+  const stepBackward = useReplayStore((s) => s.stepBackward);
+  const play = useReplayStore((s) => s.play);
+  const pause = useReplayStore((s) => s.pause);
+  const setSpeed = useReplayStore((s) => s.setSpeed);
   const annotationsByEventId = useAnnotationsByEvent();
   const [hoverEvent, setHoverEvent] = useState<TimelineEvent | null>(null);
   const [annotatingEvent, setAnnotatingEvent] = useState<string | null>(null);
@@ -250,7 +257,8 @@ function CurrentEventRow({
   annotating: boolean;
   setAnnotating: (on: boolean) => void;
 }) {
-  const { addAnnotation, removeAnnotation } = useReplayStore();
+  const addAnnotation = useReplayStore((s) => s.addAnnotation);
+  const removeAnnotation = useReplayStore((s) => s.removeAnnotation);
   const annotationsByEventId = useAnnotationsByEvent();
   const myAnnotations = annotationsByEventId.get(event.id) ?? [];
   const [note, setNote] = useState("");

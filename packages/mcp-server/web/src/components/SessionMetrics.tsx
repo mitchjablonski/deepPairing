@@ -27,7 +27,8 @@ function recordDetail(rec?: Record<string, number>): string | undefined {
 }
 
 export function SessionMetrics() {
-  const { artifacts, comments } = useArtifactStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const comments = useArtifactStore((s) => s.comments);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
 
   // R1: cumulative counts across every session in this project (the moat).

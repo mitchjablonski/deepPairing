@@ -368,7 +368,7 @@ function ThreadEntry({
   isUnread: (c: Comment) => boolean;
 }) {
   const { comment, replies } = thread;
-  const { submitComment } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
   // U5 — use the SAME predicate as the pill/filter (it also drops questions the
   // human resolved or the agent answered out-of-band), so the inline "awaiting
   // agent answer" marker can't disagree with a "0 unanswered" header.

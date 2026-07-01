@@ -1,11 +1,17 @@
 // PP3 — type-only import (erased at build): shiki + its Oniguruma regex engine
-// must NOT land in the eager entry bundle. createHighlighter is dynamically
-// imported in getHighlighter so the engine code-splits into its own chunk,
-// loaded only when the first code block actually renders (like MermaidDiagram).
-import type { Highlighter } from "shiki";
+// must NOT land in the eager entry bundle. Everything is dynamically imported
+// in getHighlighter so the engine code-splits into its own chunk, loaded only
+// when the first code block actually renders (like MermaidDiagram).
+//
+// B5 — fine-grained @shikijs/* imports replace the full `shiki` bundle. The
+// full bundle made vite emit EVERY grammar as its own chunk (~300 files,
+// ~10 MB of dist) even though highlightLines caps languages to PRELOAD_LANGS
+// and falls back to "text" — those chunks were unreachable dead weight in the
+// published package. Now only the 13 grammars + 2 themes are emitted.
+import type { HighlighterCore } from "@shikijs/core";
 
-let highlighter: Highlighter | null = null;
-let initPromise: Promise<Highlighter> | null = null;
+let highlighter: HighlighterCore | null = null;
+let initPromise: Promise<HighlighterCore> | null = null;
 
 const PRELOAD_LANGS = [
   "typescript",
@@ -23,15 +29,36 @@ const PRELOAD_LANGS = [
   "diff",
 ] as const;
 
-async function getHighlighter(): Promise<Highlighter> {
+async function getHighlighter(): Promise<HighlighterCore> {
   if (highlighter) return highlighter;
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    const { createHighlighter } = await import("shiki");
-    return createHighlighter({
-      themes: ["vitesse-dark", "vitesse-light"],
-      langs: [...PRELOAD_LANGS],
+    const [{ createHighlighterCore }, { createOnigurumaEngine }] = await Promise.all([
+      import("@shikijs/core"),
+      import("@shikijs/engine-oniguruma"),
+    ]);
+    // Each grammar/theme dynamic import becomes its own lazy chunk; the list
+    // MUST stay in sync with PRELOAD_LANGS (resolvedLang falls back to "text"
+    // for anything else, so a drift shows up as unhighlighted code, not a crash).
+    return createHighlighterCore({
+      themes: [import("@shikijs/themes/vitesse-dark"), import("@shikijs/themes/vitesse-light")],
+      langs: [
+        import("@shikijs/langs/typescript"),
+        import("@shikijs/langs/javascript"),
+        import("@shikijs/langs/json"),
+        import("@shikijs/langs/css"),
+        import("@shikijs/langs/html"),
+        import("@shikijs/langs/python"),
+        import("@shikijs/langs/rust"),
+        import("@shikijs/langs/go"),
+        import("@shikijs/langs/bash"),
+        import("@shikijs/langs/yaml"),
+        import("@shikijs/langs/markdown"),
+        import("@shikijs/langs/sql"),
+        import("@shikijs/langs/diff"),
+      ],
+      engine: createOnigurumaEngine(import("shiki/wasm")),
     });
   })().catch((err) => {
     // PP3 — the lazy chunk can 404 (stale tab after a daemon rebuild). Don't
