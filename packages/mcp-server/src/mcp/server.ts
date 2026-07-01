@@ -10,7 +10,6 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
-import { maybeEmitTaskHandle } from "./tasks-probe.js";
 import { buildFirstCallHint } from "./first-call-hint.js";
 import {
   tryElicit as tryElicitHelper,
@@ -1080,6 +1079,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   // once. Comment-independent (catches feedback-less rejects) and self-limiting
   // (a rejected artifact is terminal — revise mints a new id).
   const reportedRejectedVerdicts = new Set<string>();
+  // B3 — plan verdicts already reflected in structuredContent.status (the
+  // prose keeps repeating them; the machine-readable status must decay).
+  const reportedPlanVerdicts = new Set<string>();
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: rawArgs } = request.params;
@@ -1133,7 +1135,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         get checkFeedbackPollCount() { return checkFeedbackPollCount; },
         set checkFeedbackPollCount(v) { checkFeedbackPollCount = v; },
         reportedRejectedVerdicts,
-      } as any,
+        reportedPlanVerdicts,
+      },
       // B3 — per-request progress token for check_feedback's heartbeats.
       progressToken: request.params._meta?.progressToken,
     };

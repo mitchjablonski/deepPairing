@@ -800,6 +800,10 @@ describe("MCP Tool Handlers", () => {
     });
 
     it("B3 — carries structuredContent mirroring the prose (status/suggestedAction/summary)", async () => {
+      // Activate SDK client-side outputSchema validation: after listTools(),
+      // the client THROWS if a check_feedback result omits structuredContent
+      // or fails the declared schema — so this test pins schema-validity.
+      await client.listTools();
       // Empty session → clean proceed signal, machine-readable.
       const empty = await callTool("check_feedback");
       expect(empty.structuredContent).toMatchObject({ status: "proceed" });
@@ -939,9 +943,11 @@ describe("MCP Tool Handlers", () => {
       setTimeout(() => {
         store.addComment({ id: "cmt_noise", artifactId: "art_other", content: "stray remark", author: "human" });
       }, 50);
-      const { text } = await callTool("check_feedback", { waitFor: "decision" });
-      expect(text).toContain("Still waiting on 'decision'");
-      expect(text).not.toContain("stray remark");
+      const res = await callTool("check_feedback", { waitFor: "decision" });
+      expect(res.text).toContain("Still waiting on 'decision'");
+      expect(res.text).not.toContain("stray remark");
+      // B3 — the scoped still-waiting path carries the structured mirror too.
+      expect(res.structuredContent).toMatchObject({ status: "waiting", waitFor: "decision" });
     });
 
     it("BB3 — waitFor='comments' returns immediately when there's an unack comment, even with a draft decision", async () => {

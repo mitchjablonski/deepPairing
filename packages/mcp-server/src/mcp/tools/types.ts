@@ -63,6 +63,11 @@ export interface ToolState {
   checkFeedbackPollCount: number;
   /** FN2 — rejected artifacts already reported by check_feedback (report once). */
   reportedRejectedVerdicts: Set<string>;
+  /** B3 — plan verdicts already counted toward structuredContent.status. The
+   *  prose re-reports reviewed plans every poll (pre-existing, skim-past-able);
+   *  the machine-readable status must DECAY to 'proceed' once reported, or a
+   *  session with one reviewed plan reads status='feedback' forever. */
+  reportedPlanVerdicts: Set<string>;
 }
 
 export interface ToolContext {

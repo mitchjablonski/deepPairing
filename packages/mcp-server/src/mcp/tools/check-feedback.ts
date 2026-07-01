@@ -394,10 +394,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const pendingPlans = await store.getPendingPlanReviews();
   const planArtifacts = (await store.getArtifacts()).filter((a) => a.type === "plan");
   const reviewedPlans: string[] = [];
+  // B3 — only verdicts NOT yet counted flip structuredContent.status to
+  // 'feedback'; the prose below still repeats every verdict (pre-existing
+  // behavior, kept), but the machine-readable status decays after one report.
+  let freshPlanVerdicts = 0;
   for (const a of planArtifacts) {
     const verdict = await store.getPlanReviewVerdict(a.id);
     if (!verdict) continue;
     reviewedPlans.push(`- Plan "${a.title}": ${verdict.verdict}${verdict.feedback ? ` (feedback: ${verdict.feedback})` : ""}`);
+    if (!ctx.state.reportedPlanVerdicts.has(a.id)) {
+      ctx.state.reportedPlanVerdicts.add(a.id);
+      freshPlanVerdicts++;
+    }
   }
   if (reviewedPlans.length > 0) {
     parts.push(`Plan reviews:\n${reviewedPlans.join("\n")}`);
@@ -458,7 +466,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // B3 — the machine-readable mirror. status: feedback (something to act on),
   // waiting (drafts/decisions/plans pending), or proceed.
   const hasActionableFeedback =
-    hasNewFeedback || freshlyRejected.length > 0 || reviewedPlans.length > 0;
+    hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0;
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
