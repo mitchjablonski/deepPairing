@@ -42,8 +42,9 @@ export function ProjectSwitcher() {
   // daemon-side, now also TTL-cached there). Freshness where it matters comes
   // from the refresh-on-open below. PP3 — paused while the tab is hidden.
   usePollingWhenVisible(refresh, 30000);
-  // Refresh the instant the dropdown opens, so the list/badges the user is
-  // about to read are current even though the background poll is slow.
+  // Refresh when the dropdown opens, so the list/badges the user is about to
+  // read are at most one server-TTL (~15s) stale rather than a full poll
+  // interval behind.
   useEffect(() => {
     if (open) refresh();
   }, [open]);
