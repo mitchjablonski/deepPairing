@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MermaidDiagram } from "../MermaidDiagram";
+import { MermaidDiagram, repairMermaidSource } from "../MermaidDiagram";
 import { useOverlayStore } from "../../stores/overlay";
 
 // Mermaid needs real SVG layout, so mock it: control render() per test to
@@ -55,11 +55,46 @@ describe("MermaidDiagram", () => {
     expect(useOverlayStore.getState().count).toBe(0);
   });
 
+  it("repairs an unparseable diagram (unquoted labels) and renders it with an 'auto-formatted' note", async () => {
+    // First render (raw) fails like the real parser; the repaired retry succeeds.
+    renderMock
+      .mockRejectedValueOnce(new Error("Parse error on line 2"))
+      .mockResolvedValueOnce({ svg: "<svg aria-label='repaired'><text>ok</text></svg>" });
+    render(<MermaidDiagram source={"flowchart TD\n  A[Curse: Weak (x), #79] --> B"} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    expect(screen.getByText(/auto-formatted/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t render this diagram/i)).not.toBeInTheDocument();
+    // The repaired source (quoted label) was what got re-rendered.
+    expect(renderMock).toHaveBeenLastCalledWith(expect.any(String), expect.stringContaining('A["Curse: Weak (x), #79"]'));
+  });
+
   it("degrades to the source (fuzzy-safe) instead of crashing when it can't render", async () => {
     // Empty/blank source hits the same fallback branch a mermaid parse error
     // does: show the source, never throw. (mermaid is never even invoked here.)
     render(<MermaidDiagram source="   " />);
     await waitFor(() => expect(screen.getByText(/Couldn.t render this diagram/i)).toBeInTheDocument());
     expect(renderMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("repairMermaidSource", () => {
+  it("quotes punctuation labels and turns \\n into <br/>", () => {
+    const out = repairMermaidSource("flowchart TD\n  A[Curse: Weak (x)\\nline2] --> B{floor(D)}");
+    expect(out).toContain('A["Curse: Weak (x)<br/>line2"]');
+    expect(out).toContain('B{"floor(D)"}');
+  });
+
+  it("quotes an edge label with punctuation", () => {
+    expect(repairMermaidSource("A -->|deals D (STR)| B")).toContain('|"deals D (STR)"|');
+  });
+
+  it("preserves a dotted edge while quoting its inline text", () => {
+    const out = repairMermaidSource("A[X] -.tanky (new Act).-> B[Y]");
+    expect(out).toContain('-."tanky (new Act)".->'); // still dotted, now quoted
+  });
+
+  it("leaves an already-valid diagram byte-for-byte unchanged (repair is on-failure-safe)", () => {
+    const valid = "flowchart TD\n  A[Start] --> B{OK}\n  B -->|yes| C[Done]";
+    expect(repairMermaidSource(valid)).toBe(valid);
   });
 });
