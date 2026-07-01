@@ -32,10 +32,36 @@ function loadMermaid() {
 
 let renderSeq = 0;
 
+/**
+ * Best-effort repair for the Mermaid mistakes agents make most: `\n` where they
+ * meant a line break, and node/edge labels with punctuation — `()`, `#`, `:`,
+ * `;` — left UNQUOTED, which Mermaid rejects. Applied ONLY after the raw source
+ * fails to parse, so a valid diagram is never touched; a still-broken repair
+ * just falls through to the source-code fallback. Validated against real Mermaid
+ * (see the unit tests): it renders the class of diagrams that used to 404.
+ */
+export function repairMermaidSource(src: string): string {
+  // Literal \n → <br/> (a real line break); normalize CRLF first.
+  let s = src.replace(/\r\n/g, "\n").replace(/\\n/g, "<br/>");
+  // Dotted edge with inline text — `A -.text.-> B` — quote the text but keep the
+  // dotted style (don't collapse it to a solid edge and lose the agent's intent).
+  s = s.replace(/-\.\s*([^.|][^.]*?)\s*\.->/g, (_m, t: string) =>
+    t.includes('"') ? `-.${t}.->` : `-."${t.trim()}".->`,
+  );
+  // Quote labels containing chars Mermaid rejects unquoted, per delimiter.
+  const NEEDS = /[()#:;<]/;
+  s = s.replace(/\[([^[\]"']*?)\]/g, (m, i: string) => (NEEDS.test(i) ? `["${i.trim()}"]` : m));
+  s = s.replace(/\{([^{}"']*?)\}/g, (m, i: string) => (NEEDS.test(i) ? `{"${i.trim()}"}` : m));
+  s = s.replace(/\|([^|"']*?)\|/g, (m, i: string) => (NEEDS.test(i) ? `|"${i.trim()}"|` : m));
+  return s;
+}
+
 export function MermaidDiagram({ source }: { source: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  // True when the raw source failed but repairMermaidSource made it render.
+  const [repaired, setRepaired] = useState(false);
   // Fullscreen lightbox — a diagram squeezed into a narrow column (e.g. one of
   // 3-4 decision options side by side) is unreadable; "Expand" opens it big.
   const [fullscreen, setFullscreen] = useState(false);
@@ -51,18 +77,35 @@ export function MermaidDiagram({ source }: { source: string }) {
     let cancelled = false;
     setSvg(null);
     setError(null);
+    setRepaired(false);
     const src = (source ?? "").trim();
     if (!src) {
       setError("empty diagram");
       return;
     }
     (async () => {
+      const mermaid = await loadMermaid();
       try {
-        const mermaid = await loadMermaid();
         const { svg } = await mermaid.render(`${idPrefix.current}-${++renderSeq}`, src);
         if (!cancelled) setSvg(svg);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? String(e));
+        return;
+      } catch (firstErr: any) {
+        // Fuzzy-safe repair pass: agents commonly ship unquoted-punctuation
+        // labels / `\n` breaks. Try once with a repaired source before giving up.
+        const fixed = repairMermaidSource(src);
+        if (fixed !== src) {
+          try {
+            const { svg } = await mermaid.render(`${idPrefix.current}-${++renderSeq}`, fixed);
+            if (!cancelled) {
+              setSvg(svg);
+              setRepaired(true);
+            }
+            return;
+          } catch {
+            /* repair didn't help — fall through to the source fallback */
+          }
+        }
+        if (!cancelled) setError(firstErr?.message ?? String(firstErr));
       }
     })();
     return () => {
@@ -111,6 +154,14 @@ export function MermaidDiagram({ source }: { source: string }) {
         >
           {showSource ? "Hide source" : "View source"}
         </button>
+        {repaired && (
+          <span
+            className="text-[10px] text-text-muted italic"
+            title="The agent's Mermaid had unquoted labels or \n line breaks; auto-formatted so it renders. 'View source' shows the original."
+          >
+            · auto-formatted
+          </span>
+        )}
       </div>
       {showSource && (
         <pre className="text-2xs font-mono bg-surface-code rounded p-2 overflow-x-auto whitespace-pre text-text-secondary">
