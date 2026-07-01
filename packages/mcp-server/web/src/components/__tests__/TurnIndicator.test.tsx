@@ -55,7 +55,7 @@ function seedComment(artifactId: string, partial: any = {}): void {
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
-  useConnectionStore.setState({ connected: false } as any);
+  useConnectionStore.setState({ connected: false, agentActivityAt: null, agentActiveSince: null } as any);
 });
 
 describe("TurnIndicator — Q4 unanswered-questions badge", () => {
@@ -177,6 +177,33 @@ describe("TurnIndicator — U2 agent liveness", () => {
     rerender(<TurnIndicator />);
     expect(screen.getByText(/agent working/i)).toBeInTheDocument();
     expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("B2 — heartbeat liveness + elapsed label", () => {
+  it("shows 'Agent working · Nm' from the agent_activity heartbeat even with stale artifacts", () => {
+    seedConnected();
+    const now = Date.now();
+    // Artifacts are old (past the 45s idle cutoff) — pre-B2 this flipped to
+    // "Up to date" while the agent was mid-edit-run. The heartbeat keeps it
+    // honest and adds elapsed time.
+    seedArtifact({ id: "old", status: "approved", createdAt: "2026-01-01T00:00:00Z" });
+    useConnectionStore.setState({
+      agentActivityAt: now - 1_000,
+      agentActiveSince: now - 3 * 60_000,
+    } as any);
+    render(<TurnIndicator />);
+    expect(screen.getByText(/agent working · 3m/i)).toBeInTheDocument();
+    expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
+  });
+
+  it("stays 'Up to date' when the heartbeat is also stale", () => {
+    seedConnected();
+    const stale = Date.now() - 10 * 60_000;
+    seedArtifact({ id: "old", status: "approved", createdAt: "2026-01-01T00:00:00Z" });
+    useConnectionStore.setState({ agentActivityAt: stale, agentActiveSince: stale } as any);
+    render(<TurnIndicator />);
+    expect(screen.getByText(/up to date/i)).toBeInTheDocument();
   });
 });
 

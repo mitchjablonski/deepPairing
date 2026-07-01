@@ -21,6 +21,12 @@ export function TurnIndicator() {
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const connected = useConnectionStore((s) => s.connected);
+  // B2 — heartbeat liveness. The daemon broadcasts a throttled agent_activity
+  // on every internal API call the wrapper makes, so this keeps ticking during
+  // a long edit run where no artifact/comment lands (the timestamps below go
+  // quiet and the old inference flipped to "Up to date" on a busy agent).
+  const agentActivityAt = useConnectionStore((s) => s.agentActivityAt);
+  const agentActiveSince = useConnectionStore((s) => s.agentActiveSince);
 
   const latestReasoningAction = useMemo(() => {
     // Walk backward through artifacts to find the most recent reasoning
@@ -76,17 +82,31 @@ export function TurnIndicator() {
   }, [artifacts, comments]);
 
   const AGENT_IDLE_MS = 45_000;
+  // B2 — liveness = max(artifact/comment timestamps, heartbeat). Either signal
+  // keeps "Agent working" honest; the heartbeat covers the artifact-quiet gaps.
+  const effectiveActivityMs = Math.max(lastActivityMs, agentActivityAt ?? 0);
   const [idle, setIdle] = useState(false);
   useEffect(() => {
     setIdle(false);
     // No activity yet on a fresh session → the agent is spinning up its first
     // artifact, so keep "Agent working" rather than claiming "Up to date".
-    if (!lastActivityMs) return;
-    const remaining = AGENT_IDLE_MS - (Date.now() - lastActivityMs);
+    if (!effectiveActivityMs) return;
+    const remaining = AGENT_IDLE_MS - (Date.now() - effectiveActivityMs);
     if (remaining <= 0) { setIdle(true); return; }
     const t = setTimeout(() => setIdle(true), remaining);
     return () => clearTimeout(t);
-  }, [lastActivityMs]);
+  }, [effectiveActivityMs]);
+
+  // B2 — elapsed "· Nm" label while working: waiting becomes watching a peer
+  // think, not staring at a pulse dot. 30s tick keeps it fresh cheaply.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (idle || !agentActiveSince) return;
+    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [idle, agentActiveSince]);
+  const elapsedMin =
+    !idle && agentActiveSince ? Math.floor((Math.max(nowTick, Date.now()) - agentActiveSince) / 60_000) : 0;
 
   if (!connected) return null;
 
@@ -172,7 +192,7 @@ export function TurnIndicator() {
       ) : (
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
-          Agent working
+          Agent working{elapsedMin >= 1 ? ` · ${elapsedMin}m` : ""}
         </div>
       )}
       {questionsBadge}

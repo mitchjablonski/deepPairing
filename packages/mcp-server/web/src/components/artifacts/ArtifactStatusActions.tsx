@@ -262,7 +262,14 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   };
 
   return (
-    <div className="pt-3 border-t border-border-default space-y-2">
+    // B2 — STICKY at the bottom of the scrolling detail pane. On a long
+    // artifact (10 findings, a multi-file plan) the review actions — and worse,
+    // the ARMED AUTO-APPROVE COUNTDOWN — sat several screens below the fold: a
+    // timer could tick to commit while invisible. Sticky keeps the decision the
+    // human must make (and any running countdown) always on screen. Works
+    // because this is a direct child of each renderer root inside the
+    // overflow-y-auto pane (no intermediate overflow ancestor).
+    <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary/95 backdrop-blur-sm pt-3 border-t border-border-default space-y-2">
       {/* Auto-proceed countdown bar */}
       {countdown !== null && countdown > 0 && !countdownPaused && (
         <div className="space-y-1.5">

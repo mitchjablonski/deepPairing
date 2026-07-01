@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
 import { apiGet, sessionHeaders, setCurrentHost, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
+import { isDraftAwaitingReview } from "../lib/pending";
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -42,6 +43,14 @@ interface ConnectionState {
    *  toast the user so they know any in-flight optimistic updates may
    *  have been lost. */
   daemonStartedAt: string | null;
+  /** B2 — ms timestamp of the last `agent_activity` heartbeat (the daemon
+   *  broadcasts one, throttled, on every internal API call the agent's
+   *  wrapper makes). Honest liveness — unlike artifact timestamps, it keeps
+   *  ticking during a long edit run between tool calls. */
+  agentActivityAt: number | null;
+  /** B2 — start of the current activity streak (a gap >60s starts a new
+   *  one). Drives the "Agent working · Nm" elapsed label. */
+  agentActiveSince: number | null;
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
@@ -146,7 +155,41 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
         case "artifact_created":
           store.addArtifact(data.artifact);
+          // B2 — the turn-handoff has to reach a BACKGROUNDED tab for every
+          // reviewable draft, not just decisions/plans (which have their own
+          // dedicated events below — excluded here so they don't double-fire).
+          // Pre-B2 a draft research/spec/code_change — the majority of "your
+          // turn" moments — raised no notification at all.
+          if (
+            data.artifact &&
+            isDraftAwaitingReview(data.artifact) &&
+            data.artifact.type !== "decision" &&
+            data.artifact.type !== "plan"
+          ) {
+            const label =
+              data.artifact.type === "code_change"
+                ? "Code change ready for review"
+                : data.artifact.type === "spec"
+                  ? "Spec ready for review"
+                  : "Findings ready for review";
+            notifyIfUnfocused("deepPairing — your turn", `${label}: ${data.artifact.title ?? ""}`);
+          }
           break;
+
+        case "agent_activity": {
+          // B2 — throttled heartbeat from the daemon on every internal API
+          // call the agent's wrapper makes. A gap >60s starts a new activity
+          // streak (check_feedback polls ~30s, so a live agent pings at least
+          // that often); agentActiveSince drives "Agent working · Nm".
+          const now = Date.now();
+          const prev = get().agentActivityAt;
+          set({
+            agentActivityAt: now,
+            agentActiveSince:
+              prev !== null && now - prev < 60_000 ? (get().agentActiveSince ?? now) : now,
+          });
+          break;
+        }
 
         case "artifact_updated":
           store.updateArtifact(data.artifactId, data.status);
@@ -399,6 +442,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connected: false,
     sessionId: null,
     projectRoot: null,
+    agentActivityAt: null,
+    agentActiveSince: null,
     // II2.2 — seed projectHash from the daemon's HTML injection
     // (window.__dpProjectHash) so the VERY FIRST WS connect URL and mutation
     // fetch carry X-Project-Hash. Otherwise the fail-closed gate 403s the

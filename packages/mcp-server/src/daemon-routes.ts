@@ -209,6 +209,28 @@ export function createDaemonRoutes(
     });
   }
 
+  // B2 — agent-activity heartbeat. Every internal request IS the agent's
+  // wrapper doing something (check_feedback polls, artifact writes, comment
+  // acks), so it's the honest liveness signal the TurnIndicator was previously
+  // guessing at from artifact timestamps (which go quiet during a long edit
+  // run). Broadcast a throttled `agent_activity` per session; the UI shows
+  // "Agent working · Nm" from it. Runs AFTER the bearer gate above (Hono
+  // middleware order) and skips failed requests so unauthenticated probes
+  // can't light the indicator.
+  const lastActivityBroadcastAt = new Map<string, number>();
+  const AGENT_ACTIVITY_THROTTLE_MS = 5_000;
+  app.use("/api/internal/sessions/*", async (c, next) => {
+    await next();
+    if (c.res.status >= 400) return;
+    const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
+    if (!m) return;
+    const sid = m[1];
+    const now = Date.now();
+    if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
+    lastActivityBroadcastAt.set(sid, now);
+    broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
+  });
+
   /**
    * Y3' — lookup helper. Returns the store or a 404 response. Only
    * /register may call createSession; every other route uses this.
