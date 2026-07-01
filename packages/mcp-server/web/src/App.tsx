@@ -72,10 +72,13 @@ function App() {
   // component-internal modals App can't see (FileViewer/RepairDecisionModal/
   // HookStatus) via the overlay-presence store; the booleans cover App-owned
   // overlays. Assigned in render (not an effect) so it's never a frame stale.
+  // UM — every overlay now reports through useOverlayStore (via useModal /
+  // useOverlayPresence), so the store count is the single source of truth. The
+  // old hand-list (`showHelp || showPalette || …`) is gone — a new overlay can
+  // no longer silently fail to suppress shortcuts by being forgotten here.
   const overlayCount = useOverlayStore((s) => s.count);
   const overlayOpenRef = useRef(false);
-  overlayOpenRef.current =
-    overlayCount > 0 || showHelp || showPalette || showSettings || showTaste || showConversation;
+  overlayOpenRef.current = overlayCount > 0;
 
   // Mermaid resilience — sticky "reload" prompt when a lazy chunk fails to load
   // (daemon rebuilt/restarted → stale tab). See the hook for details.

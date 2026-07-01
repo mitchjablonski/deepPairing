@@ -41,6 +41,9 @@ export function HookStatus() {
   const [open, setOpen] = useState(false);
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  // UM — this is a non-modal status popover (no focusable content), so it does
+  // NOT claim aria-modal. It's a role="dialog" popover dismissed by Esc /
+  // outside-click; useOverlayPresence still suppresses artifact shortcuts while open.
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Click-outside + Esc dismissal. The popover has no actions inside it
@@ -99,7 +102,6 @@ export function HookStatus() {
         <div
           ref={popoverRef}
           role="dialog"
-          aria-modal="true"
           aria-label="Recent hook fires"
           className="absolute right-0 mt-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-border-default bg-surface-elevated shadow-lg z-50 overflow-hidden"
         >

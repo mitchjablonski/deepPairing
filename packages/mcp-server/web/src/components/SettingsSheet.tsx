@@ -1,6 +1,5 @@
-import { useEffect, useRef } from "react";
 import { usePreferencesStore } from "../stores/preferences";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useModal } from "../hooks/useModal";
 import { EditorPicker } from "./OpenInEditor";
 import { ExportMenu } from "./ExportMenu";
 import { SessionMetrics } from "./SessionMetrics";
@@ -14,21 +13,14 @@ import { SessionMetrics } from "./SessionMetrics";
  */
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const { theme, setTheme, fontSize, setFontSize, contentWidth, toggleContentWidth, sidebarWidth, setSidebarWidth } = usePreferencesStore();
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  useFocusTrap(panelRef, true);
-
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
+  const { dialogProps } = useModal({ onClose });
 
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <div
-        ref={panelRef}
-        tabIndex={-1}
-        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+        {...dialogProps}
+        aria-label="Settings"
         className="fixed top-0 right-0 bottom-0 z-50 w-[380px] max-w-[90vw]
                    bg-surface-elevated border-l border-border-default shadow-2xl
                    overflow-y-auto focus:outline-none"

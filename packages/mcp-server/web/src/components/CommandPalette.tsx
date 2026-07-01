@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore } from "../stores/preferences";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useOverlayPresence } from "../stores/overlay";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
 
@@ -20,6 +21,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useFocusTrap(panelRef, true);
+  // UM — report overlay presence so App suppresses the global shortcuts (was
+  // covered by App.tsx's hand-list, now deleted). Full useModal migration is a
+  // follow-up — this component's custom arrow-key handler makes it non-trivial.
+  useOverlayPresence();
   const { artifacts, selectArtifact, updateArtifactStatus } = useArtifactStore();
   const { theme, setTheme, toggleSidebar } = usePreferencesStore();
 
