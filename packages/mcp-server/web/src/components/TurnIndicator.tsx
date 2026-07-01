@@ -98,15 +98,16 @@ export function TurnIndicator() {
   }, [effectiveActivityMs]);
 
   // B2 — elapsed "· Nm" label while working: waiting becomes watching a peer
-  // think, not staring at a pulse dot. 30s tick keeps it fresh cheaply.
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  // think, not staring at a pulse dot. nowTick exists ONLY to force a re-render
+  // every 30s; the render itself always reads fresh Date.now().
+  const [, setNowTick] = useState(0);
   useEffect(() => {
     if (idle || !agentActiveSince) return;
-    const t = setInterval(() => setNowTick(Date.now()), 30_000);
+    const t = setInterval(() => setNowTick((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, [idle, agentActiveSince]);
   const elapsedMin =
-    !idle && agentActiveSince ? Math.floor((Math.max(nowTick, Date.now()) - agentActiveSince) / 60_000) : 0;
+    !idle && agentActiveSince ? Math.floor((Date.now() - agentActiveSince) / 60_000) : 0;
 
   if (!connected) return null;
 
