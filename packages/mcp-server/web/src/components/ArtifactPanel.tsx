@@ -22,7 +22,11 @@ import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 
 const statusDots: Record<string, string> = {
-  draft: "bg-text-muted",
+  // B1 — draft is the one status that NEEDS the human, yet it was styled as the
+  // quietest dot in the sidebar (dimmer than approved/rejected). Amber matches
+  // the "Your turn" pill so a glance shows where your turn lives; `revised`
+  // shares amber deliberately — both mean "awaiting your review".
+  draft: "bg-accent-amber",
   reviewing: "bg-accent-blue",
   approved: "bg-accent-green",
   revised: "bg-accent-amber",

@@ -124,7 +124,7 @@ pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js demo
 ```
 
-> Requires Node 20+ and pnpm 10+. Cold-clone wall time is ~60-90s for
+> Requires Node 22+ and pnpm 10+. Cold-clone wall time is ~60-90s for
 > `pnpm install`, ~10s to build, ~5s for the demo. No Claude Code install needed
 > for this path.
 

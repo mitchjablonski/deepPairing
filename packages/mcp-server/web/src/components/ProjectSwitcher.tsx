@@ -38,8 +38,15 @@ export function ProjectSwitcher() {
   useEffect(() => {
     refresh();
   }, []);
-  // PP3 — pause the 5s project poll while the tab is hidden.
-  usePollingWhenVisible(refresh, 5000);
+  // B1 — 30s background poll (was 5s: each request triggers a 128-port sweep
+  // daemon-side, now also TTL-cached there). Freshness where it matters comes
+  // from the refresh-on-open below. PP3 — paused while the tab is hidden.
+  usePollingWhenVisible(refresh, 30000);
+  // Refresh the instant the dropdown opens, so the list/badges the user is
+  // about to read are current even though the background poll is slow.
+  useEffect(() => {
+    if (open) refresh();
+  }, [open]);
 
   // The currently-selected project: match by the host we're pointed at, else
   // by the active projectHash from the connection store.
