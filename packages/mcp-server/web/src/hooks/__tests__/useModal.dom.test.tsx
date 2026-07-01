@@ -47,4 +47,18 @@ describe("useModal", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("restores focus to the trigger on unmount", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const { unmount } = render(<Harness onClose={() => {}} />);
+    expect(document.activeElement).not.toBe(trigger); // focus moved into the dialog
+    unmount();
+    expect(document.activeElement).toBe(trigger); // …and restored on close
+
+    trigger.remove();
+  });
 });
