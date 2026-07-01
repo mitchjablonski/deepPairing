@@ -227,7 +227,13 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
-  }, [focusedIndex, resolved, showReasoning, event.options]);
+    // handleSelect closes over phase/stakes/predictOptIn/reasoning — it MUST be
+    // in the deps or the Enter branch runs a stale closure. Field bug: on a
+    // high-stakes decision, toggling "Capture prediction with my pick" and then
+    // selecting via Enter (not click) resolved WITHOUT the prediction-capture
+    // phase, because the stale handler still saw predictOptIn=false. (The sibling
+    // shortcut effect below already lists handleSelect for the same reason.)
+  }, [focusedIndex, resolved, showReasoning, event.options, handleSelect]);
 
   // UX2 — auto-focus the card when a draft decision is shown, so its keyboard
   // nav (↑↓/Enter, advertised in the footer) is live without a Tab/click first.
