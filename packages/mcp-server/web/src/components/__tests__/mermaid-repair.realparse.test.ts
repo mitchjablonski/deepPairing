@@ -13,12 +13,13 @@ import { repairMermaidSource } from "../MermaidDiagram";
  */
 let mermaid: typeof import("mermaid").default;
 
-// Importing the full mermaid bundle in the test env is slow (~15-30s), so give
-// the one-time load a generous timeout. The parse() calls themselves are fast.
+// Importing the full mermaid bundle in the test env is slow and, under a loaded
+// parallel run, the one-time load can spike well past 45s (observed a flake), so
+// give it a very generous timeout. The parse() calls themselves are fast.
 beforeAll(async () => {
   mermaid = (await import("mermaid")).default;
   mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-}, 45000);
+}, 120000);
 
 const parses = async (src: string): Promise<boolean> => {
   try {
