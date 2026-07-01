@@ -476,8 +476,17 @@ export function LedgerPanel({
   // in the list). Pre-CC2 the click registered, the drawer opened, but
   // nothing was highlighted — read as broken. Now we render an inline
   // acknowledgement row above the list explaining the situation.
+  // B4 — case/whitespace-insensitive match (mirrors the server's normalizeKey
+  // and the ConceptBadge lookup) so a deep-link with different casing still
+  // finds its row; seeded rows count too (EE4 dedup removes their cited
+  // duplicates, so pre-B4 a seeded concept never highlighted and the CC2
+  // orphan banner fired with misleading copy).
+  const conceptMatches = (a: string | undefined, b: string) =>
+    !!a && a.trim().toLowerCase().replace(/\s+/g, " ") === b.trim().toLowerCase().replace(/\s+/g, " ");
   const highlightInList =
-    highlightConcept && topCitedStances.some((s) => s.concept === highlightConcept);
+    highlightConcept &&
+    (topCitedStances.some((s) => conceptMatches(highlightConcept, s.concept)) ||
+      seededStances.some((s) => conceptMatches(highlightConcept, s.concept)));
   const highlightOrphan = highlightConcept && !highlightInList;
 
   return (
@@ -597,13 +606,17 @@ export function LedgerPanel({
               // affordance. Without this restoration, the seeded → real
               // citation causal-graph link was broken.
               const canJump = Boolean(s.sampleArtifactId && onJumpToArtifact);
+              // B4 — seeded rows participate in the deep-link highlight (they
+              // carry the stance pips ConceptBadge links from).
+              const isSeedHighlighted = conceptMatches(highlightConcept, s.concept);
+              const seedRing = isSeedHighlighted ? " ring-2 ring-accent-violet" : "";
               if (canJump) {
                 return (
-                  <li key={`seed:${s.concept}`}>
+                  <li key={`seed:${s.concept}`} ref={isSeedHighlighted ? highlightRef : undefined}>
                     <button
                       type="button"
                       onClick={() => onJumpToArtifact!(s.sampleArtifactId!)}
-                      className="block w-full text-left rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3 hover:border-accent-violet/40 hover:bg-accent-violet-dim/15 transition-colors"
+                      className={`block w-full text-left rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3 hover:border-accent-violet/40 hover:bg-accent-violet-dim/15 transition-colors${seedRing}`}
                       title={`Jump to a citing artifact (${s.sampleArtifactId})`}
                     >
                       {inner}
@@ -614,7 +627,8 @@ export function LedgerPanel({
               return (
                 <li
                   key={`seed:${s.concept}`}
-                  className="rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3"
+                  ref={isSeedHighlighted ? highlightRef : undefined}
+                  className={`rounded border border-accent-violet/20 bg-accent-violet-dim/5 p-3${seedRing}`}
                 >
                   {inner}
                 </li>
@@ -680,7 +694,7 @@ export function LedgerPanel({
                   </div>
                 </div>
               );
-              const isHighlighted = highlightConcept === s.concept;
+              const isHighlighted = conceptMatches(highlightConcept, s.concept);
               const ringClass = isHighlighted ? "ring-2 ring-accent-violet" : "";
               if (canJump) {
                 return (

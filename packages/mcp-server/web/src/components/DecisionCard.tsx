@@ -571,6 +571,13 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               onClick={() => !submitting && handleSelect(option.id)}
               onKeyDown={(e) => {
                 if (submitting) return;
+                // B4 review — mirror the container's native-listener tag guard
+                // (DV1): Enter/Space on a NESTED interactive control (concept
+                // badge, ledger deep-link, AskTrigger) must activate that
+                // control, not select the option. Without this, the card's
+                // preventDefault also suppressed the child button's Enter→click.
+                const tag = (e.target as HTMLElement | null)?.tagName;
+                if (tag === "BUTTON" || tag === "A") return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   handleSelect(option.id);
