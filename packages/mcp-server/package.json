@@ -38,7 +38,7 @@
     "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@deeppairing/shared": "workspace:*",

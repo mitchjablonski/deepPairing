@@ -179,3 +179,21 @@ describe("TurnIndicator — U2 agent liveness", () => {
     expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
   });
 });
+
+describe("B1 — the 'Your turn' pill is a jump button, not a dead label", () => {
+  it("clicking jumps to the first pending artifact and cycles on repeat clicks", async () => {
+    const user = userEvent.setup();
+    seedConnected();
+    seedArtifact({ id: "d1", status: "draft", title: "first" });
+    seedArtifact({ id: "d2", status: "draft", title: "second" });
+    render(<TurnIndicator />);
+
+    const pill = screen.getByRole("button", { name: /your turn/i });
+    await user.click(pill);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("d1");
+    await user.click(pill);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("d2");
+    await user.click(pill); // wraps
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("d1");
+  });
+});

@@ -182,6 +182,32 @@ function broadcast(sessionId: string, event: any): void {
   }
 }
 
+/**
+ * B1 — broadcast an event to EVERY connected client exactly once. The naive
+ * "loop sessions calling broadcast(sid, …)" pattern delivered N_sessions + 1
+ * copies to each global (no-session) client — broadcast() already fans out to
+ * globalClients — and recorded the metric N times. Session clients get the
+ * event stamped with their own sessionId (matching the old per-session sends);
+ * global clients get it once with sessionId: null.
+ */
+function broadcastAll(event: any): void {
+  for (const [sid, sessionClients] of wsClients) {
+    const data = JSON.stringify({ ...event, sessionId: sid });
+    for (const ws of sessionClients) {
+      try { (ws as any).send(data); } catch { sessionClients.delete(ws); }
+    }
+  }
+  const globalData = JSON.stringify({ ...event, sessionId: null });
+  for (const ws of globalClients) {
+    try { (ws as any).send(globalData); } catch { globalClients.delete(ws); }
+  }
+  try {
+    recordBroadcastMetric(projectRoot, "__all__", event);
+  } catch {
+    // Telemetry must never break a broadcast.
+  }
+}
+
 function getClientCount(): number {
   let count = globalClients.size;
   for (const clients of wsClients.values()) count += clients.size;
@@ -273,10 +299,9 @@ const publicRoutes = createHttpRoutes(
     if (sessionId) {
       broadcast(sessionId, event);
     } else {
-      // Broadcast to all sessions as fallback
-      for (const sid of sessions.keys()) {
-        broadcast(sid, event);
-      }
+      // No-session fallback: one copy per client (the old loop-over-sessions
+      // duplicated to global clients N times and multi-counted metrics).
+      broadcastAll(event);
     }
   },
   log,
@@ -334,7 +359,31 @@ app.get("/api/daemon-info", (c) => {
 // probeDaemonIdentity used by `deeppairing list`) and returns the peers,
 // including itself. This is a read-only discovery endpoint (no session data),
 // so it's exempt from the X-Project-Hash gate like /api/daemon-info.
+// B1 — the sweep is expensive (PORT_SPAN=128 parallel probes, and every live
+// peer daemon answers /api/daemon-info), and every visible tab polls this
+// endpoint. Uncached that's ~1,500 socket attempts/min per tab, cross-traffic
+// multiplying across daemons. Cache the sweep daemon-side so all tabs share one
+// sweep per TTL window; a switcher badge lagging ≤15s is imperceptible.
+const PROJECTS_SWEEP_TTL_MS = 15_000;
+let projectsSweepCache: { at: number; payload: unknown } | null = null;
+// Single-flight: concurrent requests during a sweep share the same promise
+// instead of each launching their own 128-probe fan-out.
+let projectsSweepInFlight: Promise<unknown> | null = null;
+
 app.get("/api/projects", async (c) => {
+  if (projectsSweepCache && Date.now() - projectsSweepCache.at < PROJECTS_SWEEP_TTL_MS) {
+    return c.json(projectsSweepCache.payload as any);
+  }
+  if (!projectsSweepInFlight) {
+    projectsSweepInFlight = sweepProjects().finally(() => {
+      projectsSweepInFlight = null;
+    });
+  }
+  const payload = await projectsSweepInFlight;
+  return c.json(payload as any);
+});
+
+async function sweepProjects(): Promise<unknown> {
   const { probeDaemonIdentity } = await import("./daemon-lifecycle.js");
   const probes: Array<Promise<{ port: number; identity: any | null }>> = [];
   for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
@@ -358,8 +407,10 @@ app.get("/api/projects", async (c) => {
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
-  return c.json({ projects, selfPort: boundPort, selfHash: daemonProjectHash });
-});
+  const payload = { projects, selfPort: boundPort, selfHash: daemonProjectHash };
+  projectsSweepCache = { at: Date.now(), payload };
+  return payload;
+}
 
 // AA3 — cooperative shutdown endpoint. The doctor's project-mismatch
 // remediation calls this BEFORE falling back to SIGTERM, so the squatter
@@ -908,15 +959,11 @@ async function main() {
           const t = new Date(f.at).getTime();
           if (!Number.isFinite(t) || t <= lastFireSeen) continue;
           lastFireSeen = t;
-          // Hook fires are global (not session-scoped); broadcast to every
-          // session so any open UI sees them.
-          for (const sid of sessions.keys()) {
-            broadcast(sid, { type: "hook_fired", fire: f });
-          }
-          // Also fan out to global clients (no session selected).
-          for (const ws of globalClients) {
-            try { (ws as any).send(JSON.stringify({ type: "hook_fired", fire: f })); } catch {}
-          }
+          // Hook fires are global (not session-scoped). broadcastAll sends to
+          // every session client + every global client exactly once (the old
+          // per-session broadcast() loop handed global tabs N_sessions + 1
+          // copies and multi-counted the metric).
+          broadcastAll({ type: "hook_fired", fire: f });
         }
       } catch { /* swallow — observability isn't load-bearing */ }
     };

@@ -100,7 +100,7 @@ loaded deepPairing's MCP server.
 ## Build / install fails on a fresh clone
 
 * **`pnpm install` fails with peer dependency warnings:** harmless on
-  Node 20+/pnpm 10+. The build still produces a working dist.
+  Node 22+/pnpm 10+. The build still produces a working dist.
 * **`pnpm build` succeeds but `node packages/mcp-server/dist/cli/init.js`
   errors:** check that `pnpm build` actually ran for the
   `@deeppairing/mcp-server` workspace. `pnpm --filter @deeppairing/mcp-server build`

@@ -19,6 +19,7 @@ export function TurnIndicator() {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const connected = useConnectionStore((s) => s.connected);
 
   const latestReasoningAction = useMemo(() => {
@@ -131,12 +132,27 @@ export function TurnIndicator() {
       parts.push(`${pendingPlans.length} plan${pendingPlans.length > 1 ? "s" : ""}`);
     }
 
+    // B1 — the strongest CTA in the app was a plain div: the user read "Your
+    // turn" then had to go hunt in the sidebar. Clicking jumps to the first
+    // pending artifact; repeated clicks cycle through them.
+    const jumpToPending = () => {
+      if (pending.length === 0) return;
+      const idx = pending.findIndex((a) => a.id === selectedArtifactId);
+      const next = pending[(idx + 1) % pending.length]; // idx=-1 → pending[0]
+      selectArtifact(next.id);
+    };
+
     return (
       <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber shrink-0">
+        <button
+          type="button"
+          onClick={jumpToPending}
+          title={pending.length > 1 ? "Jump to the next item waiting on you" : "Jump to the item waiting on you"}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber shrink-0 hover:brightness-110 transition-[filter] cursor-pointer"
+        >
           <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse" />
           Your turn — {parts.join(", ")}
-        </div>
+        </button>
         {questionsBadge}
       </div>
     );
