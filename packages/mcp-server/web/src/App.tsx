@@ -27,6 +27,7 @@ import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
 import { usePreloadErrorReload } from "./hooks/usePreloadErrorReload";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
+import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
 
 function App() {
   const { connected, connect, sessionId, activeSessions, switchSession, refreshSessions } = useConnectionStore();
@@ -83,6 +84,9 @@ function App() {
   // Mermaid resilience — sticky "reload" prompt when a lazy chunk fails to load
   // (daemon rebuilt/restarted → stale tab). See the hook for details.
   usePreloadErrorReload();
+
+  // B2 — "(2) Your turn — deepPairing" in the tab title while drafts wait.
+  useDocumentTitleBadge();
 
   // Fetch active sessions on mount, auto-connect to the first one (or to the
   // session named in ?session=... — used by `npx deeppairing demo` to land

@@ -324,10 +324,12 @@ describe("Daemon Routes", () => {
     expect(body.artifact.id).toBe("art_test_1");
     expect(body.artifact.type).toBe("research");
 
-    // Verify broadcast was called
-    expect(broadcasts).toHaveLength(1);
-    expect(broadcasts[0].sessionId).toBe(SESSION);
-    expect(broadcasts[0].event.type).toBe("artifact_created");
+    // Verify broadcast was called. B2 also emits a throttled agent_activity
+    // heartbeat on internal traffic — filter to the event under test rather
+    // than assuming the artifact_created is the ONLY broadcast.
+    const created = broadcasts.filter((b) => b.event.type === "artifact_created");
+    expect(created).toHaveLength(1);
+    expect(created[0].sessionId).toBe(SESSION);
   });
 
   it("returns artifacts for a session", async () => {
@@ -1200,5 +1202,30 @@ describe("DaemonClient.recordMetric — production wiring (real HTTP)", () => {
     const m = readMetrics(metricsRoot);
     expect(m.counts.preflightBlocks.total).toBe(1);
     expect(m.counts.preflightBlocks.bySource.team).toBe(1);
+  });
+});
+
+// --- B2: agent-activity heartbeat ---
+
+describe("B2 — agent_activity heartbeat on internal API traffic", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const heartbeats = () => broadcasts.filter((b) => b.event?.type === "agent_activity");
+
+  it("broadcasts ONE throttled agent_activity per session for a burst of internal calls", async () => {
+    await app.request(`/api/internal/sessions/s1/register`, j({}));
+    // Burst: several internal calls well inside the 5s throttle window.
+    await app.request(`/api/internal/sessions/s1/comments/unacknowledged`);
+    await app.request(`/api/internal/sessions/s1/comments/unacknowledged`);
+
+    const hb = heartbeats();
+    expect(hb).toHaveLength(1);
+    expect(hb[0].sessionId).toBe("s1");
+    expect(typeof hb[0].event.at).toBe("string");
+  });
+
+  it("failed requests do NOT emit a heartbeat (unauthenticated probes can't light the indicator)", async () => {
+    // No session registered → the lookup 404s; status >= 400 suppresses the beat.
+    await app.request(`/api/internal/sessions/ghost/comments/unacknowledged`);
+    expect(heartbeats()).toHaveLength(0);
   });
 });

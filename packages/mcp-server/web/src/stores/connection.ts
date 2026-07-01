@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
 import { apiGet, sessionHeaders, setCurrentHost, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
+import { isDraftAwaitingReview } from "../lib/pending";
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -42,6 +43,14 @@ interface ConnectionState {
    *  toast the user so they know any in-flight optimistic updates may
    *  have been lost. */
   daemonStartedAt: string | null;
+  /** B2 — ms timestamp of the last `agent_activity` heartbeat (the daemon
+   *  broadcasts one, throttled, on every internal API call the agent's
+   *  wrapper makes). Honest liveness — unlike artifact timestamps, it keeps
+   *  ticking during a long edit run between tool calls. */
+  agentActivityAt: number | null;
+  /** B2 — start of the current activity streak (a gap >60s starts a new
+   *  one). Drives the "Agent working · Nm" elapsed label. */
+  agentActiveSince: number | null;
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
@@ -61,6 +70,27 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   // in quick succession sees ONE pair-tempo pip, not five.
   let lastFeedbackToastAt = 0;
   const FEEDBACK_TOAST_DEBOUNCE_MS = 8000;
+
+  // B2 — draft-notification dedupe + burst suppression. Dedupe is by ARTIFACT
+  // ID (not event type): in daemon mode the MCP-side broadcast is a no-op, so
+  // decision_request/plan_review_request never reach the browser and drafts
+  // arrive only as artifact_created — but in standalone/test wiring BOTH can
+  // fire for the same artifact, and the id-set collapses them. The 5s burst
+  // window keeps an agent presenting several artifacts back-to-back (or a
+  // supersede re-broadcast) from firing N OS notifications — the tab-title
+  // badge carries the true count.
+  const notifiedArtifactIds = new Set<string>();
+  let lastDraftNotifyAt = 0;
+  const notifyDraft = (artifactId: string | undefined, body: string) => {
+    if (artifactId) {
+      if (notifiedArtifactIds.has(artifactId)) return;
+      notifiedArtifactIds.add(artifactId);
+    }
+    const now = Date.now();
+    if (now - lastDraftNotifyAt < 5_000) return;
+    lastDraftNotifyAt = now;
+    notifyIfUnfocused("deepPairing — your turn", body);
+  };
 
   function handleMessage(data: any) {
     // Import artifact store lazily to avoid circular deps
@@ -146,7 +176,41 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
         case "artifact_created":
           store.addArtifact(data.artifact);
+          // B2 — the turn-handoff has to reach a BACKGROUNDED tab for EVERY
+          // reviewable draft. Pre-B2 only decision_request/plan_review_request
+          // notified — and in daemon mode (the only production wiring) the
+          // MCP-side broadcast of those is a NO-OP, so in practice NOTHING
+          // notified. artifact_created is the daemon-broadcast event every
+          // draft flows through, so it's the one honest trigger; notifyDraft
+          // dedupes by artifact id against the dedicated events below (which
+          // still fire in standalone/test wiring).
+          if (data.artifact && isDraftAwaitingReview(data.artifact)) {
+            const label =
+              {
+                decision: "Decision needed",
+                plan: "Plan ready for review",
+                code_change: "Code change ready for review",
+                spec: "Spec ready for review",
+                research: "Findings ready for review",
+              }[data.artifact.type as string] ?? "Ready for review";
+            notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`);
+          }
           break;
+
+        case "agent_activity": {
+          // B2 — throttled heartbeat from the daemon on every internal API
+          // call the agent's wrapper makes. A gap >60s starts a new activity
+          // streak (check_feedback polls ~30s, so a live agent pings at least
+          // that often); agentActiveSince drives "Agent working · Nm".
+          const now = Date.now();
+          const prev = get().agentActivityAt;
+          set({
+            agentActivityAt: now,
+            agentActiveSince:
+              prev !== null && now - prev < 60_000 ? (get().agentActiveSince ?? now) : now,
+          });
+          break;
+        }
 
         case "artifact_updated":
           store.updateArtifact(data.artifactId, data.status);
@@ -168,18 +232,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           }));
           break;
 
+        // B2 — these only reach the browser in standalone/test wiring (the
+        // daemon-mode MCP broadcast is a no-op); artifact_created above is the
+        // production trigger. Routed through notifyDraft so the same artifact
+        // can't notify twice when both events DO fire.
         case "decision_request":
-          notifyIfUnfocused(
-            "deepPairing — Decision needed",
-            data.context ?? "The agent needs you to choose an approach",
+          notifyDraft(
+            data.artifactId,
+            `Decision needed: ${data.context ?? "the agent needs you to choose an approach"}`,
           );
           break;
 
         case "plan_review_request":
-          notifyIfUnfocused(
-            "deepPairing — Plan review",
-            `Review plan: ${data.title ?? "Implementation plan"}`,
-          );
+          notifyDraft(data.artifactId, `Plan ready for review: ${data.title ?? "Implementation plan"}`);
           break;
 
         case "preference_changed":
@@ -399,6 +464,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connected: false,
     sessionId: null,
     projectRoot: null,
+    agentActivityAt: null,
+    agentActiveSince: null,
     // II2.2 — seed projectHash from the daemon's HTML injection
     // (window.__dpProjectHash) so the VERY FIRST WS connect URL and mutation
     // fetch carry X-Project-Hash. Otherwise the fail-closed gate 403s the
@@ -485,7 +552,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           useArtifactStore.getState().reset();
         });
         (adapter as any).switchSession(sessionId);
-        set({ sessionId });
+        // B2 — drop the OLD session's heartbeat streak, or the TurnIndicator
+        // shows "Agent working · Nm" from session A for up to 45s on session B.
+        set({ sessionId, agentActivityAt: null, agentActiveSince: null });
       }
     },
 
@@ -519,7 +588,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       // 3. Repoint the shared base + identity, then build a fresh connection.
       setCurrentHost(host);
-      set({ adapter: null, connected: false, sessionId: null, projectHash: hash, daemonStartedAt: null });
+      set({
+        adapter: null,
+        connected: false,
+        sessionId: null,
+        projectHash: hash,
+        daemonStartedAt: null,
+        // B2 — the old project's heartbeat must not light the new one.
+        agentActivityAt: null,
+        agentActiveSince: null,
+      });
       get().connect();
       // 4. Refresh the active-sessions list against the new daemon.
       try {
