@@ -37,8 +37,9 @@ let renderSeq = 0;
  * meant a line break, and node/edge labels with punctuation — `()`, `#`, `:`,
  * `;` — left UNQUOTED, which Mermaid rejects. Applied ONLY after the raw source
  * fails to parse, so a valid diagram is never touched; a still-broken repair
- * just falls through to the source-code fallback. Validated against real Mermaid
- * (see the unit tests): it renders the class of diagrams that used to 404.
+ * just falls through to the source-code fallback. The transform is validated
+ * against the REAL Mermaid parser in mermaid-repair.realparse.test.ts (the
+ * MermaidDiagram unit tests mock mermaid, so they only check the string output).
  */
 export function repairMermaidSource(src: string): string {
   // Literal \n → <br/> (a real line break); normalize CRLF first.
@@ -50,8 +51,14 @@ export function repairMermaidSource(src: string): string {
   );
   // Quote labels containing chars Mermaid rejects unquoted, per delimiter.
   const NEEDS = /[()#:;<]/;
-  s = s.replace(/\[([^[\]"']*?)\]/g, (m, i: string) => (NEEDS.test(i) ? `["${i.trim()}"]` : m));
-  s = s.replace(/\{([^{}"']*?)\}/g, (m, i: string) => (NEEDS.test(i) ? `{"${i.trim()}"}` : m));
+  // The negative lookaheads keep the repair from STARTING a match on a shape
+  // sub-delimiter — cylinder `[( )]`, parallelogram `[/ /]`, trapezoid `[/ \]`,
+  // subroutine `[[ ]]`, hexagon `{{ }}`. Without them a shape whose label has
+  // `()`/`<` would be re-quoted as a plain rectangle: a *wrong-but-parseable*
+  // render, worse than the source fallback. Guarded, those shapes fall through
+  // to source (benign); plain rectangles / rhombus / edge labels still repair.
+  s = s.replace(/\[(?![([/\\])([^[\]"']*?)\]/g, (m, i: string) => (NEEDS.test(i) ? `["${i.trim()}"]` : m));
+  s = s.replace(/\{(?![{])([^{}"']*?)\}/g, (m, i: string) => (NEEDS.test(i) ? `{"${i.trim()}"}` : m));
   s = s.replace(/\|([^|"']*?)\|/g, (m, i: string) => (NEEDS.test(i) ? `|"${i.trim()}"|` : m));
   return s;
 }
