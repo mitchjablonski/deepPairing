@@ -135,20 +135,32 @@ daily Claude Code loop.
 
 ## Use it in Claude Code
 
-Install it as a plugin from this repo's marketplace:
+All paths run the same MCP server + companion UI (build the clone first:
+`pnpm install && pnpm build`). They differ in what's set up for you.
 
-```
-/plugin marketplace add mitchjablonski/deepPairing
-/plugin install deeppairing@deeppairing
+**Recommended — `init` sets up this project end-to-end:**
+
+```bash
+node packages/mcp-server/dist/cli/init.js init   # run inside your project
 ```
 
-Or run it straight from a clone without installing:
+Writes `.mcp.json` (so Claude Code auto-loads deepPairing — no launch flag),
+installs the PreToolUse **rejection-gate hook** + the checkpoint hooks, and drops
+the protocol preamble. It's the only path that turns the rejection gate on.
+
+**Prefer the plugin (slash commands + the up-front skill)?**
 
 ```bash
 claude --plugin-dir ./claude-plugin
 ```
 
-Then just work normally — *"Let's analyze the auth module"* — and Claude routes
+Adds `/deeppairing:start`, `/deeppairing:review`, etc. and the proactively-loaded
+`pairing-protocol` skill. (Needs `--plugin-dir` each launch. A one-command
+`/plugin marketplace add` install is planned once the server bundle ships /
+`@deeppairing/mcp-server` is on npm — it doesn't work yet.)
+
+Either way you get the tools, the companion UI, and an always-on first-call
+protocol preamble. Then just work normally — *"Let's analyze the auth module"* — and Claude routes
 findings, decisions, plans, and changes through the companion UI with structured
 evidence. You comment, pick, ask "why", request revisions; every rejection (if
 you publish) joins your cross-project ledger.
