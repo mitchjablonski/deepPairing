@@ -55,8 +55,14 @@ async function callTool(name: string, args: Record<string, any> = {}) {
     .join("");
   // IV10 — surface _meta so tests can assert on the new structured
   // error-code contract without breaking the existing { text, isError }
-  // call-site shape.
-  return { text, isError: result.isError, _meta: (result as any)._meta };
+  // call-site shape. B3 — surface structuredContent for the check_feedback
+  // outputSchema contract.
+  return {
+    text,
+    isError: result.isError,
+    _meta: (result as any)._meta,
+    structuredContent: (result as any).structuredContent,
+  };
 }
 
 describe("MCP Tool Handlers", () => {
@@ -793,6 +799,38 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Suggested action:");
     });
 
+    it("B3 — carries structuredContent mirroring the prose (status/suggestedAction/summary)", async () => {
+      // Activate SDK client-side outputSchema validation: after listTools(),
+      // the client THROWS if a check_feedback result omits structuredContent
+      // or fails the declared schema — so this test pins schema-validity.
+      await client.listTools();
+      // Empty session → clean proceed signal, machine-readable.
+      const empty = await callTool("check_feedback");
+      expect(empty.structuredContent).toMatchObject({ status: "proceed" });
+      expect(typeof (empty.structuredContent as any).suggestedAction).toBe("string");
+
+      // A pending draft + a question → status flips and the question is structured.
+      await callTool("present_findings", {
+        title: "Audit", summary: "s",
+        findings: [{ category: "security", title: "F", detail: "d", evidence: "e", significance: "high" }],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "q_1", artifactId: art.id, content: "why this?", author: "human",
+        intent: "question", target: { artifactId: art.id, findingIndex: 0 },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      const sc = res.structuredContent as any;
+      expect(sc.status).toBe("feedback");
+      expect(sc.summary.pending).toBe(1);
+      expect(sc.pendingArtifacts).toHaveLength(1);
+      expect(sc.questions).toHaveLength(1);
+      expect(sc.questions[0]).toMatchObject({ commentId: "q_1", findingIndex: 0 });
+      // The prose still carries the same info (back-compat surface).
+      expect(res.text).toContain("QUESTION");
+    });
+
     it("F1 — warns to WAIT while a code_change is still under review (never 'you may proceed')", async () => {
       // confidence "low" keeps it a draft (no terminal quick-approve) → routed to UI.
       await callTool("present_code_change", {
@@ -905,9 +943,11 @@ describe("MCP Tool Handlers", () => {
       setTimeout(() => {
         store.addComment({ id: "cmt_noise", artifactId: "art_other", content: "stray remark", author: "human" });
       }, 50);
-      const { text } = await callTool("check_feedback", { waitFor: "decision" });
-      expect(text).toContain("Still waiting on 'decision'");
-      expect(text).not.toContain("stray remark");
+      const res = await callTool("check_feedback", { waitFor: "decision" });
+      expect(res.text).toContain("Still waiting on 'decision'");
+      expect(res.text).not.toContain("stray remark");
+      // B3 — the scoped still-waiting path carries the structured mirror too.
+      expect(res.structuredContent).toMatchObject({ status: "waiting", waitFor: "decision" });
     });
 
     it("BB3 — waitFor='comments' returns immediately when there's an unack comment, even with a draft decision", async () => {

@@ -8,37 +8,28 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { nanoid } from "nanoid";
 import type { IStore, RejectedApproach } from "../store/store-interface.js";
-import { buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { getGlobalStore, deriveStance } from "../store/global-store.js";
-import { postPrReview, GhMissingError, GhNotAuthedError } from "../github/post-review.js";
-import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "./tasks-probe.js";
 import { buildFirstCallHint } from "./first-call-hint.js";
 import {
   tryElicit as tryElicitHelper,
   preflightRejectedApproaches as preflightHelper,
   SessionNameLatch,
   getPassiveFeedback as getPassiveFeedbackHelper,
-  notifyResourcesListChanged,
 } from "./tool-helpers.js";
 import { handleLogReasoning } from "./tools/log-reasoning.js";
 import { handleExportSession } from "./tools/export-session.js";
 import { handlePresentFindings } from "./tools/present-findings.js";
 import { handlePresentOptions } from "./tools/present-options.js";
+import { handleCheckFeedback } from "./tools/check-feedback.js";
+import { handleAnswerQuestion } from "./tools/answer-question.js";
+import { handleReviseArtifact } from "./tools/revise-artifact.js";
+import { handlePostPrReview } from "./tools/post-pr-review.js";
 import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handleRecall } from "./tools/recall.js";
-import type { ToolContext, ToolResult } from "./tools/types.js";
-import {
-  validatePresentFindingsInput,
-  validatePresentOptionsInput,
-  validatePresentSpecInput,
-  validatePresentPlanInput,
-  validatePresentCodeChangeInput,
-  validateLogReasoningInput,
-} from "./validate-tool-input.js";
+import type { ToolContext } from "./tools/types.js";
 
 /**
  * U0.2 — schema for the quick-approve elicitation form.
@@ -67,34 +58,6 @@ import { matchesGlob as _matchesGlob } from "./preflight-validator.js";
 export const matchesGlob = _matchesGlob;
 
 type BroadcastFn = (event: any) => void;
-
-/** F3 — `revise_artifact mode='supersede'` must validate its new content with
- *  the SAME strict validator the original present_* tool used, keyed by the
- *  artifact's type, so a revision can't persist a shape present_* would reject.
- *  Types without a present_* validator (none today) simply skip the check. */
-type SupersedeValidator = (args: any) => { ok: true } | { ok: false; error: ToolResult };
-const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
-  research: validatePresentFindingsInput,
-  spec: validatePresentSpecInput,
-  plan: validatePresentPlanInput,
-  decision: validatePresentOptionsInput,
-  code_change: validatePresentCodeChangeInput,
-  reasoning: validateLogReasoningInput,
-};
-
-/**
- * F1 — the draft artifact types that make check_feedback WAIT for the human and
- * count toward "pending". These MUST stay in sync across the long-poll gate, the
- * pendingCount/pendingArts tally, and the suggestedAction branch: pre-F1
- * `code_change` was in the gate but absent from the others, so a lone pending
- * code_change made check_feedback long-poll and then return "you may proceed"
- * while the diff was still unreviewed — defeating the per-edit checkpoint.
- */
-const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change"] as const;
-/** WAITING-line subset for the generic draft list: decisions get their own
- *  dedicated WAITING line (getPendingDecisions), so they're excluded here.
- *  (Matches the prior research/spec/plan list, plus code_change.) */
-const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"] as const;
 
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
@@ -494,6 +457,84 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               description: "Scope the poll to a specific feedback type. Default 'any'.",
             },
           },
+        },
+        // B3 — machine-readable mirror of the prose response (structuredContent).
+        // Clients that support structured tool output can branch on `status` /
+        // `suggestedAction` instead of prose-parsing the status blob.
+        outputSchema: {
+          type: "object" as const,
+          properties: {
+            status: {
+              type: "string",
+              enum: ["feedback", "waiting", "proceed"],
+              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear.",
+            },
+            suggestedAction: { type: "string" },
+            waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
+            summary: {
+              type: "object",
+              properties: {
+                totalArtifacts: { type: "number" },
+                approved: { type: "number" },
+                pending: { type: "number" },
+                newComments: { type: "number" },
+                autonomy: { type: "string" },
+              },
+            },
+            pendingArtifacts: {
+              type: "array",
+              items: { type: "object", properties: { id: { type: "string" }, type: { type: "string" }, title: { type: "string" } } },
+            },
+            questions: {
+              type: "array",
+              description: "Unanswered human questions — answer via answer_question with the commentId.",
+              items: {
+                type: "object",
+                properties: {
+                  commentId: { type: "string" },
+                  artifactId: { type: "string" },
+                  content: { type: "string" },
+                  lineStart: { type: "number" },
+                  findingIndex: { type: "number" },
+                },
+              },
+            },
+            comments: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  artifactId: { type: "string" },
+                  kind: { type: "string", enum: ["directive", "comment", "suggestion"] },
+                  content: { type: "string" },
+                  suggestion: { type: "string" },
+                  filePath: { type: "string" },
+                  lineStart: { type: "number" },
+                  findingIndex: { type: "number" },
+                },
+              },
+            },
+            decisions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  decisionId: { type: "string" },
+                  artifactId: { type: "string" },
+                  context: { type: "string" },
+                  selectedOptionId: { type: "string" },
+                  selectedTitle: { type: "string" },
+                  reasoning: { type: "string" },
+                },
+              },
+            },
+            rejected: {
+              type: "array",
+              items: { type: "object", properties: { id: { type: "string" }, type: { type: "string" }, title: { type: "string" } } },
+            },
+          },
+          required: ["status", "suggestedAction"],
         },
       },
       {
@@ -1038,6 +1079,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
   // once. Comment-independent (catches feedback-less rejects) and self-limiting
   // (a rejected artifact is terminal — revise mints a new id).
   const reportedRejectedVerdicts = new Set<string>();
+  // B3 — plan verdicts already reflected in structuredContent.status (the
+  // prose keeps repeating them; the machine-readable status must decay).
+  const reportedPlanVerdicts = new Set<string>();
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: rawArgs } = request.params;
@@ -1090,7 +1134,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       state: {
         get checkFeedbackPollCount() { return checkFeedbackPollCount; },
         set checkFeedbackPollCount(v) { checkFeedbackPollCount = v; },
-      } as any,
+        reportedRejectedVerdicts,
+        reportedPlanVerdicts,
+      },
+      // B3 — per-request progress token for check_feedback's heartbeats.
+      progressToken: request.params._meta?.progressToken,
     };
 
     const result = await (async () => { switch (name) {
@@ -1112,404 +1160,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       case "present_code_change":
         return handlePresentCodeChange(ctx, args);
 
-      case "check_feedback": {
-        // BB3 — `waitFor` scopes which feedback signal counts as "ready".
-        // The agent can pin its poll to the artifact it just presented
-        // (e.g. waitFor='decision' after present_options) so an unrelated
-        // comment elsewhere doesn't wake the poll prematurely. Default
-        // 'any' preserves the historical broad behavior.
-        const waitForRaw = typeof args.waitFor === "string" ? args.waitFor : "any";
-        const waitForScope: "any" | "comments" | "decision" | "plan_review" | "artifact_status" =
-          (["any", "comments", "decision", "plan_review", "artifact_status"] as const).includes(
-            waitForRaw as any,
-          )
-            ? (waitForRaw as any)
-            : "any";
-
-        // If no immediate feedback exists, long-poll for up to 30 seconds
-        const unackComments = await store.getUnacknowledgedComments();
-        const resolvedDecs = await store.getResolvedDecisions();
-        const allArtsForScope = await store.getArtifacts();
-        const decidedPlans = allArtsForScope.filter(
-          (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
-        );
-        const decidedAny = allArtsForScope.filter(
-          (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
-        );
-
-        const hasImmediateFor = (scope: typeof waitForScope): boolean => {
-          switch (scope) {
-            case "comments": return unackComments.length > 0;
-            case "decision": return resolvedDecs.length > 0;
-            case "plan_review": return decidedPlans.length > 0;
-            case "artifact_status": return decidedAny.length > 0 || resolvedDecs.length > 0;
-            case "any":
-            default:
-              return unackComments.length > 0 || resolvedDecs.length > 0;
-          }
-        };
-        const hasImmediate = hasImmediateFor(waitForScope);
-
-        if (!hasImmediate) {
-          // Check if there are draft artifacts — if so, wait for human action
-          const allArts = allArtsForScope;
-          const hasDrafts = allArts.some(
-            (a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type),
-          );
-          if (hasDrafts) {
-            // Send progress heartbeats during the wait to keep the connection alive
-            const progressToken = request.params._meta?.progressToken;
-            let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-            if (progressToken != null) {
-              let tick = 0;
-              heartbeatTimer = setInterval(() => {
-                tick++;
-                server.notification({
-                  method: "notifications/progress",
-                  params: { progressToken, progress: tick, total: 3, message: "Waiting for human review..." },
-                });
-              }, 10000);
-            }
-
-            // Long-poll: wait up to 30s for feedback to arrive
-            await store.waitForFeedback(30000);
-
-            if (heartbeatTimer) clearInterval(heartbeatTimer);
-          }
-        }
-
-        const parts: string[] = [];
-
-        // Track consecutive empty polls for escalation
-        const newComments = await store.getUnacknowledgedComments();
-        const newResolved = await store.getResolvedDecisions();
-        const hasNewFeedback = newComments.length > 0 || newResolved.length > 0;
-        if (hasNewFeedback) {
-          checkFeedbackPollCount = 0;
-        } else {
-          checkFeedbackPollCount++;
-        }
-
-        // CC5 — respect waitFor scope post-wake. BB3 added the entry-guard
-        // branching but waitForFeedback still wakes on ANY feedback signal,
-        // and the response below assembles ALL comments + decisions. So an
-        // agent calling waitFor='decision' could be woken by an unrelated
-        // comment, fall through, and get a response stuffed with comments
-        // it explicitly said it wasn't waiting for. Re-check the scope with
-        // the fresh post-wake data; if it's narrow and unsatisfied, return
-        // a focused "still waiting" status instead of dumping out-of-scope
-        // chatter at the agent.
-        if (waitForScope !== "any") {
-          const allArtsPostWake = await store.getArtifacts();
-          const decidedPlansPostWake = allArtsPostWake.filter(
-            (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
-          );
-          const decidedAnyPostWake = allArtsPostWake.filter(
-            (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
-          );
-          const scopeSatisfied = (() => {
-            switch (waitForScope) {
-              case "comments": return newComments.length > 0;
-              case "decision": return newResolved.length > 0;
-              case "plan_review": return decidedPlansPostWake.length > 0;
-              case "artifact_status": return decidedAnyPostWake.length > 0 || newResolved.length > 0;
-              default: return true;
-            }
-          })();
-          if (!scopeSatisfied) {
-            return {
-              content: [{
-                type: "text",
-                text: `Still waiting on '${waitForScope}'. Nothing matching that scope arrived during the 30s poll. Call check_feedback again with the same waitFor (or with waitFor='any' to drain unrelated chatter).`,
-              }],
-            };
-          }
-        }
-
-        // --- Session status preamble ---
-        const allArtifacts = await store.getArtifacts();
-        const totalArtifacts = allArtifacts.length;
-        const approvedCount = allArtifacts.filter((a) => a.status === "approved").length;
-        const pendingCount = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type)).length;
-        const allComments = await store.getUnacknowledgedComments();
-        const totalComments = allComments.length;
-        const autonomyLabel = await store.getAutonomyLevel();
-
-        // FN2 — artifacts the human REJECTED that check_feedback hasn't reported
-        // yet. Without this, suggestedAction falls through to "you may proceed"
-        // right after a human rejects a code_change/spec/research (only decisions
-        // & plans had verdict reporting). Comment-independent (a feedback-less
-        // reject still triggers it) and reported exactly once via the
-        // reportedRejectedVerdicts set.
-        const freshlyRejected = allArtifacts.filter(
-          (a) =>
-            a.status === "rejected" &&
-            ["code_change", "spec", "research"].includes(a.type) &&
-            !reportedRejectedVerdicts.has(a.id),
-        );
-        for (const a of freshlyRejected) reportedRejectedVerdicts.add(a.id);
-
-        // Find oldest pending artifact age
-        let oldestPendingAge = "";
-        const pendingArts = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type));
-        if (pendingArts.length > 0) {
-          const oldestMs = Date.now() - new Date(pendingArts[0].createdAt).getTime();
-          const mins = Math.floor(oldestMs / 60000);
-          const secs = Math.floor((oldestMs % 60000) / 1000);
-          oldestPendingAge = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-        }
-
-        // Determine suggested action
-        let suggestedAction = "You may proceed with implementation.";
-        if (freshlyRejected.length > 0) {
-          suggestedAction = `Do NOT apply — the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
-        } else if (pendingArts.some((a) => a.type === "code_change")) {
-          suggestedAction = "Wait for the code change review before applying the edit.";
-        } else if (pendingArts.some((a) => a.type === "decision")) {
-          suggestedAction = "Wait for decision selection before proceeding.";
-        } else if (pendingArts.some((a) => a.type === "plan")) {
-          suggestedAction = "Wait for plan approval before implementing.";
-        } else if (pendingArts.some((a) => a.type === "spec")) {
-          suggestedAction = "Wait for spec approval before planning implementation.";
-        } else if (pendingArts.some((a) => a.type === "research")) {
-          suggestedAction = "Wait for findings review before proposing solutions.";
-        }
-
-        parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
-
-        // Unacknowledged comments (reuse the single drain snapshot fetched above)
-        const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
-        const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
-
-        // Session-level directives (free-form messages from human)
-        if (sessionMessages.length > 0) {
-          await store.acknowledgeComments(sessionMessages.map((c) => c.id));
-          const formatted = sessionMessages.map((c) => `- ${c.content}`).join("\n");
-          parts.push(`🎯 Human directive:\n${formatted}\n\nAdjust your approach based on this guidance.`);
-        }
-
-        // Artifact-specific comments — split questions (unanswered) out first
-        // since they carry a response obligation the agent can honor with
-        // answer_question. Regular comments / suggestions follow.
-        const artifactCommentsSorted = artifactComments.slice().sort((a, b) => {
-          const aIsQ = (a as any).intent === "question" && !(a as any).answeredByCommentId ? 0 : 1;
-          const bIsQ = (b as any).intent === "question" && !(b as any).answeredByCommentId ? 0 : 1;
-          return aIsQ - bIsQ;
-        });
-        if (artifactCommentsSorted.length > 0) {
-          await store.acknowledgeComments(artifactCommentsSorted.map((c) => c.id));
-          const questionLines: string[] = [];
-          const otherLines: string[] = [];
-          for (const c of artifactCommentsSorted) {
-            let loc = c.target.artifactId;
-            if ((c.target as any).lineStart) loc += `:${(c.target as any).lineStart}`;
-            if ((c.target as any).findingIndex != null) loc += ` (finding #${(c.target as any).findingIndex + 1})`;
-
-            if ((c as any).intent === "question" && !(c as any).answeredByCommentId) {
-              questionLines.push(
-                `- ❓ QUESTION [${loc}] ${c.content}\n    → Answer via answer_question with commentId="${c.id}"`,
-              );
-              continue;
-            }
-            if ((c.target as any).suggestion) {
-              const filePath = (c.target as any).filePath ?? "unknown";
-              const line = (c.target as any).lineStart ?? "?";
-              otherLines.push(`- [SUGGESTION for ${filePath}:${line}] Replace with:\n    ${(c.target as any).suggestion}`);
-              continue;
-            }
-            otherLines.push(`- [${loc}] ${c.content}`);
-          }
-          if (questionLines.length > 0) {
-            parts.push(`Human questions (${questionLines.length}) — answer these before proceeding:\n${questionLines.join("\n")}`);
-          }
-          if (otherLines.length > 0) {
-            parts.push(`Human comments (${otherLines.length}):\n${otherLines.join("\n")}`);
-          }
-        }
-
-        // FN2 — explicit rejection verdict for non-plan/non-decision artifacts
-        // (those don't have a dedicated verdict path). The reason is in the
-        // human-comments block above; this makes the verdict unmissable so the
-        // agent doesn't apply a rejected change.
-        if (freshlyRejected.length > 0) {
-          const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
-          parts.push(
-            `❌ REJECTED (${freshlyRejected.length}): ${list}\nThe human rejected ${freshlyRejected.length === 1 ? "this" : "these"} — do NOT apply. Revise the approach or propose a different one (see their comment above for why).`,
-          );
-        }
-
-        // Resolved decisions (acknowledge so they don't repeat)
-        const resolved = await store.getResolvedDecisions();
-        if (resolved.length > 0) {
-          await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
-          const formattedDecisions: string[] = [];
-          for (const d of resolved) {
-            const option = d.options.find((o: any) => o.id === d.response?.optionId);
-            if (option) {
-              const approvedDescription = `${d.context}: ${option.title}`;
-              // AA1 — concept.name (from Y5) is the cross-project ledger key.
-              // Pre-AA1 we passed option.description here, which is prose
-              // and broke compounding (every project minted unique long
-              // keys instead of bucketing under e.g. "argon2id for password
-              // hashing"). Fall back to description for older agents that
-              // don't supply concept.
-              const approvedConcept: string | undefined =
-                (option as any)?.concept?.name ?? option?.description ?? undefined;
-              await store.recordApprovedPattern({
-                description: approvedDescription,
-                concept: approvedConcept,
-              });
-              broadcast({
-                type: "ledger_write",
-                kind: "approved",
-                description: approvedDescription,
-                concept: approvedConcept,
-                sourceArtifactId: d.artifactId,
-              });
-              const rejected = d.options.filter((o: any) => o.id !== d.response?.optionId);
-              for (const rej of rejected) {
-                const rejectedDescription = `${d.context}: ${rej.title}`;
-                // AA1 — read concept from the REJECTED option, not the
-                // winning one. Each option carries its own pattern; the
-                // rejection should compound under the rejected option's
-                // concept, not the winner's.
-                const rejectedConcept: string | undefined =
-                  (rej as any)?.concept?.name ?? rej?.description ?? undefined;
-                // SP2 — per-option rejection reason. Pre-SP2 every rejected
-                // option was stamped with the human's single overall
-                // pick-reasoning ("why I chose the winner"), so B and C — often
-                // rejected for DIFFERENT reasons — compounded the same blurred
-                // signal in the ledger. Prefer THIS option's own cons (its
-                // specific "why it's the worse fit"); keep the winner + the
-                // human's reasoning as shared context when present.
-                const optionCons: string[] = Array.isArray((rej as any)?.cons)
-                  ? (rej as any).cons.filter((x: unknown) => typeof x === "string" && x.trim())
-                  : [];
-                const pickContext = d.response?.reasoning
-                  ? ` — picked "${option.title}": ${d.response.reasoning}`
-                  : "";
-                const composedReason = optionCons.length > 0
-                  ? `${optionCons.join("; ")}${pickContext}`
-                  : d.response?.reasoning;
-                // SP2 — bound the composed reason so a verbose option (many cons
-                // + long reasoning) doesn't crowd the preflight memory's
-                // contextual budget. Display/recall only; matching is on
-                // description/concept, so truncation is lossless for the gate.
-                const rejectReason =
-                  composedReason && composedReason.length > 240
-                    ? `${composedReason.slice(0, 237)}…`
-                    : composedReason;
-                await store.recordRejectedApproach({
-                  description: rejectedDescription,
-                  reason: rejectReason,
-                  sourceArtifactId: d.artifactId,
-                  concept: rejectedConcept,
-                });
-                broadcast({
-                  type: "ledger_write",
-                  kind: "rejected",
-                  description: rejectedDescription,
-                  concept: rejectedConcept,
-                  reason: rejectReason,
-                  sourceArtifactId: d.artifactId,
-                });
-              }
-              // O7: high-stakes decisions also fire a "decision_resolved_hero"
-              // event so the UI can toast the captured prediction — otherwise
-              // the prediction disappears into the decision record.
-              const stakes = (d as any).stakes ?? (d as any).request?.stakes;
-              if (stakes === "high" && d.response?.predictedOutcome) {
-                broadcast({
-                  type: "decision_resolved_hero",
-                  artifactId: d.artifactId,
-                  context: d.context,
-                  chosenTitle: option.title,
-                  predictedOutcome: d.response.predictedOutcome,
-                  confidence: (d.response as any).confidence,
-                });
-              }
-            }
-            formattedDecisions.push(`- Decision "${d.context}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
-          }
-          parts.push(`Decision selections:\n${formattedDecisions.join("\n")}`);
-        }
-
-        // Plan review verdicts
-        const pendingPlans = await store.getPendingPlanReviews();
-        const planArtifacts = (await store.getArtifacts()).filter((a) => a.type === "plan");
-        const reviewedPlans: string[] = [];
-        for (const a of planArtifacts) {
-          const verdict = await store.getPlanReviewVerdict(a.id);
-          if (!verdict) continue;
-          reviewedPlans.push(`- Plan "${a.title}": ${verdict.verdict}${verdict.feedback ? ` (feedback: ${verdict.feedback})` : ""}`);
-        }
-        if (reviewedPlans.length > 0) {
-          parts.push(`Plan reviews:\n${reviewedPlans.join("\n")}`);
-        }
-
-        // Check for draft artifacts still awaiting human review
-        const draftArtifacts = (await store.getArtifacts()).filter(
-          (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
-        );
-        if (draftArtifacts.length > 0) {
-          const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
-          parts.push(`⏳ WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
-        }
-
-        const pendingDec = await store.getPendingDecisions();
-        if (pendingDec.length > 0) {
-          parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
-        }
-        if (pendingPlans.length > 0) {
-          parts.push(`⏳ WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);
-        }
-
-        // Session memory is delivered once on the very first tool call (see
-        // firstCallHint above). Intentionally NOT repeated here — mixing
-        // WAITING signals with past-violation warnings creates contradictory
-        // imperatives ("keep polling" vs "fix the violation now"). Pre-flight
-        // validation in present_* tools is the enforcement point.
-
-        // Always include autonomy preference
-        const autonomy = await store.getAutonomyLevel();
-        if (autonomy !== "supervised") {
-          parts.push(`Human autonomy preference: ${autonomy}. ${
-            autonomy === "balanced"
-              ? "Skip findings for simple tasks. Present options only for genuine architectural choices."
-              : "Proceed with recommended options. The human will review after. Only present decisions for high-risk or irreversible changes."
-          }`);
-        }
-
-        // Engagement hint (only in balanced/autonomous mode, after some reviews)
-        const metrics = await store.getEngagementMetrics();
-        if (autonomy !== "supervised" && metrics.avgReviewLatencyMs > 0) {
-          const avgSecs = Math.round(metrics.avgReviewLatencyMs / 1000);
-          const hint = avgSecs < 30
-            ? `Human reviewing quickly (avg ${avgSecs}s) — safe to present more artifacts without batching.`
-            : avgSecs > 300
-              ? `Human taking longer on reviews (avg ${Math.round(avgSecs / 60)}m) — consider batching related findings together.`
-              : null;
-          if (hint) {
-            parts.push(`Engagement: ${hint}`);
-          }
-        }
-
-        // Escalation hint after repeated empty polls
-        if (checkFeedbackPollCount >= 3 && pendingCount > 0) {
-          parts.push(`⚠️ No human response after ${checkFeedbackPollCount} checks (~${checkFeedbackPollCount * 30}s). The human may not have the companion UI open.\nMention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
-        }
-
-        // If only the preamble exists (no feedback, no waits), give a clean proceed signal
-        if (parts.length === 1) {
-          return {
-            content: [{ type: "text", text: parts[0] }],
-          };
-        }
-
-        return {
-          content: [{ type: "text", text: parts.join("\n\n") }],
-        };
-      }
+      case "check_feedback":
+        // B3 — extracted to mcp/tools/check-feedback.ts (the last big inline
+        // case, ~405 lines). Also gained structuredContent (see the tool
+        // file) — the outputSchema lives on the ListTools entry above.
+        return handleCheckFeedback(ctx, args);
 
       // III12 — case "request_horizon_check" removed. The workflow
       // (post a question on an artifact with a templated horizon prompt)
@@ -1517,270 +1172,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       // template as the question text. The deeppairing.md skill carries
       // the templates so the LLM still has them available.
 
-      case "answer_question": {
-        const commentId = String(args?.commentId ?? "").trim();
-        const answer = String(args?.answer ?? "").trim();
-        if (!commentId || !answer) {
-          return {
-            content: [{ type: "text", text: "answer_question requires commentId and answer." }],
-            isError: true,
-          };
-        }
+      case "answer_question":
+        // B3 — extracted to mcp/tools/answer-question.ts.
+        return handleAnswerQuestion(ctx, args);
 
-        // Some stores may not yet implement getComment / markCommentAnswered
-        // (e.g., a future fake). Guard so the tool still works with a plain
-        // IStore.
-        // AA7b — getComment is required on IStore; cast was dead weight.
-        const parent = await store.getComment(commentId);
-        if (!parent) {
-          return {
-            content: [{ type: "text", text: `answer_question: no comment with id ${commentId}.` }],
-            isError: true,
-          };
-        }
-
-        const answerId = `cmt_${nanoid(10)}`;
-        const codeRefs = Array.isArray(args?.evidence)
-          ? args.evidence
-              .filter((e: any) => e && typeof e === "object")
-              .map((e: any) => ({
-                filePath: String(e.filePath ?? ""),
-                lineStart: Number(e.lineStart ?? 1),
-                lineEnd: Number(e.lineEnd ?? e.lineStart ?? 1),
-                snippet: e.snippet ? String(e.snippet) : undefined,
-              }))
-              .filter((e: any) => e.filePath)
-          : undefined;
-
-        // FN1 — pass codeReferences as a first-class param so it survives the
-        // DaemonClient HTTP round-trip in production. Pre-FN1 it was mutated
-        // onto the returned object, which is a throwaway copy in daemon mode →
-        // the agent's code evidence never reached the store or the UI.
-        const answerComment = await store.addComment({
-          id: answerId,
-          artifactId: parent.target?.artifactId ?? "__session__",
-          content: answer,
-          author: "agent",
-          target: parent.target ?? { artifactId: "__session__" },
-          parentCommentId: commentId,
-          ...(codeRefs && codeRefs.length > 0 ? { codeReferences: codeRefs } : {}),
-        } as any);
-
-        // AA7b — markCommentAnswered is required on IStore.
-        await store.markCommentAnswered(commentId, answerId);
-
-        broadcast({ type: "comment_added", comment: answerComment });
-        // O7: distinct event so the UI can toast the answer moment (otherwise
-        // it just blends into the artifact's comment thread and the human
-        // might not notice their question was picked up).
-        broadcast({
-          type: "question_answered",
-          questionId: commentId,
-          answerId,
-          artifactId: parent.target?.artifactId,
-          answerExcerpt: answer.slice(0, 120),
-        });
-        return {
-          content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await getPassiveFeedback()}` }],
-        };
-      }
-
-      case "revise_artifact": {
-        const artifactId = String(args?.artifactId ?? "").trim();
-        const mode = args?.mode as "supersede" | "retract" | "obsolete" | undefined;
-        const reason = String(args?.reason ?? "").trim();
-        if (!artifactId || !reason || (mode !== "supersede" && mode !== "retract" && mode !== "obsolete")) {
-          return {
-            content: [{ type: "text", text: "revise_artifact requires artifactId, mode ('supersede' | 'retract' | 'obsolete'), and reason." }],
-            isError: true,
-          };
-        }
-
-        if (mode === "supersede") {
-          const content = (args?.content && typeof args.content === "object") ? args.content : null;
-          if (!content) {
-            return {
-              content: [{ type: "text", text: "revise_artifact with mode='supersede' requires a `content` object (same shape the original present_* tool accepts)." }],
-              isError: true,
-            };
-          }
-          const all = await store.getArtifacts();
-          const old = all.find((a) => a.id === artifactId);
-          if (!old) {
-            return {
-              content: [{ type: "text", text: `revise_artifact: no artifact with id ${artifactId}.` }],
-              isError: true,
-            };
-          }
-          // F5 — don't supersede a CLOSED artifact. Beyond already-superseded/
-          // retracted, resurrecting a 'rejected' or 'obsolete' artifact into a
-          // fresh v(N+1) draft re-opens work the human deliberately closed (and
-          // re-queues a pending review). Only live artifacts can be revised.
-          if (["superseded", "retracted", "rejected", "obsolete"].includes(old.status)) {
-            return {
-              content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${old.status} — a closed artifact can't be superseded. Present a new artifact instead.` }],
-              isError: true,
-            };
-          }
-
-          // F3 — route the new content through the SAME strict validator the
-          // original present_* tool uses, keyed on the artifact type. Pre-this,
-          // supersede only checked `typeof content === "object"`, so a revision
-          // could persist a malformed shape that present_* would have rejected
-          // (defeating the "bad shape never lands on disk" invariant). The
-          // validators read fields off one args object, so merge in the title.
-          const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
-          if (supersedeValidator) {
-            const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
-            if (!v.ok) return v.error;
-          }
-
-          const title = String(args?.title ?? old.title);
-          const newId = `art_${nanoid(10)}`;
-          // F1 — a superseded decision needs a fresh server-minted decisionId
-          // baked into content BEFORE persistence. The supersede input shape
-          // (present_options) carries none, so without this the new decision had
-          // no DecisionRecord and the human's later selection was silently
-          // dropped (resolve no-ops → no resolved report, no ledger learning).
-          if (old.type === "decision" && Array.isArray((content as any).options)) {
-            (content as any).decisionId = `dec_${nanoid(10)}`;
-            if ((content as any).stakes === undefined && (old.content as any)?.stakes !== undefined) {
-              (content as any).stakes = (old.content as any).stakes;
-            }
-          }
-          const newArtifact = await store.createArtifact({
-            id: newId,
-            type: old.type,
-            title,
-            content: content as Record<string, unknown>,
-            agentReasoning: reason,
-            parentId: old.id,
-            version: old.version + 1,
-          });
-          await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
-          await maybeUpdateTaskStatus(server, old.id, store);
-
-          await store.addComment({
-            id: `cmt_${nanoid(10)}`,
-            artifactId: old.id,
-            content: `Superseded by ${newId}: ${reason}`,
-            author: "agent",
-          });
-
-          if (old.type === "decision" && (content as any).options && (content as any).decisionId) {
-            await store.recordDecisionRequest({
-              decisionId: (content as any).decisionId,
-              artifactId: newId,
-              context: (content as any).context ?? title,
-              options: (content as any).options,
-              stakes: (content as any).stakes,
-            } as any);
-          }
-          if (old.type === "plan") {
-            await store.recordPlanReview(newId);
-          }
-
-          broadcast({ type: "artifact_created", artifact: newArtifact });
-          broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
-          // HH10 — supersede creates a new resource AND retires the old
-          // one's content. Both are list-changing events.
-          notifyResourcesListChanged(server);
-
-          return {
-            content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review.${await getPassiveFeedback()}` }],
-          };
-        }
-
-        // mode === "retract" | "obsolete" — both close a still-open artifact
-        // with no replacement. retract = "shouldn't have presented it";
-        // obsolete = "valid, but overcome by new information / I've moved on".
-        const artifacts = await store.getArtifacts();
-        const artifact = artifacts.find((a) => a.id === artifactId);
-        if (!artifact) {
-          return {
-            content: [{ type: "text", text: `revise_artifact: no artifact with id ${artifactId}.` }],
-            isError: true,
-          };
-        }
-        if (artifact.status !== "draft" && artifact.status !== "reviewing") {
-          return {
-            content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` }],
-            isError: true,
-          };
-        }
-        const isObsolete = mode === "obsolete";
-        const newStatus = isObsolete ? "obsolete" : "retracted";
-        await store.updateArtifactStatus(artifactId, newStatus, isObsolete ? "agent_obsolete" : "agent_retract");
-        await maybeUpdateTaskStatus(server, artifactId, store);
-        await store.addComment({
-          id: `cmt_${nanoid(10)}`,
-          artifactId,
-          content: `${isObsolete ? "Overcome by new information" : "Retracted"}: ${reason}`,
-          author: "agent",
-        });
-        broadcast({ type: "artifact_updated", artifactId, status: newStatus });
-        return {
-          content: [{ type: "text", text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) — it's off the human's review queue` : `Retracted ${artifactId}`}. Continue your workflow — call check_feedback or present a revised artifact.${await getPassiveFeedback()}` }],
-        };
-      }
+      case "revise_artifact":
+        // B3 — extracted to mcp/tools/revise-artifact.ts (incl. the F3
+        // SUPERSEDE_VALIDATORS table).
+        return handleReviseArtifact(ctx, args);
 
       case "recall":
         // CC10 — handler extracted to mcp/tools/recall.ts (~190 LOC out
         // of server.ts). Matches the present-*.ts split.
         return handleRecall(ctx, args);
 
-      case "post_pr_review": {
-        const ref = String(args?.pr ?? "").trim();
-        if (!ref) {
-          return {
-            content: [{ type: "text", text: "post_pr_review requires a `pr` argument (number or URL)." }],
-            isError: true,
-          };
-        }
-        const event = ["COMMENT", "REQUEST_CHANGES", "APPROVE"].includes(args?.event)
-          ? (args.event as "COMMENT" | "REQUEST_CHANGES" | "APPROVE")
-          : "COMMENT";
-
-        // Build the payload from the current session.
-        const state = await store.getFullState();
-        const payload = buildGitHubReviewPayload(state as any, { event });
-
-        if (payload.comments.length === 0) {
-          return {
-            content: [{
-              type: "text",
-              text: "No findings with structured evidence (filePath + lineStart) in this session — nothing to post as inline review comments. Use present_findings with structured Evidence objects to enable this.",
-            }],
-            isError: true,
-          };
-        }
-
-        try {
-          const result = await postPrReview({
-            ref,
-            payload,
-            owner: typeof args?.owner === "string" ? args.owner : undefined,
-            repo: typeof args?.repo === "string" ? args.repo : undefined,
-          });
-          return {
-            content: [{
-              type: "text",
-              text: `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`,
-            }],
-          };
-        } catch (err: any) {
-          if (err instanceof GhMissingError || err instanceof GhNotAuthedError) {
-            return {
-              content: [{ type: "text", text: err.message }],
-              isError: true,
-            };
-          }
-          return {
-            content: [{ type: "text", text: `post_pr_review failed: ${err?.message ?? err}` }],
-            isError: true,
-          };
-        }
-      }
+      case "post_pr_review":
+        // B3 — extracted to mcp/tools/post-pr-review.ts.
+        return handlePostPrReview(ctx, args);
 
       case "export_session":
         return handleExportSession(ctx, args);
