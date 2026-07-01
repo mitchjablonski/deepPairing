@@ -353,6 +353,26 @@ describe("DecisionCard — keyboard navigation", () => {
     );
   });
 
+  it("FF9 — high-stakes Enter-select honors the prediction opt-in (no stale keydown closure)", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchSpy);
+    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" artifactId="art_x" />);
+
+    // Opt in to prediction capture (this is what the stale closure missed).
+    await user.click(screen.getByRole("button", { name: /capture prediction with my pick/i }));
+
+    // Select via the container's NATIVE Enter handler (not a card click).
+    const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
+    (container as HTMLElement).focus();
+    fireEvent.keyDown(container, { key: "Enter" });
+
+    // Must enter the prediction-capture phase, NOT resolve immediately.
+    expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
+    const resolveCalls = fetchSpy.mock.calls.filter(([u]) => String(u).includes("/api/decisions"));
+    expect(resolveCalls).toHaveLength(0);
+  });
+
   it("ArrowDown/ArrowUp mirror j/k", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);
     const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
