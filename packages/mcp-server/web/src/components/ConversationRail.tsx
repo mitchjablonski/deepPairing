@@ -450,7 +450,7 @@ function ThreadEntry({
         )}
         {isUnanswered && (
           <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
-            ⏳ awaiting agent answer (next check_feedback)
+            ⏳ awaiting the agent's answer — next check-in
           </div>
         )}
       </div>

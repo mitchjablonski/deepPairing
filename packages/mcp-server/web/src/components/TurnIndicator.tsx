@@ -86,10 +86,14 @@ export function TurnIndicator() {
   // keeps "Agent working" honest; the heartbeat covers the artifact-quiet gaps.
   const effectiveActivityMs = Math.max(lastActivityMs, agentActivityAt ?? 0);
   const [idle, setIdle] = useState(false);
+  // C2 — zero signal ever (no artifact, no comment, no heartbeat) must NOT
+  // claim "Agent working": pre-C2 that claim was unfalsifiable at t=0 — it
+  // pulsed forever even if Claude had exited. The B2 heartbeat fires on the
+  // wrapper's very first internal call (session register), so a live agent
+  // produces a signal within seconds; until then say "Connected" honestly.
+  const neverActive = effectiveActivityMs === 0;
   useEffect(() => {
     setIdle(false);
-    // No activity yet on a fresh session → the agent is spinning up its first
-    // artifact, so keep "Agent working" rather than claiming "Up to date".
     if (!effectiveActivityMs) return;
     const remaining = AGENT_IDLE_MS - (Date.now() - effectiveActivityMs);
     if (remaining <= 0) { setIdle(true); return; }
@@ -185,7 +189,12 @@ export function TurnIndicator() {
   // that's finished or gone.
   return (
     <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
-      {idle ? (
+      {neverActive ? (
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent-blue/60" />
+          Connected — waiting for the agent's first move
+        </div>
+      ) : idle ? (
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50" />
           Up to date

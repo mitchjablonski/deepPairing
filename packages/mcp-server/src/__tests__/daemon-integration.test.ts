@@ -1229,3 +1229,19 @@ describe("B2 — agent_activity heartbeat on internal API traffic", () => {
     expect(heartbeats()).toHaveLength(0);
   });
 });
+
+// --- C2: decision-consumption receipt broadcast ---
+
+describe("C2 — decisions/acknowledge broadcasts the consumption moment", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("acking resolved decisions emits decisions_acknowledged with the ids", async () => {
+    await app.request(`/api/internal/sessions/s1/register`, j({}));
+    await app.request(`/api/internal/sessions/s1/decisions/acknowledge`, j({ ids: ["dec_1", "dec_2"] }));
+
+    const acked = broadcasts.filter((b) => b.event?.type === "decisions_acknowledged");
+    expect(acked).toHaveLength(1);
+    expect(acked[0].sessionId).toBe("s1");
+    expect(acked[0].event.decisionIds).toEqual(["dec_1", "dec_2"]);
+  });
+});

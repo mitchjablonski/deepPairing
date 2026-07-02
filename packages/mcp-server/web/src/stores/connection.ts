@@ -156,6 +156,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             for (const comment of data.state.comments ?? []) {
               store.addComment(comment);
             }
+            // C2 — receipts survive reload: the DecisionRecord's persisted
+            // `acknowledged` flag re-seeds the consumed set on hydration.
+            const ackedIds = (data.state.decisions ?? [])
+              .filter((d: any) => d?.acknowledged && d?.decisionId)
+              .map((d: any) => d.decisionId as string);
+            if (ackedIds.length > 0) store.markDecisionsAcknowledged(ackedIds);
             // QOL — return to the artifact you were last on, now that the
             // session has hydrated (overrides addArtifact's first-artifact pick).
             store.restoreSelection();
@@ -194,6 +200,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 research: "Findings ready for review",
               }[data.artifact.type as string] ?? "Ready for review";
             notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`);
+          }
+          break;
+
+        case "decisions_acknowledged":
+          // C2 — the agent consumed these resolutions (check_feedback ack).
+          if (Array.isArray(data.decisionIds)) {
+            store.markDecisionsAcknowledged(data.decisionIds);
           }
           break;
 

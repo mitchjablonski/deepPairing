@@ -525,6 +525,11 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const { ids } = await c.req.json();
     r.store.acknowledgeDecisions(ids);
+    // C2 — this is the exact moment the agent CONSUMES the human's decision
+    // (check_feedback drains resolved decisions then acks them). Broadcast it
+    // so the resolved DecisionCard can show a receipt ("Claude picked this
+    // up") instead of leaving the handoff unconfirmed.
+    broadcast(c.req.param("sessionId"), { type: "decisions_acknowledged", decisionIds: ids });
     return c.json({ status: "acknowledged" });
   });
 

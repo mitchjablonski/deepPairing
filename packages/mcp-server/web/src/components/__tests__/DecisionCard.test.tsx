@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
@@ -491,7 +491,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     await userEvent.click(screen.getByRole("button", { name: /^↻ Send back for revision$/ }));
 
     expect(screen.getByText(/Revision requested/)).toBeInTheDocument();
-    expect(screen.getByText(/revise_artifact/)).toBeInTheDocument();
+    expect(screen.getByText(/the agent will post a revised set of options/i)).toBeInTheDocument();
     // Form is gone.
     expect(screen.queryByPlaceholderText(/all 4 are matchers/i)).not.toBeInTheDocument();
   });
@@ -753,5 +753,24 @@ describe("B4 review — Enter on a nested concept badge must not resolve the dec
     await user.click(badge);
     expect(screen.getByRole("button", { name: /^view in your ledger/i })).toBeInTheDocument();
     expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes("/api/decisions"))).toHaveLength(0);
+  });
+});
+
+describe("C2 — decision consumption receipt", () => {
+  it("resolved card shows 'Delivered' until the agent acks, then '✓ Claude picked this up'", () => {
+    render(
+      <DecisionCard
+        event={event}
+        decisionId="dec_abc"
+        initialResolved={{ optionId: event.options[0].id }}
+      />,
+    );
+    expect(screen.getByText(/delivered — claude will pick it up/i)).toBeInTheDocument();
+
+    act(() => {
+      useArtifactStore.getState().markDecisionsAcknowledged(["dec_abc"]);
+    });
+    expect(screen.getByText(/claude picked this up — proceeding with/i)).toBeInTheDocument();
+    expect(screen.queryByText(/delivered — claude will pick it up/i)).not.toBeInTheDocument();
   });
 });

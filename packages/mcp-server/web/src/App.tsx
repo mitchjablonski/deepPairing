@@ -450,14 +450,22 @@ function App() {
         }>
           {hasArtifacts
             ? <ArtifactPanel />
-            : (connected && activeSessions.length === 0
+            : connected && activeSessions.length > 0
+              // C2 — a LIVE session with no artifacts yet is the opening beat
+              // of every pairing session; pre-C2 it showed IdleHome (a
+              // retrospective ledger browser) — misdirection during the first
+              // wait. Show the "Claude is connected — drafting" state instead.
+              ? <div className="p-5"><WaitingForClaude variant="drafting" /></div>
+              : connected && activeSessions.length === 0
                 ? <div className="p-5"><WaitingForClaude /></div>
-                : <IdleHome />)}
+                : <IdleHome />}
         </ErrorBoundary>
       </div>
 
-      {/* Free-form message to agent */}
-      {hasArtifacts && <MessageInput />}
+      {/* Free-form message to agent. C2 — also shown during the live
+          pre-first-artifact wait: that's exactly when a nudge matters, and it
+          was the one moment you couldn't send one. */}
+      {(hasArtifacts || (connected && activeSessions.length > 0)) && <MessageInput />}
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}

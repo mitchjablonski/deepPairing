@@ -72,6 +72,13 @@ type DecisionPhase =
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const submitComment = useArtifactStore((s) => s.submitComment);
+  // C2 — consumption receipt: true once the agent's check_feedback drained
+  // this resolution (live decisions_acknowledged event, or the persisted
+  // acknowledged flag on hydration).
+  const effectiveDecisionId = decisionId ?? event.decisionId;
+  const agentPickedUp = useArtifactStore((s) =>
+    Boolean(effectiveDecisionId && s.acknowledgedDecisions[effectiveDecisionId]),
+  );
   const [focusedIndex, setFocusedIndex] = useState(() => {
     // findIndex returns -1 (not undefined) when nothing is recommended, so the
     // old `?? 0` never fired and focusedIndex could be -1 → options[-1] throws
@@ -356,6 +363,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
           <p className="text-sm text-text-primary">
             <span className="font-medium">{chosen?.title}</span>
             {reasoning && <span className="text-text-muted"> — {reasoning}</span>}
+          </p>
+          {/* C2 — the handoff gets a receipt. Comments already had one
+              ("seen by agent"); the app's MOST important interaction didn't. */}
+          <p className="text-2xs" aria-live="polite">
+            {agentPickedUp ? (
+              <span className="text-accent-green">✓ Claude picked this up — proceeding with "{chosen?.title}"</span>
+            ) : (
+              <span className="text-text-muted">Delivered — Claude will pick it up next time it checks in</span>
+            )}
           </p>
           {(initialResolved?.predictedOutcome || initialResolved?.confidence) && (
             <div className="mt-2 pt-2 border-t border-accent-green/15">
@@ -915,9 +931,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
           <div className="flex items-center gap-2 text-2xs text-accent-amber">
             <span aria-hidden>↻</span>
             <span>
-              Revision requested — the agent will call{" "}
-              <code className="font-mono text-[10px] bg-surface-elevated px-1 py-px rounded">revise_artifact</code>
-              {" "}and post a v2 of this decision. You can still pick from these options if you change your mind.
+              Revision requested — the agent will post a revised set of options.
+              You can still pick from these if you change your mind.
             </span>
           </div>
         ) : (
