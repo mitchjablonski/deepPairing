@@ -104,7 +104,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           `\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is the only review surface. Don't paste findings in chat; call check_feedback for the verdict.`,
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
-        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_findings) as any,
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_findings),
       },
       {
         name: "present_options",
@@ -115,7 +115,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "\n\nWorkflow: SINGLE REVIEW SURFACE — human selects in the companion UI; don't list options in chat. Call check_feedback for the selection. FF9 — stakes='high' enables opt-in prediction capture; check_feedback MAY include optional `predictedOutcome` + `confidence`.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
-        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_options) as any,
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_options),
       },
       {
         name: "present_spec",
@@ -126,7 +126,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
-        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_spec) as any,
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_spec),
       },
       {
         name: "present_plan",
@@ -137,7 +137,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "\n\nWorkflow: SINGLE REVIEW SURFACE — this REPLACES Claude Code's native plan-approval flow. Do NOT call ExitPlanMode after present_plan. The companion UI is the only approval surface; call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
-        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_plan) as any,
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_plan),
       },
       {
         name: "log_reasoning",
@@ -148,7 +148,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "\n\nWorkflow: REQUIRED BEFORE EACH SIGNIFICANT EDIT. Don't just chat-explain.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
-        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.log_reasoning) as any,
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.log_reasoning),
       },
       {
         name: "check_feedback",
@@ -254,7 +254,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "\n\nWorkflow: REQUIRED BEFORE EACH Write/Edit/MultiEdit on a file not yet approved this session — per-edit checkpoint, not one-shot. Batched implementation skipping checkpoints is a protocol violation. SINGLE REVIEW SURFACE — companion UI only, don't paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
-        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change) as any,
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change),
       },
       {
         name: "recall",

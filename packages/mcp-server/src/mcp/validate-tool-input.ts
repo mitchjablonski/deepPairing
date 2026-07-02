@@ -299,9 +299,12 @@ export const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
   log_reasoning: ReasoningContentSchema,
 };
 
-/** JSON-Schema form of a tool input for ListTools. */
-export function toMcpInputSchema(schema: z.ZodType): Record<string, unknown> {
+/** JSON-Schema form of a tool input for ListTools (typed for the SDK's
+ *  inputSchema slot so call sites need no cast). */
+export function toMcpInputSchema(
+  schema: z.ZodType,
+): { type: "object"; [k: string]: unknown } {
   const js = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
   delete js.$schema;
-  return js;
+  return js as { type: "object"; [k: string]: unknown };
 }
