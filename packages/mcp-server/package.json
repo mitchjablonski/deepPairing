@@ -1,7 +1,7 @@
 {
   "name": "@deeppairing/mcp-server",
   "version": "0.1.0",
-  "description": "Human-AI collaborative development framework — MCP server for Claude Code with companion web UI",
+  "description": "Human-AI collaborative development framework \u2014 MCP server for Claude Code with companion web UI",
   "type": "module",
   "license": "MIT",
   "main": "./dist/standalone.js",
@@ -35,7 +35,8 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build"
+    "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build",
+    "lint": "eslint src web/src --max-warnings 366"
   },
   "engines": {
     "node": ">=22.0.0"

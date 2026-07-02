@@ -31,7 +31,7 @@ function createStore(sessionId: string): FileStore {
 
 describe("FileStore", () => {
   it("creates session directory on construction", () => {
-    const store = createStore( "test_session");
+    createStore("test_session");
     const sessionDir = path.join(tmpDir, ".deeppairing", "sessions", "test_session");
     expect(fs.existsSync(sessionDir)).toBe(true);
   });

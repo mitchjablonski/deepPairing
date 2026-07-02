@@ -5,7 +5,7 @@ import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, CreateArtifactParams, AddCommentParams, RecordDecisionParams, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 
@@ -501,7 +501,6 @@ export class FileStore implements IStore {
       // ever tags a transition `comment_side_effect`, scream loudly so the
       // bug surfaces in dev/test instead of riding to prod.
       if (reason === "comment_side_effect") {
-        // eslint-disable-next-line no-console
         console.error(
           `[deepPairing] BUG: comment_side_effect transition fired for ` +
           `artifact ${artifactId} (${fromStatus} → ${status}). ` +

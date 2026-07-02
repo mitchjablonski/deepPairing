@@ -56,7 +56,6 @@ describe("plugin launcher wiring", () => {
     // Skip silently when running pre-build (e.g., a fresh clone).
     const bundled = path.join(pluginDir, "server", "standalone.js");
     if (!fs.existsSync(bundled)) {
-      // eslint-disable-next-line no-console
       console.warn(`[plugin-launcher.test] bundled standalone.js missing — run \`pnpm --filter @deeppairing/mcp-server build\``);
       return;
     }

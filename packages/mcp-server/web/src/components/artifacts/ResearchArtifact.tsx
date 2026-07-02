@@ -7,7 +7,7 @@ import { CommentableCode } from "../CommentableCode";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { SimpleMarkdown } from "../SimpleMarkdown";
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 
 interface ResearchArtifactProps {
   artifact: Artifact;
@@ -470,7 +470,6 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
   const [focusIndex, setFocusIndex] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("significance");
   const findings = content.findings;
-  const focusRef = useRef<HTMLDivElement>(null);
 
   // Arrow key navigation in focus mode
   useEffect(() => {

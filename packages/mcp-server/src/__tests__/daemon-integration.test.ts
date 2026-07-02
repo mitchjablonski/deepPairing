@@ -4,7 +4,6 @@
  * and the full session lifecycle.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { createDaemonRoutes, createActiveSessionRoutes } from "../daemon-routes.js";
 import { DaemonClient } from "../daemon-client.js";

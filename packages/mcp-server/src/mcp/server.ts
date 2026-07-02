@@ -8,8 +8,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { IStore, RejectedApproach } from "../store/store-interface.js";
-import { getGlobalStore, deriveStance } from "../store/global-store.js";
+import type { IStore } from "../store/store-interface.js";
 import { buildFirstCallHint } from "./first-call-hint.js";
 import {
   tryElicit as tryElicitHelper,

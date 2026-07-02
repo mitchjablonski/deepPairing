@@ -6,7 +6,6 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { FileStore } from "./store/file-store.js";
-import type { Artifact, Comment } from "@deeppairing/shared";
 import { ERROR_CODES } from "./error-codes.js";
 import { recordMetricEvent } from "./store/metrics-store.js";
 import { projectHashGate } from "./http/guards.js";

@@ -25,7 +25,6 @@ import { createHttpRoutes } from "./http/routes.js";
 import { mountStaticUi } from "./http/static-ui.js";
 import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./daemon-routes.js";
 import { applyTopLevelGuards } from "./http/guards.js";
-import { formatSessionMarkdown } from "./export/format-markdown.js";
 import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
 import { runDemoScript } from "./demo-script.js";
 import { recordMetricEvent, flushAllMetrics } from "./store/metrics-store.js";
@@ -53,7 +52,6 @@ async function openBrowser(url: string): Promise<void> {
   child.unref();
 }
 
-const DEFAULT_PORT = 3847;
 const MAX_PORT_ATTEMPTS = 10;
 const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // AA4 — projectHash is the deterministic short identity advertised on
