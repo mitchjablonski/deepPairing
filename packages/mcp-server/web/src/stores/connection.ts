@@ -286,7 +286,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               useToastStore.getState().push({
                 kind: "info",
                 title: "✓ Sent — Claude will see this on its next check",
-                body: "check_feedback polls every ~30s while Claude is working.",
+                body: "Claude checks in about every 30 seconds while working.",
                 ttl: 4000,
               });
             });

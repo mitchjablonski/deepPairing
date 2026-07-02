@@ -66,7 +66,7 @@ export function WaitingForClaude({ variant = "no-session" }: { variant?: "no-ses
   return (
     <div
       role="status"
-      aria-label="Waiting for Claude"
+      aria-label={drafting ? "Claude is connected" : "Waiting for Claude"}
       className="rounded-lg border border-border-default bg-surface-secondary p-5 space-y-3"
     >
       <div className="flex items-center gap-2">
@@ -85,10 +85,14 @@ export function WaitingForClaude({ variant = "no-session" }: { variant?: "no-ses
           : "Open Claude Code in this project and say something. When Claude calls a deepPairing tool, the first artifact will appear here."}
       </p>
 
-      <div className="rounded bg-surface-elevated border border-border-default px-3 py-2">
-        <div className="text-2xs text-text-muted uppercase tracking-wide mb-1">Try this</div>
-        <code className="text-xs text-text-primary block font-mono break-words">{suggestion}</code>
-      </div>
+      {/* C2 review — the "say this to Claude Code" starter is for the
+          no-session state; in drafting mode Claude is already working. */}
+      {!drafting && (
+        <div className="rounded bg-surface-elevated border border-border-default px-3 py-2">
+          <div className="text-2xs text-text-muted uppercase tracking-wide mb-1">Try this</div>
+          <code className="text-xs text-text-primary block font-mono break-words">{suggestion}</code>
+        </div>
+      )}
 
       {info && (
         <div className="pt-1 border-t border-border-default/60 text-2xs text-text-muted space-y-0.5">

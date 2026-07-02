@@ -77,6 +77,16 @@ export function SessionBrowser() {
       for (const comment of state.comments ?? []) {
         addComment(comment);
       }
+      // C2 review — reset() clears acknowledgedDecisions, so without this
+      // re-seed every REPLAYED decision showed a permanently-false
+      // "Delivered — Claude will pick it up" for resolutions the agent
+      // consumed long ago. Mirror the connection.ts hydration seed.
+      const ackedIds = (state.decisions ?? [])
+        .filter((d: any) => d?.acknowledged && d?.decisionId)
+        .map((d: any) => d.decisionId as string);
+      if (ackedIds.length > 0) {
+        useArtifactStore.getState().markDecisionsAcknowledged(ackedIds);
+      }
       // Opening a past session drops us into replay mode — the scrubber
       // above ArtifactPanel hides events after the cursor, so re-reading
       // feels like walking through the session as it happened.

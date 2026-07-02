@@ -209,13 +209,7 @@ describe("B2 — heartbeat liveness + elapsed label", () => {
 });
 
 describe("C2 — honest t=0: no signal must not claim 'Agent working'", () => {
-  it("shows 'Connected — waiting' when there are no artifacts, comments, or heartbeats", () => {
-    seedConnected();
-    render(<TurnIndicator />);
-    expect(screen.getByText(/connected — waiting for the agent/i)).toBeInTheDocument();
-    expect(screen.queryByText(/agent working/i)).not.toBeInTheDocument();
-  });
-
+  // (the zero-signal case itself is asserted in the rewritten U2 test above)
   it("flips to 'Agent working' once the first heartbeat arrives", () => {
     seedConnected();
     useConnectionStore.setState({ agentActivityAt: Date.now(), agentActiveSince: Date.now() } as any);
