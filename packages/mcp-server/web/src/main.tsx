@@ -1,9 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { installPreloadErrorRecovery } from "./lib/chunk-error";
 import { LazyMotion, domAnimation } from "motion/react";
 import "./index.css";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+
+// E5 — a stale tab's first re-hashed chunk import fails after a deploy;
+// auto-reload once (loop-guarded) so the tab picks up the fresh index.html.
+installPreloadErrorRecovery();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
