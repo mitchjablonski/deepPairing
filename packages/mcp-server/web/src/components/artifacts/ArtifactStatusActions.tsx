@@ -59,10 +59,22 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   }, []);
   const expanded =
     atEnd || forceExpanded || countdown !== null || rejecting || comment.trim().length > 0;
+  // Focus must happen AFTER the expanded render commits (the textarea doesn't
+  // exist while compact). An effect keyed on forceExpanded is deterministic
+  // where a requestAnimationFrame race isn't (and rAF never fires in jsdom).
+  const wantFocusRef = useRef(false);
+  useEffect(() => {
+    if (forceExpanded && wantFocusRef.current) {
+      wantFocusRef.current = false;
+      commentRef.current?.focus();
+      commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    }
+  }, [forceExpanded]);
   const expandAndFocus = () => {
+    wantFocusRef.current = true;
     setForceExpanded(true);
-    // Focus after the expanded render commits.
-    requestAnimationFrame(() => commentRef.current?.focus());
+    // Already expanded (e.g. atEnd) → the effect won't re-fire; focus directly.
+    commentRef.current?.focus();
   };
 
   const confidence = (artifact.content as any)?.confidence;
@@ -129,6 +141,12 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         // Request Revision (needs a reason), OR an approve shortcut while the
         // parent owns approval (hideApprove) — either way, focus the comment
         // textarea instead of approving as-is.
+        // B6 review — while the footer floats COMPACT the textarea is
+        // unmounted, so commentRef is null and this was a silent no-op (the
+        // `r` shortcut died on exactly the long artifacts that float). Expand
+        // first; the forceExpanded effect focuses after the commit.
+        wantFocusRef.current = true;
+        setForceExpanded(true);
         commentRef.current?.focus();
         commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
       }
@@ -301,7 +319,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
           ⇒ show the full panel. While it's off-screen the footer floats in
           compact form. */}
       <div ref={sentinelRef} aria-hidden className="h-px" />
-      <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2">
+      <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2" /* solid bg: content ghosted readably through the old /95+blur edge */>
       {!expanded ? (
         // B6 — slim floating bar: Approve stays one click (the bound approve),
         // everything needing a reason expands + focuses the textarea.
@@ -363,6 +381,10 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         ref={commentRef}
         placeholder="Respond to the agent…  (⌘⏎ to send · empty ⌘⏎ = approve)"
         value={comment}
+        // B6 review — once the user engages the panel, latch it open:
+        // otherwise select-all-delete while scrolled mid-artifact flipped
+        // `expanded` false and unmounted the textarea UNDER their cursor.
+        onFocus={() => setForceExpanded(true)}
         onChange={(e) => setComment(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {

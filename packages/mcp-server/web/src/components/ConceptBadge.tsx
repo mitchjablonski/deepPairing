@@ -71,7 +71,8 @@ export function ConceptBadge({
 }: {
   name: string;
   explanation?: string;
-  /** "sm" for option cards, "md" for code-change headers. Affects padding only. */
+  /** "md" for option cards + code-change headers (B6 sized options up for a
+   *  bigger click target); "sm" for dense inline uses. Affects padding only. */
   size?: "sm" | "md";
 }) {
   const [open, setOpen] = useState(false);

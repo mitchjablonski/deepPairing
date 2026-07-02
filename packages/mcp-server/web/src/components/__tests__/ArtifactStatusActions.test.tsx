@@ -66,6 +66,29 @@ describe("B6 — compact-while-floating review footer", () => {
     expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
   });
 
+  it("the `r` shortcut EXPANDS the compact bar and focuses the textarea (was a silent no-op)", async () => {
+    stubIO(false);
+    render(<ArtifactStatusActions artifact={artifact} />);
+    expect(screen.queryByPlaceholderText(/respond to the agent/i)).not.toBeInTheDocument();
+    // App dispatches this for the global `r` shortcut. Pre-fix, commentRef was
+    // null while compact and the optional chain silently dropped the action.
+    window.dispatchEvent(
+      new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "a1", action: "revise" } }),
+    );
+    const textarea = await screen.findByPlaceholderText(/respond to the agent/i);
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
+  });
+
+  it("the `a` shortcut arms the countdown while compact — and the countdown forces expansion", async () => {
+    stubIO(false);
+    render(<ArtifactStatusActions artifact={artifact} />);
+    window.dispatchEvent(
+      new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "a1", action: "approve" } }),
+    );
+    // countdown !== null → expanded: the armed timer can never hide compact.
+    expect(await screen.findByText(/will auto-approve in/i)).toBeInTheDocument();
+  });
+
   it("defaults to the full panel when IntersectionObserver never fires (test envs, short artifacts)", () => {
     // no stubIO — whatever the env provides won't call back synchronously
     render(<ArtifactStatusActions artifact={artifact} />);

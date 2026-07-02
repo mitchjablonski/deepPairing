@@ -653,8 +653,13 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   // stops propagation, but a near-miss a few px around it hit
                   // the option card and CHOSE THE DECISION. Full-row wrapper
                   // means a misclick around the ledger pip does nothing.
+                  // Keydown: stop ONLY activation keys — swallowing everything
+                  // killed the global j/k/a/r/q shortcuts while the badge had
+                  // focus (review catch).
                   onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+                  }}
                 >
                   <ConceptBadge
                     name={option.concept.name}
