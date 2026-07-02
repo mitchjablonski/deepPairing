@@ -76,7 +76,13 @@ export function mountStaticUi(app: Hono, opts: StaticUiOptions): void {
       log?.(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
       injected = html;
     }
-    return new Response(injected, { headers: { "Content-Type": "text/html" } });
+    // E5 — index.html must never be served stale: a cached index references
+    // old hashed chunks, and the first re-hashed lazy import in that tab
+    // fails (the field-confirmed skew crash). Hashed assets stay heuristic-
+    // cacheable — their names change when content does.
+    return new Response(injected, {
+      headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" },
+    });
   };
 
   app.get("/*", async (c, next) => {

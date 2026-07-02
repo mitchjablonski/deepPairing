@@ -25746,7 +25746,9 @@ function mountStaticUi(app2, opts) {
       log2?.(`[token-inject] no <head>/<html> in index.html; serving without token. Bearer routes will 401 until UI is rebuilt.`);
       injected = html;
     }
-    return new Response(injected, { headers: { "Content-Type": "text/html" } });
+    return new Response(injected, {
+      headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" }
+    });
   };
   app2.get("/*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) return next();
