@@ -10,6 +10,13 @@ import tseslint from "typescript-eslint";
  *    per-package `--max-warnings` cap in each lint script: any NEW `any`
  *    pushes the count over the cap and fails CI. Lower the caps as debt is
  *    paid down — never raise them without a tracking note.
+ *
+ * Deliberately out of scope (tracking notes):
+ *  - packages/vscode-extension has no lint script yet (thin webview shell;
+ *    add one when it grows real logic).
+ *  - no react/react-hooks plugins — effect-deps mistakes in web/ are not
+ *    machine-checked; candidate for a later batch (React Compiler adoption
+ *    would subsume much of it).
  */
 export default tseslint.config(
   {
