@@ -73,6 +73,9 @@ interface PlanStep {
   // Optional per the schema — a step may touch no files (e.g. "run tests").
   files?: (string | { filePath: string; description?: string; changeType?: string })[];
   reasoning: string;
+  // D10 (H2) — execution tracking, written by update_plan_progress.
+  status?: "pending" | "in_progress" | "done" | "skipped";
+  statusNote?: string;
   motivatedBy?: string[];
   preview?: { before: string; after: string; filePath: string };
   condition?: string;
@@ -213,6 +216,15 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             )}
           </div>
 
+          {/* D10 (H2) — the joint checklist strip. After approval the build
+              phase was pure dead air; the agent now marks steps via
+              update_plan_progress and this renders live. Only shows once
+              ANY step carries a status (old plans stay untracked). */}
+          {!["draft", "rejected", "retracted", "obsolete"].includes(artifact.status) &&
+            steps.some((st) => st.status) && (
+            <PlanExecutionStrip steps={steps} />
+          )}
+
           {steps.map((step, i) => {
             const stepComments = comments.filter(
               (c) => c.target.stepIndex === i && c.target.lineStart == null,
@@ -245,9 +257,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                         )}
                       </button>
                     ) : (
-                      <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5">
-                        {i + 1}
-                      </span>
+                      <StepStatusMarker index={i} status={step.status} />
                     )}
                     <div className={`flex-1 min-w-0 ${!checkedSteps[i] && artifact.status === "draft" ? "opacity-40 line-through" : ""}`}>
                       <p className="text-sm text-text-primary font-medium">
@@ -256,6 +266,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                       <p className="text-xs text-text-muted mt-0.5">
                         {step.reasoning}
                       </p>
+                      {step.statusNote && (
+                        <p className="text-2xs text-accent-amber mt-0.5">{step.statusNote}</p>
+                      )}
 
                       {/* Motivated by badges */}
                       {step.motivatedBy && step.motivatedBy.length > 0 && (
@@ -373,5 +386,60 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
         hideApprove={artifact.status === "draft" && hasUnchecked}
       />
     </div>
+  );
+}
+
+/** D10 (H2) — live "Step 3 of 7" strip; mirrors TriageProgressStrip's shape. */
+function PlanExecutionStrip({ steps }: { steps: PlanStep[] }) {
+  const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+  const active = steps.findIndex((s) => s.status === "in_progress");
+  const pct = steps.length === 0 ? 0 : Math.round((done / steps.length) * 100);
+  return (
+    <div
+      role="group"
+      aria-label={`Plan execution: ${done} of ${steps.length} steps complete`}
+      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg flex items-center gap-3"
+    >
+      <span className="text-2xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">
+        {done === steps.length ? "Plan complete" : active >= 0 ? `Executing step ${active + 1} of ${steps.length}` : `${done} of ${steps.length} done`}
+      </span>
+      <div className="flex-1 h-1.5 rounded-full bg-surface-elevated overflow-hidden">
+        <div
+          className="h-full rounded-full bg-accent-green transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="text-2xs text-text-muted shrink-0">{pct}%</span>
+    </div>
+  );
+}
+
+/** D10 — per-step execution marker (replaces the plain number once tracked). */
+function StepStatusMarker({ index, status }: { index: number; status?: PlanStep["status"] }) {
+  if (status === "done") {
+    return (
+      <span className="shrink-0 w-5 h-5 rounded-full bg-accent-green-dim text-accent-green text-xs flex items-center justify-center mt-0.5" title="Done" aria-label={`Step ${index + 1}: done`}>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5l2.5 2.5L8 3" /></svg>
+      </span>
+    );
+  }
+  if (status === "in_progress") {
+    return (
+      <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5 animate-pulse" title="In progress" aria-label={`Step ${index + 1}: in progress`}>
+        {index + 1}
+      </span>
+    );
+  }
+  if (status === "skipped") {
+    return (
+      <span className="shrink-0 w-5 h-5 rounded-full bg-surface-elevated text-text-muted text-xs flex items-center justify-center mt-0.5 line-through" title="Skipped" aria-label={`Step ${index + 1}: skipped`}>
+        {index + 1}
+      </span>
+    );
+  }
+  return (
+    <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5">
+      {index + 1}
+    </span>
   );
 }

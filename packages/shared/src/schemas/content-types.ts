@@ -89,6 +89,17 @@ export const PlanStepSchema = z.object({
    */
   condition: z.string().optional().describe("Condition that turns this step into a conditional branch"),
   branches: z.array(PlanBranchSchema).optional().describe("Sub-steps that execute if the condition is met"),
+  /**
+   * D10 (H2) — joint execution tracking. After the human approves a plan the
+   * build phase was the longest dead-air stretch in the session: the agent
+   * worked silently until a code_change appeared. The agent now marks steps
+   * via update_plan_progress and the UI renders a live "Step 3 of 7" strip.
+   * Optional for back-compat (absent = execution not tracked).
+   */
+  status: z.enum(["pending", "in_progress", "done", "skipped"]).optional()
+    .describe("Execution status, updated by the agent via update_plan_progress"),
+  statusNote: z.string().optional()
+    .describe("One-line note shown beside the step (e.g. why it was skipped)"),
 });
 
 export type PlanStep = z.infer<typeof PlanStepSchema>;

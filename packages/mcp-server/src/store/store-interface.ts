@@ -188,6 +188,17 @@ export interface IStore {
     status: ArtifactStatus,
     reason?: StatusTransitionReason,
   ): MaybePromise<void>;
+
+  /**
+   * D10 (H2) — joint execution tracking: patch step statuses on an existing
+   * PLAN artifact in place (no supersede — execution progress is not a new
+   * version). Returns the updated artifact for broadcasting, or null when
+   * the artifact is missing or not a plan.
+   */
+  updatePlanProgress(
+    artifactId: string,
+    updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
+  ): MaybePromise<Artifact | null>;
   getArtifacts(): MaybePromise<Artifact[]>;
 
   // Comments

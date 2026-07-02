@@ -381,6 +381,34 @@ export function createDaemonRoutes(
     return c.json({ status: "updated" });
   });
 
+  // D10 (H2) — agent marks plan step execution; UI renders the live strip.
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/plan-progress", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const artifactId = c.req.param("artifactId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const { updates } = await c.req.json();
+    if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
+    // D10 review — mirror the handler's validation (junk statuses would
+    // persist, then silently vanish on the next restart when coercePlanStep
+    // drops them). Bearer-authed callers only, but symmetry keeps it honest.
+    const VALID = new Set(["pending", "in_progress", "done", "skipped"]);
+    const clean = updates.filter(
+      (u: any) => Number.isInteger(u?.stepIndex) && u.stepIndex >= 0 && VALID.has(u?.status),
+    );
+    const artifact = r.store.updatePlanProgress(artifactId, clean);
+    // D10 review — not-found is a DOMAIN result, not a transport error:
+    // DaemonClient.request throws on non-2xx, so a 404 here surfaced as an
+    // opaque throw instead of the handler's crafted isError message (and the
+    // client's null path was dead code). 200 + null, like :456's comment read.
+    if (!artifact) return c.json({ artifact: null });
+    r.store.forceFlush();
+    // Carries the FULL artifact: step statuses live in content, and the web
+    // store patches content in place (artifact_updated only patches status).
+    broadcast(sessionId, { type: "plan_progress_updated", artifact });
+    return c.json({ artifact });
+  });
+
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);

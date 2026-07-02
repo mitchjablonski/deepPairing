@@ -41,6 +41,29 @@ export function TurnIndicator() {
     return null;
   }, [artifacts]);
 
+  // D10 (H2) — when an approved plan is mid-execution, say WHICH step
+  // instead of the generic "working": the post-approval build was the
+  // longest unnarrated stretch in the session.
+  const planProgress = useMemo(() => {
+    // Newest first (latestReasoningAction's idiom): an older abandoned
+    // half-tracked plan must not mask the one actually executing. Terminal
+    // statuses never narrate "Executing".
+    for (let i = artifacts.length - 1; i >= 0; i--) {
+      const a = artifacts[i];
+      if (
+        a.type !== "plan" ||
+        ["draft", "superseded", "rejected", "retracted", "obsolete"].includes(a.status)
+      ) continue;
+      const steps = (a.content as { steps?: Array<{ status?: string }> } | null)?.steps;
+      if (!Array.isArray(steps) || !steps.some((st) => st?.status)) continue;
+      const done = steps.filter((st) => st?.status === "done" || st?.status === "skipped").length;
+      if (done === steps.length) continue; // finished plans go back to generic copy
+      const active = steps.findIndex((st) => st?.status === "in_progress");
+      return { current: active >= 0 ? active + 1 : Math.min(done + 1, steps.length), total: steps.length };
+    }
+    return null;
+  }, [artifacts]);
+
   // Q4: aggregate unanswered questions across all artifacts so the badge
   // surfaces "N waiting on agent" at a glance. Points at the first-asked
   // unanswered question when clicked.
@@ -202,7 +225,9 @@ export function TurnIndicator() {
       ) : (
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-accent-blue animate-pulse" />
-          Agent working{elapsedMin >= 1 ? ` · ${elapsedMin}m` : ""}
+          {planProgress
+            ? `Executing plan — step ${planProgress.current} of ${planProgress.total}`
+            : "Agent working"}{elapsedMin >= 1 ? ` · ${elapsedMin}m` : ""}
         </div>
       )}
       {questionsBadge}

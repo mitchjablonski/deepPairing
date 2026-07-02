@@ -22,6 +22,7 @@ import { handlePresentFindings } from "./tools/present-findings.js";
 import { handlePresentOptions } from "./tools/present-options.js";
 import { handleCheckFeedback } from "./tools/check-feedback.js";
 import { handleAnswerQuestion } from "./tools/answer-question.js";
+import { handleUpdatePlanProgress } from "./tools/update-plan-progress.js";
 import { handleReviseArtifact } from "./tools/revise-artifact.js";
 import { handlePostPrReview } from "./tools/post-pr-review.js";
 import { handlePresentSpec } from "./tools/present-spec.js";
@@ -640,6 +641,33 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         },
       },
       {
+        name: "update_plan_progress",
+        annotations: { title: "Update plan progress", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description:
+          "Mark plan steps as in_progress/done/skipped while EXECUTING an approved plan. Call it as you finish each step — the companion UI renders a live joint checklist, so your pair watches the build land instead of staring at a spinner. Not for changing the plan itself (use revise_artifact).",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            artifactId: { type: "string", description: "The plan artifact id (art_...)" },
+            updates: {
+              type: "array",
+              description: "Step status changes; indexes are 0-based positions in the plan's steps array",
+              items: {
+                type: "object",
+                properties: {
+                  stepIndex: { type: "number", description: "0-based index into steps[]" },
+                  status: { type: "string", enum: ["pending", "in_progress", "done", "skipped"] },
+                  statusNote: { type: "string", description: "Optional one-liner shown beside the step (e.g. why skipped)" },
+                },
+                required: ["stepIndex", "status"],
+              },
+              minItems: 1,
+            },
+          },
+          required: ["artifactId", "updates"],
+        },
+      },
+      {
         name: "revise_artifact",
         annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
@@ -1046,6 +1074,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     "revise_artifact",
     "post_pr_review",
     "answer_question",
+    "update_plan_progress",
   ]);
   // X4 — session-name latch encapsulates the once-only "rename the session
   // to the first artifact's title" behavior the closure used to handle.
@@ -1149,6 +1178,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       // template as the question text. The deeppairing.md skill carries
       // the templates so the LLM still has them available.
 
+      case "update_plan_progress":
+        return await handleUpdatePlanProgress(ctx, args);
       case "answer_question":
         // B3 — extracted to mcp/tools/answer-question.ts.
         return handleAnswerQuestion(ctx, args);

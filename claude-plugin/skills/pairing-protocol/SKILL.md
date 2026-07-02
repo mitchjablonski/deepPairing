@@ -1,6 +1,6 @@
 ---
 name: pairing-protocol
-description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, present_code_change, log_reasoning, recall, revise_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
+description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_code_change, log_reasoning, recall, revise_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
 ---
 
 # deepPairing Collaboration Protocol
@@ -62,6 +62,11 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   optional design + tasks. "Think together before building."
 - **`present_plan`** — before multi-file changes. Steps with before/after
   previews, motivated by findings / requirements.
+- **`update_plan_progress`** — WHILE EXECUTING an approved plan, mark each
+  step `in_progress` when you start it and `done` (or `skipped`, with a
+  `statusNote` saying why) when you finish. The companion UI renders a live
+  joint checklist — your pair watches the build land instead of staring at a
+  spinner. Not for changing the plan itself (that's `revise_artifact`).
 - **Lead with VISUALS when planning.** A wall of prose is the weakest way to
   pitch a plan or spec — a picture is the strongest. Attach `visuals[]` to
   `present_plan` / `present_spec` (it's the same block on both) whenever you're

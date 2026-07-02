@@ -134,6 +134,14 @@ function coercePlanStep(v: unknown): PlanStep {
       filePath: str(s.preview.filePath),
     };
   }
+  // D10 (H2) — execution tracking. Without this passthrough the coercer
+  // (which builds `out` field-by-field) silently STRIPPED the statuses the
+  // agent just wrote, and the live checklist never rendered from coerced
+  // content.
+  if (s.status === "pending" || s.status === "in_progress" || s.status === "done" || s.status === "skipped") {
+    out.status = s.status;
+  }
+  if (typeof s.statusNote === "string") out.statusNote = s.statusNote;
   // Conditional-branch fields (now first-class in PlanStepSchema).
   if (typeof s.condition === "string") out.condition = s.condition;
   if (Array.isArray(s.branches)) {
