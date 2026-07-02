@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { apiBase, sessionHeaders, apiGet } from "../lib/api";
+import { useToastStore } from "../stores/toast";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
 
@@ -33,15 +34,26 @@ export function AutonomySlider() {
   }, []);
 
   const handleChange = async (newLevel: AutonomyLevel) => {
+    const prev = level;
     setLevel(newLevel);
+    // C1 — this control GOVERNS THE AUTO-APPROVE COUNTDOWN: silently keeping
+    // the optimistic value on a failed save meant a user who dialed autonomy
+    // down on a dead daemon believed auto-approve was off when it wasn't.
+    // Roll back + toast like every other mutation.
     try {
-      await fetch(`${apiBase()}/api/preferences`, {
+      const res = await fetch(`${apiBase()}/api/preferences`, {
         method: "POST",
         headers: sessionHeaders(),
         body: JSON.stringify({ autonomyLevel: newLevel }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch {
-      // Failed to save — UI still reflects the change
+      setLevel(prev);
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Autonomy level not saved",
+        body: "It still controls auto-approve, so the change was rolled back.",
+      });
     }
   };
 

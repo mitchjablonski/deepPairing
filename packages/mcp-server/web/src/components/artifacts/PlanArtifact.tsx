@@ -170,7 +170,13 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
   const hasUnchecked = checkedSteps.some((c) => !c);
 
+  // C1 — mirror ArtifactStatusActions.handleAction: a submitting guard (a
+  // double-click double-POSTed) and a catch (the store re-throws after
+  // toasting; unhandled it surfaced as a console rejection while the button
+  // sat there looking untouched).
+  const [approvingDeltas, setApprovingDeltas] = useState(false);
   const handleApproveWithDeltas = async () => {
+    if (approvingDeltas) return;
     const accepted = checkedSteps.map((c, i) => c ? i : -1).filter((i) => i >= 0);
     const rejected = checkedSteps.map((c, i) => !c ? i : -1).filter((i) => i >= 0);
 
@@ -178,7 +184,14 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
       ? `Plan approved with modifications: accepted steps [${accepted.join(",")}], removed steps [${rejected.join(",")}]`
       : undefined;
 
-    await updateArtifactStatus(artifact.id, "approved", feedbackMsg);
+    setApprovingDeltas(true);
+    try {
+      await updateArtifactStatus(artifact.id, "approved", feedbackMsg);
+    } catch {
+      // store already toasted; keep the panel usable
+    } finally {
+      setApprovingDeltas(false);
+    }
   };
 
   return (
@@ -344,10 +357,11 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
           </div>
           <button
             onClick={handleApproveWithDeltas}
+            disabled={approvingDeltas}
             className="px-3 py-1.5 bg-accent-green text-white text-xs font-medium rounded
-                       hover:bg-accent-green/80 transition-all duration-[180ms] ease-out press-scale"
+                       hover:bg-accent-green/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
           >
-            Approve with modifications
+            {approvingDeltas ? "Approving…" : "Approve with modifications"}
           </button>
         </div>
       )}

@@ -86,6 +86,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
     tools: [
       {
         name: "present_findings",
+        annotations: { title: "Present findings", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity.` +
           `\n\nSchema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Validation runs at the boundary; mismatch returns INPUT_VALIDATION_FAILED with the bad path + an example.` +
@@ -124,6 +125,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_options",
+        annotations: { title: "Present options", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Present 2–4 options with pros/cons/effort/risk for the human to choose. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects via the philosophy ledger." +
           "\n\nSchema note: `options` is an array of 2–4 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
@@ -186,6 +188,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_spec",
+        annotations: { title: "Present spec", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
           "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
@@ -281,6 +284,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_plan",
+        annotations: { title: "Present plan", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Present an implementation plan as steps with file changes and before/after previews." +
           "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
@@ -377,6 +381,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "log_reasoning",
+        annotations: { title: "Log reasoning", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Log the reasoning for an action before taking it. Pairs with present_code_change for the per-edit checkpoint cadence (WHY + WHAT — together they give the human a chance to redirect BEFORE the diff is on disk)." +
           "\n\nSchema note: required: `action`, `reasoning`. Name the underlying concept in `concept` whenever one applies — that's the human's learning lever. INPUT_VALIDATION_FAILED on mismatch." +
@@ -445,6 +450,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "check_feedback",
+        annotations: { title: "Check feedback", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         description:
           "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts." +
           "\n\n`waitFor` scopes the long-poll wake condition: 'comments' wakes only on new comments, 'decision' only on a resolved present_options, 'plan_review' only on a plan status transition, 'artifact_status' on any artifact status change, 'any' (default) on any feedback. Use a narrow scope when you've just presented a specific artifact and want to ignore unrelated chatter.",
@@ -539,6 +545,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "present_code_change",
+        annotations: { title: "Present code change", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Present a code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) — name the pattern (e.g. 'work factor tuning') so cross-project preflight matches it." +
           "\n\nSchema note: required: `filePath`, `changeType`, `after`, `reasoning`. `concept` strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
@@ -568,6 +575,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "recall",
+        annotations: { title: "Recall philosophy", readOnlyHint: true, openWorldHint: false },
         description:
           "Search deepPairing memory.\n\n" +
           "Modes:\n" +
@@ -600,6 +608,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "post_pr_review",
+        annotations: { title: "Post PR review", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         description:
           "Post this session's approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.",
         inputSchema: {
@@ -622,6 +631,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "export_session",
+        annotations: { title: "Export session", readOnlyHint: true, openWorldHint: false },
         description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact — concepts named, predictions made, approaches rejected).",
         inputSchema: {
           type: "object" as const,
@@ -638,6 +648,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       // text. The `deeppairing.md` skill carries the template prompts.
       {
         name: "answer_question",
+        annotations: { title: "Answer question", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Reply to a question comment from the human. Use instead of a plain comment reply so the answer is linked to the question and the UI collapses the pair. Attach `evidence` when the answer points at real code.",
         inputSchema: {
@@ -665,6 +676,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       },
       {
         name: "revise_artifact",
+        annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.",
         inputSchema: {

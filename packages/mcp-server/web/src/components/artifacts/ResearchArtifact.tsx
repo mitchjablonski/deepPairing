@@ -120,6 +120,10 @@ function FindingTriage({
       );
       setPromptVerdict(null);
       setReason("");
+    } catch {
+      // C1 — the store re-throws after toasting; uncaught this surfaced as an
+      // unhandled rejection. Keep the popover open (verdict + reason intact)
+      // so the user can retry.
     } finally {
       setSubmitting(false);
     }

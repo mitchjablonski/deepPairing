@@ -2149,6 +2149,28 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("C1 — ToolAnnotations on every tool", () => {
+    it("all 12 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
+      const list = await client.listTools();
+      expect(list.tools).toHaveLength(12);
+      for (const t of list.tools) {
+        expect(t.annotations, `${t.name} missing annotations`).toBeDefined();
+        expect(typeof (t.annotations as any).openWorldHint).toBe("boolean");
+      }
+      const byName = Object.fromEntries(list.tools.map((t) => [t.name, t.annotations as any]));
+      // The one tool that leaves the machine.
+      expect(byName.post_pr_review.openWorldHint).toBe(true);
+      expect(list.tools.filter((t) => (t.annotations as any).openWorldHint).map((t) => t.name)).toEqual(["post_pr_review"]);
+      // Pure reads.
+      expect(byName.recall.readOnlyHint).toBe(true);
+      expect(byName.export_session.readOnlyHint).toBe(true);
+      // check_feedback ACKNOWLEDGES + writes ledger patterns — it must NOT
+      // claim read-only, whatever its name suggests.
+      expect(byName.check_feedback.readOnlyHint).toBe(false);
+      expect(byName.check_feedback.idempotentHint).toBe(false);
+    });
+  });
+
   describe("III12 — MCP prompts capability (recall as user-invocable slash query)", () => {
     it("prompts/list advertises the `recall` prompt with query + mode args", async () => {
       const list = await client.listPrompts();

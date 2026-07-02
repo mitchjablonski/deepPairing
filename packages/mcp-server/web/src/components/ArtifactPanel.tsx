@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -8,6 +8,7 @@ import { type Artifact, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
+import { useConnectionStore } from "../stores/connection";
 import { useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { ResearchArtifact } from "./artifacts/ResearchArtifact";
 import { PlanArtifact } from "./artifacts/PlanArtifact";
@@ -556,7 +557,6 @@ function ArtifactSidebar({
 }
 
 
-interface ActiveSession { sessionId: string; port: number; pid: number; startedAt: string }
 
 /**
  * Multi-agent bar: loads artifacts from other active sessions and merges
@@ -566,7 +566,18 @@ function MultiAgentSync() {
   const addArtifact = useArtifactStore((s) => s.addArtifact);
   const addComment = useArtifactStore((s) => s.addComment);
   const artifacts = useArtifactStore((s) => s.artifacts);
+  // C1 — reuse the session list App already polls into the connection store
+  // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
+  const activeSessions = useConnectionStore((s) => s.activeSessions);
   const knownSessionIds = useMemo(() => new Set(artifacts.map((a) => a.sessionId)), [artifacts]);
+  // C1 — a session with ZERO artifacts is never "known" (knownSessionIds
+  // derives from artifact sessionIds), so pre-C1 it was refetched every 5s
+  // forever — each hit running getFullState() server-side. The refetch is
+  // still needed (it's how another session's FIRST artifact gets discovered:
+  // session-scoped tabs don't receive other sessions' WS events), so back it
+  // off to 30s per empty session instead of dropping it.
+  const lastAttemptRef = useRef<Map<string, number>>(new Map());
+  const EMPTY_SESSION_RETRY_MS = 30_000;
 
   useEffect(() => {
     let cancelled = false;
@@ -575,36 +586,35 @@ function MultiAgentSync() {
       // PP3 — skip the fetch + parse + cross-session merge when the tab is
       // hidden (the timer keeps ticking but does no work / triggers no renders).
       if (typeof document !== "undefined" && document.hidden) return;
-      try {
-        const res = await apiGet(`${apiBase()}/api/active-sessions`);
-        const data = await res.json();
-        const sessions: ActiveSession[] = data.sessions ?? [];
+      for (const session of activeSessions) {
+        if (knownSessionIds.has(session.sessionId)) continue; // Already loaded
+        const last = lastAttemptRef.current.get(session.sessionId) ?? 0;
+        if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
+        lastAttemptRef.current.set(session.sessionId, Date.now());
 
-        for (const session of sessions) {
-          if (knownSessionIds.has(session.sessionId)) continue; // Already loaded
+        // Load this session's artifacts from disk via the API
+        try {
+          const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`);
+          if (!sRes.ok) continue;
+          const state = await sRes.json();
+          if (cancelled) return;
 
-          // Load this session's artifacts from disk via the API
-          try {
-            const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`);
-            if (!sRes.ok) continue;
-            const state = await sRes.json();
-            if (cancelled) return;
-
-            for (const artifact of state.artifacts ?? []) {
-              addArtifact(artifact);
-            }
-            for (const comment of state.comments ?? []) {
-              addComment(comment);
-            }
-          } catch {}
-        }
-      } catch {}
+          for (const artifact of state.artifacts ?? []) {
+            addArtifact(artifact);
+          }
+          for (const comment of state.comments ?? []) {
+            addComment(comment);
+          }
+        } catch {}
+      }
     };
 
     sync();
-    const timer = setInterval(sync, 5000); // Poll for new sessions every 5s
+    // 5s cadence stays for reacting to NEWLY appearing sessions quickly, but
+    // it's now fetch-free unless there's an unknown session past its backoff.
+    const timer = setInterval(sync, 5000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [knownSessionIds.size]); // Re-run when we load new sessions
+  }, [activeSessions, knownSessionIds.size]); // Re-run on new sessions / merges
 
   return null; // No visual output — just syncs data
 }

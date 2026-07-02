@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AutonomySlider } from "../AutonomySlider";
+import { useToastStore } from "../../stores/toast";
 
 function mockStateAutonomy(level: string) {
   return vi.fn((url: string, init?: any) => {
@@ -66,5 +67,31 @@ describe("AutonomySlider — III9 Autonomy rename (was Q6 Ceremony)", () => {
     expect(postCall).toBeTruthy();
     const body = JSON.parse(postCall![1].body);
     expect(body).toEqual({ autonomyLevel: "balanced" });
+  });
+});
+
+describe("C1 — failed save rolls back and warns (this control governs auto-approve)", () => {
+  it("reverts to the previous level and pushes an error toast when the POST fails", async () => {
+    useToastStore.setState({ toasts: [] });
+    const fetchMock = vi.fn((url: string, init?: any) => {
+      if (String(url).endsWith("/api/state") && (!init?.method || init.method === "GET")) {
+        return Promise.resolve({ ok: true, json: async () => ({ autonomyLevel: "supervised" }) });
+      }
+      // POST /api/preferences fails
+      return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
+    await userEvent.click(screen.getByText("Light"));
+
+    // Rolled back to the server-confirmed level…
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /autonomy:/i })).toHaveTextContent(/full/i),
+    );
+    // …and the failure is loud, because this setting controls auto-approve.
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.some((t) => t.kind === "error" && /rolled back/i.test(t.body ?? ""))).toBe(true);
   });
 });

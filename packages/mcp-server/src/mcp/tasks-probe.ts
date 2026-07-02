@@ -1,13 +1,18 @@
 /**
  * S6 — MCP Tasks (SEP-1686) capability probe.
  *
- * Today: always false. The @modelcontextprotocol/sdk version we depend on
- * (1.29.x as of 2026-04) does not yet ship the Tasks primitive — there is
- * no `Server#emitTask`, no TaskUpdateNotification, no `tasks/get` request
- * handler. When the SDK lands Tasks (tracked roadmap item for 2026-Q3 per
- * the SEP-1686 discussion), flip MCP_TASKS_ENABLED to `true` and the
- * present_* handlers will emit a TaskHandle alongside the existing text
- * content (legacy clients still get the text path).
+ * Today: always false. C1 (2026-07) status correction — two facts changed:
+ * (1) SDK 1.29 DOES ship an experimental tasks module
+ *     (dist/esm/experimental/tasks/ — tasks/get|list|cancel|result), so
+ *     "does not ship the primitive" is no longer literally true; and
+ * (2) the 2026-07-28 spec RC redesigns Tasks from experimental core into an
+ *     official EXTENSION with a client-driven lifecycle (`tools/call`
+ *     returns a task handle; the CLIENT polls `tasks/get`) — which does not
+ *     match this seam's assumed server-push `emitTask` shape.
+ * The flag stays false because the blocking dependency is unchanged:
+ * Claude Code (through 2.1.198) has no task polling. When it lands, re-aim
+ * `maybeEmitTaskHandle` at the extension's client-polled shape rather than
+ * the push API sketched below, then flip the flag.
  *
  * Why a flag, not a feature detect on `server`: the SDK's type surface
  * will change shape when Tasks lands, and we want the diff that turns
