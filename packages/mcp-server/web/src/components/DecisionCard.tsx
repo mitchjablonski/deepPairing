@@ -646,10 +646,25 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   (was a (as any) cast pre-Z5; the wire shape lacked the
                   field that Y5 had hoisted only into the stored shape). */}
               {option.concept?.name && (
-                <div className="mb-2">
+                <div
+                  className="mb-2 -mx-1 px-1 py-0.5 rounded"
+                  // B6 — the WHOLE badge row is a selection-dead zone (same
+                  // treatment AskTrigger gets above). The badge itself already
+                  // stops propagation, but a near-miss a few px around it hit
+                  // the option card and CHOSE THE DECISION. Full-row wrapper
+                  // means a misclick around the ledger pip does nothing.
+                  // Keydown: stop ONLY activation keys — swallowing everything
+                  // killed the global j/k/a/r/q shortcuts while the badge had
+                  // focus (review catch).
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+                  }}
+                >
                   <ConceptBadge
                     name={option.concept.name}
                     explanation={option.concept.oneLineExplanation}
+                    size="md"
                   />
                 </div>
               )}
