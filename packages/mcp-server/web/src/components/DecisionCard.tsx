@@ -82,6 +82,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const agentPickedUp = useArtifactStore((s) =>
     Boolean(effectiveDecisionId && s.acknowledgedDecisions[effectiveDecisionId]),
   );
+  // D3 review — per-option Select button refs so keyboard nav can move DOM
+  // focus in lockstep with the roving highlight.
+  const selectBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(() => {
     // findIndex returns -1 (not undefined) when nothing is recommended, so the
     // old `?? 0` never fired and focusedIndex could be -1 → options[-1] throws
@@ -223,10 +226,16 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       // keydown listener, so it fires during native bubbling BEFORE React's
       // synthetic dispatch — a child's React onKeyDown stopPropagation can't
       // cancel it. Without this, Enter on a nested button resolved the focused
-      // decision instead of activating it (the same exposure AskTrigger had). The
-      // option card itself is a role="button" *div* (tag DIV), so its own
-      // Enter/Space selection still flows through below.
-      if (tag === "BUTTON" || tag === "A") return;
+      // decision instead of activating it (the same exposure AskTrigger had).
+      // D3 review — the SELECT buttons are the exception for NAV keys only:
+      // post-D3 every Tab stop in the grid is a BUTTON, so a blanket bail
+      // handed j/k to App's global handler, which navigated AWAY from the
+      // decision mid-choice. Enter/Space still return here (native activation
+      // fires ONE click). Scoped to data-select-option so AskTrigger /
+      // ConceptBadge keep their B6 behavior (global j/k untouched there).
+      const isSelectBtn = target?.hasAttribute?.("data-select-option") === true;
+      const isNavKey = e.key === "j" || e.key === "k" || e.key === "ArrowDown" || e.key === "ArrowUp";
+      if ((tag === "BUTTON" || tag === "A") && !(isSelectBtn && isNavKey)) return;
 
       // UX2 — within the card, j/k move the option highlight and we
       // stopPropagation so App's document-level j/k doesn't ALSO navigate
@@ -237,12 +246,20 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         if (focusedIndex >= event.options.length - 1) return; // at last → bubble to App nav
         e.preventDefault();
         e.stopPropagation();
-        setFocusedIndex((i) => Math.min(i + 1, event.options.length - 1));
+        const next = Math.min(focusedIndex + 1, event.options.length - 1);
+        setFocusedIndex(next);
+        // D3 review — when nav happens FROM a Select button, DOM focus must
+        // follow the highlight: otherwise Enter fires the STALE button's
+        // native click and selects a different option than the highlighted
+        // one (wrong-selection hazard).
+        if (isSelectBtn) selectBtnRefs.current[next]?.focus();
       } else if (e.key === "ArrowUp" || e.key === "k") {
         if (focusedIndex <= 0) return; // at first → bubble to App nav
         e.preventDefault();
         e.stopPropagation();
-        setFocusedIndex((i) => Math.max(i - 1, 0));
+        const next = Math.max(focusedIndex - 1, 0);
+        setFocusedIndex(next);
+        if (isSelectBtn) selectBtnRefs.current[next]?.focus();
       } else if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
@@ -583,7 +600,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             {stakes} stakes
           </span>
         )}
-        <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter select</span>
+        <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter selects highlighted</span>
       </div>
       <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
 
@@ -594,37 +611,19 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             <m.div
               key={option.id}
               layout
-              role="button"
-              tabIndex={submitting ? -1 : 0}
-              aria-disabled={submitting}
-              // U5e — expose the keyboard/hover selection to assistive tech; the
-              // focus ring (idx === focusedIndex) was color-only before. No
-              // aria-label here on purpose: it would become the element's entire
-              // accessible name and suppress the description/pros/cons a SR user
-              // needs to choose — let the descendant content form the name.
-              aria-current={idx === focusedIndex}
-              onClick={() => !submitting && handleSelect(option.id)}
-              onKeyDown={(e) => {
-                if (submitting) return;
-                // B4 review — mirror the container's native-listener tag guard
-                // (DV1): Enter/Space on a NESTED interactive control (concept
-                // badge, ledger deep-link, AskTrigger) must activate that
-                // control, not select the option. Without this, the card's
-                // preventDefault also suppressed the child button's Enter→click.
-                const tag = (e.target as HTMLElement | null)?.tagName;
-                if (tag === "BUTTON" || tag === "A") return;
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleSelect(option.id);
-                }
-              }}
+              // D3 — AT restructure. The card was a role="button" DIV with
+              // focusable children (concept badges, AskTrigger, ledger links)
+              // — the axe nested-interactive violation, and a misclick hazard
+              // (one stray click on 'compare these options' CHOSE one). The
+              // card is now a plain container: selection lives in the explicit
+              // Select button below (a real <button>, per-option accessible
+              // name) plus the container's roving j/k + Enter. Card click no
+              // longer selects — misclick-safe by construction.
               // X11 — affordance hierarchy. Recommended option gets a
               // visible "Recommended" pill + a violet border that matches
               // the card frame, so it reads as the primary path at a glance.
-              // Pre-X11 the recommendation was a faint border tint and a
-              // single star — ambiguous against a focused-state blue ring.
-              className={`text-left p-3 border-2 rounded-lg transition-all duration-[180ms] ease-out press-scale cursor-pointer relative ${
-                submitting ? "opacity-50 cursor-not-allowed" : ""
+              className={`text-left p-3 border-2 rounded-lg transition-all duration-[180ms] ease-out relative ${
+                submitting ? "opacity-50" : ""
               } ${
                 idx === focusedIndex
                   ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
@@ -724,14 +723,33 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                 </div>
               )}
 
-              {/* Effort + Risk badges */}
-              <div className="flex gap-1 mt-auto">
+              {/* Effort + Risk badges + the explicit select affordance (D3) */}
+              <div className="flex items-center gap-1 mt-auto">
                 <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>
                   {option.effort}
                 </span>
                 <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>
                   {option.risk} risk
                 </span>
+                <button
+                  ref={(el) => { selectBtnRefs.current[idx] = el; }}
+                  data-select-option
+                  onClick={() => !submitting && handleSelect(option.id)}
+                  disabled={submitting}
+                  // Accessible name carries the option title so a SR user
+                  // choosing from the buttons list can tell them apart.
+                  aria-label={`Select ${option.title}`}
+                  // U4 — keep the roving highlight in lockstep with Tab focus
+                  // (this button is now the card's only focusable selector).
+                  onFocus={() => !submitting && setFocusedIndex(idx)}
+                  className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
+                    idx === focusedIndex
+                      ? "bg-accent-blue text-white"
+                      : "bg-surface-secondary text-text-secondary hover:bg-accent-blue hover:text-white"
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  Select
+                </button>
               </div>
             </m.div>
           ))}
