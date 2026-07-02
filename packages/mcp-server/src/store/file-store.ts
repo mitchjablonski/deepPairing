@@ -271,10 +271,29 @@ export class FileStore implements IStore {
     }
   }
 
+  private flushFailureLogged = false;
+
   private scheduleFlush(): void {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
-      this.flush();
+      // C3 — a throwing timer callback is an UNCAUGHT EXCEPTION that kills
+      // the whole node process. This debounced flush can race directory
+      // removal (demo-session eviction rm -rf's the session dir; tests remove
+      // tmpdirs) and ENOENT out of writeFileSync. Losing one best-effort
+      // flush is fine; taking down the daemon is not.
+      try {
+        this.flush();
+        this.flushFailureLogged = false;
+      } catch (err) {
+        // Swallow — the next mutation reschedules. But log once per failure
+        // STREAK (review-caught: a bare swallow turns persistent EACCES/ENOSPC
+        // into silent permanent data loss; only teardown-race ENOENT is truly
+        // expected here).
+        if (!this.flushFailureLogged) {
+          this.flushFailureLogged = true;
+          console.error(`[deepPairing] debounced flush failed for session ${this.sessionId}:`, err);
+        }
+      }
       this.flushTimer = null;
     }, 100);
   }

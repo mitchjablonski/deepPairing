@@ -31,7 +31,7 @@
     "prebuild": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\"",
     "build": "tsc && cd web && npx vite build && cd .. && node scripts/bundle-plugin.mjs",
     "start": "tsx src/standalone.ts",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
@@ -55,6 +55,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@playwright/test": "^1.60.0",
@@ -74,7 +75,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.7.0",
     "vite": "^8.0.3",
-    "vitest": "^3.1.0",
+    "vitest": "^4.1.9",
     "zustand": "^5.0.12"
   }
 }
