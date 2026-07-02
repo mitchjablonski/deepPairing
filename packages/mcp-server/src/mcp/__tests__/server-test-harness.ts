@@ -6,7 +6,9 @@
  * Pattern note: setupServerTest() must be CALLED by each test file (not run
  * at import time) — with isolate:false the module is cached across files in
  * a worker, so import-time hook registration would only ever bind to the
- * first file that loaded it.
+ * first file that loaded it. And register any local-copy beforeEach AFTER
+ * calling setupServerTest(): same-level hooks run in registration order, so
+ * a copy-hook registered first would read stale/undefined ctx values.
  */
 import { beforeEach, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
