@@ -47,6 +47,27 @@ export function SessionMetrics() {
     return () => { cancelled = true; };
   }, []);
 
+  // C5 — the learning recap. Concept-naming works hard mid-session (badges,
+  // pips, reject capture) but the arc was never summed up anywhere: this lists
+  // every concept named THIS session with its occurrence count, deep-linking
+  // into the taste drawer. Sources: decision options, code changes, reasoning.
+  const conceptsTouched = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const a of artifacts) {
+      const content = a.content as {
+        concept?: { name?: string };
+        options?: Array<{ concept?: { name?: string } }>;
+      } | null;
+      const names: string[] = [];
+      if (content?.concept?.name) names.push(content.concept.name);
+      for (const o of content?.options ?? []) {
+        if (o?.concept?.name) names.push(o.concept.name);
+      }
+      for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [artifacts]);
+
   const stats = useMemo(() => {
     const byType = {
       research: artifacts.filter((a) => a.type === "research").length,
@@ -83,8 +104,33 @@ export function SessionMetrics() {
     return { byType, humanComments, approvals, rejections, duration, approvalRate };
   }, [artifacts, comments]);
 
+  const conceptChips = conceptsTouched.length > 0 && (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span className="uppercase tracking-wide">Concepts:</span>
+      {conceptsTouched.map(([name, n]) => (
+        <button
+          key={name}
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent("dp:open-your-taste", {
+                detail: { initialTab: "ledger", highlightConcept: name },
+              }),
+            )
+          }
+          title="Named this session — open in your cross-project ledger"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-accent-violet-dim/40 text-accent-violet border border-accent-violet/20 hover:bg-accent-violet-dim/60 transition-colors"
+        >
+          <span aria-hidden className="text-[10px] opacity-80">◆</span>
+          {name}
+          {n > 1 && <span className="text-[10px] opacity-70">×{n}</span>}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="flex flex-wrap items-center gap-3 px-3 py-1 border-t border-border-default bg-surface-secondary text-2xs text-text-muted">
+      {conceptChips}
       <div className="flex items-center gap-2">
         {stats.byType.research > 0 && (
           <span>Findings: <strong className="text-text-secondary">{stats.byType.research}</strong></span>

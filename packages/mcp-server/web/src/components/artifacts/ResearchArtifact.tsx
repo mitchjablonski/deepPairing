@@ -70,6 +70,80 @@ type ColorBy = "significance" | "category";
 
 type Verdict = "approved" | "revised" | "rejected";
 
+/** Latest verdict for one finding, derived from its verdict-section comments.
+ *  Shared by FindingTriage (per-finding) and TriageProgressStrip (aggregate). */
+function deriveVerdict(comments: Comment[], findingIndex: number): Verdict | null {
+  const verdicts = comments.filter(
+    (c) => c.target.sectionId === "verdict" && c.target.findingIndex === findingIndex,
+  );
+  const newest = verdicts[verdicts.length - 1];
+  if (!newest) return null;
+  const content = newest.content.toLowerCase();
+  if (content.startsWith("approved")) return "approved";
+  if (content.startsWith("needs revision")) return "revised";
+  if (content.startsWith("rejected")) return "rejected";
+  return null;
+}
+
+const VERDICT_CHIP: Record<Verdict, string> = {
+  approved: "bg-accent-green",
+  revised: "bg-accent-amber",
+  rejected: "bg-accent-red",
+};
+
+/**
+ * C5 — shared triage progress. Reviewing a 10-finding artifact had no joint
+ * state: verdicts vanished into per-finding comments and nothing said "3/10
+ * reviewed" or took you to the next unreviewed one — the review felt like
+ * leaving sticky notes in a drawer. One chip per finding (color = verdict,
+ * hollow = unreviewed), click to jump, plus a next-unreviewed fast path.
+ */
+function TriageProgressStrip({
+  findings,
+  comments,
+  onJump,
+}: {
+  findings: RichFinding[];
+  comments: Comment[];
+  onJump: (index: number) => void;
+}) {
+  const verdicts = findings.map((_, i) => deriveVerdict(comments, i));
+  const reviewed = verdicts.filter(Boolean).length;
+  const nextUnreviewed = verdicts.findIndex((v) => v === null);
+  if (findings.length < 3) return null;
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap rounded border border-border-default bg-surface-elevated/50 px-2.5 py-1.5">
+      <span className="text-2xs text-text-secondary font-medium shrink-0" aria-live="polite">
+        Reviewed {reviewed} / {findings.length}
+      </span>
+      {/* role=group (not list): listitem on a <button> would OVERRIDE its
+          implicit button role and hide it from AT + role queries. */}
+      <div className="flex items-center gap-1 flex-wrap" role="group" aria-label="Finding verdicts">
+        {verdicts.map((v, i) => (
+          <button
+            key={i}
+            onClick={() => onJump(i)}
+            title={`Finding ${i + 1}: ${findings[i]?.title ?? ""} — ${v ?? "not reviewed"}`}
+            aria-label={`Finding ${i + 1}: ${v ?? "not reviewed"}`}
+            className={`w-2.5 h-2.5 rounded-full transition-colors press-scale ${
+              v ? VERDICT_CHIP[v] : "border border-text-muted/50 bg-transparent hover:bg-surface-hover"
+            }`}
+          />
+        ))}
+      </div>
+      {nextUnreviewed >= 0 && reviewed > 0 && (
+        <button
+          onClick={() => onJump(nextUnreviewed)}
+          className="ml-auto text-2xs text-accent-blue hover:underline shrink-0"
+        >
+          Next unreviewed →
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * Per-finding triage chips. When auditing a research artifact with many
  * findings, binary artifact-level Approve/Revise is too coarse — you want
@@ -638,6 +712,22 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
             {/* Legend */}
             <FindingLegend colorBy={colorBy} findings={findings} />
           </div>
+
+          {/* C5 — shared triage progress (jump: focus mode retargets the
+              carousel; all mode scrolls to the finding's anchor). */}
+          <TriageProgressStrip
+            findings={findings}
+            comments={comments}
+            onJump={(i) => {
+              if (focusMode) {
+                setFocusIndex(i);
+              } else {
+                document
+                  .querySelector(`[data-comment-anchor="finding:${i}"]`)
+                  ?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+              }
+            }}
+          />
 
           {focusMode ? (
             /* Focus mode: one finding at a time with navigation */

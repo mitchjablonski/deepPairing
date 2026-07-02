@@ -69,6 +69,14 @@ async function flush() {
 }
 
 describe("connection store — handleMessage dispatch", () => {
+  it("C5 — hydrated flips true on the first `connected` payload", async () => {
+    expect(useConnectionStore.getState().hydrated).toBe(false);
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", projectRoot: "/p", state: { sessionId: "s", artifacts: [], comments: [] } });
+    await flush();
+    expect(useConnectionStore.getState().hydrated).toBe(true);
+  });
+
   it("hydrates artifact store on `connected` with state", async () => {
     useConnectionStore.getState().connect();
     activeAdapter.emit({

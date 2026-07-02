@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { SessionMetrics } from "../SessionMetrics";
 import { useArtifactStore } from "../../stores/artifact";
 
@@ -84,5 +84,33 @@ describe("SessionMetrics — R1 cumulative block", () => {
     render(<SessionMetrics />);
     await new Promise((r) => setTimeout(r, 30));
     expect(screen.queryByText(/across all sessions/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("C5 — concepts named this session", () => {
+  it("lists concept chips with counts and deep-links into the taste drawer", () => {
+    useArtifactStore.setState((s: any) => ({
+      artifacts: [
+        ...s.artifacts,
+        { id: "d1", sessionId: "s1", type: "decision", version: 1, parentId: null, title: "t",
+          status: "approved", agentReasoning: null, createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          content: { context: "c", decisionId: "dd", options: [
+            { id: "a", title: "A", description: "d", pros: [], cons: [], effort: "low", risk: "low", recommendation: true, concept: { name: "fakes over mocks" } },
+            { id: "b", title: "B", description: "d", pros: [], cons: [], effort: "low", risk: "low", recommendation: false, concept: { name: "fakes over mocks" } },
+          ] } },
+      ],
+    }));
+    let detail: any = null;
+    const listener = (e: Event) => { detail = (e as CustomEvent).detail; };
+    window.addEventListener("dp:open-your-taste", listener);
+
+    render(<SessionMetrics />);
+    const chip = screen.getByRole("button", { name: /fakes over mocks/i });
+    expect(chip).toHaveTextContent("×2");
+    fireEvent.click(chip);
+    expect(detail).toMatchObject({ initialTab: "ledger", highlightConcept: "fakes over mocks" });
+
+    window.removeEventListener("dp:open-your-taste", listener);
   });
 });
