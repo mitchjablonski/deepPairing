@@ -69,16 +69,27 @@ await build({
   entryPoints: [resolve(pkgRoot, "src/daemon.ts")],
   outfile: resolve(pluginDir, "daemon.js"),
 });
+// E1 review — setup-tasks resolves preflight-hook-core.js ON DISK beside the
+// entry; without emitting it, the PreToolUse rejected-approach gate (WP5) was
+// stamped with a nonexistent CORE_URL and silently failed open in marketplace
+// installs — the exact path this bundle exists to serve.
+await build({
+  ...shared,
+  entryPoints: [resolve(pkgRoot, "src/cli/preflight-hook-core.ts")],
+  outfile: resolve(pluginDir, "preflight-hook-core.js"),
+});
 
 // The companion web UI, served by the bundled daemon via its web/ fallback.
 cpSync(resolve(serverDist, "web"), resolve(pluginDir, "web"), { recursive: true });
 
+// No timestamp: the bundle is COMMITTED (the marketplace ships the git repo),
+// so output must be byte-reproducible for the CI staleness gate.
 writeFileSync(
   resolve(pluginDir, "GENERATED.md"),
   `# Generated — do not edit\n\n` +
     `Self-contained bundles built from packages/mcp-server/src/ by\n` +
-    `packages/mcp-server/scripts/bundle-plugin.mjs on ${new Date().toISOString()}.\n\n` +
-    `Edit the source and re-run \`pnpm build\`.\n`,
+    `packages/mcp-server/scripts/bundle-plugin.mjs (runs in \`pnpm build\`).\n\n` +
+    `Edit the source and re-run \`pnpm build\`; CI fails if this dir is stale.\n`,
 );
 
 console.log(`[bundle-plugin] ✓ Self-contained plugin server at ${pluginDir}`);
