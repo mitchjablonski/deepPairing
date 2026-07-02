@@ -49,7 +49,7 @@ export const ArtifactSchema = z.object({
    * createdAt/updatedAt when absent.
    */
   statusHistory: z.array(ArtifactStatusHistoryEntrySchema).optional(),
-  content: z.record(z.unknown()),
+  content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),
   createdAt: z.string().datetime(),

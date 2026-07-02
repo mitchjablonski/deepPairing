@@ -24,7 +24,7 @@ export const CommentBodySchema = z.object({
   /** Optional target metadata: line/finding/evidence/step/sectionId,
    *  shape varies by the artifact's renderer. Validated as a record so we
    *  don't have to enumerate every renderer's anchor strategy here. */
-  target: z.record(z.unknown()).optional(),
+  target: z.record(z.string(), z.unknown()).optional(),
   intent: z.enum(["comment", "question", "suggestion"]).optional(),
   parentCommentId: z.string().nullable().optional(),
 });
