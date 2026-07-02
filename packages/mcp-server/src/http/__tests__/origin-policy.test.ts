@@ -32,6 +32,12 @@ describe("D5 — isAllowedWsOrigin", () => {
     expect(isAllowedWsOrigin("http://localhost:3848", "localhost:3847")).toBe(false);
   });
 
+  it("rejects DNS rebinding: same-origin match on a NON-loopback host (raw upgrade bypasses the Hono Host guard)", () => {
+    // Attacker page at http://evil.com with DNS rebound to 127.0.0.1:
+    // Origin and Host agree with each other — but neither is loopback.
+    expect(isAllowedWsOrigin("http://evil.com:3941", "evil.com:3941")).toBe(false);
+  });
+
   it("allows the VS Code webview; rejects malformed origins", () => {
     expect(isAllowedWsOrigin("vscode-webview://1a2b3c", "localhost:3847")).toBe(true);
     expect(isAllowedWsOrigin("not a url", "localhost:3847")).toBe(false);

@@ -25,10 +25,24 @@ export function corsAllowedOrigin(origin: string): string | undefined {
   return undefined;
 }
 
+/** Loopback hostname check (mirrors guards.ts — the WS upgrade runs on the
+ *  raw server 'upgrade' event and BYPASSES the Hono loopback-Host guard). */
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname === "::1"
+  );
+}
+
 /**
  * WS upgrade origin gate. Allowed:
  *  - no Origin (curl / tests / non-browser clients — can't be a browser page),
  *  - the daemon's OWN origin (same host:port as the request's Host header),
+ *    AND that host is loopback — D5 review: same-origin alone passes under
+ *    DNS rebinding (Origin evil.com + Host evil.com match each other, and
+ *    this raw-upgrade path bypasses the Hono loopback-Host guard),
  *  - the VS Code webview scheme.
  * A different loopback port is exactly the attacker (old policy let it in).
  */
@@ -38,7 +52,7 @@ export function isAllowedWsOrigin(origin: string | undefined, hostHeader: string
   if (!hostHeader) return false;
   try {
     const o = new URL(origin);
-    return o.host === hostHeader;
+    return o.host === hostHeader && isLoopbackHostname(o.hostname);
   } catch {
     return false;
   }

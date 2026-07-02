@@ -35,9 +35,21 @@ model assumes:
 - **Cross-LAN access**: the daemon binds explicitly to `127.0.0.1`
   (see `daemon.ts` and `http/server.ts`). Sibling devices on the same
   wifi cannot reach it.
-- **Cross-Origin browser attacks**: WebSocket upgrade enforces an
-  `Origin` allowlist (`localhost`, `127.0.0.1`, `[::1]`). A malicious
-  page the user visits cannot subscribe to deepPairing sessions.
+- **Cross-Origin browser attacks** (tightened in D5): CORS allows
+  cross-origin reads ONLY from `vscode-webview://` origins — a page on
+  any other origin (including a different localhost port, e.g. a dev
+  server) gets no `Access-Control-Allow-Origin` and cannot read any
+  response, including the served HTML that carries the bearer token.
+  The WebSocket upgrade requires the Origin to be absent (non-browser),
+  the daemon's OWN host:port on a loopback hostname (same-origin +
+  loopback — the loopback requirement also defeats DNS rebinding, where
+  Origin and Host agree on a non-loopback name), or `vscode-webview://`.
+  A malicious page — local or remote — can neither read HTTP responses
+  nor subscribe to the event stream.
+  **Breaking change note:** external browser tools built against the old
+  any-loopback CORS policy will no longer receive CORS headers; use a
+  non-browser client (the token file grants local-process access) or the
+  companion UI itself.
 - **Cross-project session bleed**: every HTTP route + WebSocket
   upgrade requires the browser to send `X-Project-Hash` (or
   `?projectHash=` for WS). The daemon refuses requests for a

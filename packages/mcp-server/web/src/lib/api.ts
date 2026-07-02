@@ -10,7 +10,9 @@
 // Defaults to the page's own origin (the daemon that served the HTML), but the
 // project switcher can repoint it at another project's daemon (a different
 // localhost port). Cross-origin is already allowed: the daemon's CORS + WS
-// origin guard are hostname-only (port-agnostic). Mutable module state read by
+// origin guard were loosened pre-D5; post-D5 switching NAVIGATES, so this
+// mutable host only ever equals the page origin in production (tests aside).
+// Mutable module state read by
 // API_BASE / wsBase / sessionHeaders so a switch doesn't require reload.
 const defaultHost =
   typeof window !== "undefined" && window.location?.host ? window.location.host : "";

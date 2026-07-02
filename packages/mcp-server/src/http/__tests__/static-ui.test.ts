@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { mountStaticUi } from "../static-ui.js";
+import { cors } from "hono/cors";
+import { corsAllowedOrigin } from "../origin-policy.js";
 
 /**
  * II2.2/II2.3 regression guard. Both bugs lived in the seam "what bytes does
@@ -22,6 +24,9 @@ function buildApp(dir: string): Hono {
   // A representative gated API route, registered BEFORE the static catch-all,
   // so we can prove the catch-all yields to /api/* instead of swallowing it.
   app.get("/api/state", (c) => c.json({ ok: true }));
+  // D5 — same middleware order as daemon.ts: cors() BEFORE the static mount,
+  // so these tests exercise the actual token-serving path's CORS policy.
+  app.use("/*", cors({ origin: (o) => corsAllowedOrigin(o) as unknown as string }));
   mountStaticUi(app, { webDistPath: dir, authToken: TOKEN, projectHash: HASH });
   return app;
 }
@@ -111,5 +116,37 @@ describe("mountStaticUi — IV4 injection-point cascade", () => {
     const body = await serveRootWith("<!doctype html><html><body>x</body></html>");
     expect(body).toContain(`<html>${INJECTION}`);
     expect(body.indexOf("<!doctype html>")).toBe(0);
+  });
+});
+
+describe("D5 — the token-serving HTML route is not readable cross-origin", () => {
+  let dir: string;
+  let app: Hono;
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-static-d5-"));
+    fs.writeFileSync(
+      path.join(dir, "index.html"),
+      "<!doctype html><html><head><title>dp</title></head><body><div id=root></div></body></html>",
+    );
+    app = buildApp(dir);
+  });
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("GET / with a loopback web Origin gets NO Access-Control-Allow-Origin", async () => {
+    const res = await app.request("/", { headers: { Origin: "http://localhost:3000" } });
+    expect(res.status).toBe(200); // served (CORS is read-blocking, not request-blocking)
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    // Sanity: the body DOES contain the token — which is exactly why the
+    // response must stay opaque to cross-origin readers.
+    expect(await res.text()).toContain(TOKEN);
+  });
+
+  it("the webview origin can read it (the one legitimate cross-origin consumer)", async () => {
+    const res = await app.request("/", { headers: { Origin: "vscode-webview://1a2b" } });
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("vscode-webview://1a2b");
   });
 });

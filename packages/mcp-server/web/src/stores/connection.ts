@@ -591,7 +591,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     // daemon (a different localhost port). Tears down the current connection,
     // switches the shared base, re-seeds projectHash from the target daemon's
     // /api/daemon-info, clears the artifact store, and reconnects. Cross-origin
-    // is already permitted (CORS + WS guard are hostname-only).
+    // flows no longer exist post-D5 — this navigates instead.
     switchProject: async (host: string) => {
       // D5 — FULL NAVIGATION, not in-page repointing. The target daemon
       // serves its own HTML with ITS bearer token + projectHash injected.
