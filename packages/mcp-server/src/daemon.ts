@@ -357,14 +357,18 @@ app.get("/api/daemon-info", (c) => {
 // endpoint. Uncached that's ~1,500 socket attempts/min per tab, cross-traffic
 // multiplying across daemons. Cache the sweep daemon-side so all tabs share one
 // sweep per TTL window; a switcher badge lagging ≤15s is imperceptible.
-const PROJECTS_SWEEP_TTL_MS = 15_000;
+// D6 (P3) — TTL ≈ the 30s browser poll (15s meant EVERY poll missed and
+// triggered a full 128-probe sweep). Freshness where it matters comes from
+// the ?fresh=1 bypass the dropdown-open refresh sends.
+const PROJECTS_SWEEP_TTL_MS = 30_000;
 let projectsSweepCache: { at: number; payload: unknown } | null = null;
 // Single-flight: concurrent requests during a sweep share the same promise
 // instead of each launching their own 128-probe fan-out.
 let projectsSweepInFlight: Promise<unknown> | null = null;
 
 app.get("/api/projects", async (c) => {
-  if (projectsSweepCache && Date.now() - projectsSweepCache.at < PROJECTS_SWEEP_TTL_MS) {
+  const fresh = c.req.query("fresh") === "1";
+  if (!fresh && projectsSweepCache && Date.now() - projectsSweepCache.at < PROJECTS_SWEEP_TTL_MS) {
     return c.json(projectsSweepCache.payload as any);
   }
   if (!projectsSweepInFlight) {

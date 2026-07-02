@@ -108,10 +108,16 @@ function TriageProgressStrip({
   comments: Comment[];
   onJump: (index: number) => void;
 }) {
-  const verdicts = findings.map((_, i) => deriveVerdict(comments, i));
+  // D6 (P4) — memoized, and the <3 bail happens INSIDE the memo (hooks must
+  // run unconditionally) so small artifacts skip the O(findings × comments)
+  // scan entirely. Hygiene at typical sizes; matters on huge artifacts.
+  const verdicts = useMemo(
+    () => (findings.length < 3 ? [] : findings.map((_, i) => deriveVerdict(comments, i))),
+    [findings, comments],
+  );
+  if (findings.length < 3) return null;
   const reviewed = verdicts.filter(Boolean).length;
   const nextUnreviewed = verdicts.findIndex((v) => v === null);
-  if (findings.length < 3) return null;
 
   return (
     <div className="flex items-center gap-2 flex-wrap rounded border border-border-default bg-surface-elevated/50 px-2.5 py-1.5">

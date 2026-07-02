@@ -1,22 +1,26 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, lazy, Suspense } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
-import { type Artifact, coerceDecisionContent } from "@deeppairing/shared";
+import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
 import { useIsNarrowViewport } from "../hooks/useMediaQuery";
-import { ResearchArtifact } from "./artifacts/ResearchArtifact";
-import { PlanArtifact } from "./artifacts/PlanArtifact";
-import { RevisionDiff } from "./RevisionDiff";
-import { DecisionCard } from "./DecisionCard";
-import { CodeChangeArtifact } from "./artifacts/CodeChangeArtifact";
-import { ReasoningCard } from "./artifacts/ReasoningCard";
-import { SpecArtifact } from "./artifacts/SpecArtifact";
+// D6 (P2) — the artifact renderers are LAZY: statically importing all seven
+// kept them (and, via their coerce*Content imports, the whole Zod runtime)
+// in the entry chunk. Each renderer now code-splits with its coercers; the
+// entry drops ~30-40kB gz and Zod leaves it entirely (the C6a regression).
+const ResearchArtifact = lazy(() => import("./artifacts/ResearchArtifact").then((m) => ({ default: m.ResearchArtifact })));
+const PlanArtifact = lazy(() => import("./artifacts/PlanArtifact").then((m) => ({ default: m.PlanArtifact })));
+const RevisionDiff = lazy(() => import("./RevisionDiff").then((m) => ({ default: m.RevisionDiff })));
+const DecisionArtifactView = lazy(() => import("./DecisionCard").then((m) => ({ default: m.DecisionArtifactView })));
+const CodeChangeArtifact = lazy(() => import("./artifacts/CodeChangeArtifact").then((m) => ({ default: m.CodeChangeArtifact })));
+const ReasoningCard = lazy(() => import("./artifacts/ReasoningCard").then((m) => ({ default: m.ReasoningCard })));
+const SpecArtifact = lazy(() => import("./artifacts/SpecArtifact").then((m) => ({ default: m.SpecArtifact })));
 import { CommentThread } from "./CommentThread";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
@@ -201,6 +205,10 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         )}
       </div>
 
+      {/* D6 — lazy chunk boundary. MUST wrap every lazy component below
+          (RevisionDiff included — review lesson: a suspension outside the
+          boundary suspends the whole tree with no fallback). */}
+      <Suspense fallback={<div className="h-24 rounded bg-surface-elevated animate-pulse" aria-label="Loading artifact view" role="status" />}>
       {/* Revision diff — when this artifact supersedes a prior version, show
           what changed (anchored to the agent's revise reason) so the human
           sees their feedback land instead of eyeballing v2 against memory. */}
@@ -229,57 +237,8 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {artifact.type === "code_change" && (
         <CodeChangeArtifact artifact={artifact} />
       )}
-      {artifact.type === "decision" && (() => {
-        // Coercion boundary: options always an array, context/decisionId always
-        // strings. An options-less decision has nothing to render, so bail.
-        const dc = coerceDecisionContent(artifact.content);
-        if (dc.options.length === 0) return null;
-
-        // When viewing a past resolved decision via replay, pull the record so
-        // DecisionCard can open in the resolved state with the Re-pair button.
-        const replay = useReplayStore.getState();
-        // decisionId defaults to "" — fall back to the artifact id, not "".
-        const effectiveDecisionId = dc.decisionId || artifact.id;
-        const record = replay.decisions.find(
-          (d) => d.decisionId === effectiveDecisionId || d.artifactId === artifact.id,
-        );
-        const initialResolved = record?.response
-          ? {
-              optionId: record.response.optionId,
-              reasoning: record.response.reasoning,
-              resolvedAt: record.resolvedAt,
-              confidence: (record.response as any).confidence,
-              predictedOutcome: (record.response as any).predictedOutcome,
-            }
-          : undefined;
-
-        return (
-          <>
-            {/* N3.3: surface prior predictions on similar decisions so the user
-                can calibrate before choosing. Fires on EVERY decision (not just
-                high-stakes) — the breadcrumb self-hides when nothing matches, so
-                the gate was needlessly starving the calibration loop of the
-                occasions it could appear. */}
-            <PredictionsBreadcrumb
-              concept={`${artifact.title} ${dc.context ?? ""}`}
-              excludeArtifactId={artifact.id}
-            />
-            <DecisionCard
-              event={{
-                type: "decision_request",
-                decisionId: effectiveDecisionId,
-                context: dc.context,
-                options: dc.options,
-              }}
-              decisionId={effectiveDecisionId}
-              artifactId={artifact.id}
-              sessionId={artifact.sessionId}
-              stakes={dc.stakes}
-              initialResolved={initialResolved}
-            />
-          </>
-        );
-      })()}
+      {artifact.type === "decision" && <DecisionArtifactView artifact={artifact} />}
+      </Suspense>
 
       {/* General comments */}
       <div className="pt-3 border-t border-border-default">
