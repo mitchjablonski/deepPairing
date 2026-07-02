@@ -353,3 +353,30 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     expect(useToastStore.getState().toasts[0].body).toMatch(/deeppairing doctor/i);
   });
 });
+
+describe("D9 (M10) — WS echo replaces the optimistic provisional", () => {
+  it("a server comment matching a local_ provisional (author+content) replaces it in place", () => {
+    const store = useArtifactStore.getState();
+    const target = { artifactId: "art_1" } as any;
+    store.addComment({
+      id: "local_123", artifactId: "art_1", content: "great point", author: "human",
+      createdAt: "2026-07-01T00:00:00.000Z", target,
+    } as any);
+    // The WS echo (server id) lands BEFORE the POST response swap.
+    store.addComment({
+      id: "cmt_srv", artifactId: "art_1", content: "great point", author: "human",
+      createdAt: "2026-07-01T00:00:01.000Z", target,
+    } as any);
+    const bucket = useArtifactStore.getState().comments["art_1"];
+    expect(bucket).toHaveLength(1);
+    expect(bucket[0].id).toBe("cmt_srv");
+  });
+
+  it("distinct content does NOT replace — only true echoes collapse", () => {
+    const store = useArtifactStore.getState();
+    const target = { artifactId: "art_2" } as any;
+    store.addComment({ id: "local_9", artifactId: "art_2", content: "first", author: "human", createdAt: "2026-07-01T00:00:00.000Z", target } as any);
+    store.addComment({ id: "cmt_x", artifactId: "art_2", content: "second", author: "human", createdAt: "2026-07-01T00:00:01.000Z", target } as any);
+    expect(useArtifactStore.getState().comments["art_2"]).toHaveLength(2);
+  });
+});

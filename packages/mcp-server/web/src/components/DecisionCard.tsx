@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useDraft } from "../hooks/useDraft";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -88,7 +89,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     const i = event.options.findIndex((o) => o.recommendation);
     return i < 0 ? 0 : i;
   });
-  const [reasoning, setReasoning] = useState(initialResolved?.reasoning ?? "");
+  // D9 (H5 + review) — the draft survives reloads while COMPOSING; on resolve
+  // it's stashed as submittedReasoning and the draft is CLEARED — a lingering
+  // draft otherwise shadowed the recorded reasoning in the resolved/replay
+  // views (you'd see text that was never submitted, e.g. after the decision
+  // resolved from the terminal instead).
+  const [reasoningDraft, setReasoningDraft] = useDraft(`dec-reason:${decisionId}`);
+  const [submittedReasoning, setSubmittedReasoning] = useState<string | null>(null);
+  const reasoning = submittedReasoning ?? (reasoningDraft || (initialResolved?.reasoning ?? ""));
+  const setReasoning = setReasoningDraft;
   const [showReasoning, setShowReasoning] = useState(false);
   const [phase, setPhase] = useState<DecisionPhase>(
     initialResolved
@@ -115,7 +124,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
    * whether the inline composer is visible while in idle.
    */
   const [showSendBack, setShowSendBack] = useState(false);
-  const [sendBackText, setSendBackText] = useState("");
+  const [sendBackText, setSendBackText] = useDraft(`dec-sendback:${decisionId}`);
   // FF9 — opt-in for the prediction-capture phase on high-stakes
   // decisions. Pre-FF9 every high-stakes pick was forced through the
   // predicting modal, which the PMF council called the loudest
@@ -148,6 +157,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     try {
       const id = decisionId ?? event.decisionId;
       await resolveDecision(id, optionId, reasoning.trim() || undefined, prediction);
+      // Stash what was ACTUALLY submitted (trimmed — matches the record),
+      // then clear the draft so it can't shadow future resolved views.
+      setSubmittedReasoning(reasoning.trim());
+      setReasoningDraft("");
       setPhase({ kind: "resolved", optionId });
       onResolved?.();
     } catch {

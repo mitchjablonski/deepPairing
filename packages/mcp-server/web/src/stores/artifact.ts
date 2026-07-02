@@ -241,6 +241,23 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       const existing = state.comments[key] ?? [];
       // U0.1 dedupe: skip if a comment with this id is already in the bucket.
       if (existing.some((c) => c.id === comment.id)) return state;
+      // D9 (M10) — the WS echo racing the POST response duplicated the
+      // optimistic local_ provisional for a beat (author+content match, ids
+      // differ). Replace the provisional in place; the POST-response swap
+      // then no-ops via the id check above.
+      if (!comment.id.startsWith("local_")) {
+        const provisionalIdx = existing.findIndex(
+          (c) =>
+            c.id.startsWith("local_") &&
+            c.author === comment.author &&
+            c.content === comment.content,
+        );
+        if (provisionalIdx !== -1) {
+          const next = [...existing];
+          next[provisionalIdx] = comment;
+          return { comments: { ...state.comments, [key]: next } };
+        }
+      }
       return {
         comments: { ...state.comments, [key]: [...existing, comment] },
       };

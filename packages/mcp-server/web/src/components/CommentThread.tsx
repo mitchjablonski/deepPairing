@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useDraft } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
@@ -108,7 +109,8 @@ function CommentBubble({ comment }: { comment: Comment }) {
 }
 
 export function CommentThread({ artifactId, comments, target }: CommentThreadProps) {
-  const [input, setInput] = useState("");
+  // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
+  const [input, setInput] = useDraft(`comment:${artifactId}:${JSON.stringify(target ?? {})}`);
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
   

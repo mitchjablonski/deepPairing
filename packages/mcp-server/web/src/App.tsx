@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
+import { SessionWrapCard } from "./components/SessionWrapCard";
+import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
@@ -40,9 +42,10 @@ function App() {
   // wrapper pings ≤30s via check_feedback polls). Primitive selector so the
   // shell doesn't re-render per heartbeat — it flips only around the minute
   // boundary, and the routing branch re-evaluates on other renders anyway.
-  const agentRecentlyActive = useConnectionStore(
-    (s) => s.agentActivityAt !== null && Date.now() - s.agentActivityAt < 60_000,
-  );
+  // D9 review — the render-time recency compute froze once the agent exited
+  // (D6 bail suppresses idle re-renders); the shared hook re-fires at the
+  // staleness boundary so the closing beat appears when the session wraps.
+  const agentRecentlyActive = useAgentRecentlyActive();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
   // first `connected` payload lands, bounded by a grace timer so a dead
   // daemon still falls through to the real routing (IdleHome is then correct).
@@ -472,6 +475,18 @@ function App() {
           </code>
         </div>
       )}
+
+      {/* D9 (H3) — closing beat: the bound session's wrapper exited (M8 live
+          flag), the agent is quiet, and artifacts exist to recap. Renders
+          above the panel so the session's work stays browsable below it. */}
+      {hasArtifacts && !agentRecentlyActive && sessionId != null &&
+        activeSessions.find((s) => s.sessionId === sessionId)?.live === false && (
+          // D9 review — the card reads unvalidated content casts; a malformed
+          // artifact must not blank the whole shell.
+          <ErrorBoundary fallback={null}>
+            <SessionWrapCard sessionId={sessionId} />
+          </ErrorBoundary>
+        )}
 
       <div className="flex-1 min-h-0">
         <ErrorBoundary fallback={
