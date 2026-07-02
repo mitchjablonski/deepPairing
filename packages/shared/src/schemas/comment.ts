@@ -22,6 +22,12 @@ export const CommentTargetSchema = z.object({
   alternativeIndex: z.number().int().optional().describe("Index into a reasoning artifact's alternativeDetails[]"),
   optionId: z.string().optional().describe("The option id this comment targets (for decision artifacts)"),
   sectionId: z.string().optional(),
+  // D8 (M6) — stable requirement identity. stepIndex-anchored requirement
+  // comments silently reattach to the wrong requirement when a revision
+  // reorders them; REQ-ids are stable across reorders.
+  requirementId: z.string().optional().describe("The spec requirement id (e.g. REQ-1) this comment targets"),
+  // D8 (H1) — open questions are now answerable; index into openQuestions[].
+  questionIndex: z.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: z.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
   suggestion: z.string().optional().describe("Suggested code replacement for this line"),
 });

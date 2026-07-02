@@ -415,9 +415,13 @@ function App() {
                     ? "bg-accent-blue-dim text-accent-blue font-medium border border-accent-blue/20"
                     : "text-text-secondary hover:text-text-primary hover:bg-surface-hover border border-transparent"
                 }`}
-                title={`${s.sessionId}${s.project ? `\nProject: ${s.project}` : ""}\nArtifacts: ${s.artifactCount}`}
+                title={`${s.sessionId}${s.project ? `\nProject: ${s.project}` : ""}\nArtifacts: ${s.artifactCount}${s.live === false ? "\nAgent exited — history readable" : ""}`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent-blue animate-pulse" : "bg-accent-green"}`} />
+                {/* D8 (M8) — honest dots: green only while the wrapper is
+                    REGISTERED; an exited session's history stays readable but
+                    stops pretending to be live. Old daemons omit `live` —
+                    treat undefined as live (no false alarms on mixed versions). */}
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent-blue animate-pulse" : s.live === false ? "bg-text-muted/50" : "bg-accent-green"}`} />
                 <span className="truncate max-w-40">{label}</span>
                 {s.artifactCount > 0 && (
                   <span className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded opacity-70">{s.artifactCount}</span>
@@ -428,14 +432,9 @@ function App() {
         )}
       </div>
 
-      {/* Disconnected warning */}
-      {!connected && (
-        <div className="px-3 py-1.5 bg-accent-red-dim/30 border-b border-accent-red/15 text-center">
-          <span className="text-2xs text-accent-red">
-            Disconnected from server — reconnecting...
-          </span>
-        </div>
-      )}
+      {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
+          looked identical forever; past 60s the pair needs to know to act. */}
+      {!connected && <DisconnectBanner />}
 
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />
@@ -556,6 +555,37 @@ function HydrationSkeleton() {
       <div className="h-24 rounded bg-surface-elevated" />
       <div className="h-24 rounded bg-surface-elevated/70" />
       <div className="h-24 rounded bg-surface-elevated/40" />
+    </div>
+  );
+}
+
+/**
+ * D8 (H4) — escalating disconnect banner. Under 60s: a blip, keep calm.
+ * Past 60s: the daemon is probably down — say so and hand over the doctor
+ * command (the daemon-reliability rule: surface failures loudly, give a
+ * recovery command).
+ */
+function DisconnectBanner() {
+  const disconnectedSince = useConnectionStore((s) => s.disconnectedSince);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const outageMs = disconnectedSince ? now - disconnectedSince : 0;
+  const prolonged = outageMs >= 60_000;
+  return (
+    <div className="px-3 py-1.5 bg-accent-red-dim/30 border-b border-accent-red/15 text-center" role="status">
+      {prolonged ? (
+        <span className="text-2xs text-accent-red">
+          Still disconnected after {Math.round(outageMs / 60_000)} min — the daemon may be down. Run{" "}
+          <code className="bg-surface-elevated px-1 py-0.5 rounded">npx deeppairing doctor --fix</code> in the project, then reload.
+        </span>
+      ) : (
+        <span className="text-2xs text-accent-red">
+          Disconnected from server — reconnecting...
+        </span>
+      )}
     </div>
   );
 }

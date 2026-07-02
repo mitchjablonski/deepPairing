@@ -221,6 +221,9 @@ export function AskTrigger({
     optionId?: string;
     sectionId?: string;
     visualId?: string;
+    // D8 — stable requirement identity + answerable open questions.
+    requirementId?: string;
+    questionIndex?: number;
   };
   /** "inline" = compact icon-button; "pill" = small labelled pill */
   variant?: "inline" | "pill";

@@ -105,6 +105,25 @@ describe("S1 — createActiveSessionRoutes gates the root-app session reads (rea
     expect((await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashB" } })).status).toBe(403);
     expect((await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } })).status).toBe(200);
   });
+
+  it("D8 (M8) — live reflects the registered-wrapper set; sessions without a wrapper report live:false", async () => {
+    createTestSession("s_alive");
+    createTestSession("s_dead");
+    const registered = new Set(["s_alive"]);
+    const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA", registered);
+    const res = await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } });
+    const list = (await res.json()).sessions as Array<{ sessionId: string; live: boolean }>;
+    expect(list.find((s) => s.sessionId === "s_alive")?.live).toBe(true);
+    expect(list.find((s) => s.sessionId === "s_dead")?.live).toBe(false);
+  });
+
+  it("D8 (M8) — fixtures without the set report live (old-daemon behavior)", async () => {
+    createTestSession("s_x");
+    const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
+    const res = await routes.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } });
+    const list = (await res.json()).sessions as Array<{ sessionId: string; live: boolean }>;
+    expect(list.find((s) => s.sessionId === "s_x")?.live).toBe(true);
+  });
 });
 
 describe("FN3 — ledger_write metric recorded daemon-side in /memory routes", () => {
