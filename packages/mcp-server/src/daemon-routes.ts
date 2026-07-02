@@ -42,7 +42,7 @@ const CreateArtifactBody = z
     id: z.string().min(1),
     type: z.string().min(1),
     title: z.string().min(1),
-    content: z.record(z.unknown()),
+    content: z.record(z.string(), z.unknown()),
   })
   .passthrough();
 const AddCommentBody = z
@@ -53,7 +53,7 @@ const AddCommentBody = z
     author: z.enum(["human", "agent"]),
   })
   .passthrough();
-const RecordDecisionBody = z.record(z.unknown()); // must be an object; shape is the store's concern
+const RecordDecisionBody = z.record(z.string(), z.unknown()); // must be an object; shape is the store's concern
 
 async function parseJsonBody<T>(
   c: Context,

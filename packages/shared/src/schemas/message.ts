@@ -13,7 +13,7 @@ export const ToolCallEventSchema = z.object({
   type: z.literal("tool_call"),
   toolCallId: z.string(),
   tool: z.string(),
-  input: z.record(z.unknown()),
+  input: z.record(z.string(), z.unknown()),
   summary: z.string().optional(),
 });
 
