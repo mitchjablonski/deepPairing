@@ -3,6 +3,7 @@ import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard } from "./components/SessionWrapCard";
+import { computePending } from "./lib/pending";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -197,6 +198,9 @@ function App() {
       // them while an overlay/drawer is open (the toggles + Escape above still
       // work) so they don't drive the artifact hidden behind it.
       if (overlayOpenRef.current) return;
+      // E3 review — modifier chords are the browser's (Ctrl+J downloads,
+      // Cmd+N new window…); a chord must never also drive artifact state.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       const store = useArtifactStore.getState();
 
@@ -209,6 +213,16 @@ function App() {
           ? Math.min(currentIdx + 1, visible.length - 1)
           : Math.max(currentIdx - 1, 0);
         store.selectArtifact(visible[nextIdx].id);
+      }
+
+      // E3 (L1) — `n`: next thing waiting on you. Same wrap-around cycle as
+      // the TurnIndicator pill; at 15+ artifacts this is the velocity move.
+      if (e.key === "n") {
+        const pending = computePending(store.artifacts).drafts;
+        if (pending.length === 0) return;
+        e.preventDefault();
+        const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);
+        store.selectArtifact(pending[(idx + 1) % pending.length].id);
       }
 
       if (e.key === "a" || e.key === "r") {

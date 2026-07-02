@@ -5,7 +5,17 @@ import { useModal } from "../hooks/useModal";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
 
+/** Recursively collect string VALUES from artifact content (keys excluded). */
+function collectStrings(v: unknown, out: string[] = []): string {
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) v.forEach((x) => collectStrings(x, out));
+  else if (v && typeof v === "object") Object.values(v).forEach((x) => collectStrings(x, out));
+  return out.join(" ").replace(/\s+/g, " ");
+}
+
 interface PaletteItem {
+  /** E3 (L3) — flattened artifact content, lowercase, capped; substring-searched. */
+  searchText?: string;
   id: string;
   label: string;
   description?: string;
@@ -68,10 +78,18 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     // Artifacts
     for (const a of artifacts) {
       if (a.status === "superseded") continue;
+      // E3 (L3) — content is searchable, not just title/type: at 15+
+      // artifacts "where did we discuss the retry policy?" needs an answer.
+      // Review — string VALUES only: JSON.stringify put schema KEYS in the
+      // haystack, so queries like 'status'/'steps'/'evidence' matched every
+      // artifact structurally. 50KB cap (was a silent 2KB truncation that
+      // failed exactly on the big artifacts where search matters most).
+      const contentText = collectStrings(a.content).slice(0, 50_000).toLowerCase();
       items.push({
         id: a.id,
         label: a.title,
         description: `${a.type} · ${a.status}`,
+        searchText: contentText,
         icon: a.type,
         type: "artifact",
         action: () => { selectArtifact(a.id); onClose(); },
@@ -88,7 +106,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     return allItems
       .map((item) => ({
         item,
-        score: Math.max(fuzzyScore(query, item.label), fuzzyScore(query, item.description ?? "")),
+        score: Math.max(
+          fuzzyScore(query, item.label),
+          fuzzyScore(query, item.description ?? ""),
+          // Content: exact-substring only (fuzzy over a 2000-char haystack
+          // matches everything); scored below title hits so titles rank first.
+          item.searchText?.includes(query.trim().toLowerCase()) ? 1 : -1,
+        ),
       }))
       .filter((r) => r.score >= 0)
       .sort((a, b) => b.score - a.score)

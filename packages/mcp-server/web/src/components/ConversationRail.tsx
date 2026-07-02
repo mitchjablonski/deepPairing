@@ -105,7 +105,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
   // now, so the next open's "since" clock starts here. Effectively: while
   // the rail is open, every comment is "unread" relative to the moment we
   // opened it; close + reopen = fresh diff.
-  const [previousLastOpenedAt] = useState<number>(() => loadLastOpenedAt());
+  const [previousLastOpenedAt, setPreviousLastOpenedAt] = useState<number>(() => loadLastOpenedAt());
   useEffect(() => { saveLastOpenedAt(Date.now()); }, []);
 
 
@@ -298,6 +298,21 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
                 count={unansweredQuestions}
                 accent
               />
+              {/* E3 (L5) — bulk-clear: granular-only clearing was triage
+                  friction at volume. Resets the unread clock to now. */}
+              {totalUnread > 0 && (
+                <button
+                  onClick={() => {
+                    const now = Date.now();
+                    setPreviousLastOpenedAt(now);
+                    saveLastOpenedAt(now);
+                  }}
+                  className="ml-auto text-2xs text-text-muted hover:text-text-primary px-2 py-0.5 rounded hover:bg-surface-hover transition-colors"
+                  title="Clear the unread markers on every thread"
+                >
+                  Mark all read
+                </button>
+              )}
             </div>
           )}
         </div>

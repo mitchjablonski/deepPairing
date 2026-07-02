@@ -53,3 +53,25 @@ describe("CommandPalette — modal contract (useModal migration, UM2)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe("E3 (L3) — content search", () => {
+  it("matches artifact CONTENT by substring; schema keys never match", async () => {
+    useArtifactStore.setState({
+      artifacts: [
+        art({ id: "a1", title: "Cache design", content: { summary: "we should use exponential backoff for the retry policy" } }),
+        art({ id: "a2", title: "Unrelated", content: { summary: "nothing relevant here" } }),
+      ],
+    });
+    render(<CommandPalette onClose={() => {}} />);
+    const input = screen.getByPlaceholderText(/search/i);
+    fireEvent.change(input, { target: { value: "retry policy" } });
+    expect(await screen.findByText("Cache design")).toBeInTheDocument();
+    expect(screen.queryByText("Unrelated")).toBeNull();
+
+    // Schema KEYS must not match: 'summary' is a key on BOTH artifacts but
+    // content of neither. (JSON.stringify-based haystacks failed this.)
+    fireEvent.change(input, { target: { value: "summary" } });
+    expect(screen.queryByText("Cache design")).toBeNull();
+    expect(screen.queryByText("Unrelated")).toBeNull();
+  });
+});
