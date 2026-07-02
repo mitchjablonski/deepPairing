@@ -186,7 +186,6 @@ export function TurnIndicator() {
   // D10 (H2) — when an approved plan is mid-execution, say WHICH step
   // instead of the generic "working": the post-approval build was the
   // longest unnarrated stretch in the session.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- artifacts is the only input
   const planProgress = useMemo(() => {
     // Newest first (latestReasoningAction's idiom): an older abandoned
     // half-tracked plan must not mask the one actually executing. Terminal
