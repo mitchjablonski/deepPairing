@@ -542,13 +542,20 @@ function MultiAgentSync() {
   const EMPTY_SESSION_RETRY_MS = 30_000;
 
   useEffect(() => {
-    let cancelled = false;
+    // E7 — one controller per effect generation; every tick's fetch carries
+    // the signal, cleanup aborts whichever is mid-flight.
+    const ac = new AbortController();
 
     const sync = async () => {
       // PP3 — skip the fetch + parse + cross-session merge when the tab is
       // hidden (the timer keeps ticking but does no work / triggers no renders).
       if (typeof document !== "undefined" && document.hidden) return;
       for (const session of activeSessions) {
+        // E7 review — bail BEFORE stamping the backoff: an abort mid-loop
+        // otherwise phantom-stamped every remaining session (their fetches
+        // instantly rejected on the dead signal AFTER the stamp), delaying
+        // another agent's session discovery by up to 30s post-churn.
+        if (ac.signal.aborted) return;
         if (knownSessionIds.has(session.sessionId)) continue; // Already loaded
         const last = lastAttemptRef.current.get(session.sessionId) ?? 0;
         if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
@@ -556,10 +563,10 @@ function MultiAgentSync() {
 
         // Load this session's artifacts from disk via the API
         try {
-          const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`);
+          const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`, { signal: ac.signal });
           if (!sRes.ok) continue;
           const state = await sRes.json();
-          if (cancelled) return;
+          if (ac.signal.aborted) return;
 
           for (const artifact of state.artifacts ?? []) {
             addArtifact(artifact);
@@ -575,7 +582,7 @@ function MultiAgentSync() {
     // 5s cadence stays for reacting to NEWLY appearing sessions quickly, but
     // it's now fetch-free unless there's an unknown session past its backoff.
     const timer = setInterval(sync, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { ac.abort(); clearInterval(timer); };
     // sessionKey (not the array) so a same-content refresh doesn't churn the
     // interval; activeSessions is read via a ref-stable closure re-created
     // only when membership actually changes.

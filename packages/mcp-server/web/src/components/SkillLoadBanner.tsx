@@ -43,14 +43,16 @@ export function SkillLoadBanner() {
   const resolved = dismissed || hasArtifacts || Boolean(status?.pairingProtocolSkillLikelyLoaded);
   useEffect(() => {
     if (resolved) return;
-    let cancelled = false;
+    // E7 — one controller for the whole polling effect: every tick's fetch
+    // carries the signal, and cleanup aborts whichever is in flight.
+    const ac = new AbortController();
     const fetchStatus = async () => {
       if (typeof document !== "undefined" && document.hidden) return;
       try {
-        const res = await apiGet(`${apiBase()}/api/skill-status`);
+        const res = await apiGet(`${apiBase()}/api/skill-status`, { signal: ac.signal });
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setStatus(data);
+        if (!ac.signal.aborted) setStatus(data);
       } catch {
         // Silent — banner just won't show
       }
@@ -58,7 +60,7 @@ export function SkillLoadBanner() {
     fetchStatus();
     // Recheck every 30s until we have proof the skill is loaded.
     const timer = setInterval(fetchStatus, 30000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { ac.abort(); clearInterval(timer); };
   }, [resolved]);
 
   // Hide the banner as soon as we have evidence the skill is actually working.

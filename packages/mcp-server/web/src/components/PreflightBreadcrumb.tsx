@@ -148,21 +148,23 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   );
 
   useEffect(() => {
-    let cancelled = false;
+    // E7 — abortable: the cancelled flag left the request in-flight at unmount.
+    const ac = new AbortController();
     setLoaded(false);
     setTrace(null);
     setOpen(false);
     fetch(`${apiBase()}/api/artifacts/${encodeURIComponent(artifactId)}/preflight-trace`, {
       headers: sessionHeaders(),
+      signal: ac.signal,
     })
       .then((r) => (r.ok ? r.json() : { trace: null }))
       .then((body) => {
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         setTrace(body?.trace ?? null);
         setLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setLoaded(true);
+        if (!ac.signal.aborted) setLoaded(true);
       });
 
     // Y1' — listen for the live broadcast so the breadcrumb appears the
@@ -187,7 +189,7 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     };
     window.addEventListener("dp:preflight-trace", handler as EventListener);
     return () => {
-      cancelled = true;
+      ac.abort();
       window.removeEventListener("dp:preflight-trace", handler as EventListener);
     };
   }, [artifactId, projectRoot]);

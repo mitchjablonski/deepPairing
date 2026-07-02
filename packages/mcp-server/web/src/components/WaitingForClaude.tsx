@@ -48,19 +48,20 @@ export function WaitingForClaude({ variant = "no-session" }: { variant?: "no-ses
     try { localStorage.setItem(LEARN_MORE_KEY, next ? "1" : "0"); } catch {}
   };
 
+  // E7 — abortable; panel works without daemon info.
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       try {
-        const res = await fetch(`${apiBase()}/api/daemon-info`);
+        const res = await fetch(`${apiBase()}/api/daemon-info`, { signal: ac.signal });
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setInfo(data);
+        if (!ac.signal.aborted) setInfo(data);
       } catch {
         // Silent — panel works without daemon info
       }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, []);
 
   return (
