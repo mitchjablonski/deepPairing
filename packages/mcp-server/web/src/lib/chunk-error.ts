@@ -39,5 +39,5 @@ export function handlePreloadError(
 }
 
 export function installPreloadErrorRecovery(): void {
-  window.addEventListener("vite:preloadError", (e) => handlePreloadError(e as unknown as { preventDefault: () => void }));
+  window.addEventListener("vite:preloadError", (e) => handlePreloadError(e));
 }

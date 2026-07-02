@@ -77,3 +77,32 @@ describe("E5 — handlePreloadError (auto-reload, loop-guarded)", () => {
     expect(e2.preventDefault).not.toHaveBeenCalled();
   });
 });
+
+describe("E5 review — single-listener contract (the legacy-hook regression class)", () => {
+  beforeEach(() => sessionStorage.clear());
+
+  it("a second-in-window vite:preloadError ends up NOT defaultPrevented — the rejection must reach the boundary", async () => {
+    // The old usePreloadErrorReload hook preventDefault'ed EVERY event, which
+    // makes vite's helper resolve the failed import as undefined — the lazy
+    // factory then throws an undefined-module TypeError that dodges
+    // isChunkLoadError and resurrects the "malformed content" field bug.
+    // This pins the contract: after the auto-reload consumed the first event,
+    // nothing in the app swallows the second.
+    const { installPreloadErrorRecovery } = await import("../../lib/chunk-error");
+    const reloadSpy = vi.fn();
+    const origReload = window.location.reload;
+    Object.defineProperty(window.location, "reload", { value: reloadSpy, configurable: true });
+    try {
+      installPreloadErrorRecovery();
+      const first = new Event("vite:preloadError", { cancelable: true });
+      window.dispatchEvent(first);
+      expect(first.defaultPrevented).toBe(true); // consumed by the auto-reload
+
+      const second = new Event("vite:preloadError", { cancelable: true });
+      window.dispatchEvent(second);
+      expect(second.defaultPrevented).toBe(false); // propagates to the boundary
+    } finally {
+      Object.defineProperty(window.location, "reload", { value: origReload, configurable: true });
+    }
+  });
+});

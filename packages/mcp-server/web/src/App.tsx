@@ -27,7 +27,6 @@ import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
-import { usePreloadErrorReload } from "./hooks/usePreloadErrorReload";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
 
@@ -124,7 +123,6 @@ function App() {
 
   // Mermaid resilience — sticky "reload" prompt when a lazy chunk fails to load
   // (daemon rebuilt/restarted → stale tab). See the hook for details.
-  usePreloadErrorReload();
 
   // B2 — "(2) Your turn — deepPairing" in the tab title while drafts wait.
   useDocumentTitleBadge();
