@@ -26,7 +26,6 @@ import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 
 const statusDots: Record<string, string> = {
