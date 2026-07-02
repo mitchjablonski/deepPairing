@@ -4,7 +4,7 @@
  * refactors silently break.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import App from "../../App";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
