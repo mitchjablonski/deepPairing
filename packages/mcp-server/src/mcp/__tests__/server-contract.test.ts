@@ -330,3 +330,23 @@ describe("MCP Tool Handlers — protocol contract", () => {
     });
   });
 });
+
+describe("D4 — write-tool inputSchemas derive from the validator zod shapes", () => {
+  it("advertised schemas carry the zod contracts (required sets + described fields), not hand-written copies", async () => {
+    const list = await client.listTools();
+    const schemaOf = (name: string) => list.tools.find((t) => t.name === name)!.inputSchema as any;
+
+    // Root required sets — the validator's word, verbatim.
+    expect(schemaOf("present_findings").required).toEqual(["summary", "findings"]);
+    expect(schemaOf("present_spec").required).toContain("title"); // spec titles are validator-required
+    expect(schemaOf("present_plan").required).toEqual(expect.arrayContaining(["steps", "estimatedChanges", "title"]));
+    // code_change: `before` must NOT be required (validator fills ?? "") —
+    // a naive derivation from the content schema would have tightened it.
+    expect(schemaOf("present_code_change").required).not.toContain("before");
+
+    // .describe() metadata survives into the advertisement.
+    expect(schemaOf("present_findings").properties.title.description).toContain("Descriptive title");
+    const finding = schemaOf("present_findings").properties.findings.items.properties;
+    expect(typeof finding.significance.description).toBe("string");
+  });
+});

@@ -13,20 +13,21 @@ export const FindingSchema = z.object({
    *  needs to ensure findings is an array of objects, not a string. */
   evidence: z.union([z.string(), z.array(EvidenceInputSchema)]).optional(),
   /** How interesting / note-worthy — signals whether this belongs in the session at all. */
-  significance: z.enum(["low", "medium", "high"]),
+  significance: z.enum(["low", "medium", "high"]).describe("How note-worthy this finding is"),
   /**
    * Risk level for prioritization ("if we don't address this, how bad?").
    * Distinct from significance. Helps the developer know what to learn from
    * first. Optional so older sessions remain valid.
    */
-  severity: FindingSeveritySchema.optional(),
+  severity: FindingSeveritySchema.optional()
+    .describe("Risk level if unaddressed — helps the human prioritize what to study first. Distinct from significance."),
   /**
    * How confident the agent is in this finding. The `present_findings` tool
    * accepts it and the UI renders a confidence badge, so it must be modelled
    * here — otherwise the non-strict validation boundary silently strips it
    * before the artifact is persisted. Optional for back-compat.
    */
-  confidence: z.enum(["low", "medium", "high"]).optional(),
+  confidence: z.enum(["low", "medium", "high"]).optional().describe("How confident are you in this finding?"),
   impact: z.string().optional().describe("What happens if this is not addressed"),
   recommendation: z.string().optional().describe("What should be done"),
   relatedFindings: z.array(z.string()).optional(),
