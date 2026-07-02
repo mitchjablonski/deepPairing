@@ -231,7 +231,7 @@ export function MessageInput() {
 
       <div className="flex items-center justify-between mt-1">
         <p className="text-2xs text-text-muted">
-          Reaches the agent on its next <code className="font-mono">check_feedback</code> call
+          The agent will see this the next time it checks in — usually under 30s
         </p>
         <button
           onClick={handleSend}

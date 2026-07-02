@@ -159,10 +159,11 @@ describe("TurnIndicator — U2 agent liveness", () => {
     expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
   });
 
-  it("a freshly-connected session with nothing yet shows 'Agent working' (not 'Up to date')", () => {
-    seedConnected(); // no artifacts/comments
+  it("C2 — a freshly-connected session with NO signal shows 'Connected — waiting', not the unfalsifiable 'Agent working'", () => {
+    seedConnected(); // no artifacts/comments/heartbeats
     render(<TurnIndicator />);
-    expect(screen.getByText(/agent working/i)).toBeInTheDocument();
+    expect(screen.getByText(/connected — waiting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/agent working/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/up to date/i)).not.toBeInTheDocument();
   });
 
@@ -204,6 +205,17 @@ describe("B2 — heartbeat liveness + elapsed label", () => {
     useConnectionStore.setState({ agentActivityAt: stale, agentActiveSince: stale } as any);
     render(<TurnIndicator />);
     expect(screen.getByText(/up to date/i)).toBeInTheDocument();
+  });
+});
+
+describe("C2 — honest t=0: no signal must not claim 'Agent working'", () => {
+  // (the zero-signal case itself is asserted in the rewritten U2 test above)
+  it("flips to 'Agent working' once the first heartbeat arrives", () => {
+    seedConnected();
+    useConnectionStore.setState({ agentActivityAt: Date.now(), agentActiveSince: Date.now() } as any);
+    render(<TurnIndicator />);
+    expect(screen.getByText(/agent working/i)).toBeInTheDocument();
+    expect(screen.queryByText(/connected — waiting/i)).not.toBeInTheDocument();
   });
 });
 

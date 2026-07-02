@@ -134,7 +134,7 @@ describe("ConversationRail (W1)", () => {
       content: "is this the same issue as #14?", createdAt: "2026-04-26T10:00:00.000Z",
     }));
     render(<ConversationRail onClose={() => {}} />);
-    expect(screen.getByText(/awaiting agent answer/i)).toBeInTheDocument();
+    expect(screen.getByText(/awaiting the agent's answer/i)).toBeInTheDocument();
     expect(screen.getByText(/1 unanswered question/i)).toBeInTheDocument();
   });
 
@@ -151,7 +151,7 @@ describe("ConversationRail (W1)", () => {
     expect(screen.queryByText(/1 unanswered question/i)).not.toBeInTheDocument();
     // U5 — the inline thread marker must agree with the pill: a resolved
     // question is NOT "awaiting agent answer" (the shadowed predicate bug).
-    expect(screen.queryByText(/awaiting agent answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/awaiting the agent's answer/i)).not.toBeInTheDocument();
   });
 
   it("does NOT flag a question once an agent reply exists for it", () => {
@@ -166,7 +166,7 @@ describe("ConversationRail (W1)", () => {
       content: "A", createdAt: "2026-04-26T10:01:00.000Z",
     }));
     render(<ConversationRail onClose={() => {}} />);
-    expect(screen.queryByText(/awaiting agent answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/awaiting the agent's answer/i)).not.toBeInTheDocument();
   });
 
   it("clicking a thread row dispatches dp:focus-artifact with the right id", async () => {

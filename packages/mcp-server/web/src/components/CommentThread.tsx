@@ -75,7 +75,7 @@ function CommentBubble({ comment }: { comment: Comment }) {
               </span>
             )
             : (
-              <span className="text-accent-blue/70 text-2xs" title="Delivered to the session — the agent will see it on its next check_feedback">
+              <span className="text-accent-blue/70 text-2xs" title="Delivered to the session — the agent will see it the next time it checks in">
                 {/* U8 — only a QUESTION leaves the agent owing a reply; a plain
                     comment/suggestion is just delivered, so don't imply the
                     agent is on the hook for it. */}
@@ -374,7 +374,7 @@ export function AskTrigger({
             </button>
           </div>
           <div className="text-[9px] text-text-muted">
-            Answered via <code className="font-mono">answer_question</code> in the agent's next turn
+            The agent will answer on its next turn
           </div>
 
           {/* If there are answered questions, show a hint the user can collapse */}

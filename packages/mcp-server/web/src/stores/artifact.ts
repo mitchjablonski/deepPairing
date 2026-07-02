@@ -90,6 +90,11 @@ export interface ArtifactState {
   comments: Record<string, Comment[]>;
   selectedArtifactId: string | null;
   unreadIds: string[];
+  /** C2 — decision ids the AGENT has consumed (check_feedback ack). Drives the
+   *  "✓ Claude picked this up" receipt on resolved DecisionCards. Record, not
+   *  Set, per the no-Map/Set store convention. */
+  acknowledgedDecisions: Record<string, true>;
+  markDecisionsAcknowledged: (decisionIds: string[]) => void;
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
@@ -179,6 +184,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
   comments: {},
   selectedArtifactId: null,
   unreadIds: [],
+  acknowledgedDecisions: {},
 
   // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
   // visibly increased its count over time while the user just sat on the
@@ -458,5 +464,12 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     }
   },
 
-  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [] }),
+  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {} }),
+
+  markDecisionsAcknowledged: (decisionIds) =>
+    set((s) => {
+      const next = { ...s.acknowledgedDecisions };
+      for (const id of decisionIds) next[id] = true;
+      return { acknowledgedDecisions: next };
+    }),
 }));

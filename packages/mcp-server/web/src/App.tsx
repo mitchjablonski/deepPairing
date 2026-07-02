@@ -36,6 +36,24 @@ function App() {
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const switchSession = useConnectionStore((s) => s.switchSession);
   const refreshSessions = useConnectionStore((s) => s.refreshSessions);
+  // C2 review — "drafting" honesty: a heartbeat within the last 60s (a live
+  // wrapper pings ≤30s via check_feedback polls). Primitive selector so the
+  // shell doesn't re-render per heartbeat — it flips only around the minute
+  // boundary, and the routing branch re-evaluates on other renders anyway.
+  const agentRecentlyActive = useConnectionStore(
+    (s) => s.agentActivityAt !== null && Date.now() - s.agentActivityAt < 60_000,
+  );
+
+  // C2 review — auto-bind an unbound tab when there's EXACTLY ONE active
+  // session: an unbound composer posts to the daemon's default store (map
+  // insertion order — possibly a dead session) while claiming Sent ✓.
+  // Conservative single-session scope so multi-session global tabs keep
+  // their aggregate view.
+  useEffect(() => {
+    if (connected && sessionId == null && activeSessions.length === 1) {
+      switchSession(activeSessions[0].sessionId);
+    }
+  }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
 
   // U7 — at-rest signal on the Conversation button: how many human questions
@@ -450,14 +468,28 @@ function App() {
         }>
           {hasArtifacts
             ? <ArtifactPanel />
-            : (connected && activeSessions.length === 0
+            : connected && activeSessions.length > 0 && agentRecentlyActive
+              // C2 — a LIVE session with no artifacts yet is the opening beat
+              // of every pairing session; pre-C2 it showed IdleHome (a
+              // retrospective ledger browser) — misdirection during the first
+              // wait. "Drafting" requires a RECENT heartbeat (review catch:
+              // /api/active-sessions retains unregistered sessions, so the
+              // list alone would claim "Claude is working" forever after it
+              // exited — the same unfalsifiable claim C2 removed from the
+              // TurnIndicator).
+              ? <div className="p-5"><WaitingForClaude variant="drafting" /></div>
+              : connected
                 ? <div className="p-5"><WaitingForClaude /></div>
-                : <IdleHome />)}
+                : <IdleHome />}
         </ErrorBoundary>
       </div>
 
-      {/* Free-form message to agent */}
-      {hasArtifacts && <MessageInput />}
+      {/* Free-form message to agent. C2 — also shown during the live
+          pre-first-artifact wait: that's exactly when a nudge matters, and it
+          was the one moment you couldn't send one. Requires a BOUND sessionId
+          (review catch: an unbound tab's message routes to the daemon's
+          default store — possibly a dead session — while the UI says Sent ✓). */}
+      {(hasArtifacts || (connected && sessionId != null && activeSessions.length > 0)) && <MessageInput />}
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}
