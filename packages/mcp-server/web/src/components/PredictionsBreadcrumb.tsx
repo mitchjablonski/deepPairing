@@ -60,22 +60,24 @@ export function PredictionsBreadcrumb({
   const [predictions, setPredictions] = useState<Prediction[] | null>(null);
   const [expanded, setExpanded] = useState(false);
 
+  // E7 — abortable (manual: the retrospective flow mutates this state
+  // optimistically, so the read-only useAbortableFetch doesn't fit).
   useEffect(() => {
     if (!concept?.trim()) return;
-    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       try {
         const params = new URLSearchParams({ concept, limit: "3" });
         if (excludeArtifactId) params.set("excludeArtifactId", excludeArtifactId);
-        const res = await apiGet(`${apiBase()}/api/predictions?${params}`);
+        const res = await apiGet(`${apiBase()}/api/predictions?${params}`, { signal: ac.signal });
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setPredictions(data.predictions ?? []);
+        if (!ac.signal.aborted) setPredictions(data.predictions ?? []);
       } catch {
         // Silent — the breadcrumb is an assist; failure shouldn't bother the user.
       }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, [concept, excludeArtifactId]);
 
   if (!predictions || predictions.length === 0) return null;

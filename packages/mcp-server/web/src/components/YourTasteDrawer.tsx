@@ -143,37 +143,35 @@ export function YourTasteDrawer({
 
 
   useEffect(() => {
-    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       try {
-        const res = await apiGet(`${apiBase()}/api/philosophy?limit=200`);
+        const res = await apiGet(`${apiBase()}/api/philosophy?limit=200`, { signal: ac.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!cancelled) setEntries(data.entries ?? []);
+        if (!ac.signal.aborted) setEntries(data.entries ?? []);
       } catch (err: any) {
-        if (!cancelled) setError(err?.message ?? String(err));
+        if (!ac.signal.aborted) setError(err?.message ?? String(err));
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, []);
 
   // Lazy-load the digest the first time the tab is opened.
   useEffect(() => {
     if (tab !== "digest" || digest !== null || digestError !== null) return;
-    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       try {
-        const res = await apiGet(`${apiBase()}/api/philosophy/digest?sinceDays=7`);
+        const res = await apiGet(`${apiBase()}/api/philosophy/digest?sinceDays=7`, { signal: ac.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!cancelled) setDigest(data);
+        if (!ac.signal.aborted) setDigest(data);
       } catch (err: any) {
-        if (!cancelled) setDigestError(err?.message ?? String(err));
+        if (!ac.signal.aborted) setDigestError(err?.message ?? String(err));
       }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, [tab, digest, digestError]);
 
   // EE2 — wiring the shared store handles fetch + dp:preflight-trace
@@ -192,18 +190,18 @@ export function YourTasteDrawer({
   // P3 — lazy-load team preferences on first tab visit.
   useEffect(() => {
     if (tab !== "team" || teamPrefs !== null || teamError !== null) return;
-    let cancelled = false;
+    const ac = new AbortController();
     (async () => {
       try {
-        const res = await apiGet(`${apiBase()}/api/team-preferences`);
+        const res = await apiGet(`${apiBase()}/api/team-preferences`, { signal: ac.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!cancelled) setTeamPrefs(data);
+        if (!ac.signal.aborted) setTeamPrefs(data);
       } catch (err: any) {
-        if (!cancelled) setTeamError(err?.message ?? String(err));
+        if (!ac.signal.aborted) setTeamError(err?.message ?? String(err));
       }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, [tab, teamPrefs, teamError]);
 
   const filtered = (entries ?? []).filter((e) => (filter === "all" ? true : e.stance === filter));

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiGet, apiBase } from "../lib/api";
 import { useLedgerStore } from "../stores/ledger";
+import { useAbortableFetch } from "../hooks/useAbortableFetch";
 
 /**
  * Compact "look how much you've taught it" stat for the header — the felt proof
@@ -14,29 +15,20 @@ import { useLedgerStore } from "../stores/ledger";
  * the count ticks up in the moment the taste compounds rather than on reload.
  */
 export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
-  const [stat, setStat] = useState<{ blocks: number; writes: number } | null>(null);
+
   // Bumped every time the ledger digest refetches (dp:preflight-trace, override) —
   // a cheap, existing "taste changed" signal to re-pull the cumulative counts.
   const ledgerVersion = useLedgerStore((s) => s.version);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiGet(`${apiBase()}/api/metrics`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setStat({
-          blocks: data?.counts?.preflightBlocks?.total ?? 0,
-          writes: data?.counts?.ledgerWrites?.total ?? 0,
-        });
-      } catch {
-        // Silent — badge just stays hidden if /api/metrics isn't reachable.
-      }
-    })();
-    return () => {
-      cancelled = true;
+  // E7 — abortable (the cancelled-flag left the request in-flight at
+  // unmount; badge stays hidden if /api/metrics isn't reachable).
+  const stat = useAbortableFetch(async (signal) => {
+    const res = await apiGet(`${apiBase()}/api/metrics`, { signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      blocks: data?.counts?.preflightBlocks?.total ?? 0,
+      writes: data?.counts?.ledgerWrites?.total ?? 0,
     };
   }, [ledgerVersion]);
 
