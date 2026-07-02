@@ -569,6 +569,10 @@ function MultiAgentSync() {
   // C1 — reuse the session list App already polls into the connection store
   // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
+  // C1 review — refreshSessions sets a NEW array identity every 10s poll even
+  // when unchanged; depending on the array tore down + recreated the 5s
+  // interval each time. Key the effect on the id list's VALUE instead.
+  const sessionKey = activeSessions.map((s) => s.sessionId).join(",");
   const knownSessionIds = useMemo(() => new Set(artifacts.map((a) => a.sessionId)), [artifacts]);
   // C1 — a session with ZERO artifacts is never "known" (knownSessionIds
   // derives from artifact sessionIds), so pre-C1 it was refetched every 5s
@@ -614,7 +618,11 @@ function MultiAgentSync() {
     // it's now fetch-free unless there's an unknown session past its backoff.
     const timer = setInterval(sync, 5000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [activeSessions, knownSessionIds.size]); // Re-run on new sessions / merges
+    // sessionKey (not the array) so a same-content refresh doesn't churn the
+    // interval; activeSessions is read via a ref-stable closure re-created
+    // only when membership actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey, knownSessionIds.size]); // Re-run on new sessions / merges
 
   return null; // No visual output — just syncs data
 }

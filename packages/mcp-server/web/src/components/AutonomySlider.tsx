@@ -48,7 +48,10 @@ export function AutonomySlider() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch {
-      setLevel(prev);
+      // C1 review — only roll back if the display still shows THIS request's
+      // optimistic value; a rapid A→B→C where B's save fails after C's
+      // succeeded must not clobber C back to A.
+      setLevel((cur) => (cur === newLevel ? prev : cur));
       useToastStore.getState().push({
         kind: "error",
         title: "Autonomy level not saved",

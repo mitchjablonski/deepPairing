@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
+import { useConnectionStore } from "../stores/connection";
 
 /**
  * O6 — Skill-load banner. When `/api/skill-status` reports that the
@@ -27,6 +28,13 @@ export function SkillLoadBanner() {
     try { return sessionStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; }
   });
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  // C1 review — a positive status latched `resolved` FOREVER, so after a
+  // project switch (new daemon, new skill state) the banner could never show
+  // again until reload. Reset the cached status when the project changes.
+  const projectHash = useConnectionStore((s) => s.projectHash);
+  useEffect(() => {
+    setStatus(null);
+  }, [projectHash]);
 
   // C1 — the resolution states only gated RENDERING; the 30s poll (which
   // fs.readFileSync's CLAUDE.md server-side per hit) kept firing for the tab's
