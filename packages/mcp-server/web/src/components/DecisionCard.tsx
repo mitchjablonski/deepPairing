@@ -647,7 +647,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   field that Y5 had hoisted only into the stored shape). */}
               {option.concept?.name && (
                 <div
-                  className="mb-2 -mx-1 px-1 py-0.5 rounded"
+                  className="mb-2 -mx-1 px-1 py-0.5 rounded cursor-default"
                   // B6 — the WHOLE badge row is a selection-dead zone (same
                   // treatment AskTrigger gets above). The badge itself already
                   // stops propagation, but a near-miss a few px around it hit

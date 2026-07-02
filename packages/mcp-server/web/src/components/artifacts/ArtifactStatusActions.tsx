@@ -57,8 +57,19 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const expanded =
-    atEnd || forceExpanded || countdown !== null || rejecting || comment.trim().length > 0;
+  // B7 — manual collapse. B6 made expansion a one-way latch: once expanded
+  // (reached the end / clicked the expander) there was no way back to the slim
+  // bar. Minimize collapses the VOLUNTARY expanders; the mandatory ones (an
+  // armed countdown, an in-flight reject, typed text) still force the panel —
+  // the countdown can never be hidden.
+  const [userCollapsed, setUserCollapsed] = useState(false);
+  // B7' — reaching the end re-opens a minimized panel (rising edge only:
+  // minimizing while AT the end sticks until you scroll away and return).
+  useEffect(() => {
+    if (atEnd) setUserCollapsed(false);
+  }, [atEnd]);
+  const mustExpand = countdown !== null || rejecting || comment.trim().length > 0;
+  const expanded = mustExpand || (!userCollapsed && (atEnd || forceExpanded));
   // Focus must happen AFTER the expanded render commits (the textarea doesn't
   // exist while compact). An effect keyed on forceExpanded is deterministic
   // where a requestAnimationFrame race isn't (and rAF never fires in jsdom).
@@ -72,6 +83,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   }, [forceExpanded]);
   const expandAndFocus = () => {
     wantFocusRef.current = true;
+    setUserCollapsed(false);
     setForceExpanded(true);
     // Already expanded (e.g. atEnd) → the effect won't re-fire; focus directly.
     commentRef.current?.focus();
@@ -146,6 +158,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         // `r` shortcut died on exactly the long artifacts that float). Expand
         // first; the forceExpanded effect focuses after the commit.
         wantFocusRef.current = true;
+        setUserCollapsed(false);
         setForceExpanded(true);
         commentRef.current?.focus();
         commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
@@ -158,6 +171,10 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   const cancelCountdown = () => {
     setCountdownPaused(true);
     setCountdown(null);
+    // B7 review — cancelling a countdown is ENGAGEMENT: without this, a user
+    // who minimized earlier had the whole panel snap to compact under their
+    // Cancel click (countdown was the only thing mandating expansion).
+    setUserCollapsed(false);
   };
 
   if (artifact.status === "approved") {
@@ -448,6 +465,25 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             Reject
           </button>
         </div>
+
+        {/* B7 — collapse back to the slim bar. Lives in the action row
+            (right-aligned) so it isn't crowded against the message composer
+            below the pane. Hidden while something mandates the full panel
+            (countdown/reject/typed text) — a dead control lies. Scrolling
+            back to the end re-opens automatically. */}
+        {!mustExpand && (
+          <button
+            type="button"
+            onClick={() => {
+              setUserCollapsed(true);
+              setForceExpanded(false);
+            }}
+            className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors shrink-0"
+            title="Collapse to the slim bar (Approve stays one click; reaching the end re-opens)"
+          >
+            Minimize ▾
+          </button>
+        )}
       </div>
 
       {/* Reject confirm: name the pattern (the cross-project ledger key) so a
