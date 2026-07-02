@@ -538,11 +538,19 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
   // ResearchContent (every finding an object, findings an array) so the
   // renderer can trust the shape. RichFinding is the local view type — it adds
   // the UI-only `confidence` the coercer preserves and narrows `evidence`.
-  const content = coerceResearchContent(artifact.content) as {
-    summary: string;
-    findings: RichFinding[];
-    openQuestions?: string[];
-  };
+  // D6 review — memoize the coercion at the SOURCE: unmemoized it built a
+  // fresh findings array every render, which made every downstream
+  // [findings]-keyed memo (the triage strip's included) decorative — and on
+  // huge artifacts the re-coerce itself was the bigger per-render cost.
+  const content = useMemo(
+    () =>
+      coerceResearchContent(artifact.content) as {
+        summary: string;
+        findings: RichFinding[];
+        openQuestions?: string[];
+      },
+    [artifact.content],
+  );
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const [focusMode, setFocusMode] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);

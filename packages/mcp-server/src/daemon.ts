@@ -357,10 +357,12 @@ app.get("/api/daemon-info", (c) => {
 // endpoint. Uncached that's ~1,500 socket attempts/min per tab, cross-traffic
 // multiplying across daemons. Cache the sweep daemon-side so all tabs share one
 // sweep per TTL window; a switcher badge lagging ≤15s is imperceptible.
-// D6 (P3) — TTL ≈ the 30s browser poll (15s meant EVERY poll missed and
-// triggered a full 128-probe sweep). Freshness where it matters comes from
-// the ?fresh=1 bypass the dropdown-open refresh sends.
-const PROJECTS_SWEEP_TTL_MS = 30_000;
+// D6 (P3) — TTL 35s > the 30s browser poll: review-caught, TTL == poll is a
+// knife-edge race (the cache is stamped at sweep COMPLETION; sub-second
+// sweeps made hit/miss a coin flip). 35s makes every poll deterministically
+// ride the cache (sweep cadence settles at 60s). Freshness where it matters
+// comes from the ?fresh=1 bypass the dropdown-open refresh sends.
+const PROJECTS_SWEEP_TTL_MS = 35_000;
 let projectsSweepCache: { at: number; payload: unknown } | null = null;
 // Single-flight: concurrent requests during a sweep share the same promise
 // instead of each launching their own 128-probe fan-out.
@@ -368,7 +370,11 @@ let projectsSweepInFlight: Promise<unknown> | null = null;
 
 app.get("/api/projects", async (c) => {
   const fresh = c.req.query("fresh") === "1";
-  if (!fresh && projectsSweepCache && Date.now() - projectsSweepCache.at < PROJECTS_SWEEP_TTL_MS) {
+  // fresh=1 bypasses the TTL but still rides a <2s-old result — CORS blocks
+  // cross-origin READS, not request execution, so without this floor a
+  // drive-by page could force back-to-back 128-probe sweeps.
+  const maxAge = fresh ? 2_000 : PROJECTS_SWEEP_TTL_MS;
+  if (projectsSweepCache && Date.now() - projectsSweepCache.at < maxAge) {
     return c.json(projectsSweepCache.payload as any);
   }
   if (!projectsSweepInFlight) {
