@@ -344,6 +344,10 @@ describe("D4 — write-tool inputSchemas derive from the validator zod shapes", 
     // a naive derivation from the content schema would have tightened it.
     expect(schemaOf("present_code_change").required).not.toContain("before");
 
+    // Emission must stay $ref/$defs-free: MCP clients vary in ref support,
+    // and zod's `reused` default changing would silently break them.
+    expect(JSON.stringify(list.tools.map((t) => t.inputSchema))).not.toMatch(/\$ref|\$defs/);
+
     // .describe() metadata survives into the advertisement.
     expect(schemaOf("present_findings").properties.title.description).toContain("Descriptive title");
     const finding = schemaOf("present_findings").properties.findings.items.properties;

@@ -147,21 +147,15 @@ export type PlanVisualAnnotation = z.infer<typeof PlanVisualAnnotationSchema>;
 export const PlanVisualSchema = z.object({
   /** Stable id — comments anchor to it. Keep it across revisions so a comment
    *  thread on a diagram survives the agent redrawing it. */
-  id: z.string(),
+  id: z.string().describe("Stable id — comments anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on a diagram survives the agent redrawing it"),
   kind: z.enum(["diagram", "file_map", "prototype", "annotated_code"]),
   title: z.string().optional(),
   caption: z.string().optional(),
-  /** kind="diagram": Mermaid source. */
-  source: z.string().optional(),
-  /** kind="file_map": the planned file operations. */
-  files: z.array(PlanVisualFileSchema).optional(),
-  /** kind="prototype": a self-contained HTML document (rendered sandboxed). */
-  html: z.string().optional(),
-  /** kind="annotated_code": the code snippet to render + annotate. */
-  code: z.string().optional(),
-  /** kind="annotated_code": source path (drives syntax highlighting + the
-   *  per-line comment anchor). */
-  filePath: z.string().optional(),
+  source: z.string().optional().describe("kind=diagram: Mermaid source"),
+  files: z.array(PlanVisualFileSchema).optional().describe("kind=file_map: the planned file operations"),
+  html: z.string().optional().describe("kind=prototype: a self-contained HTML document (rendered sandboxed)"),
+  code: z.string().optional().describe("kind=annotated_code: the code snippet to render + annotate"),
+  filePath: z.string().optional().describe("kind=annotated_code: source path (drives syntax highlighting + the per-line comment anchor)"),
   /** kind="annotated_code": override the language inferred from filePath. */
   language: z.string().optional(),
   /** kind="annotated_code": line number of the snippet's first line (default 1)
@@ -218,7 +212,7 @@ export type SpecTask = z.infer<typeof SpecTaskSchema>;
 export const SpecContentSchema = z.object({
   objective: z.string().describe("One-sentence objective the spec is chasing"),
   context: z.string().optional().describe("Background / constraints / existing system notes"),
-  requirements: z.array(SpecRequirementSchema),
+  requirements: z.array(SpecRequirementSchema).min(1).describe("The requirements — non-empty; each carries rationale + acceptance criteria"),
   /**
    * Optional design notes — NOT a full design doc, just the chosen shape at
    * a high level. The plan artifact is for implementation; design here lives

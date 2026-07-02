@@ -270,8 +270,11 @@ export const _decisionContentSchemaForReference = DecisionContentSchema;
 // JSON schemas and they drifted from the validators (the C6b options-visuals
 // tightening was exactly this class). The wire deltas mirror validator
 // behavior precisely:
-//  - findings/options/code_change/log_reasoning: title optional (server
-//    defaults it); spec/plan: title required (validators .min(1) it).
+//  - findings: title optional (server defaults it); spec/plan: title
+//    required (validators .min(1) it). options/code_change do NOT advertise
+//    title — their handlers derive it (context / changeType+filePath) and
+//    never read args.title; advertising a dead field is the drift class
+//    this map exists to kill (D4 review).
 //  - code_change `before` is advertised optional — the validator fills ?? "".
 // z.toJSONSchema emits from the same objects, so a schema edit reaches the
 // validator and the advertisement in one place. server.test's C6b contract
@@ -286,15 +289,24 @@ export const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
     title: ARTIFACT_TITLE.optional(),
   }),
   present_options: PresentOptionsInputSchema.extend({
-    title: ARTIFACT_TITLE.optional(),
+    relatedFindings: z.array(z.string()).optional()
+      .describe("Artifact IDs of findings that motivated this decision"),
   }),
   present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE }),
-  present_plan: PlanContentSchema.extend({ title: ARTIFACT_TITLE }),
+  present_plan: PlanContentSchema.extend({
+    title: ARTIFACT_TITLE,
+    relatedFindings: z.array(z.string()).optional()
+      .describe("Artifact IDs of findings that motivated this plan"),
+  }),
   present_code_change: CodeChangeContentSchema.extend({
-    title: ARTIFACT_TITLE.optional(),
     before: z.string().optional()
       .describe("Code before the change — omit for created files (server defaults to empty)"),
-    after: z.string().describe("Code after the change"),
+    after: z.string().describe("Code after the change — empty string for deletions"),
+    // D4 review — the handler consumes this (relatedArtifactIds) but the
+    // derived schema stopped advertising it: finding→code-change links died
+    // of undiscoverability.
+    relatedFindings: z.array(z.string()).optional()
+      .describe("Artifact IDs of findings that motivated this change"),
   }),
   log_reasoning: ReasoningContentSchema,
 };
