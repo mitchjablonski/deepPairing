@@ -103,7 +103,8 @@ describe("DecisionCard — draft state", () => {
   it("clicking an option calls resolveDecision with the option id", async () => {
     const resolveSpy = vi.spyOn(useArtifactStore.getState(), "resolveDecision");
     render(<DecisionCard event={event} decisionId="dec_abc" />);
-    await userEvent.click(screen.getByText("Redis"));
+    // D3 — selection moved to the explicit per-option button.
+    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
     // The resolveDecision method is bound on the store state at render time;
     // spyOn attaches but the component reads from the live store — confirm via
     // fetch instead, which the store's resolveDecision hits.
@@ -385,9 +386,10 @@ describe("DecisionCard — keyboard navigation", () => {
 
   it("U4 — focusing an option (Tab) syncs the highlight so the container's Enter selects THAT option", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);
-    // o1 (Redis) is the recommended default at focusedIndex 0. Tab DOM-focus to
-    // o2 — pre-fix the j/k highlight stayed on o1, so Enter selected o1.
-    const opt2 = screen.getByText("CDN edge cache").closest('[role="button"]') as HTMLElement;
+    // o1 (Redis) is the recommended default at focusedIndex 0. Tab DOM-focus
+    // now lands on the option's Select button (D3) — pre-fix the j/k highlight
+    // stayed on o1, so Enter selected o1.
+    const opt2 = screen.getByRole("button", { name: "Select CDN edge cache" });
     fireEvent.focus(opt2);
     const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
     fireEvent.keyDown(container, { key: "Enter" });
@@ -397,13 +399,16 @@ describe("DecisionCard — keyboard navigation", () => {
     );
   });
 
-  it("U5e — marks the focused option with aria-current for assistive tech", () => {
+  it("D3 (was U5e) — each option exposes a distinctly-named real Select button; the roving highlight styles the focused one", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);
-    // o1 (Redis) is the recommended default → focusedIndex 0 → aria-current
-    const o1 = screen.getByText("Redis").closest('[role="button"]')!;
-    const o2 = screen.getByText("CDN edge cache").closest('[role="button"]')!;
-    expect(o1).toHaveAttribute("aria-current", "true");
-    expect(o2).toHaveAttribute("aria-current", "false");
+    // The AT affordance is now a REAL button per option with a distinct
+    // accessible name (aria-current on a role-less div was the old signal;
+    // the nested-interactive violation is gone with the role).
+    const b1 = screen.getByRole("button", { name: "Select Redis" });
+    const b2 = screen.getByRole("button", { name: "Select CDN edge cache" });
+    // o1 (Redis) is the recommended default → focusedIndex 0 → filled style.
+    expect(b1.className).toContain("bg-accent-blue text-white");
+    expect(b2.className).toContain("bg-surface-secondary");
   });
 
   it("UX2 — a draft decision auto-focuses + stops j from bubbling to the global handler", () => {
@@ -525,7 +530,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<DecisionCard event={event} decisionId="dec_abc" />);
-    const optionBtn = screen.getByText("Redis").closest('[role="button"]')!;
+    const optionBtn = screen.getByRole("button", { name: "Select Redis" });
     // Fire two clicks back-to-back, before the first POST resolves.
     await userEvent.click(optionBtn);
     await userEvent.click(optionBtn);
@@ -545,20 +550,21 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { findByRole } = render(<DecisionCard event={event} decisionId="dec_abc" />);
-    const optionBtn = screen.getByText("Redis").closest('[role="button"]')!;
+    const optionBtn = screen.getByRole("button", { name: "Select Redis" });
     await userEvent.click(optionBtn);
 
     // Wait for the catch + setPhase(idle) to flush.
     const { waitFor } = await import("@testing-library/react");
     await waitFor(() => {
-      const el = screen.getByText("Redis").closest('[role="button"]')!;
-      expect(el).toHaveAttribute("aria-disabled", "false");
+      // D3 — native button: real disabled attribute, not aria-disabled.
+      const el = screen.getByRole("button", { name: "Select Redis" });
+      expect(el).toBeEnabled();
     });
     expect(screen.queryByText(/Decision Made/i)).not.toBeInTheDocument();
 
     // Retry succeeds.
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
-    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
     expect(await findByRole("heading", { name: /Decision Made|Redis/i }).catch(() => null) ?? await screen.findByText(/Decision Made/i)).toBeInTheDocument();
   });
 
@@ -569,7 +575,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
     // FF9 — opt in to prediction capture before clicking the option.
     await userEvent.click(screen.getByRole("button", { name: /capture prediction/i }));
-    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
     // Predicting form is showing.
     expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
     // Cancel.
@@ -577,8 +583,8 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     await userEvent.click(cancelBtns[cancelBtns.length - 1]);
     // Back to idle: prediction form gone, options re-clickable.
     expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
-    const redisBtn = screen.getByText("Redis").closest('[role="button"]')!;
-    expect(redisBtn).toHaveAttribute("aria-disabled", "false");
+    const redisBtn = screen.getByRole("button", { name: "Select Redis" });
+    expect(redisBtn).toBeEnabled();
   });
 
   it("FF9 — high-stakes pick WITHOUT opting in submits directly (no prediction modal)", async () => {
@@ -589,7 +595,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
     // No opt-in click. Pick directly.
-    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
     // Pre-FF9 this would have entered the predicting modal. Now it
     // submits straight through.
     expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
@@ -610,7 +616,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
     await userEvent.click(screen.getByRole("button", { name: /capture prediction/i }));
-    await userEvent.click(screen.getByText("Redis").closest('[role="button"]')!);
+    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
     expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
     // Fill prediction and confirm.
     await userEvent.type(screen.getByPlaceholderText(/cache hit rate/i), "smooth rollout");

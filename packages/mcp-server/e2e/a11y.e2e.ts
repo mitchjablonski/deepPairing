@@ -102,14 +102,15 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
     // KNOWN DEBT (tracked, do NOT grow this list without a tracking note):
     // - color-contrast: ~20 muted-text selectors are below WCAG AA — fixing
     //   is a design-token decision (visibly lightens every muted gray).
-    // - nested-interactive: DecisionCard option cards are role="button" with
-    //   focusable children (AskTrigger, ConceptBadge) — the structural
-    //   tension the B4/B6 keyboard guards work around. Real fix = drop the
+    // - nested-interactive: FIXED (D3) — option cards are plain containers
+    //   with an explicit per-option Select button; rule re-enabled. Old note:
+    //   cards were role="button" divs with focusable children; the B4/B6
+    //   keyboard guards worked around the structural tension. The fix dropped the
     //   interactive role from the card and give the option title an explicit
     //   select button; deserves its own PR (changes the AT interaction
     //   model).
     // Everything else (aria, roles, names, keyboard, labels) ratchets NOW.
-    .disableRules(["color-contrast", "nested-interactive"])
+    .disableRules(["color-contrast"]) // nested-interactive un-excluded — D3 fixed the option cards
     .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
@@ -122,7 +123,7 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
   await page.waitForSelector("text=deepPairing", { timeout: 15000 });
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
-    .disableRules(["color-contrast", "nested-interactive"]) // see tracked-debt note above
+    .disableRules(["color-contrast"]) // see tracked-debt note above (nested-interactive fixed by D3)
     .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
