@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, PreflightTrace } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, DecisionOption, PreflightTrace } from "@deeppairing/shared";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -36,7 +36,9 @@ export interface DecisionRecord {
   decisionId: string;
   artifactId: string;
   context: string;
-  options: any[];
+  /** C6c — typed via the unified DecisionOptionBaseSchema (was any[], the
+   *  root of ~10 `as any` reads in check-feedback). */
+  options: DecisionOption[];
   /** Agent-asserted consequentiality of the decision. */
   stakes?: "low" | "medium" | "high";
   response?: {
@@ -89,7 +91,9 @@ export interface RecordDecisionParams {
   decisionId: string;
   artifactId: string;
   context: string;
-  options: any[];
+  /** C6c — typed via the unified DecisionOptionBaseSchema (was any[], the
+   *  root of ~10 `as any` reads in check-feedback). */
+  options: DecisionOption[];
   stakes?: "low" | "medium" | "high";
 }
 

@@ -479,7 +479,10 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, RecordDecisionBody);
     if (!parsed.ok) return parsed.res;
-    r.store.recordDecisionRequest(parsed.data as Parameters<typeof r.store.recordDecisionRequest>[0]);
+    // The wire body is deliberately loose (RecordDecisionBody = z.record;
+    // present_options' upstream validator owns the real shape check) — the
+    // C6c-typed param surface makes that laundering explicit.
+    r.store.recordDecisionRequest(parsed.data as unknown as Parameters<typeof r.store.recordDecisionRequest>[0]);
     return c.json({ status: "recorded" });
   });
 

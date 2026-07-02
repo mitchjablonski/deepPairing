@@ -292,7 +292,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
     const formattedDecisions: string[] = [];
     for (const d of resolved) {
-      const option = d.options.find((o: any) => o.id === d.response?.optionId);
+      const option = d.options.find((o) => o.id === d.response?.optionId);
       if (option) {
         const approvedDescription = `${d.context}: ${option.title}`;
         // AA1 — concept.name (from Y5) is the cross-project ledger key.
@@ -302,7 +302,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         // hashing"). Fall back to description for older agents that
         // don't supply concept.
         const approvedConcept: string | undefined =
-          (option as any)?.concept?.name ?? option?.description ?? undefined;
+          option.concept?.name ?? option.description ?? undefined;
         await store.recordApprovedPattern({
           description: approvedDescription,
           concept: approvedConcept,
@@ -314,7 +314,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           concept: approvedConcept,
           sourceArtifactId: d.artifactId,
         });
-        const rejected = d.options.filter((o: any) => o.id !== d.response?.optionId);
+        const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
         for (const rej of rejected) {
           const rejectedDescription = `${d.context}: ${rej.title}`;
           // AA1 — read concept from the REJECTED option, not the
@@ -322,7 +322,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           // rejection should compound under the rejected option's
           // concept, not the winner's.
           const rejectedConcept: string | undefined =
-            (rej as any)?.concept?.name ?? rej?.description ?? undefined;
+            rej.concept?.name ?? rej.description ?? undefined;
           // SP2 — per-option rejection reason. Pre-SP2 every rejected
           // option was stamped with the human's single overall
           // pick-reasoning ("why I chose the winner"), so B and C — often
@@ -330,8 +330,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           // signal in the ledger. Prefer THIS option's own cons (its
           // specific "why it's the worse fit"); keep the winner + the
           // human's reasoning as shared context when present.
-          const optionCons: string[] = Array.isArray((rej as any)?.cons)
-            ? (rej as any).cons.filter((x: unknown) => typeof x === "string" && x.trim())
+          const optionCons: string[] = Array.isArray(rej.cons)
+            ? rej.cons.filter((x) => typeof x === "string" && x.trim())
             : [];
           const pickContext = d.response?.reasoning
             ? ` — picked "${option.title}": ${d.response.reasoning}`
@@ -365,7 +365,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         // O7: high-stakes decisions also fire a "decision_resolved_hero"
         // event so the UI can toast the captured prediction — otherwise
         // the prediction disappears into the decision record.
-        const stakes = (d as any).stakes ?? (d as any).request?.stakes;
+        // stakes is typed on DecisionRecord; the nested `.request.stakes` read
+        // is a legacy stored shape from pre-FF9 sessions — one narrow cast.
+        const stakes = d.stakes ?? (d as { request?: { stakes?: string } }).request?.stakes;
         if (stakes === "high" && d.response?.predictedOutcome) {
           broadcast({
             type: "decision_resolved_hero",
@@ -373,7 +375,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
             context: d.context,
             chosenTitle: option.title,
             predictedOutcome: d.response.predictedOutcome,
-            confidence: (d.response as any).confidence,
+            confidence: d.response.confidence,
           });
         }
       }

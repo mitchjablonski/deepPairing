@@ -5,7 +5,7 @@ import { parseTeamPreferencesFile } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 
@@ -655,13 +655,9 @@ export class FileStore implements IStore {
 
   // --- Decisions ---
 
-  recordDecisionRequest(params: {
-    decisionId: string;
-    artifactId: string;
-    context: string;
-    options: any[];
-    stakes?: "low" | "medium" | "high";
-  }): void {
+  // C6c review — the interface narrowed options to DecisionOption[] but this
+  // inline param type still said any[], leaving the WRITE site unenforced.
+  recordDecisionRequest(params: RecordDecisionParams): void {
     this.decisions.set(params.decisionId, {
       ...params,
       createdAt: new Date().toISOString(),
