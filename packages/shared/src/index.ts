@@ -200,3 +200,5 @@ export {
   type SpecTask,
   type SpecContent,
 } from "./schemas/content-types.js";
+export { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./schemas/content-types.js";
+export { normalizeConceptKey } from "./normalize.js";

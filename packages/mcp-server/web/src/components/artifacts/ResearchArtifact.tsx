@@ -510,6 +510,16 @@ function renderEvidence(
   return (
     <div className="space-y-1">
       {evidenceArray.map((ev, evIdx) => {
+        // D7 — string elements in mixed arrays are schema-legal and now
+        // actually reach here (the coercer used to drop them); render them
+        // as plain refs, not JSON-quoted.
+        if (typeof ev === "string") {
+          return (
+            <p key={evIdx} className="text-text-muted mt-0.5 font-mono text-[11px]">
+              {ev}
+            </p>
+          );
+        }
         // Guard: skip items that don't look like Evidence objects
         if (!ev || typeof ev !== "object" || !("filePath" in ev)) {
           return (

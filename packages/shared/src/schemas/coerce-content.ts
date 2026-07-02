@@ -82,9 +82,14 @@ function coerceFinding(v: unknown): Finding {
     significance: oneOf(f.significance, LMH, "low"),
   };
   if (typeof f.title === "string") out.title = f.title;
-  // evidence is string | Evidence[]; keep a valid shape, else drop.
+  // evidence is string | (string | Evidence)[]; MIXED arrays are schema-legal
+  // (EvidenceInputSchema is a union). D7 review — the old object-only filter
+  // silently dropped legacy string elements, violating this file's own
+  // never-drop-data contract (and making the exporter's string branch dead).
   if (typeof f.evidence === "string") out.evidence = f.evidence;
-  else if (Array.isArray(f.evidence)) out.evidence = f.evidence.filter(isObj) as any;
+  else if (Array.isArray(f.evidence)) {
+    out.evidence = f.evidence.filter((x: unknown) => typeof x === "string" || isObj(x)) as any;
+  }
   const severity = optOneOf(f.severity, ["info", "low", "medium", "high", "critical"] as const);
   if (severity) out.severity = severity;
   if (typeof f.impact === "string") out.impact = f.impact;

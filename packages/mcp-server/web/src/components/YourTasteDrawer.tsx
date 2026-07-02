@@ -3,6 +3,7 @@ import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useModal } from "../hooks/useModal";
 import { useArtifactStore } from "../stores/artifact";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
+import { normalizeConceptKey } from "@deeppairing/shared";
 
 // O3: Weekly Digest is gated until real users have accumulated 4+ weeks of
 // ledger activity — otherwise the "new / strengthened" lists look embarrassing
@@ -482,7 +483,7 @@ export function LedgerPanel({
   // duplicates, so pre-B4 a seeded concept never highlighted and the CC2
   // orphan banner fired with misleading copy).
   const conceptMatches = (a: string | undefined, b: string) =>
-    !!a && a.trim().toLowerCase().replace(/\s+/g, " ") === b.trim().toLowerCase().replace(/\s+/g, " ");
+    !!a && normalizeConceptKey(a) === normalizeConceptKey(b);
   const highlightInList =
     highlightConcept &&
     (topCitedStances.some((s) => conceptMatches(highlightConcept, s.concept)) ||

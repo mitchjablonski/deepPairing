@@ -30,6 +30,7 @@ import {
   CodeChangeContentSchema,
   ReasoningContentSchema,
   PlanVisualSchema,
+  DecisionOptionBaseSchema,
 } from "@deeppairing/shared";
 
 export type ToolErrorResponse = {
@@ -167,27 +168,17 @@ export function validatePresentFindingsInput(args: any): ValidationResult<z.infe
   return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS) };
 }
 
+// D7 — extends the C6b single-source base instead of hand-redeclaring all
+// ten fields (the last inline copy of the option shape). Wire-side deltas
+// kept deliberately: id/title get .min(1) (agent input hygiene), and visuals
+// stays the ID-OPTIONAL variant — a naive extend would inherit id-required
+// visuals and break the C6b looseness contract (coerceOption assigns a
+// stable option-scoped id when omitted).
 const PresentOptionsInputSchema = z.object({
   context: z.string().min(1),
-  options: z.array(z.object({
+  options: z.array(DecisionOptionBaseSchema.extend({
     id: z.string().min(1),
     title: z.string().min(1),
-    description: z.string(),
-    pros: z.array(z.string()),
-    cons: z.array(z.string()),
-    effort: z.enum(["low", "medium", "high"]),
-    risk: z.enum(["low", "medium", "high"]),
-    recommendation: z.boolean(),
-    // Y5 — name the underlying pattern so rejections compound across
-    // projects. Optional for back-compat, but the description in
-    // ListTools (server.ts) actively encourages it.
-    concept: z.object({
-      name: z.string().min(1),
-      oneLineExplanation: z.string().optional(),
-    }).optional(),
-    // DV1 — optional per-option visuals (e.g. a Mermaid diagram of this option's
-    // architecture). id is optional on input — coerceOption assigns a stable
-    // option-scoped one if omitted, so the agent can just send {kind, source}.
     visuals: z.array(PlanVisualSchema.extend({ id: z.string().optional() })).optional(),
   })).min(2).max(4),
   stakes: z.enum(["low", "medium", "high"]).optional(),
