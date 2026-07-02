@@ -95,3 +95,39 @@ describe("B6 — compact-while-floating review footer", () => {
     expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
   });
 });
+
+describe("B7 — the expanded footer can be minimized (and mandatory states override)", () => {
+  it("Minimize collapses to the slim bar even at the artifact's end", async () => {
+    stubIO(true); // at end → expanded
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact} />);
+    expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /minimize/i }));
+    expect(screen.queryByPlaceholderText(/respond to the agent/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /respond \/ revise \/ reject/i })).toBeInTheDocument();
+  });
+
+  it("the slim bar's expander re-opens after a Minimize", async () => {
+    stubIO(true);
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact} />);
+    await user.click(screen.getByRole("button", { name: /minimize/i }));
+    await user.click(screen.getByRole("button", { name: /respond \/ revise \/ reject/i }));
+    const textarea = await screen.findByPlaceholderText(/respond to the agent/i);
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
+  });
+
+  it("an armed countdown overrides Minimize (the timer can never be hidden) — and no dead Minimize shows", async () => {
+    stubIO(true);
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact} />);
+    await user.click(screen.getByRole("button", { name: /minimize/i }));
+    window.dispatchEvent(
+      new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "a1", action: "approve" } }),
+    );
+    expect(await screen.findByText(/will auto-approve in/i)).toBeInTheDocument();
+    // While the countdown mandates expansion, Minimize would be a lying control.
+    expect(screen.queryByRole("button", { name: /minimize/i })).not.toBeInTheDocument();
+  });
+});

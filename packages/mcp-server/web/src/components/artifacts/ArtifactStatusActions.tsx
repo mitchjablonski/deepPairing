@@ -57,8 +57,14 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const expanded =
-    atEnd || forceExpanded || countdown !== null || rejecting || comment.trim().length > 0;
+  // B7 — manual collapse. B6 made expansion a one-way latch: once expanded
+  // (reached the end / clicked the expander) there was no way back to the slim
+  // bar. Minimize collapses the VOLUNTARY expanders; the mandatory ones (an
+  // armed countdown, an in-flight reject, typed text) still force the panel —
+  // the countdown can never be hidden.
+  const [userCollapsed, setUserCollapsed] = useState(false);
+  const mustExpand = countdown !== null || rejecting || comment.trim().length > 0;
+  const expanded = mustExpand || (!userCollapsed && (atEnd || forceExpanded));
   // Focus must happen AFTER the expanded render commits (the textarea doesn't
   // exist while compact). An effect keyed on forceExpanded is deterministic
   // where a requestAnimationFrame race isn't (and rAF never fires in jsdom).
@@ -72,6 +78,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   }, [forceExpanded]);
   const expandAndFocus = () => {
     wantFocusRef.current = true;
+    setUserCollapsed(false);
     setForceExpanded(true);
     // Already expanded (e.g. atEnd) → the effect won't re-fire; focus directly.
     commentRef.current?.focus();
@@ -146,6 +153,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         // `r` shortcut died on exactly the long artifacts that float). Expand
         // first; the forceExpanded effect focuses after the commit.
         wantFocusRef.current = true;
+        setUserCollapsed(false);
         setForceExpanded(true);
         commentRef.current?.focus();
         commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
@@ -349,6 +357,23 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         </div>
       ) : (
       <>
+      {/* B7 — collapse back to the slim bar. Hidden while something mandates
+          the full panel (countdown/reject/typed text) — a dead control lies. */}
+      {!mustExpand && (
+        <div className="flex justify-end -mt-1 -mb-1">
+          <button
+            type="button"
+            onClick={() => {
+              setUserCollapsed(true);
+              setForceExpanded(false);
+            }}
+            className="text-2xs text-text-muted hover:text-text-secondary transition-colors"
+            title="Collapse to the slim bar (Approve stays one click)"
+          >
+            Minimize ▾
+          </button>
+        </div>
+      )}
       {/* Auto-proceed countdown bar */}
       {countdown !== null && countdown > 0 && !countdownPaused && (
         <div className="space-y-1.5">
