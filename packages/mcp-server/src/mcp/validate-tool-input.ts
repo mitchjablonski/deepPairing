@@ -263,3 +263,60 @@ export function validateLogReasoningInput(args: any): ValidationResult<z.infer<t
 // Kept here for completeness if a future tool persists decision content
 // directly.
 export const _decisionContentSchemaForReference = DecisionContentSchema;
+
+// ---------------------------------------------------------------------------
+// D4 — ADVERTISED input schemas, derived from the SAME zod shapes the
+// validators run. Before this, server.ts hand-wrote all six write-tool
+// JSON schemas and they drifted from the validators (the C6b options-visuals
+// tightening was exactly this class). The wire deltas mirror validator
+// behavior precisely:
+//  - findings: title optional (server defaults it); spec/plan: title
+//    required (validators .min(1) it). options/code_change do NOT advertise
+//    title — their handlers derive it (context / changeType+filePath) and
+//    never read args.title; advertising a dead field is the drift class
+//    this map exists to kill (D4 review).
+//  - code_change `before` is advertised optional — the validator fills ?? "".
+// z.toJSONSchema emits from the same objects, so a schema edit reaches the
+// validator and the advertisement in one place. server.test's C6b contract
+// pins the shape.
+// ---------------------------------------------------------------------------
+
+const ARTIFACT_TITLE = z.string().min(1)
+  .describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
+
+export const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
+  present_findings: ResearchContentSchema.extend({
+    title: ARTIFACT_TITLE.optional(),
+  }),
+  present_options: PresentOptionsInputSchema.extend({
+    relatedFindings: z.array(z.string()).optional()
+      .describe("Artifact IDs of findings that motivated this decision"),
+  }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE }),
+  present_plan: PlanContentSchema.extend({
+    title: ARTIFACT_TITLE,
+    relatedFindings: z.array(z.string()).optional()
+      .describe("Artifact IDs of findings that motivated this plan"),
+  }),
+  present_code_change: CodeChangeContentSchema.extend({
+    before: z.string().optional()
+      .describe("Code before the change — omit for created files (server defaults to empty)"),
+    after: z.string().describe("Code after the change — empty string for deletions"),
+    // D4 review — the handler consumes this (relatedArtifactIds) but the
+    // derived schema stopped advertising it: finding→code-change links died
+    // of undiscoverability.
+    relatedFindings: z.array(z.string()).optional()
+      .describe("Artifact IDs of findings that motivated this change"),
+  }),
+  log_reasoning: ReasoningContentSchema,
+};
+
+/** JSON-Schema form of a tool input for ListTools (typed for the SDK's
+ *  inputSchema slot so call sites need no cast). */
+export function toMcpInputSchema(
+  schema: z.ZodType,
+): { type: "object"; [k: string]: unknown } {
+  const js = z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
+  delete js.$schema;
+  return js as { type: "object"; [k: string]: unknown };
+}

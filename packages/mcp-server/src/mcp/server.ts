@@ -55,6 +55,7 @@ export { ELICIT_APPROVE_SCHEMA, decideElicitResponse } from "./elicit.js";
 // MCP harness. matchesGlob is re-exported from there for any caller
 // that imported it from this module historically.
 import { matchesGlob as _matchesGlob } from "./preflight-validator.js";
+import { TOOL_INPUT_SCHEMAS, toMcpInputSchema } from "./validate-tool-input.js";
 export const matchesGlob = _matchesGlob;
 
 type BroadcastFn = (event: any) => void;
@@ -68,48 +69,6 @@ type BroadcastFn = (event: any) => void;
  * schema via z.toJSONSchema (needs the field descriptions ported to
  * .describe() first).
  */
-const VISUAL_ITEMS_JSON_SCHEMA = {
-    type: "object",
-    properties: {
-      id: { type: "string", description: "Stable id — keep it across revisions so comment threads survive" },
-      kind: { type: "string", enum: ["diagram", "file_map", "prototype", "annotated_code"] },
-      title: { type: "string" },
-      caption: { type: "string" },
-      source: { type: "string", description: "kind='diagram': Mermaid source" },
-      files: {
-        type: "array",
-        description: "kind='file_map': planned file operations",
-        items: {
-          type: "object",
-          properties: {
-            path: { type: "string" },
-            change: { type: "string", enum: ["create", "modify", "delete"] },
-            note: { type: "string" },
-          },
-          required: ["path"],
-        },
-      },
-      html: { type: "string", description: "kind='prototype': self-contained HTML (rendered sandboxed)" },
-      code: { type: "string", description: "kind='annotated_code': the real code snippet to show + annotate" },
-      filePath: { type: "string", description: "kind='annotated_code': source path (drives highlighting + per-line comments)" },
-      language: { type: "string", description: "kind='annotated_code': override language inferred from filePath" },
-      lineStart: { type: "number", description: "kind='annotated_code': line number of the snippet's first line (default 1)" },
-      annotations: {
-        type: "array",
-        description: "kind='annotated_code': line-anchored explanations",
-        items: {
-          type: "object",
-          properties: {
-            line: { type: "number", description: "absolute line number (within the snippet's lineStart range)" },
-            note: { type: "string" },
-            kind: { type: "string", enum: ["add", "change", "remove", "context"] },
-          },
-          required: ["line", "note"],
-        },
-      },
-    },
-    required: ["id", "kind"],
-};
 
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
@@ -143,37 +102,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity.` +
           `\n\nSchema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Validation runs at the boundary; mismatch returns INPUT_VALIDATION_FAILED with the bad path + an example.` +
           `\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is the only review surface. Don't paste findings in chat; call check_feedback for the verdict.`,
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            title: { type: "string", description: "Descriptive title for this research artifact (e.g., 'Authentication System Analysis', 'Database Performance Audit')" },
-            summary: { type: "string", description: "Brief summary of findings" },
-            findings: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  category: { type: "string" },
-                  title: { type: "string" },
-                  detail: { type: "string" },
-                  evidence: { description: "Code snippets with explanations — use rich format" },
-                  significance: { type: "string", enum: ["low", "medium", "high"], description: "How note-worthy this finding is" },
-                  severity: {
-                    type: "string",
-                    enum: ["info", "low", "medium", "high", "critical"],
-                    description: "Risk level if unaddressed — helps the human prioritize what to study first. Distinct from significance.",
-                  },
-                  confidence: { type: "string", enum: ["low", "medium", "high"], description: "How confident are you in this finding?" },
-                  impact: { type: "string" },
-                  recommendation: { type: "string" },
-                },
-                required: ["category", "detail", "significance"],
-              },
-            },
-            openQuestions: { type: "array", items: { type: "string" } },
-          },
-          required: ["summary", "findings"],
-        },
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_findings),
       },
       {
         name: "present_options",
@@ -182,57 +113,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "Present 2–4 options with pros/cons/effort/risk for the human to choose. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) — the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects via the philosophy ledger." +
           "\n\nSchema note: `options` is an array of 2–4 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — human selects in the companion UI; don't list options in chat. Call check_feedback for the selection. FF9 — stakes='high' enables opt-in prediction capture; check_feedback MAY include optional `predictedOutcome` + `confidence`.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            context: { type: "string", description: "What decision needs to be made" },
-            stakes: {
-              type: "string",
-              enum: ["low", "medium", "high"],
-              description: "Consequentiality — on 'high' the UI offers an opt-in prediction-capture toggle (FF9). When the human enables it for a particular pick, the resolved decision carries `predictedOutcome` and `confidence`; otherwise both fields are absent.",
-            },
-            options: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  id: { type: "string" },
-                  title: { type: "string" },
-                  description: { type: "string" },
-                  pros: { type: "array", items: { type: "string" } },
-                  cons: { type: "array", items: { type: "string" } },
-                  effort: { type: "string", enum: ["low", "medium", "high"] },
-                  risk: { type: "string", enum: ["low", "medium", "high"] },
-                  recommendation: { type: "boolean" },
-                  concept: {
-                    type: "object",
-                    description: "Y5 — the underlying pattern, named so rejections compound across projects",
-                    properties: {
-                      name: { type: "string", description: "Short concept name, e.g. 'argon2id for password hashing'" },
-                      oneLineExplanation: { type: "string", description: "Plain-English so the human learns the pattern, not just the option" },
-                    },
-                    required: ["name"],
-                  },
-                  visuals: {
-                    type: "array",
-                    description: "DV1 — optional diagram(s) illustrating THIS option (e.g. its architecture). Shown behind an expand-on-demand 'Show diagram' toggle in the option card. Most useful with kind='diagram' (Mermaid). `id` optional — one is assigned if omitted.",
-                    // Review-caught: the OPTIONS wire validator extends
-                    // PlanVisualSchema with id OPTIONAL (a content-stable hash
-                    // is assigned when omitted) — the unified const's
-                    // required:["id","kind"] would have made clients that
-                    // validate args against inputSchema reject calls the
-                    // server accepts. Spec/plan genuinely require id.
-                    items: { ...VISUAL_ITEMS_JSON_SCHEMA, required: ["kind"] },
-                  },
-                },
-                required: ["id", "title", "description", "pros", "cons", "effort", "risk", "recommendation"],
-              },
-              minItems: 2,
-              maxItems: 4,
-            },
-          },
-          required: ["context", "options"],
-        },
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_options),
       },
       {
         name: "present_spec",
@@ -241,53 +124,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
           "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            title: { type: "string", description: "Short descriptive title, e.g. 'Auth rate limiting'" },
-            objective: { type: "string", description: "One-sentence objective this spec is chasing" },
-            context: { type: "string", description: "Background / constraints / existing system notes" },
-            requirements: {
-              type: "array",
-              minItems: 1,
-              items: {
-                type: "object",
-                properties: {
-                  id: { type: "string", description: "Stable identifier within this spec, e.g. 'REQ-1'" },
-                  statement: { type: "string", description: "WHAT, in one sentence" },
-                  rationale: { type: "string", description: "WHY — the reason this requirement exists (teaching moment)" },
-                  acceptanceCriteria: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "Testable conditions that satisfy this requirement",
-                  },
-                  priority: { type: "string", enum: ["must", "should", "could"] },
-                },
-                required: ["id", "statement", "rationale", "acceptanceCriteria"],
-              },
-            },
-            design: { type: "string", description: "High-level design notes — not a full design doc" },
-            tasks: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  description: { type: "string" },
-                  linkedRequirementIds: { type: "array", items: { type: "string" } },
-                  estimate: { type: "string", enum: ["xs", "s", "m", "l", "xl"] },
-                },
-                required: ["description"],
-              },
-            },
-            openQuestions: { type: "array", items: { type: "string" }, description: "Things you need the human to decide before proceeding" },
-            visuals: {
-              type: "array",
-              description: "Diagrams / file maps / annotated code / prototypes that frame the spec. Encouraged.",
-              items: VISUAL_ITEMS_JSON_SCHEMA,
-            },
-          },
-          required: ["title", "objective", "requirements"],
-        },
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_spec),
       },
       {
         name: "present_plan",
@@ -296,54 +135,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "Present an implementation plan as steps with file changes and before/after previews." +
           "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — this REPLACES Claude Code's native plan-approval flow. Do NOT call ExitPlanMode after present_plan. The companion UI is the only approval surface; call check_feedback for the verdict.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            title: { type: "string" },
-            steps: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  description: { type: "string" },
-                  files: { description: "Files affected" },
-                  reasoning: { type: "string" },
-                  motivatedBy: { type: "array", items: { type: "string" } },
-                  preview: {
-                    type: "object",
-                    properties: {
-                      before: { type: "string" },
-                      after: { type: "string" },
-                      filePath: { type: "string" },
-                    },
-                  },
-                  condition: { type: "string", description: "Condition for this step (e.g., 'if tests pass'). Makes this a conditional branch." },
-                  branches: {
-                    type: "array",
-                    description: "Sub-steps that execute if the condition is met",
-                    items: {
-                      type: "object",
-                      properties: {
-                        description: { type: "string" },
-                        files: { description: "Files affected" },
-                        reasoning: { type: "string" },
-                      },
-                      required: ["description", "reasoning"],
-                    },
-                  },
-                },
-                required: ["description", "reasoning"],
-              },
-            },
-            estimatedChanges: { type: "number" },
-            visuals: {
-              type: "array",
-              description: "Diagrams / file maps / annotated code / prototypes that frame the plan. Strongly encouraged.",
-              items: VISUAL_ITEMS_JSON_SCHEMA,
-            },
-          },
-          required: ["title", "steps", "estimatedChanges"],
-        },
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_plan),
       },
       {
         name: "log_reasoning",
@@ -352,67 +146,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "Log the reasoning for an action before taking it. Pairs with present_code_change for the per-edit checkpoint cadence (WHY + WHAT — together they give the human a chance to redirect BEFORE the diff is on disk)." +
           "\n\nSchema note: required: `action`, `reasoning`. Name the underlying concept in `concept` whenever one applies — that's the human's learning lever. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: REQUIRED BEFORE EACH SIGNIFICANT EDIT. Don't just chat-explain.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            action: { type: "string", description: "What you're about to do, in plain English" },
-            reasoning: { type: "string", description: "Why this approach" },
-            concept: {
-              type: "object",
-              description:
-                "The named concept or pattern this reasoning applies. Name the concept whenever one applies — this is how the human learns.",
-              properties: {
-                name: { type: "string", description: "Concept name (e.g. 'dependency inversion', 'optimistic UI')" },
-                oneLineExplanation: {
-                  type: "string",
-                  description: "One-sentence plain-English definition, for readers who may not know the concept",
-                },
-              },
-              required: ["name"],
-            },
-            evidence: {
-              type: "array",
-              description: "Files / line ranges that motivated this reasoning step",
-              items: {
-                type: "object",
-                properties: {
-                  filePath: { type: "string" },
-                  lineStart: { type: "number" },
-                  lineEnd: { type: "number" },
-                  snippet: { type: "string" },
-                  explanation: { type: "string" },
-                },
-              },
-            },
-            relatesTo: {
-              type: "object",
-              description: "Back-link to another artifact this reasoning elaborates, answers, or supersedes",
-              properties: {
-                artifactId: { type: "string" },
-                kind: { type: "string", enum: ["elaborates", "answers", "supersedes"] },
-              },
-              required: ["artifactId", "kind"],
-            },
-            alternativesConsidered: { type: "array", items: { type: "string" } },
-            alternativeDetails: {
-              type: "array",
-              description: "Structured alternatives with rejection reasons",
-              items: {
-                type: "object",
-                properties: {
-                  title: { type: "string" },
-                  reason: { type: "string", description: "Why this alternative was rejected" },
-                },
-                required: ["title", "reason"],
-              },
-            },
-            confidence: { type: "string", enum: ["low", "medium", "high"] },
-          },
-          // `confidence` is optional in ReasoningContentSchema and the tool's
-          // own description says required: action, reasoning. Keep the JSON
-          // schema consistent so strict MCP clients don't reject valid calls.
-          required: ["action", "reasoning"],
-        },
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.log_reasoning),
       },
       {
         name: "check_feedback",
@@ -516,28 +252,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           "Present a code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) — name the pattern (e.g. 'work factor tuning') so cross-project preflight matches it." +
           "\n\nSchema note: required: `filePath`, `changeType`, `after`, `reasoning`. `concept` strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: REQUIRED BEFORE EACH Write/Edit/MultiEdit on a file not yet approved this session — per-edit checkpoint, not one-shot. Batched implementation skipping checkpoints is a protocol violation. SINGLE REVIEW SURFACE — companion UI only, don't paste in chat. Call check_feedback for the verdict.",
-        inputSchema: {
-          type: "object" as const,
-          properties: {
-            filePath: { type: "string", description: "File being changed" },
-            changeType: { type: "string", enum: ["create", "modify", "delete"], description: "Type of change" },
-            before: { type: "string", description: "Code before the change (empty for create)" },
-            after: { type: "string", description: "Code after the change (empty for delete)" },
-            reasoning: { type: "string", description: "Why this change is being made" },
-            confidence: { type: "string", enum: ["low", "medium", "high"], description: "How confident are you in this change?" },
-            relatedFindings: { type: "array", items: { type: "string" }, description: "Artifact IDs of findings that motivated this" },
-            concept: {
-              type: "object",
-              description: "Y5 — the underlying pattern, named so cross-project preflight can match against past stances",
-              properties: {
-                name: { type: "string", description: "Short concept name, e.g. 'optimistic UI rollback'" },
-                oneLineExplanation: { type: "string", description: "Plain-English so the human learns the pattern" },
-              },
-              required: ["name"],
-            },
-          },
-          required: ["filePath", "changeType", "after", "reasoning"],
-        },
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change),
       },
       {
         name: "recall",
