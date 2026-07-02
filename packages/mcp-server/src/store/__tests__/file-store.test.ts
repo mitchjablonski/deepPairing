@@ -660,3 +660,51 @@ describe("D1 — salvage at the JSON.parse boundary", () => {
     expect(store.getPendingDecisions()).toHaveLength(1);
   });
 });
+
+describe("D1 review — flush-time external-merge salvage (the permanent-failure loop)", () => {
+  it("garbage appended externally mid-session merges cleanly on forceFlush (no throw, valid records kept)", () => {
+    const store = createStore("salvage_flush");
+    store.createArtifact({ id: "a_mem", type: "research", title: "in memory", content: {} });
+    store.forceFlush();
+
+    // External writer appends garbage + one valid artifact, bumps mtime.
+    const artPath = path.join(tmpDir, ".deeppairing", "sessions", "salvage_flush", "artifacts.json");
+    const disk = JSON.parse(fs.readFileSync(artPath, "utf-8"));
+    const external = {
+      id: "a_ext", sessionId: "salvage_flush", type: "research", version: 1, parentId: null,
+      title: "external", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    fs.writeFileSync(artPath, JSON.stringify([...disk, null, "garbage", external]));
+    const future = Date.now() / 1000 + 5;
+    fs.utimesSync(artPath, future, future);
+
+    // Pre-fix: threw inside mergeArrayById; the debounced catch would swallow
+    // it and the un-advanced watermark re-threw on EVERY later flush.
+    expect(() => store.forceFlush()).not.toThrow();
+    const ids = store.getArtifacts().map((a) => a.id);
+    expect(ids).toContain("a_mem");
+    expect(ids).toContain("a_ext");
+  });
+
+  it("preferences.json = null no longer crashes the constructor", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "salvage_prefs");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "preferences.json"), "null");
+    expect(() => createStore("salvage_prefs")).not.toThrow();
+  });
+
+  it("a null decisions.json no longer hides an otherwise-healthy session from listSessions", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "salvage_list");
+    fs.mkdirSync(dir, { recursive: true });
+    const valid = {
+      id: "a_l", sessionId: "salvage_list", type: "research", version: 1, parentId: null,
+      title: "t", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify([valid]));
+    fs.writeFileSync(path.join(dir, "decisions.json"), "null");
+    const sessions = FileStore.listSessions(tmpDir);
+    expect(sessions.map((s) => s.id)).toContain("salvage_list");
+  });
+});
