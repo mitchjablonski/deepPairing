@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlanVisualSchema } from "./content-types.js";
+import { PlanVisualSchema, DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
   "research",
@@ -77,30 +77,9 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  * reuse the ConceptCallout component without translation. Optional —
  * existing call sites that don't supply concepts keep working.
  */
-const DecisionOptionConceptSchema = z.object({
-  // Min 1 so a present-but-empty `concept: { name: "" }` is rejected. An
-  // empty string is worse than no concept at all — it pollutes the ledger
-  // with a row that can never match anything, blocking nothing.
-  name: z.string().min(1).describe("The underlying pattern (e.g. 'argon2id for password hashing', 'optimistic UI')"),
-  oneLineExplanation: z
-    .string()
-    .optional()
-    .describe("Plain-English so the human learns the pattern, not just the option"),
-});
-
-export const DecisionOptionContentSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  description: z.string(),
-  pros: z.array(z.string()),
-  cons: z.array(z.string()),
-  effort: z.enum(["low", "medium", "high"]),
-  risk: z.enum(["low", "medium", "high"]),
-  recommendation: z.boolean(),
-  concept: DecisionOptionConceptSchema.optional(),
-  /** DV1 — optional per-option visuals (mirrors DecisionOptionSchema, decision.ts). */
-  visuals: z.array(PlanVisualSchema).optional(),
-});
+// C6b — stored shape aliases the shared base (content-types.ts); see the
+// note there before diverging wire and stored shapes.
+export const DecisionOptionContentSchema = DecisionOptionBaseSchema;
 
 export const DecisionContentSchema = z.object({
   context: z.string(),
