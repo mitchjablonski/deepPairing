@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
+import { normalizeConceptKey } from "@deeppairing/shared";
 
 /**
  * Y5 — compact concept badge for DecisionCard options + CodeChangeArtifact.
@@ -32,9 +33,8 @@ interface ConceptRecurrence {
   canonicalName: string;
 }
 
-/** Mirror the server's normalizeKey (global-store.ts): trim, lowercase,
- *  collapse internal whitespace — so an agent-emitted double-space matches. */
-const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+// D7 — the shared single-source normalizer (was a local mirror).
+const normalize = normalizeConceptKey;
 
 function useConceptRecurrence(name: string): ConceptRecurrence | null {
   const digest = useLedgerStore((s) => s.digest);

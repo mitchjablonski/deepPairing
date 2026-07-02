@@ -32,7 +32,7 @@ function art(type: Artifact["type"], content: any, overrides: Partial<Artifact> 
 
 describe("parseArtifactContent (U2)", () => {
   it("validates a research artifact's content via ResearchContentSchema", async () => {
-    const r = await parseArtifactContent(art("research", {
+    const r = parseArtifactContent(art("research", {
       summary: "x", findings: [{ category: "c", detail: "d", significance: "low", evidence: "snip" }],
     }));
     expect(r.ok).toBe(true);
@@ -40,13 +40,13 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("returns ok=false when a required field is missing", async () => {
-    const r = await parseArtifactContent(art("research", { summary: "x" }));
+    const r = parseArtifactContent(art("research", { summary: "x" }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.issues[0].path.join(".")).toBe("findings");
   });
 
   it("validates a decision artifact (matches DecisionContentSchema)", async () => {
-    const r = await parseArtifactContent(art("decision", {
+    const r = parseArtifactContent(art("decision", {
       context: "Pick a cache",
       decisionId: "dec_1",
       options: [{
@@ -58,7 +58,7 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("rejects a decision artifact with malformed options (missing required fields)", async () => {
-    const r = await parseArtifactContent(art("decision", {
+    const r = parseArtifactContent(art("decision", {
       context: "x", decisionId: "d",
       options: [{ id: "a" }],  // missing title, description, etc.
     }));
@@ -66,21 +66,21 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("validates a code_change artifact", async () => {
-    const r = await parseArtifactContent(art("code_change", {
+    const r = parseArtifactContent(art("code_change", {
       filePath: "x.ts", changeType: "modify", before: "a", after: "b", reasoning: "fix",
     }));
     expect(r.ok).toBe(true);
   });
 
   it("rejects a code_change with an unknown changeType", async () => {
-    const r = await parseArtifactContent(art("code_change", {
+    const r = parseArtifactContent(art("code_change", {
       filePath: "x", changeType: "yeet", before: "", after: "", reasoning: "",
     }));
     expect(r.ok).toBe(false);
   });
 
   it("validates a plan artifact via PlanContentSchema", async () => {
-    const r = await parseArtifactContent(art("plan", {
+    const r = parseArtifactContent(art("plan", {
       steps: [{ description: "step 1", reasoning: "why", files: [] }],
       estimatedChanges: 1,
     }));
@@ -88,7 +88,7 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("validates a spec artifact", async () => {
-    const r = await parseArtifactContent(art("spec", {
+    const r = parseArtifactContent(art("spec", {
       objective: "ship",
       requirements: [{
         id: "REQ-1", statement: "do x", rationale: "because", acceptanceCriteria: ["x is done"],
@@ -98,7 +98,7 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("validates a reasoning artifact (concept optional)", async () => {
-    const r = await parseArtifactContent(art("reasoning", {
+    const r = parseArtifactContent(art("reasoning", {
       action: "use DI", reasoning: "testability",
     }));
     expect(r.ok).toBe(true);
@@ -106,7 +106,7 @@ describe("parseArtifactContent (U2)", () => {
 
   // Y5 — concepts hoisted into decision options + code_change content.
   it("Y5: validates a decision option carrying a concept", async () => {
-    const r = await parseArtifactContent(art("decision", {
+    const r = parseArtifactContent(art("decision", {
       context: "Pick a cache",
       decisionId: "dec_y5",
       options: [{
@@ -123,7 +123,7 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("Y5: option concept is optional — old-shape options still validate", async () => {
-    const r = await parseArtifactContent(art("decision", {
+    const r = parseArtifactContent(art("decision", {
       context: "x", decisionId: "d",
       options: [{
         id: "a", title: "x", description: "y", pros: [], cons: [],
@@ -134,7 +134,7 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("Y5: option concept rejects empty name (low-signal rows are worse than no row)", async () => {
-    const r = await parseArtifactContent(art("decision", {
+    const r = parseArtifactContent(art("decision", {
       context: "x", decisionId: "d",
       options: [{
         id: "a", title: "x", description: "y", pros: [], cons: [],
@@ -146,7 +146,7 @@ describe("parseArtifactContent (U2)", () => {
   });
 
   it("Y5: validates a code_change carrying a concept", async () => {
-    const r = await parseArtifactContent(art("code_change", {
+    const r = parseArtifactContent(art("code_change", {
       filePath: "x.ts", changeType: "modify", before: "a", after: "b", reasoning: "fix",
       concept: { name: "password-hash work factor tuning" },
     }));

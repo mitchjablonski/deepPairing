@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged } from "../tool-helpers.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
@@ -86,10 +87,18 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // (present_options) carries none, so without this the new decision had
     // no DecisionRecord and the human's later selection was silently
     // dropped (resolve no-ops → no resolved report, no ledger learning).
-    if (old.type === "decision" && Array.isArray((content as any).options)) {
-      (content as any).decisionId = `dec_${nanoid(10)}`;
-      if ((content as any).stakes === undefined && (old.content as any)?.stakes !== undefined) {
-        (content as any).stakes = (old.content as any).stakes;
+    // D7 — ONE typed view replaces the ten (content as any) reads that
+    // followed: the validator above just ACCEPTED this shape, so the cast is
+    // an honest post-validation narrowing, not a guess.
+    const decisionContent =
+      old.type === "decision"
+        ? (content as { options?: unknown[]; decisionId?: string; stakes?: "low" | "medium" | "high"; context?: string })
+        : null;
+    if (decisionContent && Array.isArray(decisionContent.options)) {
+      decisionContent.decisionId = `dec_${nanoid(10)}`;
+      const oldStakes = (old.content as { stakes?: "low" | "medium" | "high" } | null)?.stakes;
+      if (decisionContent.stakes === undefined && oldStakes !== undefined) {
+        decisionContent.stakes = oldStakes;
       }
     }
     const newArtifact = await store.createArtifact({
@@ -111,14 +120,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       author: "agent",
     });
 
-    if (old.type === "decision" && (content as any).options && (content as any).decisionId) {
+    if (decisionContent?.options && decisionContent.decisionId) {
       await store.recordDecisionRequest({
-        decisionId: (content as any).decisionId,
+        decisionId: decisionContent.decisionId,
         artifactId: newId,
-        context: (content as any).context ?? title,
-        options: (content as any).options,
-        stakes: (content as any).stakes,
-      } as any);
+        context: decisionContent.context ?? title,
+        // Validated by SUPERSEDE_VALIDATORS (present_options schema) above.
+        options: decisionContent.options as DecisionOption[],
+        stakes: decisionContent.stakes,
+      });
     }
     if (old.type === "plan") {
       await store.recordPlanReview(newId);

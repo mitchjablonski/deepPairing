@@ -1,6 +1,12 @@
 import type { Artifact, Comment, SessionAnnotation } from "@deeppairing/shared";
 import { buildTimeline } from "../replay/timeline.js";
 import type { DecisionRecord, PlanReviewRecord } from "../store/store-interface.js";
+import {
+  normalizeConceptKey,
+  coercePlanContent,
+  coerceResearchContent,
+  coerceReasoningContent,
+} from "@deeppairing/shared";
 
 interface SessionState {
   sessionId: string;
@@ -73,7 +79,7 @@ function formatPrDescription(state: SessionState): string {
   // Plan steps
   const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
   for (const plan of plans) {
-    const steps = (plan.content as any).steps ?? [];
+    const steps = coercePlanContent(plan.content).steps;
     if (steps.length > 0) {
       sections.push(`### Changes (${plan.title})\n`);
       for (const step of steps) {
@@ -89,7 +95,7 @@ function formatPrDescription(state: SessionState): string {
   // Key findings
   const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
   if (research.length > 0) {
-    const findings = research.flatMap((r) => (r.content as any).findings ?? []);
+    const findings = research.flatMap((r) => coerceResearchContent(r.content).findings);
     const highFindings = findings.filter((f: any) => f.significance === "high");
     if (highFindings.length > 0) {
       sections.push("### Key Findings\n");
@@ -120,7 +126,7 @@ function formatAdr(state: SessionState): string {
   if (research.length > 0) {
     sections.push("## Context\n");
     for (const r of research) {
-      const content = r.content as any;
+      const content = coerceResearchContent(r.content);
       if (content.summary) sections.push(content.summary + "\n");
       for (const f of content.findings ?? []) {
         sections.push(`### ${f.title ?? f.category}\n`);
@@ -159,7 +165,7 @@ function formatAdr(state: SessionState): string {
   if (plans.length > 0) {
     sections.push("## Consequences\n");
     for (const plan of plans) {
-      for (const step of (plan.content as any).steps ?? []) {
+      for (const step of coercePlanContent(plan.content).steps) {
         sections.push(`- ${step.description}: ${step.reasoning}`);
       }
     }
@@ -184,16 +190,23 @@ function formatFull(state: SessionState): string {
   if (research.length > 0) {
     sections.push("## Findings\n");
     for (const r of research) {
-      const content = r.content as any;
+      const content = coerceResearchContent(r.content);
       if (content.summary) sections.push(`${content.summary}\n`);
 
       for (const f of content.findings ?? []) {
         sections.push(`### ${f.title ?? f.category} (${f.significance})\n`);
         sections.push(f.detail + "\n");
 
-        // Evidence with code
+        // Evidence with code. D7 — the typed coercer surfaced what the old
+        // `as any` hid: evidence ARRAYS can still contain plain strings
+        // (legacy mixed shape); narrow per element instead of assuming objects.
         if (Array.isArray(f.evidence)) {
           for (const ev of f.evidence) {
+            if (typeof ev === "string") {
+              sections.push(`> ${ev}`);
+              sections.push("");
+              continue;
+            }
             sections.push(`\`${ev.filePath}:${ev.lineStart}-${ev.lineEnd}\``);
             if (ev.snippet) {
               sections.push("```" + (ev.language ?? ""));
@@ -250,7 +263,7 @@ function formatFull(state: SessionState): string {
       const review = state.planReviews.find((p) => p.artifactId === plan.id);
       if (review?.verdict) sections.push(`**Status**: ${review.verdict}\n`);
 
-      for (const [i, step] of ((plan.content as any).steps ?? []).entries()) {
+      for (const [i, step] of coercePlanContent(plan.content).steps.entries()) {
         sections.push(`${i + 1}. **${step.description}** — ${step.reasoning}`);
         if (step.motivatedBy?.length) {
           sections.push(`   *Motivated by*: ${step.motivatedBy.join(", ")}`);
@@ -265,7 +278,7 @@ function formatFull(state: SessionState): string {
   if (reasoning.length > 0) {
     sections.push("<details><summary>Reasoning Log</summary>\n");
     for (const r of reasoning) {
-      const content = r.content as any;
+      const content = coerceReasoningContent(r.content);
       sections.push(`- **${content.action}** (${content.confidence}): ${content.reasoning}`);
     }
     sections.push("\n</details>\n");
@@ -420,13 +433,16 @@ export function buildGitHubReviewPayload(
   );
 
   for (const artifact of researchArtifacts) {
-    const findings = (artifact.content as any)?.findings;
+    const findings = coerceResearchContent(artifact.content).findings;
     if (!Array.isArray(findings)) continue;
 
     for (const finding of findings) {
       const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
+      // D7 — the runtime narrowing existed; the predicate is now a TYPE guard
+      // so the loop below reads typed evidence instead of any.
       const structured = evidence.filter(
-        (e: any) => e && typeof e === "object" && e.filePath && typeof e.lineStart === "number",
+        (e): e is Exclude<typeof e, string> =>
+          !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number",
       );
       if (structured.length === 0) continue;
 
@@ -519,7 +535,7 @@ function formatPrComments(state: SessionState): string {
     index: number;
   }> = [];
   for (const artifact of researchArtifacts) {
-    const findings = (artifact.content as any)?.findings;
+    const findings = coerceResearchContent(artifact.content).findings;
     if (!Array.isArray(findings)) continue;
     findings.forEach((f: any, i: number) => {
       allFindings.push({ artifact, finding: f, index: i });
@@ -629,12 +645,12 @@ function formatLearnings(state: SessionState): string {
   );
   const conceptCounts = new Map<string, { name: string; explanation?: string; count: number; actions: string[] }>();
   for (const a of reasoningArtifacts) {
-    const concept = (a.content as any)?.concept;
+    const concept = coerceReasoningContent(a.content).concept;
     if (!concept?.name) continue;
-    const key = String(concept.name).trim().toLowerCase();
+    const key = normalizeConceptKey(String(concept.name));
     if (!key) continue;
     const existing = conceptCounts.get(key);
-    const action = (a.content as any)?.action ? String((a.content as any).action) : null;
+    const action = coerceReasoningContent(a.content).action || null;
     if (existing) {
       existing.count += 1;
       if (action && !existing.actions.includes(action)) existing.actions.push(action);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
+import { normalizeConceptKey } from "@deeppairing/shared";
 
 /** R1: cumulative metrics from /api/metrics — proves the moat is compounding. */
 interface MetricsSnapshot {
@@ -67,7 +68,7 @@ export function SessionMetrics() {
         if (o?.concept?.name) names.push(o.concept.name);
       }
       for (const raw of names) {
-        const key = raw.trim().toLowerCase().replace(/\s+/g, " ");
+        const key = normalizeConceptKey(raw);
         const prev = counts.get(key);
         counts.set(key, { display: prev?.display ?? raw, n: (prev?.n ?? 0) + 1 });
       }

@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./content-types.js";
+import {
+  DecisionOptionBaseSchema,
+  DecisionOptionConceptSchema,
+  ResearchContentSchema,
+  PlanContentSchema,
+  SpecContentSchema,
+  ReasoningContentSchema,
+} from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
   "research",
@@ -127,25 +134,27 @@ export type CodeChangeContent = z.infer<typeof CodeChangeContentSchema>;
  */
 type ParseResult<T> = { ok: true; data: T } | { ok: false; error: z.ZodError };
 
-export async function parseArtifactContent(
+// D7 — SYNC. The old async form's lazy import cited a circular dep that is
+// provably absent (this module already statically imports content-types
+// values at the top). Async-only was the root cause of the server's
+// content-cast plateau: every sync consumer cast instead of parsing.
+export function parseArtifactContent(
   artifact: Artifact,
-): Promise<
+):
   | ParseResult<DecisionContent>
   | ParseResult<CodeChangeContent>
   | ParseResult<import("./content-types.js").ResearchContent>
   | ParseResult<import("./content-types.js").PlanContent>
   | ParseResult<import("./content-types.js").SpecContent>
-  | ParseResult<import("./content-types.js").ReasoningContent>
-> {
-  const ct = await import("./content-types.js");
+  | ParseResult<import("./content-types.js").ReasoningContent> {
   const schema = (() => {
     switch (artifact.type) {
       case "decision":     return DecisionContentSchema;
       case "code_change":  return CodeChangeContentSchema;
-      case "research":     return ct.ResearchContentSchema;
-      case "plan":         return ct.PlanContentSchema;
-      case "spec":         return ct.SpecContentSchema;
-      case "reasoning":    return ct.ReasoningContentSchema;
+      case "research":     return ResearchContentSchema;
+      case "plan":         return PlanContentSchema;
+      case "spec":         return SpecContentSchema;
+      case "reasoning":    return ReasoningContentSchema;
     }
   })();
   const result = schema.safeParse(artifact.content);

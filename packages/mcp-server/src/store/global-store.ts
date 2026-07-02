@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
+import { normalizeConceptKey } from "@deeppairing/shared";
 
 /**
  * GlobalStore — cross-project "philosophy ledger".
@@ -57,9 +58,8 @@ function defaultLedgerPath(): string {
   return path.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
 }
 
-function normalizeKey(concept: string): string {
-  return concept.trim().toLowerCase().replace(/\s+/g, " ");
-}
+// D7 — delegates to the shared single source (5 copies existed; one drifted).
+const normalizeKey = normalizeConceptKey;
 
 /**
  * EE5 — single source of truth for "is this entry user-seeded?".
