@@ -292,7 +292,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
     const formattedDecisions: string[] = [];
     for (const d of resolved) {
-      const option = d.options.find((o: any) => o.id === d.response?.optionId);
+      const option = d.options.find((o) => o.id === d.response?.optionId);
       if (option) {
         const approvedDescription = `${d.context}: ${option.title}`;
         // AA1 — concept.name (from Y5) is the cross-project ledger key.
@@ -314,7 +314,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           concept: approvedConcept,
           sourceArtifactId: d.artifactId,
         });
-        const rejected = d.options.filter((o: any) => o.id !== d.response?.optionId);
+        const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
         for (const rej of rejected) {
           const rejectedDescription = `${d.context}: ${rej.title}`;
           // AA1 — read concept from the REJECTED option, not the

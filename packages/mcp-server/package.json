@@ -36,7 +36,7 @@
     "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build",
-    "lint": "eslint src web/src e2e --max-warnings 357"
+    "lint": "eslint src web/src e2e --max-warnings 354"
   },
   "engines": {
     "node": ">=22.0.0"
