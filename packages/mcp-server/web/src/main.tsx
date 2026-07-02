@@ -10,8 +10,9 @@ createRoot(document.getElementById("root")!).render(
     <ErrorBoundary>
       {/* B5 — LazyMotion + `m.` components (ArtifactPanel, DecisionCard)
           instead of the full `motion` import: only the domAnimation feature
-          set ships, cutting ~40kB gzip from the entry bundle. strict throws
-          if a full `motion.` component sneaks back in. */}
+          set ships (~15-20kB gzip saved vs full motion; domAnimation itself
+          is still statically imported here). strict throws if a full
+          `motion.` component sneaks back in. */}
       <LazyMotion features={domAnimation} strict>
         <App />
       </LazyMotion>

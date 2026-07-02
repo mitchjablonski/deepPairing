@@ -13,21 +13,27 @@ import type { HighlighterCore } from "@shikijs/core";
 let highlighter: HighlighterCore | null = null;
 let initPromise: Promise<HighlighterCore> | null = null;
 
-const PRELOAD_LANGS = [
-  "typescript",
-  "javascript",
-  "json",
-  "css",
-  "html",
-  "python",
-  "rust",
-  "go",
-  "bash",
-  "yaml",
-  "markdown",
-  "sql",
-  "diff",
-] as const;
+// B5 review — ONE map is the source of truth for both the supported-language
+// check and the grammar imports, so the two can't drift (a drift silently
+// downgraded that language to plaintext). Each thunk is a dynamic import →
+// its own lazy chunk.
+const LANG_IMPORTS = {
+  typescript: () => import("@shikijs/langs/typescript"),
+  javascript: () => import("@shikijs/langs/javascript"),
+  json: () => import("@shikijs/langs/json"),
+  css: () => import("@shikijs/langs/css"),
+  html: () => import("@shikijs/langs/html"),
+  python: () => import("@shikijs/langs/python"),
+  rust: () => import("@shikijs/langs/rust"),
+  go: () => import("@shikijs/langs/go"),
+  bash: () => import("@shikijs/langs/bash"),
+  yaml: () => import("@shikijs/langs/yaml"),
+  markdown: () => import("@shikijs/langs/markdown"),
+  sql: () => import("@shikijs/langs/sql"),
+  diff: () => import("@shikijs/langs/diff"),
+} as const;
+
+const PRELOAD_LANGS = Object.keys(LANG_IMPORTS) as ReadonlyArray<keyof typeof LANG_IMPORTS>;
 
 async function getHighlighter(): Promise<HighlighterCore> {
   if (highlighter) return highlighter;
@@ -38,27 +44,13 @@ async function getHighlighter(): Promise<HighlighterCore> {
       import("@shikijs/core"),
       import("@shikijs/engine-oniguruma"),
     ]);
-    // Each grammar/theme dynamic import becomes its own lazy chunk; the list
-    // MUST stay in sync with PRELOAD_LANGS (resolvedLang falls back to "text"
-    // for anything else, so a drift shows up as unhighlighted code, not a crash).
     return createHighlighterCore({
       themes: [import("@shikijs/themes/vitesse-dark"), import("@shikijs/themes/vitesse-light")],
-      langs: [
-        import("@shikijs/langs/typescript"),
-        import("@shikijs/langs/javascript"),
-        import("@shikijs/langs/json"),
-        import("@shikijs/langs/css"),
-        import("@shikijs/langs/html"),
-        import("@shikijs/langs/python"),
-        import("@shikijs/langs/rust"),
-        import("@shikijs/langs/go"),
-        import("@shikijs/langs/bash"),
-        import("@shikijs/langs/yaml"),
-        import("@shikijs/langs/markdown"),
-        import("@shikijs/langs/sql"),
-        import("@shikijs/langs/diff"),
-      ],
-      engine: createOnigurumaEngine(import("shiki/wasm")),
+      langs: Object.values(LANG_IMPORTS).map((load) => load()),
+      // B5 review — the wasm comes from the SAME pinned engine package (not the
+      // floating `shiki` re-export), so the engine and its wasm can't skew
+      // across versions. `shiki` is no longer a dependency at all.
+      engine: createOnigurumaEngine(import("@shikijs/engine-oniguruma/wasm-inlined")),
     });
   })().catch((err) => {
     // PP3 — the lazy chunk can 404 (stale tab after a daemon rebuild). Don't
