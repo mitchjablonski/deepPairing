@@ -129,8 +129,7 @@ export type CodeChangeContent = z.infer<typeof CodeChangeContentSchema>;
  * throwing.
  *
  * Falls back to ResearchContentSchema-style validation for `research`,
- * PlanContentSchema for `plan`, etc., importing lazily so this module
- * doesn't grow a circular dep on content-types.
+ * PlanContentSchema for `plan`, etc.
  */
 type ParseResult<T> = { ok: true; data: T } | { ok: false; error: z.ZodError };
 

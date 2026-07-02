@@ -645,12 +645,13 @@ function formatLearnings(state: SessionState): string {
   );
   const conceptCounts = new Map<string, { name: string; explanation?: string; count: number; actions: string[] }>();
   for (const a of reasoningArtifacts) {
-    const concept = coerceReasoningContent(a.content).concept;
+    const content = coerceReasoningContent(a.content);
+    const concept = content.concept;
     if (!concept?.name) continue;
-    const key = normalizeConceptKey(String(concept.name));
+    const key = normalizeConceptKey(concept.name);
     if (!key) continue;
     const existing = conceptCounts.get(key);
-    const action = coerceReasoningContent(a.content).action || null;
+    const action = content.action || null;
     if (existing) {
       existing.count += 1;
       if (action && !existing.actions.includes(action)) existing.actions.push(action);

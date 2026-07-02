@@ -208,3 +208,26 @@ describe("coerceArtifactContent dispatcher", () => {
     expect(coerceArtifactContent({ type: "unknown" as any, content: {} })).toBeNull();
   });
 });
+
+describe("D7 review — mixed evidence arrays keep their string elements", () => {
+  it("a legacy string ref beside structured evidence survives coercion (never-drop-data contract)", () => {
+    const out = coerceResearchContent({
+      summary: "s",
+      findings: [
+        {
+          category: "arch",
+          detail: "d",
+          significance: "low",
+          evidence: [
+            "legacy string reference",
+            { filePath: "a.ts", lineStart: 1, lineEnd: 2, snippet: "x", explanation: "e" },
+          ],
+        },
+      ],
+    });
+    const ev = out.findings[0].evidence as unknown[];
+    expect(ev).toHaveLength(2);
+    expect(ev[0]).toBe("legacy string reference");
+    expect(typeof ev[1]).toBe("object");
+  });
+});
