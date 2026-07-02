@@ -32,7 +32,10 @@ export function SessionBrowser() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
-  const { addArtifact, addComment, selectArtifact, reset } = useArtifactStore();
+  const addArtifact = useArtifactStore((s) => s.addArtifact);
+  const addComment = useArtifactStore((s) => s.addComment);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const reset = useArtifactStore((s) => s.reset);
   const hasActiveSession = useConnectionStore((s) => s.activeSessions.length > 0);
 
   // Cross-session search state

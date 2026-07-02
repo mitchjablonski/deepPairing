@@ -20,7 +20,8 @@ const KEYBOARD_CONFIRM_SECONDS = 3;
 export function ArtifactStatusActions({ artifact, hideApprove = false }: ArtifactStatusActionsProps) {
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const { updateArtifactStatus, submitComment } = useArtifactStore();
+  const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  const submitComment = useArtifactStore((s) => s.submitComment);
   const autonomyLevel = useConnectionStore((s) => s.autonomyLevel);
   const commentRef = useRef<HTMLTextAreaElement>(null);
 

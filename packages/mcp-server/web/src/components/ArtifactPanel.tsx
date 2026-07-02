@@ -1,5 +1,8 @@
 import { useMemo, useState, useEffect } from "react";
-import { motion, AnimatePresence } from "motion/react";
+// B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
+// `motion` component: drops ~40kB gzip of animation features nothing uses
+// from the ENTRY bundle. Same animations.
+import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import { type Artifact, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
@@ -86,7 +89,8 @@ const typeLabels: Record<string, string> = {
 };
 
 function RelatedArtifacts({ ids }: { ids: string[] }) {
-  const { artifacts, selectArtifact } = useArtifactStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const related = ids.map((id) => artifacts.find((a) => a.id === id)).filter(Boolean) as Artifact[];
 
   if (related.length === 0) return null;
@@ -112,7 +116,7 @@ function RelatedArtifacts({ ids }: { ids: string[] }) {
 function EditableTitle({ artifact }: { artifact: Artifact }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(artifact.title);
-  const { renameArtifact } = useArtifactStore();
+  const renameArtifact = useArtifactStore((s) => s.renameArtifact);
 
   const handleSave = () => {
     const trimmed = draft.trim();
@@ -163,7 +167,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   );
 
   return (
-    <motion.div
+    <m.div
       key={artifact.id}
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
@@ -283,7 +287,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         </h4>
         <CommentThread artifactId={artifact.id} comments={generalComments} />
       </div>
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -378,7 +382,7 @@ function ArtifactSidebar({
   width: number;
   onToggle: () => void;
 }) {
-  const { selectArtifact } = useArtifactStore();
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   // Flow (causal chain) is the fresh-tab default — once a project is deep,
   // grouping by type scatters a finding → plan → change thread across buckets.
   // The user's pick persists across reloads.
@@ -559,7 +563,9 @@ interface ActiveSession { sessionId: string; port: number; pid: number; startedA
  * them into the local store so everything appears in one UI.
  */
 function MultiAgentSync() {
-  const { addArtifact, addComment, artifacts } = useArtifactStore();
+  const addArtifact = useArtifactStore((s) => s.addArtifact);
+  const addComment = useArtifactStore((s) => s.addComment);
+  const artifacts = useArtifactStore((s) => s.artifacts);
   const knownSessionIds = useMemo(() => new Set(artifacts.map((a) => a.sessionId)), [artifacts]);
 
   useEffect(() => {
@@ -604,8 +610,13 @@ function MultiAgentSync() {
 }
 
 export function ArtifactPanel() {
-  const { artifacts, selectedArtifactId, selectArtifact, unreadIds } = useArtifactStore();
-  const { sidebarCollapsed, toggleSidebar, sidebarWidth } = usePreferencesStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const unreadIds = useArtifactStore((s) => s.unreadIds);
+  const sidebarCollapsed = usePreferencesStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
+  const sidebarWidth = usePreferencesStore((s) => s.sidebarWidth);
   const isNarrow = useIsNarrowViewport();
   const effectiveCollapsed = sidebarCollapsed || isNarrow;
   const [sessionFilter, setSessionFilter] = useState<string | "all">("all");

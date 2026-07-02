@@ -3,7 +3,9 @@ import { coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 
 export function ReviewGate() {
-  const { artifacts, updateArtifactStatus, resolveDecision } = useArtifactStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const [confirming, setConfirming] = useState(false);
 
   const allDraft = artifacts.filter((a) => a.status === "draft");

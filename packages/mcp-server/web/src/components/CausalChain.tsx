@@ -10,7 +10,9 @@ const typeOrder = ["research", "decision", "plan", "code_change", "reasoning"];
  * Each node is clickable to navigate to that artifact.
  */
 export function CausalChain() {
-  const { artifacts, selectedArtifactId, selectArtifact } = useArtifactStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
 
   const visible = artifacts.filter((a) => a.status !== "superseded");
   if (visible.length <= 1) return null;

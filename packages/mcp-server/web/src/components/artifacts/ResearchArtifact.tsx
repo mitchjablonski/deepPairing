@@ -90,7 +90,7 @@ function FindingTriage({
   const [promptVerdict, setPromptVerdict] = useState<Verdict | null>(null);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const { submitComment } = useArtifactStore();
+  const submitComment = useArtifactStore((s) => s.submitComment);
 
   // Look up any existing verdict (latest one with sectionId === "verdict")
   const latestVerdict = useMemo<Verdict | null>(() => {

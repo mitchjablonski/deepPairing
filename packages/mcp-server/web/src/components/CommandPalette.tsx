@@ -19,8 +19,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const { dialogProps } = useModal({ onClose });
-  const { artifacts, selectArtifact, updateArtifactStatus } = useArtifactStore();
-  const { theme, setTheme, toggleSidebar } = usePreferencesStore();
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  const theme = usePreferencesStore((s) => s.theme);
+  const setTheme = usePreferencesStore((s) => s.setTheme);
+  const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
 
   // Build searchable items
   const allItems = useMemo((): PaletteItem[] => {
