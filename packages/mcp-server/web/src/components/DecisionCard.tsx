@@ -82,6 +82,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const agentPickedUp = useArtifactStore((s) =>
     Boolean(effectiveDecisionId && s.acknowledgedDecisions[effectiveDecisionId]),
   );
+  // D3 review — per-option Select button refs so keyboard nav can move DOM
+  // focus in lockstep with the roving highlight.
+  const selectBtnRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(() => {
     // findIndex returns -1 (not undefined) when nothing is recommended, so the
     // old `?? 0` never fired and focusedIndex could be -1 → options[-1] throws
@@ -223,10 +226,16 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       // keydown listener, so it fires during native bubbling BEFORE React's
       // synthetic dispatch — a child's React onKeyDown stopPropagation can't
       // cancel it. Without this, Enter on a nested button resolved the focused
-      // decision instead of activating it (the same exposure AskTrigger had). The
-      // option card itself is a role="button" *div* (tag DIV), so its own
-      // Enter/Space selection still flows through below.
-      if (tag === "BUTTON" || tag === "A") return;
+      // decision instead of activating it (the same exposure AskTrigger had).
+      // D3 review — the SELECT buttons are the exception for NAV keys only:
+      // post-D3 every Tab stop in the grid is a BUTTON, so a blanket bail
+      // handed j/k to App's global handler, which navigated AWAY from the
+      // decision mid-choice. Enter/Space still return here (native activation
+      // fires ONE click). Scoped to data-select-option so AskTrigger /
+      // ConceptBadge keep their B6 behavior (global j/k untouched there).
+      const isSelectBtn = target?.hasAttribute?.("data-select-option") === true;
+      const isNavKey = e.key === "j" || e.key === "k" || e.key === "ArrowDown" || e.key === "ArrowUp";
+      if ((tag === "BUTTON" || tag === "A") && !(isSelectBtn && isNavKey)) return;
 
       // UX2 — within the card, j/k move the option highlight and we
       // stopPropagation so App's document-level j/k doesn't ALSO navigate
@@ -237,12 +246,20 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         if (focusedIndex >= event.options.length - 1) return; // at last → bubble to App nav
         e.preventDefault();
         e.stopPropagation();
-        setFocusedIndex((i) => Math.min(i + 1, event.options.length - 1));
+        const next = Math.min(focusedIndex + 1, event.options.length - 1);
+        setFocusedIndex(next);
+        // D3 review — when nav happens FROM a Select button, DOM focus must
+        // follow the highlight: otherwise Enter fires the STALE button's
+        // native click and selects a different option than the highlighted
+        // one (wrong-selection hazard).
+        if (isSelectBtn) selectBtnRefs.current[next]?.focus();
       } else if (e.key === "ArrowUp" || e.key === "k") {
         if (focusedIndex <= 0) return; // at first → bubble to App nav
         e.preventDefault();
         e.stopPropagation();
-        setFocusedIndex((i) => Math.max(i - 1, 0));
+        const next = Math.max(focusedIndex - 1, 0);
+        setFocusedIndex(next);
+        if (isSelectBtn) selectBtnRefs.current[next]?.focus();
       } else if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
@@ -715,6 +732,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   {option.risk} risk
                 </span>
                 <button
+                  ref={(el) => { selectBtnRefs.current[idx] = el; }}
+                  data-select-option
                   onClick={() => !submitting && handleSelect(option.id)}
                   disabled={submitting}
                   // Accessible name carries the option title so a SR user
@@ -723,7 +742,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   // U4 — keep the roving highlight in lockstep with Tab focus
                   // (this button is now the card's only focusable selector).
                   onFocus={() => !submitting && setFocusedIndex(idx)}
-                  className={`ml-auto px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
+                  className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
                     idx === focusedIndex
                       ? "bg-accent-blue text-white"
                       : "bg-surface-secondary text-text-secondary hover:bg-accent-blue hover:text-white"

@@ -780,3 +780,41 @@ describe("C2 — decision consumption receipt", () => {
     expect(screen.queryByText(/delivered — claude will pick it up/i)).not.toBeInTheDocument();
   });
 });
+
+describe("D3 review — keyboard nav from a focused Select button", () => {
+  it("j on a focused Select button moves highlight AND focus; Enter then selects the highlighted option", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<DecisionCard event={event} decisionId="dec_abc" />);
+
+    const b1 = screen.getByRole("button", { name: "Select Redis" });
+    b1.focus();
+    // Pre-fix: the blanket BUTTON guard returned, and App's global j
+    // navigated AWAY from the decision mid-choice.
+    fireEvent.keyDown(b1, { key: "j" });
+    const b2 = screen.getByRole("button", { name: "Select CDN edge cache" });
+    // DOM focus followed the highlight — without this, Enter would fire the
+    // STALE button's native click (wrong-selection hazard).
+    expect(document.activeElement).toBe(b2);
+
+    fireEvent.keyDown(b2, { key: "Enter" });
+    // Native activation path: the container guard returns for Enter on a
+    // button; jsdom doesn't synthesize click from keydown, so simulate it.
+    fireEvent.click(b2);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/decisions/dec_abc"),
+      expect.objectContaining({ body: expect.stringContaining('"optionId":"o2"') }),
+    );
+  });
+
+  it("j on an AskTrigger button does NOT hijack the option highlight (pass-through scoped to Select buttons)", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_1" />);
+    const ask = screen.getAllByRole("button", { name: /ask/i })[0];
+    ask.focus();
+    fireEvent.keyDown(ask, { key: "j" });
+    // Focus stayed on the AskTrigger — the nav pass-through is data-select-option
+    // only, so non-Select buttons keep their pre-existing behavior (the
+    // wrapper's own stopPropagation, unchanged by D3).
+    expect(document.activeElement).toBe(ask);
+  });
+});
