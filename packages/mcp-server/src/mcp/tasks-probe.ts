@@ -35,14 +35,20 @@ import { taskHandleForArtifact } from "./task-handles.js";
 export const MCP_TASKS_ENABLED = false as const;
 
 /**
- * Seam for emitting an MCP Task from a present_* tool handler. Today this
- * is a no-op (MCP_TASKS_ENABLED === false). When the SDK ships Tasks, the
- * implementer should:
+ * Seam for exposing a present_* artifact as an MCP Task. Today this is a
+ * no-op (MCP_TASKS_ENABLED === false). E4 — realigned to the 2026-07-28 RC's
+ * Tasks EXTENSION lifecycle (the sketch below replaces the pre-RC
+ * server-push `emitTask` idea, which the RC removed):
  *
- *   1. Build the handle: `const handle = await taskHandleForArtifact(artifact, store);`
- *   2. Emit via the SDK call (name TBD — likely `server.emitTask(handle)` or
- *      a notification along the lines of `notifications/tasks/created`).
- *   3. Status transitions are wired through `maybeUpdateTaskStatus` (below).
+ *   - Task creation is SERVER-DIRECTED: the client advertises the tasks
+ *     extension in its capability map; the SERVER decides a tools/call runs
+ *     as a task and answers with a task handle instead of a final result.
+ *   - The CLIENT then drives the lifecycle by polling `tasks/get` and
+ *     calling `tasks/update` / `tasks/cancel`. `tasks/list` is REMOVED.
+ *   - For this seam: a present_* call whose review outlives the request is
+ *     the natural task — answer with a handle derived from
+ *     `taskHandleForArtifact(artifact, store)`, then surface review-state
+ *     transitions through the `tasks/get` poll (see maybeUpdateTaskStatus).
  *
  * Keeping this helper async so future Tasks emission doesn't change the
  * call sites' shape.
@@ -53,9 +59,10 @@ export async function maybeEmitTaskHandle(
   _store: IStore,
 ): Promise<void> {
   if (!MCP_TASKS_ENABLED) return;
-  // TODO(2026-Q3, MCP Tasks SDK ships): build the handle and emit it.
+  // TODO(2026-Q3, SDK v2 stable ships the tasks extension): answer the
+  // originating tools/call with a task handle —
   //   const handle = await taskHandleForArtifact(_artifact, _store);
-  //   await _server.emitTask(handle);  // exact API TBD per SDK release
+  // and register it so the client's tasks/get poll can read review state.
   // Reference taskHandleForArtifact so the import isn't pruned by the
   // `MCP_TASKS_ENABLED === false` dead-code branch above.
   void taskHandleForArtifact;
@@ -85,11 +92,12 @@ export async function maybeUpdateTaskStatus(
   _store: IStore,
 ): Promise<void> {
   if (!MCP_TASKS_ENABLED) return;
-  // TODO(2026-Q3, MCP Tasks SDK ships): re-derive the handle from the
-  // current artifact + store state and emit a status update.
+  // TODO(2026-Q3, SDK v2 stable): re-derive the handle from the current
+  // artifact + store state and update the task record the client polls —
   //   const artifact = (await _store.getArtifacts()).find((a) => a.id === _artifactId);
   //   if (!artifact) return;
   //   const handle = await taskHandleForArtifact(artifact, _store);
-  //   await _server?.updateTask(handle);  // exact API TBD per SDK release
+  // (RC lifecycle: the CLIENT polls tasks/get — there is no server-push
+  // update call to make; keeping the record current is our whole job.)
   void taskHandleForArtifact;
 }
