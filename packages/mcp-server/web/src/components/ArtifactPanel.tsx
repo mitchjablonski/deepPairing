@@ -551,6 +551,11 @@ function MultiAgentSync() {
       // hidden (the timer keeps ticking but does no work / triggers no renders).
       if (typeof document !== "undefined" && document.hidden) return;
       for (const session of activeSessions) {
+        // E7 review — bail BEFORE stamping the backoff: an abort mid-loop
+        // otherwise phantom-stamped every remaining session (their fetches
+        // instantly rejected on the dead signal AFTER the stamp), delaying
+        // another agent's session discovery by up to 30s post-churn.
+        if (ac.signal.aborted) return;
         if (knownSessionIds.has(session.sessionId)) continue; // Already loaded
         const last = lastAttemptRef.current.get(session.sessionId) ?? 0;
         if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;

@@ -20,8 +20,20 @@ export function useAbortableFetch<T>(
   useEffect(() => {
     const ac = new AbortController();
     (async () => {
-      const result = await fetcher(ac.signal).catch(() => null);
-      if (!ac.signal.aborted) setData(result);
+      // E7 review — a REJECTED refetch keeps the last-known data instead of
+      // nulling it (the cancelled-flag original bare-returned on failure, so
+      // e.g. CompoundingBadge kept stale counts through a transient blip
+      // rather than vanishing). Fetchers signal "clear the data" by
+      // RESOLVING null; failures resolve undefined and are skipped.
+      // try/catch (not .catch) so a synchronously-throwing fetcher is
+      // covered too.
+      let result: T | null | undefined;
+      try {
+        result = await fetcher(ac.signal);
+      } catch {
+        result = undefined;
+      }
+      if (result !== undefined && !ac.signal.aborted) setData(result);
     })();
     return () => ac.abort();
   }, deps); // caller-owned deps — the hook's contract (no exhaustive-deps plugin loaded)

@@ -36,10 +36,32 @@ describe("E7 — useAbortableFetch", () => {
     expect(signals[1].aborted).toBe(false);
   });
 
-  it("a rejecting fetcher settles to null (silent-failure contract)", async () => {
-    const { result } = renderHook(() =>
-      useAbortableFetch(async () => { throw new Error("boom"); }, []),
+  it("a rejecting REFETCH keeps the last-known data (transient-blip contract)", async () => {
+    let fail = false;
+    const { result, rerender } = renderHook(
+      ({ k }) => useAbortableFetch(async () => {
+        if (fail) throw new Error("blip");
+        return { ok: k };
+      }, [k]),
+      { initialProps: { k: 1 } },
     );
+    await waitFor(() => expect(result.current).toEqual({ ok: 1 }));
+    fail = true;
+    rerender({ k: 2 });
+    // The failed refetch must NOT null out the data — stale beats vanished.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(result.current).toEqual({ ok: 1 });
+  });
+
+  it("a fetcher resolving null CLEARS the data (explicit-clear contract)", async () => {
+    let empty = false;
+    const { result, rerender } = renderHook(
+      ({ k }) => useAbortableFetch(async () => (empty ? null : { ok: k }), [k]),
+      { initialProps: { k: 1 } },
+    );
+    await waitFor(() => expect(result.current).toEqual({ ok: 1 }));
+    empty = true;
+    rerender({ k: 2 });
     await waitFor(() => expect(result.current).toBeNull());
   });
 });

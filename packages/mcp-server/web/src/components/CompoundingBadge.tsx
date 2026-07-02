@@ -23,7 +23,9 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
   // unmount; badge stays hidden if /api/metrics isn't reachable).
   const stat = useAbortableFetch(async (signal) => {
     const res = await apiGet(`${apiBase()}/api/metrics`, { signal });
-    if (!res.ok) return null;
+    // Throw (not null) on failure: the hook keeps last-known counts through
+    // a transient blip instead of unmounting the compounding proof.
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return {
       blocks: data?.counts?.preflightBlocks?.total ?? 0,
