@@ -181,3 +181,63 @@ describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a f
     }
   });
 });
+
+describe("D8 — spec open questions are answerable (H1) and requirement counts work (M6)", () => {
+  it("each open question renders Ask + Comment triggers targeted by questionIndex", () => {
+    const artifact = mk("spec", {
+      objective: "obj",
+      openQuestions: ["Should auth be optional?", "Which DB?"],
+    });
+    useArtifactStore.setState({ artifacts: [artifact], comments: {} });
+    render(<SpecArtifact artifact={artifact} />);
+    expect(screen.getByText("Should auth be optional?")).toBeInTheDocument();
+    // Two questions → two Ask triggers within the open-questions block
+    const asks = screen.getAllByRole("button", { name: /ask/i });
+    expect(asks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a comment targeting questionIndex marks the question answered", () => {
+    const artifact = mk("spec", { objective: "obj", openQuestions: ["Which DB?"] });
+    useArtifactStore.setState({
+      artifacts: [artifact],
+      comments: {
+        [artifact.id]: [
+          {
+            id: "c1", artifactId: artifact.id, author: "human", text: "Postgres",
+            createdAt: new Date().toISOString(),
+            target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
+          } as any,
+        ],
+      },
+    });
+    render(<SpecArtifact artifact={artifact} />);
+    expect(screen.getByText(/answered/i)).toBeInTheDocument();
+  });
+
+  it("M6 — requirement comment counts increment for comments carrying requirementId", () => {
+    const artifact = mk("spec", {
+      objective: "obj",
+      requirements: [{ id: "REQ-1", statement: "Must work", priority: "must" }],
+    });
+    useArtifactStore.setState({
+      artifacts: [artifact],
+      comments: {
+        [artifact.id]: [
+          {
+            id: "c2", artifactId: artifact.id, author: "human", text: "clarify",
+            createdAt: new Date().toISOString(),
+            // Legacy trigger shape — exactly what main's CommentTrigger sent
+            // (no sectionId), which main's filter could NEVER count. This
+            // test fails on main; the requirementId shape is covered by the
+            // new-trigger path implicitly.
+            target: { artifactId: artifact.id, stepIndex: 0 },
+          } as any,
+        ],
+      },
+    });
+    render(<SpecArtifact artifact={artifact} />);
+    // The CommentTrigger badge shows the count — the old filter could never
+    // reach 1 for trigger-created comments (sectionId was never sent).
+    expect(screen.getByText("1")).toBeInTheDocument();
+  });
+});

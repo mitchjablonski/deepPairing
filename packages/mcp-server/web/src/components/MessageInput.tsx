@@ -3,6 +3,7 @@ import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 import { useToastStore } from "../stores/toast";
+import { useConnectionStore } from "../stores/connection";
 import { useSentFlash } from "../hooks/useSentFlash";
 
 // Stable empty-array reference so Zustand's store selector doesn't produce
@@ -21,7 +22,28 @@ const EMPTY_COMMENTS: Comment[] = [];
  * - @artifact mentions with fuzzy autocomplete — inline text reference
  * - Last 3 session messages surfaced as thread history above the input
  */
+function useAgentRecentlyActive(): boolean {
+  // D8 review — select the BOOLEAN (raw agentActivityAt re-rendered the
+  // composer on every heartbeat), and arm a one-shot timer to the recency
+  // boundary: after the agent exits, nothing re-renders this component (the
+  // D6 equality bail suppresses idle polls), so without the timer the
+  // "under 30s" promise froze — the exact staleness M3 targets.
+  const recentlyActive = useConnectionStore(
+    (st) => st.agentActivityAt != null && Date.now() - st.agentActivityAt < 60_000,
+  );
+  const agentActivityAt = useConnectionStore((st) => st.agentActivityAt);
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!recentlyActive || agentActivityAt == null) return;
+    const msUntilStale = agentActivityAt + 60_000 - Date.now();
+    const t = setTimeout(() => force((n) => n + 1), Math.max(msUntilStale, 0) + 250);
+    return () => clearTimeout(t);
+  }, [recentlyActive, agentActivityAt]);
+  return recentlyActive;
+}
+
 export function MessageInput() {
+  const agentRecentlyActive = useAgentRecentlyActive();
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const { sent, flash } = useSentFlash();
@@ -230,8 +252,12 @@ export function MessageInput() {
       </div>
 
       <div className="flex items-center justify-between mt-1">
+        {/* D8 (M3) — the "under 30s" promise is only honest while the agent
+            heartbeat is fresh; when it's idle/gone, don't promise latency. */}
         <p className="text-2xs text-text-muted">
-          The agent will see this the next time it checks in — usually under 30s
+          {agentRecentlyActive
+            ? "The agent will see this the next time it checks in — usually under 30s"
+            : "The agent will see this the next time it checks in"}
         </p>
         <button
           onClick={handleSend}

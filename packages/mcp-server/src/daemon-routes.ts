@@ -106,6 +106,9 @@ export function createActiveSessionRoutes(
   sessions: SessionMap,
   sessionMeta: Map<string, SessionMeta>,
   daemonHash: string | undefined,
+  /** D8 (M8) — registered-wrapper set for the honest `live` flag. Optional so
+   *  route-logic fixtures don't thread it (undefined ⇒ every session reports live). */
+  activeSessions?: Set<string>,
 ): Hono {
   const app = new Hono();
   const gate = projectHashGate(daemonHash);
@@ -120,6 +123,12 @@ export function createActiveSessionRoutes(
         title: meta?.title ?? id,
         project: meta?.project ?? "",
         artifactCount: store.getArtifacts().length,
+        // D8 (M8) — honest liveness. The data map deliberately retains
+        // unregistered sessions (readable history); the UI needs to know
+        // which still have a REGISTERED wrapper so dead sessions stop
+        // wearing a live green dot forever. Fixtures without the set report
+        // live (matches old-daemon behavior the client also tolerates).
+        live: activeSessions ? activeSessions.has(id) : true,
       };
     });
     return c.json({ sessions: list });

@@ -111,9 +111,13 @@ export function SpecArtifact({ artifact }: Props) {
           <div className="text-2xs font-semibold text-accent-amber uppercase tracking-wide mb-1.5">
             Open questions
           </div>
-          <ul className="list-disc list-inside space-y-0.5 text-xs text-text-secondary">
+          {/* D8 (H1) — open questions are the agent explicitly asking its
+              pair for input; they were inert text with no way to answer
+              except a whole-artifact comment. Each gets Ask/Comment targeted
+              per question so answers land in the agent's feedback lane. */}
+          <ul className="space-y-1 text-xs text-text-secondary">
             {spec.openQuestions.map((q, i) => (
-              <li key={i}>{q}</li>
+              <OpenQuestionRow key={i} artifactId={artifact.id} question={q} index={i} />
             ))}
           </ul>
         </div>
@@ -127,6 +131,44 @@ export function SpecArtifact({ artifact }: Props) {
   );
 }
 
+function OpenQuestionRow({
+  artifactId,
+  question,
+  index,
+}: {
+  artifactId: string;
+  question: string;
+  index: number;
+}) {
+  const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  // D8 review — the human's own UNANSWERED AskTrigger question must not
+  // stamp the row "answered"; only plain comments / answered questions do.
+  const answers = comments.filter(
+    (c) =>
+      c.target.questionIndex === index &&
+      !(c.intent === "question" && !c.answeredByCommentId),
+  );
+  return (
+    <li className="flex items-start justify-between gap-2 group">
+      <span className="min-w-0">
+        <span className="text-accent-amber mr-1.5" aria-hidden>?</span>
+        {question}
+        {answers.length > 0 && (
+          <span className="ml-1.5 text-2xs text-accent-green" title="Answered">✓ answered</span>
+        )}
+      </span>
+      <span className="flex items-center gap-1 shrink-0">
+        <AskTrigger artifactId={artifactId} target={{ questionIndex: index, sectionId: "open-question" }} />
+        <CommentTrigger
+          artifactId={artifactId}
+          target={{ questionIndex: index, sectionId: "open-question" }}
+          existingCount={answers.length}
+        />
+      </span>
+    </li>
+  );
+}
+
 function RequirementRow({
   requirement,
   index,
@@ -137,8 +179,15 @@ function RequirementRow({
   artifact: Artifact;
 }) {
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  // D8 (M6) — match by stable requirementId first; keep the legacy
+  // stepIndex+sectionId shape so existing comments still count. The old
+  // filter ALSO demanded sectionId, which CommentTrigger never sent — so
+  // comment counts on requirements could never increment (verified bug).
   const reqComments = comments.filter(
-    (c) => c.target.stepIndex === index && c.target.sectionId === "requirement",
+    (c) =>
+      c.target.requirementId === requirement.id ||
+      (c.target.stepIndex === index &&
+        (c.target.sectionId === "requirement" || c.target.sectionId == null)),
   );
 
   return (
@@ -160,11 +209,11 @@ function RequirementRow({
         <div className="flex items-center gap-1 shrink-0">
           <AskTrigger
             artifactId={artifact.id}
-            target={{ stepIndex: index, sectionId: "requirement" } as any}
+            target={{ requirementId: requirement.id, stepIndex: index, sectionId: "requirement" }}
           />
           <CommentTrigger
             artifactId={artifact.id}
-            target={{ stepIndex: index } as any}
+            target={{ requirementId: requirement.id, stepIndex: index, sectionId: "requirement" }}
             existingCount={reqComments.length}
           />
         </div>

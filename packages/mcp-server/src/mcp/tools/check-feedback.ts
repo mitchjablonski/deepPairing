@@ -224,10 +224,25 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     await store.acknowledgeComments(artifactCommentsSorted.map((c) => c.id));
     const questionLines: string[] = [];
     const otherLines: string[] = [];
+    const artsForTargets = await store.getArtifacts();
     for (const c of artifactCommentsSorted) {
       let loc = c.target.artifactId;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
       if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
+      // D8 review [BLOCKER] — question answers and requirement comments
+      // arrived UNTAGGED: the human clicked Comment on "Which DB?", typed
+      // "Postgres", and the agent got a bare artifact-level comment with no
+      // clue which open question it answered. Tag both, resolving the
+      // question TEXT so terse answers ("yes") stay unambiguous.
+      if (c.target.questionIndex != null) {
+        const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+        const qs = (art?.content as { openQuestions?: string[] } | undefined)?.openQuestions;
+        const qText = qs?.[c.target.questionIndex];
+        loc += qText
+          ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")`
+          : ` (answers open question #${c.target.questionIndex + 1})`;
+      }
+      if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
 
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
@@ -239,6 +254,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           content: c.content,
           lineStart: c.target.lineStart,
           findingIndex: c.target.findingIndex,
+          questionIndex: c.target.questionIndex,
+          requirementId: c.target.requirementId,
         });
         continue;
       }
@@ -265,6 +282,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         content: c.content,
         lineStart: c.target.lineStart,
         findingIndex: c.target.findingIndex,
+        questionIndex: c.target.questionIndex,
+        requirementId: c.target.requirementId,
       });
     }
     if (questionLines.length > 0) {

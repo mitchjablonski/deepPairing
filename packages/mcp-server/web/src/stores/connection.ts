@@ -21,10 +21,14 @@ interface ActiveSession {
   title: string;
   project: string;
   artifactCount: number;
+  /** D8 (M8) — wrapper still registered on the daemon. Optional: old daemons omit it. */
+  live?: boolean;
 }
 
 interface ConnectionState {
   connected: boolean;
+  /** D8 (H4) — epoch ms of the FIRST disconnect of the current outage; null while connected. */
+  disconnectedSince: number | null;
   sessionId: string | null;
   projectRoot: string | null;
   /**
@@ -482,6 +486,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
   return {
     connected: false,
+    disconnectedSince: null,
     sessionId: null,
     projectRoot: null,
     agentActivityAt: null,
@@ -509,7 +514,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       set({ adapter });
 
       adapter.onConnect(() => {
-        set({ connected: true });
+        set({ connected: true, disconnectedSince: null });
         // Request notification permission on first connect
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           Notification.requestPermission();
@@ -523,7 +528,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       adapter.onMessage(handleMessage);
 
       adapter.onDisconnect(() => {
-        set({ connected: false });
+        // D8 (H4) — stamp WHEN the outage started (first flip only) so the
+        // banner can escalate: a 30-second blip and a dead daemon looked
+        // identical forever.
+        set((st) => ({
+          connected: false,
+          disconnectedSince: st.disconnectedSince ?? Date.now(),
+        }));
       });
 
       // II3 — the WS adapter detected (via /api/daemon-info) that the
@@ -598,7 +609,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 p.sessionId === n.sessionId &&
                 p.title === n.title &&
                 p.project === n.project &&
-                p.artifactCount === n.artifactCount
+                p.artifactCount === n.artifactCount &&
+                // D8 — every RENDERED field must be here (D6 review's drift
+                // warning); live drives the session-bar dot.
+                p.live === n.live
               );
             });
           if (!same) set({ activeSessions: next });

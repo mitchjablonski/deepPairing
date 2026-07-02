@@ -221,6 +221,9 @@ export function AskTrigger({
     optionId?: string;
     sectionId?: string;
     visualId?: string;
+    // D8 — stable requirement identity + answerable open questions.
+    requirementId?: string;
+    questionIndex?: number;
   };
   /** "inline" = compact icon-button; "pill" = small labelled pill */
   variant?: "inline" | "pill";
@@ -242,6 +245,10 @@ export function AskTrigger({
     if (c.intent !== "question") return false;
     if (target.findingIndex != null && c.target.findingIndex !== target.findingIndex) return false;
     if (target.stepIndex != null && c.target.stepIndex !== target.stepIndex) return false;
+    // D8 review — without these arms all open questions share
+    // sectionId="open-question", so one asked question pulsed on EVERY row.
+    if (target.questionIndex != null && c.target.questionIndex !== target.questionIndex) return false;
+    if (target.requirementId != null && c.target.requirementId !== target.requirementId) return false;
     if (target.evidenceIndex != null && c.target.evidenceIndex !== target.evidenceIndex) return false;
     if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
     if (target.optionId != null && c.target.optionId !== target.optionId) return false;
@@ -418,6 +425,10 @@ export function CommentTrigger({
       return c.target.findingIndex === target.findingIndex && c.target.evidenceIndex === target.evidenceIndex;
     }
     if (target.findingIndex != null) return c.target.findingIndex === target.findingIndex;
+    // D8 review — no arm meant the badge said "1" but the popover thread was
+    // EMPTY (your answer vanished on reopen, inviting a repost).
+    if (target.questionIndex != null) return c.target.questionIndex === target.questionIndex;
+    if (target.requirementId != null) return c.target.requirementId === target.requirementId;
     if (target.stepIndex != null) return c.target.stepIndex === target.stepIndex;
     if (target.visualId != null) return c.target.visualId === target.visualId;
     return false;

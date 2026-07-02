@@ -84,6 +84,13 @@ function targetLabel(c: Comment, artifact?: Artifact): string {
 type FilterMode = "all" | "unanswered";
 
 export function ConversationRail({ onClose }: ConversationRailProps) {
+  // D8 (M4) — relative timestamps froze at render ("30s ago" forever).
+  // 30s tick, TurnIndicator's idiom; drives re-render only while mounted.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setNowTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
   const { dialogProps } = useModal({ onClose });
   const artifacts = useArtifactStore((s) => s.artifacts);
   const commentsByArtifact = useArtifactStore((s) => s.comments);

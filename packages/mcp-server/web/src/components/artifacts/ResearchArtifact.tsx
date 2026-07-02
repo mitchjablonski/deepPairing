@@ -808,12 +808,11 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
           <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-1">
             Open Questions
           </h4>
+          {/* D8 (H1) — answerable: each question gets Ask/Comment targeted per
+              question (questionIndex), mirroring SpecArtifact. */}
           <ul className="text-xs text-text-secondary space-y-1">
             {content.openQuestions.map((q, i) => (
-              <li key={i} className="flex items-start gap-1.5">
-                <span className="text-accent-amber mt-0.5">?</span>
-                <span>{q}</span>
-              </li>
+              <ResearchOpenQuestion key={i} artifactId={artifact.id} question={q} index={i} />
             ))}
           </ul>
         </div>
@@ -821,5 +820,45 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
 
       <ArtifactStatusActions artifact={artifact} />
     </div>
+  );
+}
+
+function ResearchOpenQuestion({
+  artifactId,
+  question,
+  index,
+}: {
+  artifactId: string;
+  question: string;
+  index: number;
+}) {
+  const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  // D8 review — the human's own UNANSWERED AskTrigger question must not
+  // stamp the row "answered"; only plain comments / answered questions do.
+  const answers = comments.filter(
+    (c) =>
+      c.target.questionIndex === index &&
+      !(c.intent === "question" && !c.answeredByCommentId),
+  );
+  return (
+    <li className="flex items-start justify-between gap-2 group">
+      <span className="flex items-start gap-1.5 min-w-0">
+        <span className="text-accent-amber mt-0.5" aria-hidden>?</span>
+        <span>
+          {question}
+          {answers.length > 0 && (
+            <span className="ml-1.5 text-2xs text-accent-green" title="Answered">✓ answered</span>
+          )}
+        </span>
+      </span>
+      <span className="flex items-center gap-1 shrink-0">
+        <AskTrigger artifactId={artifactId} target={{ questionIndex: index, sectionId: "open-question" }} />
+        <CommentTrigger
+          artifactId={artifactId}
+          target={{ questionIndex: index, sectionId: "open-question" }}
+          existingCount={answers.length}
+        />
+      </span>
+    </li>
   );
 }
