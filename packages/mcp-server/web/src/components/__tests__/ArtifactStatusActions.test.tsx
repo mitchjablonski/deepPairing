@@ -1,0 +1,74 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
+import { useArtifactStore } from "../../stores/artifact";
+
+const artifact = {
+  id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null,
+  title: "t", status: "draft", content: {}, agentReasoning: null,
+  createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+} as any;
+
+beforeEach(() => {
+  useArtifactStore.getState().reset();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+});
+afterEach(() => vi.unstubAllGlobals());
+
+/** Install a fake IntersectionObserver that immediately reports the sentinel
+ *  as (not) intersecting — i.e. the user is (not) at the artifact's end. */
+function stubIO(isIntersecting: boolean) {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      cb: any;
+      constructor(cb: any) { this.cb = cb; }
+      observe() { this.cb([{ isIntersecting }]); }
+      disconnect() {}
+      unobserve() {}
+    } as any,
+  );
+}
+
+describe("B6 — compact-while-floating review footer", () => {
+  it("floats as a slim bar mid-scroll: Approve stays one click, no textarea", async () => {
+    stubIO(false); // sentinel off-screen → user hasn't reached the end
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact} />);
+
+    expect(screen.queryByPlaceholderText(/respond to the agent/i)).not.toBeInTheDocument();
+    // The bound approve still works directly from the compact bar.
+    await user.click(screen.getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => {
+      const calls = (globalThis.fetch as any).mock.calls.filter(([u]: any[]) =>
+        String(u).includes("/api/artifacts/a1/status"),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("'Respond / revise / reject…' expands the full panel and focuses the textarea", async () => {
+    stubIO(false);
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact} />);
+    await user.click(screen.getByRole("button", { name: /respond \/ revise \/ reject/i }));
+    const textarea = await screen.findByPlaceholderText(/respond to the agent/i);
+    expect(textarea).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
+    // The full action row is present now.
+    expect(screen.getByRole("button", { name: /request revision/i })).toBeInTheDocument();
+  });
+
+  it("shows the FULL panel when the user is at the artifact's end", () => {
+    stubIO(true);
+    render(<ArtifactStatusActions artifact={artifact} />);
+    expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
+  });
+
+  it("defaults to the full panel when IntersectionObserver never fires (test envs, short artifacts)", () => {
+    // no stubIO — whatever the env provides won't call back synchronously
+    render(<ArtifactStatusActions artifact={artifact} />);
+    expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
+  });
+});

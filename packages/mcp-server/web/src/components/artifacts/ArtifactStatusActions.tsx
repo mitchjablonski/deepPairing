@@ -39,6 +39,32 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   const [countdownPaused, setCountdownPaused] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // B6 — compact-while-floating. The full footer (~180px: textarea + three
+  // action rows) permanently occluded a big slice of the pane while sticky
+  // mid-scroll. A sentinel sits at the artifact's natural end: while it's
+  // off-screen (user still reading) the footer collapses to one slim row
+  // (Approve stays one click; "Respond…" expands + focuses the textarea);
+  // reaching the end — or arming a countdown, typing, or rejecting — expands
+  // the full panel. atEnd defaults TRUE so test envs without a working
+  // IntersectionObserver (and short artifacts) keep today's full footer.
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [atEnd, setAtEnd] = useState(true);
+  const [forceExpanded, setForceExpanded] = useState(false);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([entry]) => setAtEnd(entry.isIntersecting));
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const expanded =
+    atEnd || forceExpanded || countdown !== null || rejecting || comment.trim().length > 0;
+  const expandAndFocus = () => {
+    setForceExpanded(true);
+    // Focus after the expanded render commits.
+    requestAnimationFrame(() => commentRef.current?.focus());
+  };
+
   const confidence = (artifact.content as any)?.confidence;
   const shouldAutoApprove =
     artifact.status === "draft" &&
@@ -270,7 +296,41 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     // human must make (and any running countdown) always on screen. Works
     // because this is a direct child of each renderer root inside the
     // overflow-y-auto pane (no intermediate overflow ancestor).
-    <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary/95 backdrop-blur-sm pt-3 border-t border-border-default space-y-2">
+    <>
+      {/* B6 — end-of-artifact sentinel: visible ⇒ the user reached the bottom
+          ⇒ show the full panel. While it's off-screen the footer floats in
+          compact form. */}
+      <div ref={sentinelRef} aria-hidden className="h-px" />
+      <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2">
+      {!expanded ? (
+        // B6 — slim floating bar: Approve stays one click (the bound approve),
+        // everything needing a reason expands + focuses the textarea.
+        <div className="flex items-center gap-2 pb-2">
+          {!hideApprove && (
+            <button
+              onClick={() => handleAction("approved")}
+              disabled={submitting}
+              className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
+                         hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+              title="Approve as-is"
+            >
+              Approve
+            </button>
+          )}
+          <button
+            onClick={expandAndFocus}
+            className="px-2.5 py-1 text-2xs font-medium text-text-secondary rounded border border-border-default
+                       hover:text-text-primary hover:bg-surface-hover transition-all duration-[180ms] ease-out press-scale"
+            title="Respond, request a revision, or reject — opens the full review panel"
+          >
+            Respond / revise / reject…
+          </button>
+          <span className="text-2xs text-text-muted ml-auto" aria-hidden>
+            ▼ full review at the end
+          </span>
+        </div>
+      ) : (
+      <>
       {/* Auto-proceed countdown bar */}
       {countdown !== null && countdown > 0 && !countdownPaused && (
         <div className="space-y-1.5">
@@ -433,6 +493,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
           ⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)
         </div>
       )}
-    </div>
+      </>
+      )}
+      </div>
+    </>
   );
 }
