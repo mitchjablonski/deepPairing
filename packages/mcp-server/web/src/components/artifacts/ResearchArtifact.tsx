@@ -1,6 +1,7 @@
 import type { Artifact, Evidence, Comment } from "@deeppairing/shared";
 import { coerceResearchContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
+import { scrollToAnchor } from "../../lib/comment-anchor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
@@ -166,17 +167,14 @@ function FindingTriage({
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
 
-  // Look up any existing verdict (latest one with sectionId === "verdict")
-  const latestVerdict = useMemo<Verdict | null>(() => {
-    const verdicts = comments.filter((c) => c.target.sectionId === "verdict");
-    const newest = verdicts[verdicts.length - 1];
-    if (!newest) return null;
-    const content = newest.content.toLowerCase();
-    if (content.startsWith("approved")) return "approved";
-    if (content.startsWith("needs revision")) return "revised";
-    if (content.startsWith("rejected")) return "rejected";
-    return null;
-  }, [comments]);
+  // C5 review — REAL single-sourcing: consume the shared deriveVerdict (the
+  // strip and the chip previously ran near-duplicate derivations over
+  // different comment subsets — a divergence door if a verdict comment ever
+  // carried evidence fields).
+  const latestVerdict = useMemo<Verdict | null>(
+    () => deriveVerdict(comments, findingIndex),
+    [comments, findingIndex],
+  );
 
   const submit = async (verdict: Verdict, reasonText = "") => {
     if (submitting) return;
@@ -722,9 +720,10 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
               if (focusMode) {
                 setFocusIndex(i);
               } else {
-                document
-                  .querySelector(`[data-comment-anchor="finding:${i}"]`)
-                  ?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+                // C5 review — the scoped helper, not a bare querySelector:
+                // during AnimatePresence transitions two artifacts coexist
+                // (X10) and an unscoped match can hit the exiting one.
+                scrollToAnchor(artifact.id, `finding:${i}`);
               }
             }}
           />

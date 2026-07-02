@@ -52,7 +52,10 @@ export function SessionMetrics() {
   // every concept named THIS session with its occurrence count, deep-linking
   // into the taste drawer. Sources: decision options, code changes, reasoning.
   const conceptsTouched = useMemo(() => {
-    const counts = new Map<string, number>();
+    // Key case/whitespace-insensitively (mirrors the ledger's normalizeKey);
+    // display the first-seen casing — review: "Fakes over mocks" and "fakes
+    // over mocks" must be ONE chip, like the drawer treats them.
+    const counts = new Map<string, { display: string; n: number }>();
     for (const a of artifacts) {
       const content = a.content as {
         concept?: { name?: string };
@@ -63,9 +66,13 @@ export function SessionMetrics() {
       for (const o of content?.options ?? []) {
         if (o?.concept?.name) names.push(o.concept.name);
       }
-      for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+      for (const raw of names) {
+        const key = raw.trim().toLowerCase().replace(/\s+/g, " ");
+        const prev = counts.get(key);
+        counts.set(key, { display: prev?.display ?? raw, n: (prev?.n ?? 0) + 1 });
+      }
     }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    return [...counts.values()].map(({ display, n }) => [display, n] as const).sort((a, b) => b[1] - a[1]);
   }, [artifacts]);
 
   const stats = useMemo(() => {

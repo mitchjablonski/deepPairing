@@ -45,13 +45,14 @@ describe("C5 — triage progress strip", () => {
     expect(screen.getByRole("button", { name: /finding 3: rejected/i })).toBeInTheDocument();
   });
 
-  it("'Next unreviewed' appears once triage starts and targets the first hollow chip", () => {
+  it("'Next unreviewed' retargets the focus carousel to the first hollow chip", () => {
     seedVerdict(0, "Approved");
     render(<ResearchArtifact artifact={artifact} />);
-    const next = screen.getByRole("button", { name: /next unreviewed/i });
-    // All-mode jump scrolls to the anchor — assert it doesn't throw (jsdom
-    // scrollIntoView is optional-chained per the codebase convention).
-    fireEvent.click(next);
+    // Focus mode makes the jump observable without DOM scrolling: the
+    // carousel header shows the target index.
+    fireEvent.click(screen.getByRole("button", { name: /^focus$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next unreviewed/i }));
+    expect(screen.getByText(/2 \/ 4/)).toBeInTheDocument();
   });
 
   it("hides below 3 findings (no noise on small artifacts)", () => {

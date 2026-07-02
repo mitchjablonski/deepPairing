@@ -49,9 +49,13 @@ function App() {
   const hydrated = useConnectionStore((s) => s.hydrated);
   const [hydrationGrace, setHydrationGrace] = useState(true);
   useEffect(() => {
+    // Review: re-arm whenever hydration is pending (mount AND project switch,
+    // which resets `hydrated`), so the skeleton covers both.
+    if (hydrated) return;
+    setHydrationGrace(true);
     const t = setTimeout(() => setHydrationGrace(false), 4000);
     return () => clearTimeout(t);
-  }, []);
+  }, [hydrated]);
   const showHydrationSkeleton = !hydrated && hydrationGrace;
 
   // C2 review — auto-bind an unbound tab when there's EXACTLY ONE active
