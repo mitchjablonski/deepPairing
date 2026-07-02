@@ -88,6 +88,15 @@ describe("SessionMetrics — R1 cumulative block", () => {
 });
 
 describe("C5 — concepts named this session", () => {
+  beforeEach(() => {
+    // E2 review — this describe previously inherited the PREVIOUS test's
+    // fetch stub (restoreAllMocks doesn't undo stubGlobal); run with .only it
+    // hit real network and could reintroduce the AbortError leak class.
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })),
+    ));
+  });
+
   it("lists concept chips with counts and deep-links into the taste drawer", () => {
     useArtifactStore.setState((s: any) => ({
       artifacts: [

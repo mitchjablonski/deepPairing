@@ -3,7 +3,17 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { SettingsSheet } from "../SettingsSheet";
 import { useOverlayStore } from "../../stores/overlay";
 
-beforeEach(() => useOverlayStore.setState({ count: 0 }));
+beforeEach(() => {
+  useOverlayStore.setState({ count: 0 });
+  // E2 (N4) — the sheet mounts SessionMetrics, whose /api/metrics fetch was
+  // the suite's AbortError leak source (in-flight at window teardown when
+  // unstubbed). Unit tests never talk to a real daemon.
+  // mockImplementation, not mockResolvedValue: a Response body is
+  // single-consume, so a shared instance throws on the second fetch.
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+    Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })),
+  ));
+});
 
 // UM — SettingsSheet gained role="dialog" + aria-modal in the useModal migration
 // (it had NEITHER before, so SRs never announced it as a modal). Was smoke-only.
