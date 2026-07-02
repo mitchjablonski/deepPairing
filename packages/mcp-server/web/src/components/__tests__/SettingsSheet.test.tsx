@@ -8,8 +8,10 @@ beforeEach(() => {
   // E2 (N4) — the sheet mounts SessionMetrics, whose /api/metrics fetch was
   // the suite's AbortError leak source (in-flight at window teardown when
   // unstubbed). Unit tests never talk to a real daemon.
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }),
+  // mockImplementation, not mockResolvedValue: a Response body is
+  // single-consume, so a shared instance throws on the second fetch.
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+    Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })),
   ));
 });
 
