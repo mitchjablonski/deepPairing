@@ -4,6 +4,7 @@ const shortcuts = [
   { keys: "⌘K", description: "Command palette" },
   { keys: "⌘,", description: "Settings sheet" },
   { keys: "j / k", description: "Navigate artifacts" },
+  { keys: "n", description: "Jump to the next artifact waiting on you" },
   { keys: "a", description: "Arm approve (3s confirm countdown)" },
   { keys: "r", description: "Focus revision textarea" },
   { keys: "q", description: "Ask the agent about this artifact" },
