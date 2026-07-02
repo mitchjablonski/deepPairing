@@ -89,10 +89,14 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     const i = event.options.findIndex((o) => o.recommendation);
     return i < 0 ? 0 : i;
   });
-  // D9 (H5) — draft survives reloads; a resolved decision's stored reasoning
-  // wins over any leftover draft.
+  // D9 (H5 + review) — the draft survives reloads while COMPOSING; on resolve
+  // it's stashed as submittedReasoning and the draft is CLEARED — a lingering
+  // draft otherwise shadowed the recorded reasoning in the resolved/replay
+  // views (you'd see text that was never submitted, e.g. after the decision
+  // resolved from the terminal instead).
   const [reasoningDraft, setReasoningDraft] = useDraft(`dec-reason:${decisionId}`);
-  const reasoning = reasoningDraft || (initialResolved?.reasoning ?? "");
+  const [submittedReasoning, setSubmittedReasoning] = useState<string | null>(null);
+  const reasoning = submittedReasoning ?? (reasoningDraft || (initialResolved?.reasoning ?? ""));
   const setReasoning = setReasoningDraft;
   const [showReasoning, setShowReasoning] = useState(false);
   const [phase, setPhase] = useState<DecisionPhase>(
@@ -153,6 +157,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     try {
       const id = decisionId ?? event.decisionId;
       await resolveDecision(id, optionId, reasoning.trim() || undefined, prediction);
+      // Stash what was ACTUALLY submitted (trimmed — matches the record),
+      // then clear the draft so it can't shadow future resolved views.
+      setSubmittedReasoning(reasoning.trim());
+      setReasoningDraft("");
       setPhase({ kind: "resolved", optionId });
       onResolved?.();
     } catch {

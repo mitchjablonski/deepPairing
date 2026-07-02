@@ -27,16 +27,22 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
     // First-seen casing per normalized key — SessionMetrics' idiom.
     const conceptNames = new Map<string, string>();
     for (const a of artifacts) {
+      // D9 review — harvest top-level and option concepts INDEPENDENTLY
+      // (SessionMetrics' idiom): decisions normally carry concepts only on
+      // options, and the early-continue skipped them entirely.
       const c = (a.content as { concept?: { name?: unknown } } | null)?.concept;
       const raw = typeof c?.name === "string" ? c.name : null;
-      if (!raw) continue;
-      const key = normalizeConceptKey(raw);
-      if (!conceptNames.has(key)) conceptNames.set(key, raw.trim());
-      const opts = (a.content as { options?: Array<{ concept?: { name?: string } }> } | null)?.options;
-      for (const o of opts ?? []) {
-        if (o.concept?.name) {
-          const k = normalizeConceptKey(o.concept.name);
-          if (!conceptNames.has(k)) conceptNames.set(k, o.concept.name.trim());
+      if (raw) {
+        const key = normalizeConceptKey(raw);
+        if (!conceptNames.has(key)) conceptNames.set(key, raw.trim());
+      }
+      const opts = (a.content as { options?: unknown } | null)?.options;
+      if (Array.isArray(opts)) {
+        for (const o of opts as Array<{ concept?: { name?: string } }>) {
+          if (typeof o?.concept?.name === "string" && o.concept.name) {
+            const k = normalizeConceptKey(o.concept.name);
+            if (!conceptNames.has(k)) conceptNames.set(k, o.concept.name.trim());
+          }
         }
       }
     }

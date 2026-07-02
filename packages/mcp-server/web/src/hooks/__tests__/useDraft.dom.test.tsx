@@ -38,3 +38,29 @@ describe("D9 (H5) — useDraft", () => {
     expect(sessionStorage.getItem("dp:draft:msg:s1")).toBeNull();
   });
 });
+
+describe("D9 review — flush semantics", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    vi.useFakeTimers();
+  });
+
+  it("switching keys WITHIN the debounce window flushes the old key's draft (fast rail click)", () => {
+    const { result, rerender } = renderHook(({ k }) => useDraft(k), {
+      initialProps: { k: "msg:s1" },
+    });
+    act(() => result.current[1]("typed then switched fast"));
+    // NO timer advance — switch before the 300ms write fires.
+    rerender({ k: "msg:s2" });
+    expect(sessionStorage.getItem("dp:draft:msg:s1")).toBe("typed then switched fast");
+    rerender({ k: "msg:s1" });
+    expect(result.current[0]).toBe("typed then switched fast");
+  });
+
+  it("unmount within the debounce window flushes (reload-toast case)", () => {
+    const { result, unmount } = renderHook(() => useDraft("msg:s1"));
+    act(() => result.current[1]("about to reload"));
+    unmount();
+    expect(sessionStorage.getItem("dp:draft:msg:s1")).toBe("about to reload");
+  });
+});

@@ -30,6 +30,20 @@ describe("D9 (H3) — SessionWrapCard", () => {
     expect(screen.getByText(/2 artifacts/)).toBeInTheDocument();
   });
 
+  it("harvests concepts that live ONLY on decision options (the normal Y5 shape)", () => {
+    useArtifactStore.setState({
+      artifacts: [
+        art({
+          id: "a3", type: "decision",
+          content: { options: [{ concept: { name: "event sourcing" } }, { concept: { name: "CRUD" } }] },
+        }),
+      ],
+    });
+    render(<SessionWrapCard sessionId="s1" />);
+    expect(screen.getByText("event sourcing")).toBeInTheDocument();
+    expect(screen.getByText("CRUD")).toBeInTheDocument();
+  });
+
   it("refuses to claim 'wrapped' over pending work (draft present)", () => {
     useArtifactStore.setState({ artifacts: [art({ status: "draft" })] });
     render(<SessionWrapCard sessionId="s1" />);
