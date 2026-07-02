@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
-import { apiGet, sessionHeaders, setCurrentHost, apiBase } from "../lib/api";
+import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
 
