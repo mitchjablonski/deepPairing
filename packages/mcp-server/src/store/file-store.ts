@@ -274,7 +274,17 @@ export class FileStore implements IStore {
   private scheduleFlush(): void {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
-      this.flush();
+      // C3 — a throwing timer callback is an UNCAUGHT EXCEPTION that kills
+      // the whole node process. This debounced flush can race directory
+      // removal (demo-session eviction rm -rf's the session dir; tests remove
+      // tmpdirs) and ENOENT out of writeFileSync. Losing one best-effort
+      // flush is fine; taking down the daemon is not.
+      try {
+        this.flush();
+      } catch {
+        /* swallow — the next mutation reschedules; if the dir is gone the
+           session is being torn down anyway */
+      }
       this.flushTimer = null;
     }, 100);
   }
