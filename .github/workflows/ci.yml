@@ -21,6 +21,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Lint (warning caps are the as-any ratchet — lower, never raise)
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 

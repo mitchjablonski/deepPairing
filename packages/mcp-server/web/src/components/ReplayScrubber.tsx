@@ -104,13 +104,13 @@ export function ReplayScrubber() {
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.key === "ArrowRight" || e.key === "]") { e.preventDefault(); stepForward(); }
       else if (e.key === "ArrowLeft" || e.key === "[") { e.preventDefault(); stepBackward(); }
-      else if (e.key === " ") { e.preventDefault(); playing ? pause() : play(); }
+      else if (e.key === " ") { e.preventDefault(); if (playing) pause(); else play(); }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [active, playing, stepForward, stepBackward, play, pause]);
 
-  const { minT, maxT, span } = useMemo(() => {
+  const { minT, span } = useMemo(() => {
     if (events.length === 0) return { minT: 0, maxT: 0, span: 1 };
     const first = new Date(events[0].at).getTime();
     const last = new Date(events[events.length - 1].at).getTime();

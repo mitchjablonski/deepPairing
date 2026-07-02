@@ -192,7 +192,6 @@ export function LineCommentChips({
     const isQuestion = c.intent === "question";
     const answered = !!(c as any).answeredByCommentId;
     const humanResolved = !!(c as any).humanResolvedAt;
-    const unansweredQuestion = isHuman && isQuestion && !answered && !humanResolved;
     return (
       <div key={c.id} className="mb-0.5">
         <div className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs">
