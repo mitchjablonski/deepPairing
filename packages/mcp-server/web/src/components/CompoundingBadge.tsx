@@ -33,19 +33,32 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
     };
   }, [ledgerVersion]);
 
-  if (!stat || (stat.blocks === 0 && stat.writes === 0)) return null;
+  if (!stat) return null;
+
+  // E3 (L6) — a muted zero-state instead of self-hiding: new users never
+  // learned the compounding meter existed because it only appeared once it
+  // had something to show. Zero is honest AND teaches the affordance.
+  const isZero = stat.blocks === 0 && stat.writes === 0;
 
   return (
     <button
       onClick={onOpen}
-      title={`Your taste is compounding: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project. Click for the full breakdown.`}
+      title={isZero
+        ? "Your taste will compound here: pre-flight blocks and ledger writes accumulate across this project. Click to see how it works."
+        : `Your taste is compounding: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project. Click for the full breakdown.`}
       aria-label="Cumulative taste stats — open Your taste"
       className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs text-text-muted
                  hover:text-text-secondary hover:bg-surface-hover transition-colors font-mono"
     >
-      <span>🛡 {stat.blocks}</span>
-      <span className="text-border-default">·</span>
-      <span>🧭 {stat.writes}</span>
+      {isZero ? (
+        <span className="opacity-60">🛡 taste ledger</span>
+      ) : (
+        <>
+          <span>🛡 {stat.blocks}</span>
+          <span className="text-border-default">·</span>
+          <span>🧭 {stat.writes}</span>
+        </>
+      )}
     </button>
   );
 }

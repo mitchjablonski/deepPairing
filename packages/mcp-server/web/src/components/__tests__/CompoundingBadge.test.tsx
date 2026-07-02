@@ -18,11 +18,12 @@ function mockMetrics(blocks: number, writes: number) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("CompoundingBadge", () => {
-  it("stays hidden until there's signal (0 blocks + 0 writes)", async () => {
+  it("E3 (L6) — shows a muted zero-state at 0/0 (was: self-hiding, so new users never learned the meter existed)", async () => {
     vi.stubGlobal("fetch", mockMetrics(0, 0));
-    const { container } = render(<CompoundingBadge onOpen={() => {}} />);
-    await new Promise((r) => setTimeout(r, 30));
-    expect(container.firstChild).toBeNull();
+    render(<CompoundingBadge onOpen={() => {}} />);
+    expect(await screen.findByText(/taste ledger/)).toBeInTheDocument();
+    // The counts only render once there's real signal.
+    expect(screen.queryByText("🛡 0")).toBeNull();
   });
 
   it("surfaces the cumulative blocks · writes and opens Your taste on click", async () => {

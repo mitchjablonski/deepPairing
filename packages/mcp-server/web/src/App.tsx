@@ -3,6 +3,7 @@ import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard } from "./components/SessionWrapCard";
+import { computePending } from "./lib/pending";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -209,6 +210,16 @@ function App() {
           ? Math.min(currentIdx + 1, visible.length - 1)
           : Math.max(currentIdx - 1, 0);
         store.selectArtifact(visible[nextIdx].id);
+      }
+
+      // E3 (L1) — `n`: next thing waiting on you. Same wrap-around cycle as
+      // the TurnIndicator pill; at 15+ artifacts this is the velocity move.
+      if (e.key === "n") {
+        e.preventDefault();
+        const pending = computePending(store.artifacts).drafts;
+        if (pending.length === 0) return;
+        const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);
+        store.selectArtifact(pending[(idx + 1) % pending.length].id);
       }
 
       if (e.key === "a" || e.key === "r") {

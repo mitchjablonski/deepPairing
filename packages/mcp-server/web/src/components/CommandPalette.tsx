@@ -6,6 +6,8 @@ import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
 
 interface PaletteItem {
+  /** E3 (L3) — flattened artifact content, lowercase, capped; substring-searched. */
+  searchText?: string;
   id: string;
   label: string;
   description?: string;
@@ -68,10 +70,18 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     // Artifacts
     for (const a of artifacts) {
       if (a.status === "superseded") continue;
+      // E3 (L3) — content is searchable, not just title/type: at 15+
+      // artifacts "where did we discuss the retry policy?" needs an answer.
+      // Flattened + capped so the haystack stays cheap.
+      const contentText = JSON.stringify(a.content ?? {})
+        .replace(/["{}\[\],:]/g, " ")
+        .slice(0, 2000)
+        .toLowerCase();
       items.push({
         id: a.id,
         label: a.title,
         description: `${a.type} · ${a.status}`,
+        searchText: contentText,
         icon: a.type,
         type: "artifact",
         action: () => { selectArtifact(a.id); onClose(); },
@@ -88,7 +98,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     return allItems
       .map((item) => ({
         item,
-        score: Math.max(fuzzyScore(query, item.label), fuzzyScore(query, item.description ?? "")),
+        score: Math.max(
+          fuzzyScore(query, item.label),
+          fuzzyScore(query, item.description ?? ""),
+          // Content: exact-substring only (fuzzy over a 2000-char haystack
+          // matches everything); scored below title hits so titles rank first.
+          item.searchText?.includes(query.toLowerCase()) ? 1 : -1,
+        ),
       }))
       .filter((r) => r.score >= 0)
       .sort((a, b) => b.score - a.score)
