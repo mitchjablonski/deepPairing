@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useDraft } from "../hooks/useDraft";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -88,7 +89,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     const i = event.options.findIndex((o) => o.recommendation);
     return i < 0 ? 0 : i;
   });
-  const [reasoning, setReasoning] = useState(initialResolved?.reasoning ?? "");
+  // D9 (H5) — draft survives reloads; a resolved decision's stored reasoning
+  // wins over any leftover draft.
+  const [reasoningDraft, setReasoningDraft] = useDraft(`dec-reason:${decisionId}`);
+  const reasoning = reasoningDraft || (initialResolved?.reasoning ?? "");
+  const setReasoning = setReasoningDraft;
   const [showReasoning, setShowReasoning] = useState(false);
   const [phase, setPhase] = useState<DecisionPhase>(
     initialResolved
@@ -115,7 +120,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
    * whether the inline composer is visible while in idle.
    */
   const [showSendBack, setShowSendBack] = useState(false);
-  const [sendBackText, setSendBackText] = useState("");
+  const [sendBackText, setSendBackText] = useDraft(`dec-sendback:${decisionId}`);
   // FF9 — opt-in for the prediction-capture phase on high-stakes
   // decisions. Pre-FF9 every high-stakes pick was forced through the
   // predicting modal, which the PMF council called the loudest

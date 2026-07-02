@@ -4,6 +4,7 @@ import { useArtifactStore } from "../stores/artifact";
 import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 import { useConnectionStore } from "../stores/connection";
+import { useDraft } from "../hooks/useDraft";
 import { useSentFlash } from "../hooks/useSentFlash";
 
 // Stable empty-array reference so Zustand's store selector doesn't produce
@@ -44,7 +45,10 @@ function useAgentRecentlyActive(): boolean {
 
 export function MessageInput() {
   const agentRecentlyActive = useAgentRecentlyActive();
-  const [message, setMessage] = useState("");
+  // D9 (H5) — survives reloads; keyed per session so a draft can never
+  // follow you across a session switch (M5).
+  const sessionId = useConnectionStore((st) => st.sessionId);
+  const [message, setMessage] = useDraft(`msg:${sessionId ?? "unbound"}`);
   const [sending, setSending] = useState(false);
   const { sent, flash } = useSentFlash();
 

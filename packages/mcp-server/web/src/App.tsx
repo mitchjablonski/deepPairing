@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
+import { SessionWrapCard } from "./components/SessionWrapCard";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
@@ -472,6 +473,14 @@ function App() {
           </code>
         </div>
       )}
+
+      {/* D9 (H3) — closing beat: the bound session's wrapper exited (M8 live
+          flag), the agent is quiet, and artifacts exist to recap. Renders
+          above the panel so the session's work stays browsable below it. */}
+      {hasArtifacts && !agentRecentlyActive && sessionId != null &&
+        activeSessions.find((s) => s.sessionId === sessionId)?.live === false && (
+          <SessionWrapCard sessionId={sessionId} />
+        )}
 
       <div className="flex-1 min-h-0">
         <ErrorBoundary fallback={
