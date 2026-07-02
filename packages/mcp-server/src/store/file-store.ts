@@ -195,17 +195,22 @@ export class FileStore implements IStore {
 
   private loadPreferences(): void {
     const prefsPath = path.join(this.basePath, "preferences.json");
-    const prefs = this.loadJsonFile<Record<string, any>>(prefsPath, {});
+    const prefs = FileStore.salvageRecord(
+      "preferences.json", this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
     if (prefs.autonomyLevel) this.autonomyLevel = prefs.autonomyLevel;
   }
 
   private load(): void {
     const dir = this.sessionDir();
-    this.artifacts = this.loadJsonFile<Artifact[]>(path.join(dir, "artifacts.json"), []);
-    this.comments = this.loadJsonFile<Comment[]>(path.join(dir, "comments.json"), []);
-    const decArr = this.loadJsonFile<DecisionRecord[]>(path.join(dir, "decisions.json"), []);
+    this.artifacts = FileStore.salvageArray<Artifact>(
+      "artifacts.json", this.loadJsonFile<unknown>(path.join(dir, "artifacts.json"), []), "id");
+    this.comments = FileStore.salvageArray<Comment>(
+      "comments.json", this.loadJsonFile<unknown>(path.join(dir, "comments.json"), []), "id");
+    const decArr = FileStore.salvageArray<DecisionRecord>(
+      "decisions.json", this.loadJsonFile<unknown>(path.join(dir, "decisions.json"), []), "decisionId");
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
-    const planArr = this.loadJsonFile<PlanReviewRecord[]>(path.join(dir, "plan-reviews.json"), []);
+    const planArr = FileStore.salvageArray<PlanReviewRecord>(
+      "plan-reviews.json", this.loadJsonFile<unknown>(path.join(dir, "plan-reviews.json"), []), "artifactId");
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
     // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
     // dropped on every daemon idle-shutdown — review-latency metrics
@@ -215,6 +220,45 @@ export class FileStore implements IStore {
       path.join(dir, "metrics.json"),
       [],
     );
+  }
+
+  /**
+   * D1 — the disk trust boundary. JSON.parse returns `any`; every collection
+   * read used to cast it blind, so one garbage element in a hand-edited or
+   * corrupted-but-parseable file (a string in artifacts.json, null in
+   * decisions.json) crashed whatever downstream code touched it first.
+   * salvageArray enforces STRUCTURE (array of objects, each carrying its
+   * identity field) and drops+logs anything else. Field-level leniency stays
+   * the coercers' job — legacy shapes keep loading.
+   */
+  /** D1 review — once-per-label guard: listSessions/search run per request,
+   *  so a persistently corrupted file would otherwise log on every poll. */
+  private static salvageLogged = new Set<string>();
+  private static salvageLog(label: string, message: string): void {
+    if (FileStore.salvageLogged.has(label)) return;
+    FileStore.salvageLogged.add(label);
+    console.error(`[deepPairing] ${label}: ${message}`);
+  }
+
+  static salvageArray<T>(label: string, raw: unknown, idField: string): T[] {
+    if (!Array.isArray(raw)) {
+      if (raw != null) FileStore.salvageLog(label, `expected an array, got ${typeof raw} — using []`);
+      return [];
+    }
+    const kept = raw.filter(
+      (el) => el !== null && typeof el === "object" && typeof (el as Record<string, unknown>)[idField] === "string",
+    );
+    if (kept.length !== raw.length) {
+      FileStore.salvageLog(label, `dropped ${raw.length - kept.length} malformed element(s) (missing string '${idField}')`);
+    }
+    return kept as T[];
+  }
+
+  /** D1 — Record-shaped files must be plain objects (not arrays/primitives). */
+  static salvageRecord<T extends Record<string, unknown>>(label: string, raw: unknown, fallback: T): T {
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) return raw as T;
+    if (raw != null) FileStore.salvageLog(label, `expected an object, got ${Array.isArray(raw) ? "array" : typeof raw} — using fallback`);
+    return fallback;
   }
 
   /** Load a JSON file with graceful error handling. Records mtime + size so a
@@ -356,29 +400,42 @@ export class FileStore implements IStore {
     // into memory here, but if the merge nets back to our last-written bytes the
     // skip would leave the external (lossy) version on disk and our merged copy
     // only in RAM. Forcing the rewrite restores it (and keeps in-memory-wins).
-    const diskArtifacts = this.readIfChanged<Artifact[]>(artifactsPath);
+    // D1 review — the EXTERNAL reads must be salvaged too: a null element in a
+    // hand-edited file threw inside mergeArrayById's filter, the flush catch
+    // swallowed it, and — because the mtime watermark only advances on a
+    // successful load/write — EVERY subsequent flush re-read and re-threw:
+    // persistence for the session silently stopped until the file was fixed.
+    const diskArtifacts = this.readIfChanged<unknown>(artifactsPath);
     if (diskArtifacts) {
-      this.artifacts = this.mergeArrayById(this.artifacts, diskArtifacts, "id");
+      this.artifacts = this.mergeArrayById(
+        this.artifacts,
+        FileStore.salvageArray<Artifact>("artifacts.json (external)", diskArtifacts, "id"),
+        "id",
+      );
       delete this.lastSerialized[artifactsPath];
     }
-    const diskComments = this.readIfChanged<Comment[]>(commentsPath);
+    const diskComments = this.readIfChanged<unknown>(commentsPath);
     if (diskComments) {
-      this.comments = this.mergeArrayById(this.comments, diskComments, "id");
+      this.comments = this.mergeArrayById(
+        this.comments,
+        FileStore.salvageArray<Comment>("comments.json (external)", diskComments, "id"),
+        "id",
+      );
       delete this.lastSerialized[commentsPath];
     }
-    const diskDecisions = this.readIfChanged<DecisionRecord[]>(decisionsPath);
-    if (diskDecisions && Array.isArray(diskDecisions)) {
-      for (const d of diskDecisions) {
-        if (d.decisionId && !this.decisions.has(d.decisionId)) {
+    const diskDecisions = this.readIfChanged<unknown>(decisionsPath);
+    if (diskDecisions) {
+      for (const d of FileStore.salvageArray<DecisionRecord>("decisions.json (external)", diskDecisions, "decisionId")) {
+        if (!this.decisions.has(d.decisionId)) {
           this.decisions.set(d.decisionId, d);
         }
       }
       delete this.lastSerialized[decisionsPath];
     }
-    const diskPlans = this.readIfChanged<PlanReviewRecord[]>(plansPath);
-    if (diskPlans && Array.isArray(diskPlans)) {
-      for (const p of diskPlans) {
-        if (p.artifactId && !this.planReviews.has(p.artifactId)) {
+    const diskPlans = this.readIfChanged<unknown>(plansPath);
+    if (diskPlans) {
+      for (const p of FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", diskPlans, "artifactId")) {
+        if (!this.planReviews.has(p.artifactId)) {
           this.planReviews.set(p.artifactId, p);
         }
       }
@@ -1081,7 +1138,7 @@ export class FileStore implements IStore {
 
   private readPreferences(): Record<string, any> {
     const prefsPath = path.join(this.basePath, "preferences.json");
-    return this.loadJsonFile<Record<string, any>>(prefsPath, {});
+    return FileStore.salvageRecord("preferences.json", this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
   }
 
   private writePreferences(prefs: Record<string, any>): void {
@@ -1189,7 +1246,8 @@ export class FileStore implements IStore {
   }
 
   recordPreflightTrace(artifactId: string, trace: PreflightTrace): void {
-    const map = this.loadJsonFile<Record<string, PreflightTrace>>(this.preflightTracesPath(), {});
+    const map = FileStore.salvageRecord(
+      "preflight-traces.json", this.loadJsonFile<unknown>(this.preflightTracesPath(), {}), {} as Record<string, PreflightTrace>);
     map[artifactId] = trace;
     // Z4 — atomic write. Pre-Z4 a SIGKILL during this rewrite (which
     // fires per `present_*` and twice for `revise_artifact`) could
@@ -1204,7 +1262,8 @@ export class FileStore implements IStore {
   }
 
   getPreflightTrace(artifactId: string): PreflightTrace | null {
-    const map = this.loadJsonFile<Record<string, PreflightTrace>>(this.preflightTracesPath(), {});
+    const map = FileStore.salvageRecord(
+      "preflight-traces.json", this.loadJsonFile<unknown>(this.preflightTracesPath(), {}), {} as Record<string, PreflightTrace>);
     return map[artifactId] ?? null;
   }
 
@@ -1295,12 +1354,15 @@ export class FileStore implements IStore {
         const artFile = path.join(sessionDir, "artifacts.json");
         if (!fs.existsSync(artFile)) continue;
 
-        const artifacts: Artifact[] = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+        const artifacts: Artifact[] = FileStore.salvageArray<Artifact>(
+          `${entry.name}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
         if (artifacts.length === 0) continue;
 
         const decFile = path.join(sessionDir, "decisions.json");
-        const hasDecisions = fs.existsSync(decFile) &&
-          JSON.parse(fs.readFileSync(decFile, "utf-8")).length > 0;
+        // D1 review — a null decisions.json threw here and the per-session
+        // catch SKIPPED the whole (otherwise healthy) session from the list.
+        const decRaw = fs.existsSync(decFile) ? JSON.parse(fs.readFileSync(decFile, "utf-8")) : [];
+        const hasDecisions = Array.isArray(decRaw) && decRaw.length > 0;
 
         const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const firstArtifact = sorted[0];
@@ -1371,7 +1433,7 @@ export class FileStore implements IStore {
       if (!fs.existsSync(artFile)) continue;
       let artifacts: Artifact[];
       try {
-        artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+        artifacts = FileStore.salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
       } catch {
         continue;
       }
@@ -1507,8 +1569,8 @@ export class FileStore implements IStore {
       let artifacts: Artifact[];
       let decisions: DecisionRecord[];
       try {
-        artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
-        decisions = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+        artifacts = FileStore.salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
+        decisions = FileStore.salvageArray(`${session.id}/decisions.json`, JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
       } catch {
         continue;
       }
@@ -1548,7 +1610,8 @@ export class FileStore implements IStore {
         let retrospective: Retrospective | undefined;
         try {
           if (fs.existsSync(retrosPath)) {
-            const retros: Retrospective[] = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+            const retros: Retrospective[] = FileStore.salvageArray<Retrospective>(
+              "retrospectives.json", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
             retrospective = retros.find((r) => r.decisionId === dec.decisionId);
           }
         } catch {}
@@ -1594,7 +1657,7 @@ export class FileStore implements IStore {
       if (!fs.existsSync(decFile)) continue;
       let decisions: DecisionRecord[];
       try {
-        decisions = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+        decisions = FileStore.salvageArray(`${session.id}/decisions.json`, JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
       } catch {
         continue;
       }
@@ -1612,7 +1675,7 @@ export class FileStore implements IStore {
       let existing: Retrospective[] = [];
       try {
         if (fs.existsSync(retrosPath)) {
-          existing = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+          existing = FileStore.salvageArray("retrospectives.json (write path)", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
         }
       } catch {}
       const filtered = existing.filter((r) => r.decisionId !== params.decisionId);
@@ -1697,7 +1760,9 @@ export class FileStore implements IStore {
       const tracesPath = path.join(sessionsDir, entry.name, "preflight-traces.json");
       if (!fs.existsSync(tracesPath)) continue;
       let map: Record<string, any>;
-      try { map = JSON.parse(fs.readFileSync(tracesPath, "utf-8")); } catch { continue; }
+      try {
+        map = FileStore.salvageRecord("preflight-traces.json", JSON.parse(fs.readFileSync(tracesPath, "utf-8")), {});
+      } catch { continue; }
       const traceIds = Object.keys(map);
       if (traceIds.length === 0) continue;
       sessionsTouched++;
