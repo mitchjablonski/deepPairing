@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlanVisualSchema, DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./content-types.js";
+import { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
   "research",

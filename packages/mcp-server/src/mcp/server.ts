@@ -67,7 +67,7 @@ type BroadcastFn = (event: any) => void;
  * schema via z.toJSONSchema (needs the field descriptions ported to
  * .describe() first).
  */
-const VISUAL_ITEMS_JSON_SCHEMA =   {
+const VISUAL_ITEMS_JSON_SCHEMA = {
     type: "object",
     properties: {
       id: { type: "string", description: "Stable id — keep it across revisions so comment threads survive" },
@@ -215,7 +215,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                   visuals: {
                     type: "array",
                     description: "DV1 — optional diagram(s) illustrating THIS option (e.g. its architecture). Shown behind an expand-on-demand 'Show diagram' toggle in the option card. Most useful with kind='diagram' (Mermaid). `id` optional — one is assigned if omitted.",
-                    items: VISUAL_ITEMS_JSON_SCHEMA,
+                    // Review-caught: the OPTIONS wire validator extends
+                    // PlanVisualSchema with id OPTIONAL (a content-stable hash
+                    // is assigned when omitted) — the unified const's
+                    // required:["id","kind"] would have made clients that
+                    // validate args against inputSchema reject calls the
+                    // server accepts. Spec/plan genuinely require id.
+                    items: { ...VISUAL_ITEMS_JSON_SCHEMA, required: ["kind"] },
                   },
                 },
                 required: ["id", "title", "description", "pros", "cons", "effort", "risk", "recommendation"],
