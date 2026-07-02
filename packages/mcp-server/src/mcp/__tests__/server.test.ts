@@ -799,6 +799,27 @@ describe("MCP Tool Handlers", () => {
       expect(text).toContain("Suggested action:");
     });
 
+    it("D8 — a questionIndex-targeted answer reaches the agent TAGGED with the question text", async () => {
+      // The whole point of answerable open questions: the agent must know
+      // WHICH question "Postgres" answers. Pre-fix the loc builder ignored
+      // questionIndex and the answer arrived as a bare artifact comment.
+      await callTool("present_findings", {
+        title: "Research", summary: "s",
+        findings: [{ category: "arch", title: "F", detail: "d", evidence: "e", significance: "low" }],
+        openQuestions: ["Which DB should we use?"],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "ans_1", artifactId: art.id, content: "Postgres", author: "human",
+        target: { artifactId: art.id, questionIndex: 0, sectionId: "open-question" },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain('answers open question #1: "Which DB should we use?"');
+      const sc = res.structuredContent as any;
+      expect(sc.comments[0]).toMatchObject({ id: "ans_1", questionIndex: 0 });
+    });
+
     it("B3 — carries structuredContent mirroring the prose (status/suggestedAction/summary)", async () => {
       // Activate SDK client-side outputSchema validation: after listTools(),
       // the client THROWS if a check_feedback result omits structuredContent

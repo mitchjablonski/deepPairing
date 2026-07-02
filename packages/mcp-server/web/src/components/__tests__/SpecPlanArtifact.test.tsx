@@ -226,7 +226,11 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
           {
             id: "c2", artifactId: artifact.id, author: "human", text: "clarify",
             createdAt: new Date().toISOString(),
-            target: { artifactId: artifact.id, requirementId: "REQ-1", stepIndex: 0, sectionId: "requirement" },
+            // Legacy trigger shape — exactly what main's CommentTrigger sent
+            // (no sectionId), which main's filter could NEVER count. This
+            // test fails on main; the requirementId shape is covered by the
+            // new-trigger path implicitly.
+            target: { artifactId: artifact.id, stepIndex: 0 },
           } as any,
         ],
       },

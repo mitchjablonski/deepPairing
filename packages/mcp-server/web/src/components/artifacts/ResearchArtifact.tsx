@@ -833,7 +833,13 @@ function ResearchOpenQuestion({
   index: number;
 }) {
   const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
-  const answers = comments.filter((c) => c.target.questionIndex === index);
+  // D8 review — the human's own UNANSWERED AskTrigger question must not
+  // stamp the row "answered"; only plain comments / answered questions do.
+  const answers = comments.filter(
+    (c) =>
+      c.target.questionIndex === index &&
+      !(c.intent === "question" && !c.answeredByCommentId),
+  );
   return (
     <li className="flex items-start justify-between gap-2 group">
       <span className="flex items-start gap-1.5 min-w-0">

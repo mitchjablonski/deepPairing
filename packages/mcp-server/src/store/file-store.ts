@@ -618,6 +618,11 @@ export class FileStore implements IStore {
       "lineNumber", "lineStart", "lineEnd", "filePath",
       "findingIndex", "evidenceIndex", "stepIndex", "alternativeIndex",
       "optionId", "sectionId", "visualId",
+      // D8 review — added with the schema fields; without them two
+      // same-content answers ("yes") on DIFFERENT open questions inside the
+      // dedupe window collapsed into one (the exact F3 class this key exists
+      // to prevent).
+      "requirementId", "questionIndex",
     ].map((f) => `${f}=${t[f] ?? ""}`).join("|");
   }
 

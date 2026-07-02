@@ -421,7 +421,7 @@ function App() {
                     REGISTERED; an exited session's history stays readable but
                     stops pretending to be live. Old daemons omit `live` —
                     treat undefined as live (no false alarms on mixed versions). */}
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive ? "bg-accent-blue animate-pulse" : s.live === false ? "bg-text-muted/50" : "bg-accent-green"}`} />
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? "bg-accent-blue animate-pulse" : "bg-accent-green"}`} />
                 <span className="truncate max-w-40">{label}</span>
                 {s.artifactCount > 0 && (
                   <span className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded opacity-70">{s.artifactCount}</span>
