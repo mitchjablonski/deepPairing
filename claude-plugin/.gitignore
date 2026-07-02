@@ -1,3 +1,4 @@
-# R6 — bundled mcp-server copied here by packages/mcp-server/scripts/bundle-plugin.mjs
-# on every build. Generated artifact; source lives in packages/mcp-server/src/.
-server/
+# E1 — claude-plugin/server/ is GENERATED (bundle-plugin.mjs) but COMMITTED:
+# the marketplace source is this git repo, so gitignoring the bundle meant
+# marketplace installs had no server at all (E1 review blocker). CI gates
+# staleness: the check job rebuilds and fails on `git diff claude-plugin/server`.

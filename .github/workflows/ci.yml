@@ -33,6 +33,15 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # E1 — claude-plugin/server/ is generated-but-committed (the marketplace
+      # ships the git repo). A stale bundle means marketplace users run old
+      # code; fail loudly instead.
+      - name: Plugin bundle staleness gate
+        # -c core.filemode=false: esbuild marks shebanged outputs executable;
+        # contributor filesystems (WSL /mnt/c) can't represent that faithfully.
+        # Content staleness is what we gate, not mode bits.
+        run: git -c core.filemode=false diff --exit-code -- claude-plugin/server || (echo "::error::claude-plugin/server is stale — run pnpm build and commit the result" && exit 1)
+
   e2e:
     runs-on: ubuntu-latest
     steps:

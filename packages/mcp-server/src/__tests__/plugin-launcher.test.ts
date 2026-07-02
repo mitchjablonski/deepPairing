@@ -41,7 +41,7 @@ describe("plugin launcher wiring", () => {
     const inOrder = [...launcherSrc.matchAll(resolveCall)].map((m) => m[1]);
     // S2 reorder: monorepo-sibling first (resolves npm deps via the
     // workspace's node_modules); bundled is the future-marketplace
-    // fallback. Until the bundled path inlines deps, sibling has to win.
+    // fallback. E1 inlined the deps; sibling still wins in dev for freshness (see server.mjs).
     expect(inOrder).toEqual([
       "../packages/mcp-server/dist/standalone.js",
       "server/standalone.js",

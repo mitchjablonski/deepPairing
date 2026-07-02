@@ -548,7 +548,11 @@ app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHas
 // the /api routes so they win the match.
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
-const webDistPath = path.join(__thisDir, "../dist/web");
+// E1 — two layouts: monorepo dist (../dist/web from src/, i.e. dist/web from
+// the compiled file) and the self-contained plugin bundle (web/ BESIDE the
+// bundled daemon.js). Mirrors daemon-lifecycle's daemon.js spawn fallback.
+const webDistCandidates = [path.join(__thisDir, "../dist/web"), path.join(__thisDir, "web")];
+const webDistPath = webDistCandidates.find((p) => fs.existsSync(p)) ?? webDistCandidates[0];
 
 mountStaticUi(app, {
   webDistPath,
