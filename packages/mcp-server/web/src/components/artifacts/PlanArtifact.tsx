@@ -220,7 +220,8 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
               phase was pure dead air; the agent now marks steps via
               update_plan_progress and this renders live. Only shows once
               ANY step carries a status (old plans stay untracked). */}
-          {artifact.status !== "draft" && steps.some((st) => st.status) && (
+          {!["draft", "rejected", "retracted", "obsolete"].includes(artifact.status) &&
+            steps.some((st) => st.status) && (
             <PlanExecutionStrip steps={steps} />
           )}
 

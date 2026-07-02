@@ -2220,6 +2220,16 @@ describe("MCP Tool Handlers", () => {
       expect(steps[2].status).toBeUndefined();
     });
 
+    it("warns loudly when progress is marked on an UNAPPROVED plan (F2-class honor-review)", async () => {
+      await callTool("present_plan", { title: "P", objective: "o", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1 });
+      const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+      expect(plan.status).toBe("draft");
+      const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
+      expect(res.isError).toBeFalsy(); // progress IS recorded...
+      expect(res.text).toContain("WARNING");
+      expect(res.text).toContain("AWAITING REVIEW");
+    });
+
     it("rejects unknown artifacts, non-plans, bad statuses, and out-of-range-only updates", async () => {
       const bad = await callTool("update_plan_progress", { artifactId: "art_nope", updates: [{ stepIndex: 0, status: "done" }] });
       expect(bad.isError).toBe(true);

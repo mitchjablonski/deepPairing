@@ -186,9 +186,17 @@ export function TurnIndicator() {
   // D10 (H2) — when an approved plan is mid-execution, say WHICH step
   // instead of the generic "working": the post-approval build was the
   // longest unnarrated stretch in the session.
-  const planProgress = (() => {
-    for (const a of artifacts) {
-      if (a.type !== "plan" || a.status === "draft" || a.status === "superseded") continue;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- artifacts is the only input
+  const planProgress = useMemo(() => {
+    // Newest first (latestReasoningAction's idiom): an older abandoned
+    // half-tracked plan must not mask the one actually executing. Terminal
+    // statuses never narrate "Executing".
+    for (let i = artifacts.length - 1; i >= 0; i--) {
+      const a = artifacts[i];
+      if (
+        a.type !== "plan" ||
+        ["draft", "superseded", "rejected", "retracted", "obsolete"].includes(a.status)
+      ) continue;
       const steps = (a.content as { steps?: Array<{ status?: string }> } | null)?.steps;
       if (!Array.isArray(steps) || !steps.some((st) => st?.status)) continue;
       const done = steps.filter((st) => st?.status === "done" || st?.status === "skipped").length;
@@ -197,7 +205,7 @@ export function TurnIndicator() {
       return { current: active >= 0 ? active + 1 : Math.min(done + 1, steps.length), total: steps.length };
     }
     return null;
-  })();
+  }, [artifacts]);
 
   // Agent's turn. While there's recent activity, show "Agent working" + a
   // narration line ("watch your peer think"); once idle past the threshold,

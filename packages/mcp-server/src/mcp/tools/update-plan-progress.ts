@@ -50,10 +50,22 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
 
   const steps = (artifact.content as { steps?: Array<{ status?: string }> }).steps ?? [];
   const done = steps.filter((st) => st.status === "done" || st.status === "skipped").length;
+  // D10 review (F2-class) — executing an unapproved/rejected plan violates
+  // the protocol. Record the progress (the store already did) but tell the
+  // agent loudly; the honor-rejection precedent says this must not be silent.
+  const NOT_EXECUTABLE: Record<string, string> = {
+    draft: "still AWAITING REVIEW — get your pair's approval before executing",
+    rejected: "REJECTED — do not execute it; address the feedback or present a new plan",
+    retracted: "retracted",
+    obsolete: "obsolete",
+  };
+  const warning = NOT_EXECUTABLE[artifact.status]
+    ? `\n⚠ WARNING: this plan is ${NOT_EXECUTABLE[artifact.status]}.`
+    : "";
   return {
     content: [{
       type: "text",
-      text: `Plan progress recorded: ${done}/${steps.length} steps complete. The companion UI checklist is live — keep marking steps as you finish them.`,
+      text: `Plan progress recorded: ${done}/${steps.length} steps complete. The companion UI checklist is live — keep marking steps as you finish them.${warning}`,
     }],
   };
 }
