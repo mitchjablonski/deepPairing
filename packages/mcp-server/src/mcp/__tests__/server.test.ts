@@ -2171,6 +2171,23 @@ describe("MCP Tool Handlers", () => {
     });
   });
 
+  describe("C6b — visuals schema contract per tool (the dedupe must not tighten options)", () => {
+    it("options advertises id-OPTIONAL visuals (auto-assigned); spec/plan require id", async () => {
+      const list = await client.listTools();
+      const schemaOf = (name: string) => list.tools.find((t) => t.name === name)!.inputSchema as any;
+      const optVisuals = schemaOf("present_options").properties.options.items.properties.visuals.items;
+      const specVisuals = schemaOf("present_spec").properties.visuals.items;
+      const planVisuals = schemaOf("present_plan").properties.visuals.items;
+      // The options wire validator extends PlanVisualSchema with id OPTIONAL —
+      // the advertised schema must not demand what the server doesn't.
+      expect(optVisuals.required).toEqual(["kind"]);
+      expect(specVisuals.required).toEqual(["id", "kind"]);
+      expect(planVisuals.required).toEqual(["id", "kind"]);
+      // The dedupe upgraded options to advertise the FULL shape it accepts.
+      expect(Object.keys(optVisuals.properties)).toEqual(Object.keys(specVisuals.properties));
+    });
+  });
+
   describe("III12 — MCP prompts capability (recall as user-invocable slash query)", () => {
     it("prompts/list advertises the `recall` prompt with query + mode args", async () => {
       const list = await client.listPrompts();

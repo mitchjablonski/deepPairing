@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlanVisualSchema } from "./content-types.js";
+import { DecisionOptionBaseSchema } from "./content-types.js";
 
 export const DecisionStakesSchema = z.enum(["low", "medium", "high"]);
 export type DecisionStakes = z.infer<typeof DecisionStakesSchema>;
@@ -12,30 +12,11 @@ export type DecisionStakes = z.infer<typeof DecisionStakesSchema>;
  * must carry concept or DecisionCard has to (option as any) it back —
  * which is exactly the regression the Z review flagged.
  */
-const DecisionOptionConceptSchema = z.object({
-  name: z.string().min(1),
-  oneLineExplanation: z.string().optional(),
-});
-
-export const DecisionOptionSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  description: z.string(),
-  pros: z.array(z.string()),
-  cons: z.array(z.string()),
-  effort: z.enum(["low", "medium", "high"]),
-  risk: z.enum(["low", "medium", "high"]),
-  recommendation: z.boolean(),
-  concept: DecisionOptionConceptSchema.optional(),
-  /**
-   * DV1 — optional per-option visuals (Mermaid diagram / file map / annotated
-   * code), reusing PlanVisualSchema so the whole render + comment stack applies.
-   * Shown behind an expand-on-demand disclosure in each option card so the grid
-   * stays scannable. Same field on DecisionOptionContentSchema (artifact.ts) —
-   * the Z5 wire/stored split.
-   */
-  visuals: z.array(PlanVisualSchema).optional(),
-});
+// C6b — the wire shape IS the shared base (see content-types.ts). The Z5
+// wire/stored split is preserved at the type level via the two exported
+// names; the SHAPE is single-sourced so it can't drift again (DV1 added
+// `visuals` to both copies by hand — the failure mode this ends).
+export const DecisionOptionSchema = DecisionOptionBaseSchema;
 
 export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
 

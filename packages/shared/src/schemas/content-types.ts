@@ -271,3 +271,39 @@ export const ReasoningContentSchema = z.object({
 });
 
 export type ReasoningContent = z.infer<typeof ReasoningContentSchema>;
+
+/**
+ * C6b — the ONE DecisionOption shape. It existed twice — DecisionOptionSchema
+ * (decision.ts, the wire shape) and DecisionOptionContentSchema (artifact.ts,
+ * the stored shape) — held in sync only by cross-referencing comments, and the
+ * concept sub-schema had ALREADY drifted (artifact.ts's carried .describe()
+ * metadata the wire copy lacked). Both files now alias this. If the wire and
+ * stored shapes ever legitimately diverge, extend from this base rather than
+ * forking it.
+ */
+export const DecisionOptionConceptSchema = z.object({
+  // Min 1 so a present-but-empty `concept: { name: "" }` is rejected. An
+  // empty string is worse than no concept at all — it pollutes the ledger
+  // with a row that can never match anything, blocking nothing.
+  name: z.string().min(1).describe("The underlying pattern (e.g. 'argon2id for password hashing', 'optimistic UI')"),
+  oneLineExplanation: z
+    .string()
+    .optional()
+    .describe("Plain-English so the human learns the pattern, not just the option"),
+});
+
+export const DecisionOptionBaseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  pros: z.array(z.string()),
+  cons: z.array(z.string()),
+  effort: z.enum(["low", "medium", "high"]),
+  risk: z.enum(["low", "medium", "high"]),
+  recommendation: z.boolean(),
+  concept: DecisionOptionConceptSchema.optional(),
+  /** DV1 — optional per-option visuals (Mermaid diagram / file map /
+   *  annotated code), reusing PlanVisualSchema so the whole render + comment
+   *  stack applies. */
+  visuals: z.array(PlanVisualSchema).optional(),
+});
