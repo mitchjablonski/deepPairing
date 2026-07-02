@@ -3,19 +3,14 @@
  * Test bodies are verbatim from the monolith; only the harness wiring is new.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
 let store: FileStore;
-let client: Client;
-let broadcasts: any[];
 beforeEach(() => {
   store = ctx.store;
-  client = ctx.client;
-  broadcasts = ctx.broadcasts;
 });
 
 describe("MCP Tool Handlers — revise_artifact", () => {

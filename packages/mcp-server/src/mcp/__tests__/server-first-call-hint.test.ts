@@ -15,14 +15,8 @@ import path from "node:path";
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
 let store: FileStore;
-let client: Client;
-let broadcasts: any[];
-let tmpDir: string;
 beforeEach(() => {
   store = ctx.store;
-  client = ctx.client;
-  broadcasts = ctx.broadcasts;
-  tmpDir = ctx.tmpDir;
 });
 
 describe("MCP Tool Handlers — firstCallHint", () => {

@@ -11,11 +11,9 @@ const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
 let store: FileStore;
 let client: Client;
-let broadcasts: any[];
 beforeEach(() => {
   store = ctx.store;
   client = ctx.client;
-  broadcasts = ctx.broadcasts;
 });
 
 describe("MCP Tool Handlers — feedback loop", () => {

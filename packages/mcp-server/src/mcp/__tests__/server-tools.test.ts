@@ -6,7 +6,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
