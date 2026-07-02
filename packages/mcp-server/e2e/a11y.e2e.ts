@@ -31,8 +31,9 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
       const info = JSON.parse(fs.readFileSync(daemonJson, "utf-8"));
       if (info.port) {
         const res = await fetch(`http://localhost:${info.port}/api/daemon-info`);
-        // The internal seed routes are bearer-gated; on POSIX the token lives
-        // in the project's daemon.json.
+        // The internal seed routes are bearer-gated; on POSIX (CI + WSL dev)
+        // the token lives in the project's daemon.json. Non-POSIX dev boxes
+        // would need bootstrap.e2e's sidecar fallback — not wired here.
         if (res.ok && info.authToken) return { base: `http://localhost:${info.port}`, token: info.authToken };
       }
     } catch {}
@@ -114,8 +115,9 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });
 
-test("a11y: idle shell has no serious/critical axe violations", async ({ page, context }) => {
-  // A fresh context sees the no-session state.
+test("a11y: app shell (no session selected) has no serious/critical axe violations", async ({ page }) => {
+  // Note: a session exists (seeded in beforeAll), so this scans the shell
+  // chrome + aggregate surface rather than a truly empty app.
   await page.goto(baseURL);
   await page.waitForSelector("text=deepPairing", { timeout: 15000 });
   const results = await new AxeBuilder({ page })

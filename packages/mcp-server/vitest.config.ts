@@ -32,6 +32,12 @@ export default defineConfig({
           include: ["src/**/*.test.ts"],
           exclude: STD_EXCLUDE,
           isolate: false,
+          // Review-caught: vi.restoreAllMocks() does NOT undo vi.stubGlobal —
+          // with a shared worker context a leaked fetch stub persists into
+          // every later file (ping.test.ts stubs fetch; daemon-client tests
+          // make real fetches). Auto-unstub between files.
+          unstubGlobals: true,
+          unstubEnvs: true,
         },
       },
       {

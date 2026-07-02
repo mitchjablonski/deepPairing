@@ -271,6 +271,8 @@ export class FileStore implements IStore {
     }
   }
 
+  private flushFailureLogged = false;
+
   private scheduleFlush(): void {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
@@ -281,9 +283,16 @@ export class FileStore implements IStore {
       // flush is fine; taking down the daemon is not.
       try {
         this.flush();
-      } catch {
-        /* swallow — the next mutation reschedules; if the dir is gone the
-           session is being torn down anyway */
+        this.flushFailureLogged = false;
+      } catch (err) {
+        // Swallow — the next mutation reschedules. But log once per failure
+        // STREAK (review-caught: a bare swallow turns persistent EACCES/ENOSPC
+        // into silent permanent data loss; only teardown-race ENOENT is truly
+        // expected here).
+        if (!this.flushFailureLogged) {
+          this.flushFailureLogged = true;
+          console.error(`[deepPairing] debounced flush failed for session ${this.sessionId}:`, err);
+        }
       }
       this.flushTimer = null;
     }, 100);
