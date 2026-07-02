@@ -13,6 +13,7 @@ import { getGlobalStore, isSeededEntry } from "../store/global-store.js";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
+import { corsAllowedOrigin } from "./origin-policy.js";
 import {
   CommentBodySchema,
   DecisionResolveBodySchema,
@@ -256,16 +257,10 @@ export function createHttpRoutes(
   });
 
   app.use("/*", cors({
-    origin: (origin) => {
-      if (!origin) return origin as string;
-      try {
-        const url = new URL(origin);
-        if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") {
-          return origin;
-        }
-      } catch {}
-      return undefined as unknown as string;
-    },
+    // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
+    // reflection let any local web page read responses cross-origin —
+    // including the served HTML with the injected bearer token.
+    origin: (origin) => corsAllowedOrigin(origin) as unknown as string,
   }));
 
   app.onError((err, c) => {

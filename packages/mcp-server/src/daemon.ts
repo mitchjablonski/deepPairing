@@ -59,6 +59,7 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // back in `X-Project-Hash` and any per-session route 403s on mismatch,
 // closing the stale-tab-after-port-recycling write hole.
 import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "./project-root.js";
+import { corsAllowedOrigin, isAllowedWsOrigin } from "./http/origin-policy.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 // MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
 // so route handlers defined before the server starts can read it at call time
@@ -244,17 +245,11 @@ const app = new Hono();
 
 // CORS for localhost
 app.use("/*", cors({
-  origin: (origin) => {
-    if (!origin) return origin as string;
-    try {
-      const url = new URL(origin);
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") {
-        return origin;
-      }
-    } catch {}
-    return undefined as unknown as string;
-  },
-}));
+    // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
+    // reflection let any local web page read responses cross-origin —
+    // including the served HTML with the injected bearer token.
+    origin: (origin) => corsAllowedOrigin(origin) as unknown as string,
+  }));
 
 // Top-level guards (body-size cap + DNS-rebinding Host check) applied to the
 // ROOT app BEFORE any sub-app mount, so coverage is order-independent rather
@@ -816,24 +811,16 @@ async function main() {
         socket.destroy();
         return;
       }
-      // Origin guard.
+      // Origin guard. D5 — same-origin or vscode-webview ONLY: WebSocket
+      // ignores CORS, so this check is the ONLY thing between a hostile page
+      // on another loopback port and a live artifact stream. The old
+      // any-loopback policy let exactly that page in.
       const origin = request.headers?.origin as string | undefined;
-      if (origin) {
-        let host: string;
-        try {
-          host = new URL(origin).hostname;
-        } catch {
-          log(`[ws-upgrade] reject: malformed Origin "${origin}"`);
-          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-          socket.destroy();
-          return;
-        }
-        if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]" && host !== "::1") {
-          log(`[ws-upgrade] reject: non-local Origin host "${host}"`);
-          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-          socket.destroy();
-          return;
-        }
+      if (!isAllowedWsOrigin(origin, request.headers?.host as string | undefined)) {
+        log(`[ws-upgrade] reject: disallowed Origin "${origin ?? "<none>"}" (host=${request.headers?.host ?? "<none>"})`);
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
       }
       // Project-hash guard. Skip when the daemon wasn't constructed
       // with a projectRoot (test fixtures, plugin install with bad
