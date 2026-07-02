@@ -3,13 +3,15 @@ import { useState, useRef, useEffect } from "react";
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
 import { m, AnimatePresence } from "motion/react";
-import type { DecisionRequestEvent } from "@deeppairing/shared";
+import { type DecisionRequestEvent, type Artifact, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { AskTrigger } from "./CommentThread";
 import { RepairDecisionModal } from "./RepairDecisionModal";
 import { ConceptBadge } from "./ConceptBadge";
 import { VisualBody } from "./ArtifactVisuals";
+import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
+import { useReplayStore } from "../stores/replay";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -975,5 +977,60 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * D6 (P2) — the decision-artifact wrapper, moved here from ArtifactPanel so
+ * the coercion boundary (and with it the Zod runtime) lives in THIS lazy
+ * chunk instead of the entry. Behavior is verbatim from the old inline IIFE.
+ */
+export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
+  // Coercion boundary: options always an array, context/decisionId always
+  // strings. An options-less decision has nothing to render, so bail.
+  const dc = coerceDecisionContent(artifact.content);
+  if (dc.options.length === 0) return null;
+
+  // When viewing a past resolved decision via replay, pull the record so
+  // DecisionCard can open in the resolved state with the Re-pair button.
+  const replay = useReplayStore.getState();
+  // decisionId defaults to "" — fall back to the artifact id, not "".
+  const effectiveDecisionId = dc.decisionId || artifact.id;
+  const record = replay.decisions.find(
+    (d) => d.decisionId === effectiveDecisionId || d.artifactId === artifact.id,
+  );
+  const initialResolved = record?.response
+    ? {
+        optionId: record.response.optionId,
+        reasoning: record.response.reasoning,
+        resolvedAt: record.resolvedAt,
+        confidence: (record.response as any).confidence,
+        predictedOutcome: (record.response as any).predictedOutcome,
+      }
+    : undefined;
+
+  return (
+    <>
+      {/* N3.3: surface prior predictions on similar decisions so the user
+          can calibrate before choosing. Fires on EVERY decision — the
+          breadcrumb self-hides when nothing matches. */}
+      <PredictionsBreadcrumb
+        concept={`${artifact.title} ${dc.context ?? ""}`}
+        excludeArtifactId={artifact.id}
+      />
+      <DecisionCard
+        event={{
+          type: "decision_request",
+          decisionId: effectiveDecisionId,
+          context: dc.context,
+          options: dc.options,
+        }}
+        decisionId={effectiveDecisionId}
+        artifactId={artifact.id}
+        sessionId={artifact.sessionId}
+        stakes={dc.stakes}
+        initialResolved={initialResolved}
+      />
+    </>
   );
 }

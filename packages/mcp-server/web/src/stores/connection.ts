@@ -583,7 +583,26 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // MP1 — use the switchable base so this reflects the SELECTED project.
       apiGet(`${apiBase()}/api/active-sessions`)
         .then((r) => r.json())
-        .then((data) => set({ activeSessions: data.sessions ?? [] }))
+        .then((data) => {
+          const next: ActiveSession[] = data.sessions ?? [];
+          // D6 (P1) — equality bail. An unconditional set minted a new array
+          // identity every 10s poll, re-rendering the ENTIRE App subtree at
+          // idle. Compare ALL FOUR rendered fields (id alone would freeze the
+          // session bar's title / artifact-count badges).
+          const prev = get().activeSessions;
+          const same =
+            prev.length === next.length &&
+            prev.every((p, i) => {
+              const n = next[i];
+              return (
+                p.sessionId === n.sessionId &&
+                p.title === n.title &&
+                p.project === n.project &&
+                p.artifactCount === n.artifactCount
+              );
+            });
+          if (!same) set({ activeSessions: next });
+        })
         .catch(() => {});
     },
 

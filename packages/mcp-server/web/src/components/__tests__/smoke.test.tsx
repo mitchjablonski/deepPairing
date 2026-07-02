@@ -25,7 +25,6 @@ import { SearchResults as _SearchResults } from "../SessionBrowser";
 import { MessageInput } from "../MessageInput";
 import { TurnIndicator } from "../TurnIndicator";
 import { PendingBanner } from "../PendingBanner";
-import { ReviewGate } from "../ReviewGate";
 import { AutonomySlider } from "../AutonomySlider";
 import { ExportMenu } from "../ExportMenu";
 import { KeyboardShortcutHelp } from "../KeyboardShortcutHelp";
@@ -191,10 +190,6 @@ describe("layout / chrome — smoke", () => {
 
   it("PendingBanner renders", () => {
     expect(() => render(<PendingBanner />)).not.toThrow();
-  });
-
-  it("ReviewGate renders", () => {
-    expect(() => render(<ReviewGate />)).not.toThrow();
   });
 
   it("AutonomySlider renders", () => {

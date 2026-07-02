@@ -108,10 +108,16 @@ function TriageProgressStrip({
   comments: Comment[];
   onJump: (index: number) => void;
 }) {
-  const verdicts = findings.map((_, i) => deriveVerdict(comments, i));
+  // D6 (P4) — memoized, and the <3 bail happens INSIDE the memo (hooks must
+  // run unconditionally) so small artifacts skip the O(findings × comments)
+  // scan entirely. Hygiene at typical sizes; matters on huge artifacts.
+  const verdicts = useMemo(
+    () => (findings.length < 3 ? [] : findings.map((_, i) => deriveVerdict(comments, i))),
+    [findings, comments],
+  );
+  if (findings.length < 3) return null;
   const reviewed = verdicts.filter(Boolean).length;
   const nextUnreviewed = verdicts.findIndex((v) => v === null);
-  if (findings.length < 3) return null;
 
   return (
     <div className="flex items-center gap-2 flex-wrap rounded border border-border-default bg-surface-elevated/50 px-2.5 py-1.5">
@@ -532,11 +538,19 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
   // ResearchContent (every finding an object, findings an array) so the
   // renderer can trust the shape. RichFinding is the local view type — it adds
   // the UI-only `confidence` the coercer preserves and narrows `evidence`.
-  const content = coerceResearchContent(artifact.content) as {
-    summary: string;
-    findings: RichFinding[];
-    openQuestions?: string[];
-  };
+  // D6 review — memoize the coercion at the SOURCE: unmemoized it built a
+  // fresh findings array every render, which made every downstream
+  // [findings]-keyed memo (the triage strip's included) decorative — and on
+  // huge artifacts the re-coerce itself was the bigger per-render cost.
+  const content = useMemo(
+    () =>
+      coerceResearchContent(artifact.content) as {
+        summary: string;
+        findings: RichFinding[];
+        openQuestions?: string[];
+      },
+    [artifact.content],
+  );
   const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
   const [focusMode, setFocusMode] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);

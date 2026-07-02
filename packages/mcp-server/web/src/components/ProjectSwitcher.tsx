@@ -28,8 +28,11 @@ export function ProjectSwitcher() {
   const switchProject = useConnectionStore((s) => s.switchProject);
   const projectHash = useConnectionStore((s) => s.projectHash);
 
-  const refresh = () => {
-    fetch(`${apiBase()}/api/projects`)
+  const refresh = (fresh = false) => {
+    // D6 (P3) — the dropdown-open refresh bypasses the sweep cache so the
+    // list the user is about to read is actually current; the background
+    // poll rides the cache.
+    fetch(`${apiBase()}/api/projects${fresh ? "?fresh=1" : ""}`)
       .then((r) => r.json())
       .then((d) => setProjects(d.projects ?? []))
       .catch(() => {});
@@ -42,11 +45,10 @@ export function ProjectSwitcher() {
   // daemon-side, now also TTL-cached there). Freshness where it matters comes
   // from the refresh-on-open below. PP3 — paused while the tab is hidden.
   usePollingWhenVisible(refresh, 30000);
-  // Refresh when the dropdown opens, so the list/badges the user is about to
-  // read are at most one server-TTL (~15s) stale rather than a full poll
-  // interval behind.
+  // Refresh when the dropdown opens with fresh=1 (cache bypassed, ≥2s floor),
+  // so the list/badges the user is about to read are actually current.
   useEffect(() => {
-    if (open) refresh();
+    if (open) refresh(true);
   }, [open]);
 
   // The currently-selected project: match by the host we're pointed at, else
