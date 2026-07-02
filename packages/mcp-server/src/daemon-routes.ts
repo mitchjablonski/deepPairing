@@ -381,6 +381,23 @@ export function createDaemonRoutes(
     return c.json({ status: "updated" });
   });
 
+  // D10 (H2) — agent marks plan step execution; UI renders the live strip.
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/plan-progress", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const artifactId = c.req.param("artifactId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const { updates } = await c.req.json();
+    if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
+    const artifact = r.store.updatePlanProgress(artifactId, updates);
+    if (!artifact) return c.json({ artifact: null }, 404);
+    r.store.forceFlush();
+    // Carries the FULL artifact: step statuses live in content, and the web
+    // store patches content in place (artifact_updated only patches status).
+    broadcast(sessionId, { type: "plan_progress_updated", artifact });
+    return c.json({ artifact });
+  });
+
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);

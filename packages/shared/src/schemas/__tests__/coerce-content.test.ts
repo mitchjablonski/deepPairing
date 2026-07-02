@@ -231,3 +231,20 @@ describe("D7 review — mixed evidence arrays keep their string elements", () =>
     expect(typeof ev[1]).toBe("object");
   });
 });
+
+describe("D10 — plan step execution status survives coercion", () => {
+  it("status + statusNote pass through; junk statuses drop", () => {
+    const out = coercePlanContent({
+      estimatedChanges: 1,
+      steps: [
+        { description: "a", reasoning: "r", status: "done" },
+        { description: "b", reasoning: "r", status: "in_progress", statusNote: "waiting on CI" },
+        { description: "c", reasoning: "r", status: "finished" }, // not a valid status
+      ],
+    });
+    expect(out.steps[0].status).toBe("done");
+    expect(out.steps[1].status).toBe("in_progress");
+    expect(out.steps[1].statusNote).toBe("waiting on CI");
+    expect(out.steps[2].status).toBeUndefined();
+  });
+});

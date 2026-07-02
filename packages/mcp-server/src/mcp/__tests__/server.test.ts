@@ -2171,9 +2171,9 @@ describe("MCP Tool Handlers", () => {
   });
 
   describe("C1 — ToolAnnotations on every tool", () => {
-    it("all 12 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
+    it("all 13 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
       const list = await client.listTools();
-      expect(list.tools).toHaveLength(12);
+      expect(list.tools).toHaveLength(13);
       for (const t of list.tools) {
         expect(t.annotations, `${t.name} missing annotations`).toBeDefined();
         expect(typeof (t.annotations as any).openWorldHint).toBe("boolean");
@@ -2189,6 +2189,52 @@ describe("MCP Tool Handlers", () => {
       // claim read-only, whatever its name suggests.
       expect(byName.check_feedback.readOnlyHint).toBe(false);
       expect(byName.check_feedback.idempotentHint).toBe(false);
+    });
+  });
+
+  describe("D10 — update_plan_progress (the joint checklist)", () => {
+    it("marks steps, persists into content, and reports progress", async () => {
+      await callTool("present_plan", {
+        title: "Build it",
+        objective: "obj",
+        steps: [
+          { description: "step one", reasoning: "r1" },
+          { description: "step two", reasoning: "r2" },
+          { description: "step three", reasoning: "r3" },
+        ],
+        estimatedChanges: 3,
+      });
+      const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+      const res = await callTool("update_plan_progress", {
+        artifactId: plan.id,
+        updates: [
+          { stepIndex: 0, status: "done" },
+          { stepIndex: 1, status: "in_progress" },
+        ],
+      });
+      expect(res.isError).toBeFalsy();
+      expect(res.text).toContain("1/3 steps complete");
+      const steps = (store.getArtifacts().find((a) => a.id === plan.id)!.content as any).steps;
+      expect(steps[0].status).toBe("done");
+      expect(steps[1].status).toBe("in_progress");
+      expect(steps[2].status).toBeUndefined();
+    });
+
+    it("rejects unknown artifacts, non-plans, bad statuses, and out-of-range-only updates", async () => {
+      const bad = await callTool("update_plan_progress", { artifactId: "art_nope", updates: [{ stepIndex: 0, status: "done" }] });
+      expect(bad.isError).toBe(true);
+
+      await callTool("present_findings", { title: "R", summary: "s", findings: [{ category: "c", title: "t", detail: "d", evidence: "e", significance: "low" }] });
+      const research = store.getArtifacts().find((a) => a.type === "research")!;
+      const notPlan = await callTool("update_plan_progress", { artifactId: research.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(notPlan.isError).toBe(true);
+
+      await callTool("present_plan", { title: "P", objective: "o", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1 });
+      const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+      const badStatus = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "finished" }] });
+      expect(badStatus.isError).toBe(true);
+      const outOfRange = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 99, status: "done" }] });
+      expect(outOfRange.isError).toBe(true);
     });
   });
 

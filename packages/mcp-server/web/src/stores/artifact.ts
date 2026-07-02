@@ -98,6 +98,8 @@ export interface ArtifactState {
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
+  /** D10 — replace an artifact wholesale (content patches, e.g. plan progress). No-op if unknown. */
+  replaceArtifact: (artifact: Artifact) => void;
   addComment: (comment: Comment) => void;
   /** Upsert an existing comment by id (e.g. from a comment_updated WS event). */
   updateComment: (comment: Comment) => void;
@@ -233,6 +235,15 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
         }
       }
       return { artifacts, selectedArtifactId, unreadIds };
+    }),
+
+  replaceArtifact: (artifact) =>
+    set((state) => {
+      const idx = state.artifacts.findIndex((a) => a.id === artifact.id);
+      if (idx === -1) return state;
+      const next = [...state.artifacts];
+      next[idx] = artifact;
+      return { artifacts: next };
     }),
 
   addComment: (comment) =>

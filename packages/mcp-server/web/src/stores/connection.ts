@@ -240,6 +240,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           store.updateArtifact(data.artifactId, data.status);
           break;
 
+        case "plan_progress_updated":
+          // D10 (H2) — full-artifact patch: step statuses live in content.
+          useArtifactStore.getState().replaceArtifact(data.artifact);
+          break;
+
         case "comment_added":
           store.addComment(data.comment);
           break;

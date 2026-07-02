@@ -369,6 +369,14 @@ export class DaemonClient implements IStore {
     await this.post(`/artifacts/${artifactId}/status`, { status, reason });
   }
 
+  async updatePlanProgress(
+    artifactId: string,
+    updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
+  ): Promise<Artifact | null> {
+    const data = await this.post<{ artifact: Artifact | null }>(`/artifacts/${artifactId}/plan-progress`, { updates });
+    return data?.artifact ?? null;
+  }
+
   async getArtifacts(): Promise<Artifact[]> {
     const data = await this.get<{ artifacts: Artifact[] }>("/artifacts");
     return data.artifacts;

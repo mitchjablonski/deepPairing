@@ -578,6 +578,29 @@ export class FileStore implements IStore {
     }
   }
 
+  /** D10 (H2) — patch plan step statuses in place. See store-interface.ts. */
+  updatePlanProgress(
+    artifactId: string,
+    updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
+  ): Artifact | null {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art || art.type !== "plan") return null;
+    const content = art.content as { steps?: Array<Record<string, unknown>> };
+    if (!Array.isArray(content.steps)) return null;
+    let touched = false;
+    for (const u of updates) {
+      const step = content.steps[u.stepIndex];
+      if (!step) continue; // out-of-range indexes are the caller's bug, not a crash
+      step.status = u.status;
+      if (u.statusNote !== undefined) step.statusNote = u.statusNote;
+      touched = true;
+    }
+    if (!touched) return null;
+    art.updatedAt = new Date().toISOString();
+    this.scheduleFlush();
+    return art;
+  }
+
   getArtifacts(): Artifact[] {
     return this.artifacts;
   }
