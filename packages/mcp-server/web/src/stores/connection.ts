@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter";
-import { apiGet, sessionHeaders, setCurrentHost, apiBase } from "../lib/api";
+import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
 
@@ -591,41 +591,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     // daemon (a different localhost port). Tears down the current connection,
     // switches the shared base, re-seeds projectHash from the target daemon's
     // /api/daemon-info, clears the artifact store, and reconnects. Cross-origin
-    // is already permitted (CORS + WS guard are hostname-only).
+    // flows no longer exist post-D5 — this navigates instead.
     switchProject: async (host: string) => {
-      // 1. Learn the target daemon's projectHash BEFORE reconnecting, so the
-      //    first WS upgrade + fetches carry the right X-Project-Hash.
-      let hash: string | null = null;
-      try {
-        const res = await fetch(`http://${host}/api/daemon-info`);
-        if (res.ok) hash = (await res.json())?.projectHash ?? null;
-      } catch { /* fall through; connected payload will populate it */ }
-
-      // 2. Tear down the old adapter + clear the loaded session.
-      const { adapter } = get();
-      if (adapter) { adapter.disconnect(); }
-      const { useArtifactStore } = await import("./artifact");
-      useArtifactStore.getState().reset();
-
-      // 3. Repoint the shared base + identity, then build a fresh connection.
-      setCurrentHost(host);
-      set({
-        adapter: null,
-        connected: false,
-        sessionId: null,
-        projectHash: hash,
-        daemonStartedAt: null,
-        // B2 — the old project's heartbeat must not light the new one.
-        agentActivityAt: null,
-        agentActiveSince: null,
-        hydrated: false,
-      });
-      get().connect();
-      // 4. Refresh the active-sessions list against the new daemon.
-      try {
-        const r = await apiGet(`${apiBase()}/api/active-sessions`);
-        set({ activeSessions: (await r.json())?.sessions ?? [] });
-      } catch { /* best-effort */ }
+      // D5 — FULL NAVIGATION, not in-page repointing. The target daemon
+      // serves its own HTML with ITS bearer token + projectHash injected.
+      // The old in-page switch left the tab holding daemon A's token against
+      // daemon B: reads only worked because reads were origin-open (the
+      // exposure D5 closes), and bearer-gated mutations were silently
+      // 401ing already. Navigation makes every flow same-origin again.
+      if (typeof window !== "undefined") {
+        window.location.assign(`http://${host}/`);
+      }
     },
   };
 });

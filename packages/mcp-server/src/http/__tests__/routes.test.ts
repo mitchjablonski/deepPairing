@@ -1855,27 +1855,26 @@ describe("HTTP Routes", () => {
     });
   });
 
-  describe("CORS", () => {
-    it("allows localhost origins", async () => {
-      const res = await app.request("/api/state", {
-        headers: { Origin: "http://localhost:3847" },
-      });
-      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:3847");
+  describe("CORS (D5 — webview-only cross-origin)", () => {
+    it("REJECTS loopback web origins — any local dev server was the verified attacker class", async () => {
+      for (const origin of ["http://localhost:3847", "http://localhost:3000", "http://127.0.0.1:8080"]) {
+        const res = await app.request("/api/state", { headers: { Origin: origin } });
+        expect(res.headers.get("Access-Control-Allow-Origin"), origin).toBeNull();
+      }
     });
 
-    it("allows 127.0.0.1 origins", async () => {
+    it("allows the VS Code webview origin (the one legitimate cross-origin consumer)", async () => {
       const res = await app.request("/api/state", {
-        headers: { Origin: "http://127.0.0.1:3847" },
+        headers: { Origin: "vscode-webview://1a2b3c" },
       });
-      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://127.0.0.1:3847");
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("vscode-webview://1a2b3c");
     });
 
     it("rejects non-localhost origins", async () => {
       const res = await app.request("/api/state", {
         headers: { Origin: "http://evil.com" },
       });
-      const corsHeader = res.headers.get("Access-Control-Allow-Origin");
-      expect(corsHeader).not.toBe("http://evil.com");
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
     });
   });
 });
