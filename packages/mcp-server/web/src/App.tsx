@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
@@ -42,10 +42,11 @@ function App() {
   // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
   // that ConversationRail's pill/filter/marker use, so the badge can't drift
   // from the rail. Without it the cross-artifact triage surface gave no hint.
-  const comments = useArtifactStore((s) => s.comments);
-  const unansweredCount = useMemo(
-    () => countUnansweredQuestions(Object.values(comments).flat()),
-    [comments],
+  // C1 — select the derived NUMBER, not the comments record: the record gets
+  // a new identity on every comment event, re-rendering the whole App shell;
+  // a primitive selector only re-renders when the count actually changes.
+  const unansweredCount = useArtifactStore((s) =>
+    countUnansweredQuestions(Object.values(s.comments).flat()),
   );
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);

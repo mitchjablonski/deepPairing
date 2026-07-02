@@ -12,11 +12,14 @@ const BASE_TITLE = "deepPairing — Companion";
  * same computePending predicate as the banner/indicator so it can't disagree.
  */
 export function useDocumentTitleBadge(): void {
-  const artifacts = useArtifactStore((s) => s.artifacts);
+  // C1 — select the pending COUNT (a primitive), not the artifacts array:
+  // this hook lives in the App root, and the array gets a new identity on
+  // every artifact event — each one re-rendered the entire shell just to
+  // (maybe) update a title string.
+  const pendingCount = useArtifactStore((s) => computePending(s.artifacts).drafts.length);
   useEffect(() => {
-    const n = computePending(artifacts).drafts.length;
-    document.title = n > 0 ? `(${n}) Your turn — deepPairing` : BASE_TITLE;
-  }, [artifacts]);
+    document.title = pendingCount > 0 ? `(${pendingCount}) Your turn — deepPairing` : BASE_TITLE;
+  }, [pendingCount]);
   // Restore the base title if the app unmounts (tests, HMR).
   useEffect(() => () => {
     document.title = BASE_TITLE;

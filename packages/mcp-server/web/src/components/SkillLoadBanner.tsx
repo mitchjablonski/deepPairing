@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
+import { useConnectionStore } from "../stores/connection";
 
 /**
  * O6 — Skill-load banner. When `/api/skill-status` reports that the
@@ -27,11 +28,24 @@ export function SkillLoadBanner() {
     try { return sessionStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; }
   });
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
-
+  // C1 review — a positive status latched `resolved` FOREVER, so after a
+  // project switch (new daemon, new skill state) the banner could never show
+  // again until reload. Reset the cached status when the project changes.
+  const projectHash = useConnectionStore((s) => s.projectHash);
   useEffect(() => {
-    if (dismissed) return;
+    setStatus(null);
+  }, [projectHash]);
+
+  // C1 — the resolution states only gated RENDERING; the 30s poll (which
+  // fs.readFileSync's CLAUDE.md server-side per hit) kept firing for the tab's
+  // lifetime. Stop polling once anything proves the banner moot, and skip
+  // fetches while the tab is hidden.
+  const resolved = dismissed || hasArtifacts || Boolean(status?.pairingProtocolSkillLikelyLoaded);
+  useEffect(() => {
+    if (resolved) return;
     let cancelled = false;
     const fetchStatus = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await apiGet(`${apiBase()}/api/skill-status`);
         if (!res.ok) return;
@@ -42,11 +56,10 @@ export function SkillLoadBanner() {
       }
     };
     fetchStatus();
-    // Recheck every 30s until we have proof the skill is loaded. No reason
-    // to keep polling after that — the hasArtifacts guard will handle it.
+    // Recheck every 30s until we have proof the skill is loaded.
     const timer = setInterval(fetchStatus, 30000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [dismissed]);
+  }, [resolved]);
 
   // Hide the banner as soon as we have evidence the skill is actually working.
   if (dismissed) return null;
