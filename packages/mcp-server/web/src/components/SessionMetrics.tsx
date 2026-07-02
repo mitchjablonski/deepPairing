@@ -34,18 +34,24 @@ export function SessionMetrics() {
 
   // R1: cumulative counts across every session in this project (the moat).
   useEffect(() => {
-    let cancelled = false;
+    // E2 (N4 bisect) — ABORT the fetch on unmount, don't just ignore the
+    // result: the cancelled-flag version left the request in flight, and
+    // happy-dom's window teardown aborted it noisily (the suite's recurring
+    // AbortError leak — SettingsSheet mounts this 4×). Aborting in cleanup
+    // settles the request inside OUR catch instead.
+    const ac = new AbortController();
     (async () => {
       try {
-        const res = await apiGet(`${apiBase()}/api/metrics`);
+        const res = await apiGet(`${apiBase()}/api/metrics`, { signal: ac.signal });
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setMetrics(data);
+        if (!ac.signal.aborted) setMetrics(data);
       } catch {
-        // Silent — section just hides if the endpoint isn't reachable
+        // Silent — section just hides if the endpoint isn't reachable (and
+        // the deliberate unmount abort lands here too).
       }
     })();
-    return () => { cancelled = true; };
+    return () => ac.abort();
   }, []);
 
   // C5 — the learning recap. Concept-naming works hard mid-session (badges,
