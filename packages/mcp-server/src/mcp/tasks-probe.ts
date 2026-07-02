@@ -1,18 +1,18 @@
 /**
  * S6 — MCP Tasks (SEP-1686) capability probe.
  *
- * Today: always false. C1 (2026-07) status correction — two facts changed:
- * (1) SDK 1.29 DOES ship an experimental tasks module
- *     (dist/esm/experimental/tasks/ — tasks/get|list|cancel|result), so
- *     "does not ship the primitive" is no longer literally true; and
- * (2) the 2026-07-28 spec RC redesigns Tasks from experimental core into an
- *     official EXTENSION with a client-driven lifecycle (`tools/call`
- *     returns a task handle; the CLIENT polls `tasks/get`) — which does not
- *     match this seam's assumed server-push `emitTask` shape.
+ * Today: always false. C1 (2026-07) noted the 2026-07-28 spec RC redesigns
+ * Tasks from experimental core (SDK 1.29 ships tasks/get|list|cancel|result
+ * under experimental/) into an official EXTENSION with a client-driven
+ * lifecycle. E4 realigned this seam's guidance to that shape: the server
+ * answers the originating tools/call with a task handle; the CLIENT drives
+ * via `tasks/get` polling (which also carries the final result once the
+ * task completes — the RC drops the separate `tasks/result` and removes
+ * `tasks/list`) plus `tasks/update`/`tasks/cancel` for client-initiated
+ * changes. The sketches below ARE the RC shape.
  * The flag stays false because the blocking dependency is unchanged:
- * Claude Code (through 2.1.198) has no task polling. When it lands, re-aim
- * `maybeEmitTaskHandle` at the extension's client-polled shape rather than
- * the push API sketched below, then flip the flag.
+ * Claude Code (through 2.1.198) has no task polling. When it lands, fill in
+ * the sketches and flip the flag.
  *
  * Why a flag, not a feature detect on `server`: the SDK's type surface
  * will change shape when Tasks lands, and we want the diff that turns
@@ -72,9 +72,11 @@ export async function maybeEmitTaskHandle(
  * X6 — counterpart seam for status transitions. Every site that mutates an
  * artifact's lifecycle (approve, reject, revise, supersede, retract,
  * decision-resolve, plan-review verdict) calls this so the future Tasks
- * implementer can flip the flag and have every status change automatically
- * become a `tasks/update` notification — no scavenger hunt for mutation
- * sites required.
+ * implementer can flip the flag and have every status change land in the
+ * task record that the client's `tasks/get` poll observes (RC lifecycle:
+ * the server keeps the record current; `tasks/update` is the CLIENT's call
+ * for client-initiated changes) — no scavenger hunt for mutation sites
+ * required.
  *
  * `server` is the optional MCP Server instance: routes.ts calls this from
  * HTTP-side mutations where there's no direct server reference (the MCP
