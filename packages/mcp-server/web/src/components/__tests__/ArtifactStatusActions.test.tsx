@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
 import { useArtifactStore } from "../../stores/artifact";
@@ -17,18 +17,24 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 /** Install a fake IntersectionObserver that immediately reports the sentinel
- *  as (not) intersecting — i.e. the user is (not) at the artifact's end. */
+ *  as (not) intersecting — i.e. the user is (not) at the artifact's end.
+ *  Returns a fire() handle so tests can simulate later scroll transitions. */
 function stubIO(isIntersecting: boolean) {
+  const handle: { fire: (v: boolean) => void } = { fire: () => {} };
   vi.stubGlobal(
     "IntersectionObserver",
     class {
       cb: any;
-      constructor(cb: any) { this.cb = cb; }
+      constructor(cb: any) {
+        this.cb = cb;
+        handle.fire = (v: boolean) => this.cb([{ isIntersecting: v }]);
+      }
       observe() { this.cb([{ isIntersecting }]); }
       disconnect() {}
       unobserve() {}
     } as any,
   );
+  return handle;
 }
 
 describe("B6 — compact-while-floating review footer", () => {
@@ -129,5 +135,23 @@ describe("B7 — the expanded footer can be minimized (and mandatory states over
     expect(await screen.findByText(/will auto-approve in/i)).toBeInTheDocument();
     // While the countdown mandates expansion, Minimize would be a lying control.
     expect(screen.queryByRole("button", { name: /minimize/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("B7' — reaching the end re-opens a minimized panel", () => {
+  it("minimize sticks in place, but scrolling away and back to the end auto-expands", async () => {
+    const io = stubIO(true); // mounted at the end → expanded
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact} />);
+    await user.click(screen.getByRole("button", { name: /minimize/i }));
+    expect(screen.queryByPlaceholderText(/respond to the agent/i)).not.toBeInTheDocument();
+
+    // Scroll away (sentinel leaves view) — still compact.
+    act(() => io.fire(false));
+    expect(screen.queryByPlaceholderText(/respond to the agent/i)).not.toBeInTheDocument();
+
+    // Scroll back to the end — the rising edge clears the collapse.
+    act(() => io.fire(true));
+    expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
   });
 });

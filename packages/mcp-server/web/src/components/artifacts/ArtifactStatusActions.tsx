@@ -63,6 +63,11 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   // armed countdown, an in-flight reject, typed text) still force the panel —
   // the countdown can never be hidden.
   const [userCollapsed, setUserCollapsed] = useState(false);
+  // B7' — reaching the end re-opens a minimized panel (rising edge only:
+  // minimizing while AT the end sticks until you scroll away and return).
+  useEffect(() => {
+    if (atEnd) setUserCollapsed(false);
+  }, [atEnd]);
   const mustExpand = countdown !== null || rejecting || comment.trim().length > 0;
   const expanded = mustExpand || (!userCollapsed && (atEnd || forceExpanded));
   // Focus must happen AFTER the expanded render commits (the textarea doesn't
@@ -166,6 +171,10 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   const cancelCountdown = () => {
     setCountdownPaused(true);
     setCountdown(null);
+    // B7 review — cancelling a countdown is ENGAGEMENT: without this, a user
+    // who minimized earlier had the whole panel snap to compact under their
+    // Cancel click (countdown was the only thing mandating expansion).
+    setUserCollapsed(false);
   };
 
   if (artifact.status === "approved") {
@@ -357,23 +366,6 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         </div>
       ) : (
       <>
-      {/* B7 — collapse back to the slim bar. Hidden while something mandates
-          the full panel (countdown/reject/typed text) — a dead control lies. */}
-      {!mustExpand && (
-        <div className="flex justify-end -mt-1 -mb-1">
-          <button
-            type="button"
-            onClick={() => {
-              setUserCollapsed(true);
-              setForceExpanded(false);
-            }}
-            className="text-2xs text-text-muted hover:text-text-secondary transition-colors"
-            title="Collapse to the slim bar (Approve stays one click)"
-          >
-            Minimize ▾
-          </button>
-        </div>
-      )}
       {/* Auto-proceed countdown bar */}
       {countdown !== null && countdown > 0 && !countdownPaused && (
         <div className="space-y-1.5">
@@ -473,6 +465,25 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             Reject
           </button>
         </div>
+
+        {/* B7 — collapse back to the slim bar. Lives in the action row
+            (right-aligned) so it isn't crowded against the message composer
+            below the pane. Hidden while something mandates the full panel
+            (countdown/reject/typed text) — a dead control lies. Scrolling
+            back to the end re-opens automatically. */}
+        {!mustExpand && (
+          <button
+            type="button"
+            onClick={() => {
+              setUserCollapsed(true);
+              setForceExpanded(false);
+            }}
+            className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors shrink-0"
+            title="Collapse to the slim bar (Approve stays one click; reaching the end re-opens)"
+          >
+            Minimize ▾
+          </button>
+        )}
       </div>
 
       {/* Reject confirm: name the pattern (the cross-project ledger key) so a
