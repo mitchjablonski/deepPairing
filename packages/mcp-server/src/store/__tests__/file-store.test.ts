@@ -617,3 +617,46 @@ describe("FileStore", () => {
     });
   });
 });
+
+// --- D1: the disk trust boundary ---
+
+describe("D1 — salvage at the JSON.parse boundary", () => {
+  it("a garbage element in artifacts.json is dropped, valid ones load, nothing crashes", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "salvage_test");
+    fs.mkdirSync(dir, { recursive: true });
+    const valid = {
+      id: "a_ok", sessionId: "salvage_test", type: "research", version: 1, parentId: null,
+      title: "ok", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    // A string, a null, an object missing id, and one valid artifact — the
+    // exact hand-edited/corrupted-but-parseable class that used to crash
+    // downstream consumers.
+    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(["garbage", null, { title: "no id" }, valid]));
+
+    const store = createStore("salvage_test");
+    const arts = store.getArtifacts();
+    expect(arts).toHaveLength(1);
+    expect(arts[0].id).toBe("a_ok");
+  });
+
+  it("a non-array artifacts.json (object/string) degrades to empty, not a crash", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "salvage_obj");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify({ not: "an array" }));
+    const store = createStore("salvage_obj");
+    expect(store.getArtifacts()).toEqual([]);
+  });
+
+  it("legacy-shaped elements (extra/missing OPTIONAL fields) still load — structure only, not strictness", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "salvage_legacy");
+    fs.mkdirSync(dir, { recursive: true });
+    // No severity/confidence/agentReasoning, plus an unknown field — the
+    // lenient contract: identity + objectness is enough at this boundary.
+    fs.writeFileSync(path.join(dir, "decisions.json"), JSON.stringify([
+      { decisionId: "d1", artifactId: "a1", context: "c", options: [], someLegacyField: true, createdAt: "2026-01-01T00:00:00.000Z" },
+    ]));
+    const store = createStore("salvage_legacy");
+    expect(store.getPendingDecisions()).toHaveLength(1);
+  });
+});

@@ -201,11 +201,15 @@ export class FileStore implements IStore {
 
   private load(): void {
     const dir = this.sessionDir();
-    this.artifacts = this.loadJsonFile<Artifact[]>(path.join(dir, "artifacts.json"), []);
-    this.comments = this.loadJsonFile<Comment[]>(path.join(dir, "comments.json"), []);
-    const decArr = this.loadJsonFile<DecisionRecord[]>(path.join(dir, "decisions.json"), []);
+    this.artifacts = FileStore.salvageArray<Artifact>(
+      "artifacts.json", this.loadJsonFile<unknown>(path.join(dir, "artifacts.json"), []), "id");
+    this.comments = FileStore.salvageArray<Comment>(
+      "comments.json", this.loadJsonFile<unknown>(path.join(dir, "comments.json"), []), "id");
+    const decArr = FileStore.salvageArray<DecisionRecord>(
+      "decisions.json", this.loadJsonFile<unknown>(path.join(dir, "decisions.json"), []), "decisionId");
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
-    const planArr = this.loadJsonFile<PlanReviewRecord[]>(path.join(dir, "plan-reviews.json"), []);
+    const planArr = FileStore.salvageArray<PlanReviewRecord>(
+      "plan-reviews.json", this.loadJsonFile<unknown>(path.join(dir, "plan-reviews.json"), []), "artifactId");
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
     // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
     // dropped on every daemon idle-shutdown — review-latency metrics
@@ -215,6 +219,38 @@ export class FileStore implements IStore {
       path.join(dir, "metrics.json"),
       [],
     );
+  }
+
+  /**
+   * D1 — the disk trust boundary. JSON.parse returns `any`; every collection
+   * read used to cast it blind, so one garbage element in a hand-edited or
+   * corrupted-but-parseable file (a string in artifacts.json, null in
+   * decisions.json) crashed whatever downstream code touched it first.
+   * salvageArray enforces STRUCTURE (array of objects, each carrying its
+   * identity field) and drops+logs anything else. Field-level leniency stays
+   * the coercers' job — legacy shapes keep loading.
+   */
+  static salvageArray<T>(label: string, raw: unknown, idField: string): T[] {
+    if (!Array.isArray(raw)) {
+      if (raw != null) console.error(`[deepPairing] ${label}: expected an array, got ${typeof raw} — using []`);
+      return [];
+    }
+    const kept = raw.filter(
+      (el) => el !== null && typeof el === "object" && typeof (el as Record<string, unknown>)[idField] === "string",
+    );
+    if (kept.length !== raw.length) {
+      console.error(
+        `[deepPairing] ${label}: dropped ${raw.length - kept.length} malformed element(s) (missing string '${idField}')`,
+      );
+    }
+    return kept as T[];
+  }
+
+  /** D1 — Record-shaped files must be plain objects (not arrays/primitives). */
+  static salvageRecord<T extends Record<string, unknown>>(label: string, raw: unknown, fallback: T): T {
+    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) return raw as T;
+    if (raw != null) console.error(`[deepPairing] ${label}: expected an object, got ${Array.isArray(raw) ? "array" : typeof raw} — using fallback`);
+    return fallback;
   }
 
   /** Load a JSON file with graceful error handling. Records mtime + size so a
@@ -1295,7 +1331,8 @@ export class FileStore implements IStore {
         const artFile = path.join(sessionDir, "artifacts.json");
         if (!fs.existsSync(artFile)) continue;
 
-        const artifacts: Artifact[] = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+        const artifacts: Artifact[] = FileStore.salvageArray<Artifact>(
+          `${entry.name}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
         if (artifacts.length === 0) continue;
 
         const decFile = path.join(sessionDir, "decisions.json");
@@ -1371,7 +1408,7 @@ export class FileStore implements IStore {
       if (!fs.existsSync(artFile)) continue;
       let artifacts: Artifact[];
       try {
-        artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
+        artifacts = FileStore.salvageArray("artifacts.json", JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
       } catch {
         continue;
       }
@@ -1507,8 +1544,8 @@ export class FileStore implements IStore {
       let artifacts: Artifact[];
       let decisions: DecisionRecord[];
       try {
-        artifacts = JSON.parse(fs.readFileSync(artFile, "utf-8"));
-        decisions = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+        artifacts = FileStore.salvageArray("artifacts.json", JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
+        decisions = FileStore.salvageArray("decisions.json", JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
       } catch {
         continue;
       }
@@ -1548,7 +1585,8 @@ export class FileStore implements IStore {
         let retrospective: Retrospective | undefined;
         try {
           if (fs.existsSync(retrosPath)) {
-            const retros: Retrospective[] = JSON.parse(fs.readFileSync(retrosPath, "utf-8"));
+            const retros: Retrospective[] = FileStore.salvageArray<Retrospective>(
+              "retrospectives.json", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
             retrospective = retros.find((r) => r.decisionId === dec.decisionId);
           }
         } catch {}
@@ -1594,7 +1632,7 @@ export class FileStore implements IStore {
       if (!fs.existsSync(decFile)) continue;
       let decisions: DecisionRecord[];
       try {
-        decisions = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+        decisions = FileStore.salvageArray("decisions.json", JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
       } catch {
         continue;
       }
