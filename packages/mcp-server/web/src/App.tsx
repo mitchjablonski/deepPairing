@@ -43,6 +43,20 @@ function App() {
   const agentRecentlyActive = useConnectionStore(
     (s) => s.agentActivityAt !== null && Date.now() - s.agentActivityAt < 60_000,
   );
+  // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
+  // first `connected` payload lands, bounded by a grace timer so a dead
+  // daemon still falls through to the real routing (IdleHome is then correct).
+  const hydrated = useConnectionStore((s) => s.hydrated);
+  const [hydrationGrace, setHydrationGrace] = useState(true);
+  useEffect(() => {
+    // Review: re-arm whenever hydration is pending (mount AND project switch,
+    // which resets `hydrated`), so the skeleton covers both.
+    if (hydrated) return;
+    setHydrationGrace(true);
+    const t = setTimeout(() => setHydrationGrace(false), 4000);
+    return () => clearTimeout(t);
+  }, [hydrated]);
+  const showHydrationSkeleton = !hydrated && hydrationGrace;
 
   // C2 review — auto-bind an unbound tab when there's EXACTLY ONE active
   // session: an unbound composer posts to the daemon's default store (map
@@ -466,7 +480,9 @@ function App() {
             Failed to render — try selecting a different artifact
           </div>
         }>
-          {hasArtifacts
+          {showHydrationSkeleton
+            ? <HydrationSkeleton />
+            : hasArtifacts
             ? <ArtifactPanel />
             : connected && activeSessions.length > 0 && agentRecentlyActive
               // C2 — a LIVE session with no artifacts yet is the opening beat
@@ -528,3 +544,18 @@ function App() {
 }
 
 export default App;
+
+
+/** C5 — lightweight placeholder while the first WS `connected` payload loads.
+ *  Prevents a mid-session refresh from flashing the ledger/onboarding surfaces
+ *  before snapping to the artifact panel. */
+function HydrationSkeleton() {
+  return (
+    <div className="p-5 space-y-3 animate-pulse" role="status" aria-label="Loading session">
+      <div className="h-4 w-48 rounded bg-surface-elevated" />
+      <div className="h-24 rounded bg-surface-elevated" />
+      <div className="h-24 rounded bg-surface-elevated/70" />
+      <div className="h-24 rounded bg-surface-elevated/40" />
+    </div>
+  );
+}

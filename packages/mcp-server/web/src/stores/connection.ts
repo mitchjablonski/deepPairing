@@ -51,6 +51,11 @@ interface ConnectionState {
   /** B2 — start of the current activity streak (a gap >60s starts a new
    *  one). Drives the "Agent working · Nm" elapsed label. */
   agentActiveSince: number | null;
+  /** C5 — true once the first `connected` payload has been processed: we KNOW
+   *  whether this daemon has sessions/artifacts. Until then App shows a
+   *  skeleton instead of flashing IdleHome/WaitingForClaude on every refresh
+   *  (the app impersonating its own cold start). */
+  hydrated: boolean;
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
@@ -166,6 +171,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             // session has hydrated (overrides addArtifact's first-artifact pick).
             store.restoreSelection();
           }
+
+          set({ hydrated: true });
 
           if (daemonRestarted) {
             import("./toast").then(({ useToastStore }) => {
@@ -479,6 +486,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     projectRoot: null,
     agentActivityAt: null,
     agentActiveSince: null,
+    hydrated: false,
     // II2.2 — seed projectHash from the daemon's HTML injection
     // (window.__dpProjectHash) so the VERY FIRST WS connect URL and mutation
     // fetch carry X-Project-Hash. Otherwise the fail-closed gate 403s the
@@ -610,6 +618,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // B2 — the old project's heartbeat must not light the new one.
         agentActivityAt: null,
         agentActiveSince: null,
+        hydrated: false,
       });
       get().connect();
       // 4. Refresh the active-sessions list against the new daemon.
