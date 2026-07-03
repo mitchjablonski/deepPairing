@@ -65,3 +65,26 @@ describe("E6 — footerReducer", () => {
     expect(footerReducer(armed, { type: "tick" }).countdown).toBe(9);
   });
 });
+
+describe("E6 review — Respond vs terminal-action clearing", () => {
+  it("respondSucceeded keeps an open reject panel + the edited concept (a clarifying comment must not discard the ledger key)", () => {
+    let s = footerReducer(INITIAL_FOOTER_STATE, { type: "typed", comment: "reason" });
+    s = footerReducer(s, { type: "beginReject", concept: "agent's phrasing" });
+    s = footerReducer(s, { type: "rejectConceptTyped", concept: "my phrasing" });
+    s = footerReducer(s, { type: "respondSucceeded" });
+    expect(s).toMatchObject({ comment: "", rejecting: true, rejectConcept: "my phrasing" });
+  });
+
+  it("rejectConceptTyped is JUST typing — no cancel side effects", () => {
+    const minimized = footerReducer(INITIAL_FOOTER_STATE, { type: "minimize" });
+    const s = footerReducer(minimized, { type: "rejectConceptTyped", concept: "x" });
+    expect(s.userCollapsed).toBe(true); // unlike the cancel paths
+    expect(s.rejectConcept).toBe("x");
+  });
+
+  it("duplicate sentinel notifications bail out (a re-notify must not clear a Minimize)", () => {
+    const minimizedAtEnd = footerReducer(INITIAL_FOOTER_STATE, { type: "minimize" });
+    const dup = footerReducer(minimizedAtEnd, { type: "sentinel", atEnd: true }); // atEnd already true initially
+    expect(dup).toBe(minimizedAtEnd); // same reference — no render minted
+  });
+});

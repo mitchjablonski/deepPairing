@@ -61,6 +61,8 @@ type FooterAction =
   | { type: "submitStart" }
   | { type: "submitEnd" }
   | { type: "actionSucceeded" }
+  | { type: "respondSucceeded" }
+  | { type: "rejectConceptTyped"; concept: string }
   | { type: "sentinel"; atEnd: boolean }
   | { type: "expand" }
   | { type: "minimize" };
@@ -99,11 +101,27 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
     case "submitEnd":
       return { ...s, submitting: false };
     case "actionSucceeded":
-      // Only on success — a failed action keeps the text to retry.
+      // Only on success — a failed action keeps the text to retry. (Terminal
+      // actions unmount the interactive footer anyway; the clearing matters
+      // for state hygiene, not visibly.)
       return { ...s, comment: "", rejecting: false, rejectConcept: "" };
+    case "respondSucceeded":
+      // E6 review — Respond keeps an open reject panel AND the user's edited
+      // concept (main's behavior): a clarifying comment mid-reject must not
+      // discard the hand-tuned ledger key.
+      return { ...s, comment: "" };
+    case "rejectConceptTyped":
+      // E6 review — typing the concept is JUST typing (main: setRejectConcept
+      // only). Routing it through beginReject re-ran the cancel semantics —
+      // convergent, but the machine should say what it does.
+      return { ...s, rejectConcept: a.concept };
     case "sentinel":
       // B7' — reaching the end re-opens a minimized panel (rising edge only:
       // minimizing while AT the end sticks until you scroll away and return).
+      // Duplicate notifications bail (matches main's same-value setState):
+      // IntersectionObserver only notifies on crossings per spec, but a
+      // duplicate must not clear a Minimize or mint a render.
+      if (a.atEnd === s.atEnd) return s;
       return a.atEnd
         ? { ...s, atEnd: true, userCollapsed: false }
         : { ...s, atEnd: false };
@@ -362,7 +380,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     dispatch({ type: "submitStart" });
     try {
       await submitComment(artifact.id, trimmedComment);
-      dispatch({ type: "actionSucceeded" }); // only clears on success
+      dispatch({ type: "respondSucceeded" }); // only clears on success
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
@@ -562,7 +580,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             id="reject-concept"
             autoFocus
             value={rejectConcept}
-            onChange={(e) => dispatch({ type: "beginReject", concept: e.target.value })}
+            onChange={(e) => dispatch({ type: "rejectConceptTyped", concept: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === "Enter") { e.preventDefault(); handleAction("rejected"); }
               if (e.key === "Escape") { e.preventDefault(); dispatch({ type: "cancelReject" }); }
