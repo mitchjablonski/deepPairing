@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildThreads } from "../lib/threading";
+import { useConnectionStore } from "../stores/connection";
 import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useModal } from "../hooks/useModal";
@@ -379,6 +380,10 @@ function ThreadEntry({
 }) {
   const { comment, replies } = thread;
   const submitComment = useArtifactStore((s) => s.submitComment);
+  // F8 (M6) — liveness for honest copy (see the unanswered line below).
+  const boundLive = useConnectionStore(
+    (st) => st.activeSessions.find((x) => x.sessionId === st.sessionId)?.live !== false,
+  );
   // U5 — use the SAME predicate as the pill/filter (it also drops questions the
   // human resolved or the agent answered out-of-band), so the inline "awaiting
   // agent answer" marker can't disagree with a "0 unanswered" header.
@@ -460,7 +465,10 @@ function ThreadEntry({
         )}
         {isUnanswered && (
           <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
-            ⏳ awaiting the agent's answer — next check-in
+            {/* F8 (M6) — don't promise a check-in on a dead session. */}
+            {boundLive
+              ? "⏳ awaiting the agent's answer — next check-in"
+              : "⏳ unanswered — the agent exited; it'll be seen if the session resumes"}
           </div>
         )}
       </div>

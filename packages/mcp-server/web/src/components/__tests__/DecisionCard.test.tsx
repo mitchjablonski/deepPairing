@@ -425,13 +425,44 @@ describe("DecisionCard — keyboard navigation", () => {
     expect(docSpy).not.toHaveBeenCalled();
   });
 
-  it("UX6 — the global approve shortcut selects the focused option on a decision", () => {
-    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_x" />);
-    fireEvent(window, new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
-    expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/decisions/dec_abc"),
-      expect.objectContaining({ body: expect.stringContaining('"optionId":"o1"') }),
-    );
+  it("F8 (M4) — the approve shortcut ARMS a confirm, then commits when it runs out (was: one keystroke = irreversible)", () => {
+    vi.useFakeTimers();
+    try {
+      render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_x" />);
+      fireEvent(window, new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
+      // Armed, not committed.
+      expect(screen.getByText(/will select/i)).toBeInTheDocument();
+      expect(fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/api/decisions/dec_abc"),
+        expect.anything(),
+      );
+      // Each tick schedules the NEXT timeout from an effect — one act per hop.
+      for (let i = 0; i < 4; i++) act(() => { vi.advanceTimersByTime(1100); });
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/decisions/dec_abc"),
+        expect.objectContaining({ body: expect.stringContaining('"optionId":"o1"') }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("F8 (M4) — Escape disarms the pending select", () => {
+    vi.useFakeTimers();
+    try {
+      render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_x" />);
+      fireEvent(window, new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
+      expect(screen.getByText(/will select/i)).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByText(/will select/i)).toBeNull();
+      for (let i = 0; i < 5; i++) act(() => { vi.advanceTimersByTime(1100); });
+      expect(fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/api/decisions/dec_abc"),
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("UX6 — the global revise shortcut opens the send-back composer on a decision", () => {

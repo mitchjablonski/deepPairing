@@ -14,7 +14,12 @@ import { computePending } from "../lib/pending";
  * Dismissible per session (sessionStorage, the drafts/rail idiom).
  */
 export function SessionWrapCard({ sessionId }: { sessionId: string }) {
-  const artifacts = useArtifactStore((s) => s.artifacts);
+  // F8 (M2) — the merged store carries OTHER sessions' artifacts; the wrap
+  // card must recap ITS session only (stats were inflated by live neighbors,
+  // and a neighbor's draft suppressed the card entirely).
+  const artifacts = useArtifactStore((s) => s.artifacts).filter(
+    (a) => a.sessionId === sessionId,
+  );
   const dismissKey = `dp:wrap-dismissed:${sessionId}`;
   const [dismissed, setDismissed] = useState<boolean>(() => {
     try { return sessionStorage.getItem(dismissKey) === "1"; } catch { return false; }

@@ -5,6 +5,7 @@ import { ArtifactVisuals } from "../ArtifactVisuals";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
 import { useEffect, useMemo, useState } from "react";
@@ -222,7 +223,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
               ANY step carries a status (old plans stay untracked). */}
           {!["draft", "rejected", "retracted", "obsolete"].includes(artifact.status) &&
             steps.some((st) => st.status) && (
-            <PlanExecutionStrip steps={steps} />
+            <PlanExecutionStrip steps={steps} sessionId={artifact.sessionId} />
           )}
 
           {steps.map((step, i) => {
@@ -390,10 +391,16 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 }
 
 /** D10 (H2) — live "Step 3 of 7" strip; mirrors TriageProgressStrip's shape. */
-function PlanExecutionStrip({ steps }: { steps: PlanStep[] }) {
+function PlanExecutionStrip({ steps, sessionId }: { steps: PlanStep[]; sessionId?: string }) {
   const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
   const active = steps.findIndex((s) => s.status === "in_progress");
   const pct = steps.length === 0 ? 0 : Math.round((done / steps.length) * 100);
+  // F8 (M2) — "Executing" is a claim about a LIVE agent; on a dead session
+  // it contradicted the SessionWrapCard rendered right above it. The dead
+  // wrapper narrates honestly instead.
+  const sessionLive = useConnectionStore(
+    (s) => s.activeSessions.find((x) => x.sessionId === sessionId)?.live !== false,
+  );
   return (
     <div
       role="group"
@@ -401,7 +408,13 @@ function PlanExecutionStrip({ steps }: { steps: PlanStep[] }) {
       className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg flex items-center gap-3"
     >
       <span className="text-2xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">
-        {done === steps.length ? "Plan complete" : active >= 0 ? `Executing step ${active + 1} of ${steps.length}` : `${done} of ${steps.length} done`}
+        {done === steps.length
+          ? "Plan complete"
+          : !sessionLive
+            ? `Paused at step ${(active >= 0 ? active : done) + 1} of ${steps.length} — agent exited`
+            : active >= 0
+              ? `Executing step ${active + 1} of ${steps.length}`
+              : `${done} of ${steps.length} done`}
       </span>
       <div className="flex-1 h-1.5 rounded-full bg-surface-elevated overflow-hidden">
         <div

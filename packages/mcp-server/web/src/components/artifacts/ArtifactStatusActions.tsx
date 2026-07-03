@@ -203,6 +203,21 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     commentRef.current?.focus();
   };
 
+  // F8 (M3) — the ? help and the arm comment BOTH promised "Esc to cancel";
+  // no Escape path existed (App's handler only closes overlays). Scoped to
+  // an armed countdown so it can't swallow overlay Escapes.
+  useEffect(() => {
+    if (countdown === null || countdownPaused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        dispatch({ type: "cancelCountdown" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [countdown, countdownPaused]);
+
   const confidence = (artifact.content as any)?.confidence;
   const shouldAutoApprove =
     artifact.status === "draft" &&
