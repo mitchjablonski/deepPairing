@@ -247,7 +247,7 @@ export function MessageInput() {
         <button
           onClick={handleSend}
           disabled={!message.trim() || sending}
-          className="px-3 py-1 bg-accent-blue text-white text-2xs rounded
+          className="px-3 py-1 bg-accent-blue-strong text-white text-2xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
         >

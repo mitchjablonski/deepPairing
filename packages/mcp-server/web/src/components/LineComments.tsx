@@ -51,11 +51,11 @@ export function LineGutter({
         onClick={() => (askActive ? onClose() : onOpen("ask"))}
         className={`w-6 h-6 flex items-center justify-center rounded text-[10px] font-semibold transition-all ${
           askActive
-            ? "bg-accent-violet text-white"
+            ? "bg-accent-violet-strong text-white"
             // Faint at rest so it's discoverable that lines are commentable
             // (not a hover-only secret), full on hover, and revealed on keyboard
             // focus so the gutter is reachable without a mouse (U3).
-            : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-violet/80 text-white hover:bg-accent-violet"
+            : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-violet-strong text-white hover:bg-accent-violet-strong-hover"
         }`}
         title="Ask the agent about this line"
         aria-label="Ask a question about this line"
@@ -66,8 +66,8 @@ export function LineGutter({
         onClick={() => (commentActive ? onClose() : onOpen("comment"))}
         className={`w-6 h-6 flex items-center justify-center rounded text-[10px] transition-all ${
           commentActive || commentCount > 0
-            ? "bg-accent-blue text-white"
-            : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue"
+            ? "bg-accent-blue-strong text-white"
+            : "opacity-25 group-hover:opacity-100 focus-visible:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue-strong"
         }`}
         title="Add comment on this line"
         aria-label="Add a comment on this line"
@@ -275,7 +275,7 @@ export function LineCommentChips({
                 type="button"
                 onClick={() => submitReply(c)}
                 disabled={!replyText.trim() || replySubmitting}
-                className="px-2.5 py-1 bg-accent-blue text-white text-2xs rounded
+                className="px-2.5 py-1 bg-accent-blue-strong text-white text-2xs rounded
                            hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
               >
                 Reply
@@ -550,7 +550,7 @@ export function LineComposer({
             onClick={handleSubmit}
             disabled={!commentText.trim() || submitting}
             className={`px-2.5 py-1.5 text-white text-xs rounded disabled:bg-surface-elevated disabled:text-text-muted transition-all duration-[180ms] ease-out press-scale ${
-              mode === "ask" ? "bg-accent-violet hover:bg-accent-violet/80" : "bg-accent-blue hover:bg-accent-blue/80"
+              mode === "ask" ? "bg-accent-violet-strong hover:bg-accent-violet-strong-hover" : "bg-accent-blue-strong hover:bg-accent-blue/80"
             }`}
           >
             {mode === "ask" ? "Ask" : "Comment"}

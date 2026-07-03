@@ -29,18 +29,32 @@
 
   /* Text */
   --color-text-primary: #e4e5ea;
-  --color-text-secondary: #9ca0b0;
-  --color-text-muted: #5c6178;
+  /* F1 — AA re-tint (user-approved). Muted carried information (timestamps,
+     file refs, helper text) at 2.6–3.1:1 — unreadable for low-vision users
+     and the last axe exclusion. Minimal full-AA muted (#86899a, worst 4.54)
+     blended with the old secondary, so BOTH tokens moved to keep the
+     three-level ladder: 4.5 / 8.0 / 12.5 on the worst surface. */
+  --color-text-secondary: #b4b8c6;
+  --color-text-muted: #86899a;
   --color-text-inverse: #0f1117;
 
   /* Borders */
   --color-border-default: #2a2d3a;
   --color-border-subtle: #1e2130;
-  --color-border-focus: #4f7df7;
+  --color-border-focus: #6b93f9; /* F1 review — follow the theme's text blue */
 
   /* Accents */
-  --color-accent-blue: #4f7df7;
-  --color-accent-blue-dim: #2a3f6e;
+  /* F1 — accent AA (surfaced when the axe color-contrast exclusion dropped):
+     accent-blue text on its dim pill was 2.76; blue lightened + dim darkened
+     to 4.51 (6.4+ on plain surfaces). */
+  --color-accent-blue: #6b93f9;
+  /* F1 review — blue ALSO needed the role split violet got: lightening it
+     for text made white-on-blue solids WORSE (3.74→2.93). -strong is for
+     solid fills under white text; hovers are SOLID tokens because /80 alpha
+     fails in light theme (composites toward white) while passing in dark. */
+  --color-accent-blue-strong: #2f5fd6;
+  --color-accent-blue-strong-hover: #2a56c1;
+  --color-accent-blue-dim: #1e2f54;
   --color-accent-green: #3fb950;
   --color-accent-green-dim: #1a3524;
   --color-accent-amber: #d4a72c;
@@ -48,6 +62,10 @@
   --color-accent-red: #f85149;
   --color-accent-red-dim: #3d1a1a;
   --color-accent-violet: #a78bfa;
+  /* F1 — role split: #a78bfa works as TEXT on dark surfaces (7:1) but fails
+     under white button text (2.72). Solid violet buttons use -strong. */
+  --color-accent-violet-strong: #7458ee;
+  --color-accent-violet-strong-hover: #684fd6;
   --color-accent-violet-dim: #2d2450;
   --color-accent-cyan: #56d4dd;
   --color-accent-cyan-dim: #1a3338;
@@ -95,7 +113,7 @@ html {
 
 /* Selection */
 ::selection {
-  background: var(--color-accent-blue);
+  background: var(--color-accent-blue-strong); /* F1 review — white needs the solid-fill blue */
   color: white;
 }
 
@@ -219,18 +237,27 @@ h1, h2, h3, h4, h5, h6 {
   --color-surface-active: #e8e9ed;
 
   --color-text-primary: #1a1c23;
-  --color-text-secondary: #5c6178;
-  --color-text-muted: #9ca0b0;
+  /* F1 — mirrored AA re-tint: old muted was 2.60:1 on white. Ladder on the
+     worst light surface: 4.5 / 7.2 / 14+. */
+  --color-text-secondary: #454a5e;
+  --color-text-muted: #666973;
   --color-text-inverse: #ffffff;
 
   --color-border-default: #e0e2e8;
   --color-border-subtle: #eef0f4;
   --color-border-focus: #4f7df7;
 
+  /* F1 review — the light block inherited dark's lightened blue: 2.93 on
+     white. Text blue darkens (5.5:1); strong pair mirrors. */
+  --color-accent-blue: #3560d6;
+  --color-accent-blue-strong: #2f5fd6;
+  --color-accent-blue-strong-hover: #2a56c1;
   --color-accent-blue-dim: #e8f0fe;
   --color-accent-green-dim: #e6f9ec;
   --color-accent-amber-dim: #fef6e0;
   --color-accent-red-dim: #fde8e8;
   --color-accent-violet-dim: #f0ecfe;
+  --color-accent-violet-strong: #6f52ea;
+  --color-accent-violet-strong-hover: #644ad3;
   --color-accent-cyan-dim: #e4f8fa;
 }

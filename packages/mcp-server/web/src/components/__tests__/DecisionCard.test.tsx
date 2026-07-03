@@ -407,7 +407,7 @@ describe("DecisionCard — keyboard navigation", () => {
     const b1 = screen.getByRole("button", { name: "Select Redis" });
     const b2 = screen.getByRole("button", { name: "Select CDN edge cache" });
     // o1 (Redis) is the recommended default → focusedIndex 0 → filled style.
-    expect(b1.className).toContain("bg-accent-blue text-white");
+    expect(b1.className).toContain("bg-accent-blue-strong text-white");
     expect(b2.className).toContain("bg-surface-secondary");
   });
 

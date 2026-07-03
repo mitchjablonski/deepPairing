@@ -855,7 +855,7 @@ export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
           type="button"
           onClick={submit}
           disabled={!text.trim() || submitting}
-          className="ml-auto px-3 py-1 rounded text-2xs font-medium bg-accent-violet text-white hover:bg-accent-violet/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="ml-auto px-3 py-1 rounded text-2xs font-medium bg-accent-violet-strong text-white hover:bg-accent-violet-strong-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {submitting ? "Seeding…" : "Add to ledger"}
         </button>

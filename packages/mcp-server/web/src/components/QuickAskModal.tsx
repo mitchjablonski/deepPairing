@@ -72,8 +72,8 @@ export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModa
           <button
             onClick={submit}
             disabled={!text.trim()}
-            className="px-3 py-1.5 bg-accent-violet text-white text-xs font-medium rounded
-                       hover:bg-accent-violet/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+            className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
+                       hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
           >
             Ask
           </button>

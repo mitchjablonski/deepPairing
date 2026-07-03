@@ -470,7 +470,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                         )}
                         {option.recommendation && (
                           <span
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet text-white rounded"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet-strong text-white rounded"
                             title="Agent recommended this option"
                           >
                             ★ Recommended
@@ -586,7 +586,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       className="mx-3 my-3 p-4 bg-accent-violet-dim/25 border border-accent-violet/20 rounded-lg focus:outline-none"
     >
       <div className="flex items-center gap-2 mb-3">
-        <span className="inline-block w-2 h-2 rounded-full bg-accent-violet animate-pulse" />
+        <span className="inline-block w-2 h-2 rounded-full bg-accent-violet-strong animate-pulse" />
         <span className="text-sm font-semibold text-accent-violet">Let's think this through</span>
         {stakes && stakes !== "low" && (
           <span
@@ -645,7 +645,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
                   {option.recommendation && (
                     <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet text-white rounded"
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet-strong text-white rounded"
                       title="Agent recommends this option"
                     >
                       <span aria-hidden>★</span>
@@ -744,8 +744,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   onFocus={() => !submitting && setFocusedIndex(idx)}
                   className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
                     idx === focusedIndex
-                      ? "bg-accent-blue text-white"
-                      : "bg-surface-secondary text-text-secondary hover:bg-accent-blue hover:text-white"
+                      ? "bg-accent-blue-strong text-white"
+                      : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   Select
@@ -853,8 +853,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             <button
               onClick={confirmWithPrediction}
               disabled={submitting}
-              className="px-3 py-1 text-xs font-medium bg-accent-violet text-white rounded
-                         hover:bg-accent-violet/80 disabled:opacity-50 transition-colors press-scale"
+              className="px-3 py-1 text-xs font-medium bg-accent-violet-strong text-white rounded
+                         hover:bg-accent-violet-strong-hover disabled:opacity-50 transition-colors press-scale"
             >
               Commit with prediction
             </button>

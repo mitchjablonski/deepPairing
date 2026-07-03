@@ -245,7 +245,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                         onClick={() => toggleStep(i)}
                         className={`shrink-0 w-5 h-5 rounded border flex items-center justify-center mt-0.5 transition-colors ${
                           checkedSteps[i]
-                            ? "bg-accent-blue border-accent-blue text-white"
+                            ? "bg-accent-blue-strong border-accent-blue text-white"
                             : "border-border-default bg-surface-elevated text-transparent hover:border-text-muted"
                         }`}
                         title={checkedSteps[i] ? "Uncheck to skip this step" : "Check to include this step"}

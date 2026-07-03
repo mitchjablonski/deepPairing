@@ -185,8 +185,8 @@ export function RepairDecisionModal({
           </button>
           <button
             onClick={copy}
-            className="px-3 py-1.5 bg-accent-violet text-white text-xs font-medium rounded
-                       hover:bg-accent-violet/80 transition-colors press-scale"
+            className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
+                       hover:bg-accent-violet-strong-hover transition-colors press-scale"
           >
             {copied ? "Copied ✓" : "Copy prompt"}
           </button>
