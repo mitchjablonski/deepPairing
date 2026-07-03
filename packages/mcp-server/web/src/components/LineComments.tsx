@@ -51,7 +51,7 @@ export function LineGutter({
         onClick={() => (askActive ? onClose() : onOpen("ask"))}
         className={`w-6 h-6 flex items-center justify-center rounded text-[10px] font-semibold transition-all ${
           askActive
-            ? "bg-accent-violet text-white"
+            ? "bg-accent-violet-strong text-white"
             // Faint at rest so it's discoverable that lines are commentable
             // (not a hover-only secret), full on hover, and revealed on keyboard
             // focus so the gutter is reachable without a mouse (U3).
@@ -550,7 +550,7 @@ export function LineComposer({
             onClick={handleSubmit}
             disabled={!commentText.trim() || submitting}
             className={`px-2.5 py-1.5 text-white text-xs rounded disabled:bg-surface-elevated disabled:text-text-muted transition-all duration-[180ms] ease-out press-scale ${
-              mode === "ask" ? "bg-accent-violet hover:bg-accent-violet/80" : "bg-accent-blue hover:bg-accent-blue/80"
+              mode === "ask" ? "bg-accent-violet-strong hover:bg-accent-violet-strong/80" : "bg-accent-blue hover:bg-accent-blue/80"
             }`}
           >
             {mode === "ask" ? "Ask" : "Comment"}

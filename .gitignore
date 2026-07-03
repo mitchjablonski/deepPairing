@@ -11,3 +11,4 @@ coverage
 # Local scratch / triage notes — not part of the tracked repo.
 # File real bugs in the GitHub issue tracker instead.
 ISSUE-*.md
+.claude/

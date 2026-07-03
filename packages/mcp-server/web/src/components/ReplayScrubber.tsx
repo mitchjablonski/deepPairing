@@ -325,7 +325,7 @@ function CurrentEventRow({
           <button
             onClick={save}
             disabled={!note.trim()}
-            className="px-2 py-0.5 bg-accent-violet text-white text-2xs rounded hover:bg-accent-violet/80 disabled:opacity-50"
+            className="px-2 py-0.5 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong/80 disabled:opacity-50"
           >
             Save
           </button>

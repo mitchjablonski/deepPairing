@@ -51,7 +51,8 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
                  hover:text-text-secondary hover:bg-surface-hover transition-colors font-mono"
     >
       {isZero ? (
-        <span className="opacity-60">🛡 taste ledger</span>
+        // F1 — no opacity stacking: muted IS the floor of the AA ladder
+        <span>🛡 taste ledger</span>
       ) : (
         <>
           <span>🛡 {stat.blocks}</span>

@@ -99,19 +99,14 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
-    // KNOWN DEBT (tracked, do NOT grow this list without a tracking note):
-    // - color-contrast: ~20 muted-text selectors are below WCAG AA — fixing
-    //   is a design-token decision (visibly lightens every muted gray).
+    // F1 — the axe net runs with ZERO disabled rules. History of the two
+    // exclusions this net launched with (both fixed, keep for archaeology):
+    // - color-contrast: FIXED (F1) — two-token AA re-tint, both themes; the
+    //   muted/secondary ladder is 4.5/8.0/12.5 on the worst dark surface.
     // - nested-interactive: FIXED (D3) — option cards are plain containers
-    //   with an explicit per-option Select button; rule re-enabled. Old note:
-    //   cards were role="button" divs with focusable children; the B4/B6
-    //   keyboard guards worked around the structural tension. The fix dropped the
-    //   interactive role from the card and give the option title an explicit
-    //   select button; deserves its own PR (changes the AT interaction
-    //   model).
-    // Everything else (aria, roles, names, keyboard, labels) ratchets NOW.
-    .disableRules(["color-contrast"]) // nested-interactive un-excluded — D3 fixed the option cards
-    .analyze();
+    //   with an explicit per-option Select button.
+    // Do not add a disableRules() call without a tracking note + task.
+    .analyze(); // F1 — color-contrast un-excluded: the token re-tint passes AA; ZERO exclusions remain
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });
@@ -123,7 +118,7 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
   await page.waitForSelector("text=deepPairing", { timeout: 15000 });
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
-    .disableRules(["color-contrast"]) // see tracked-debt note above (nested-interactive fixed by D3)
+    // F1 — no disabled rules: the axe net is fully live
     .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
