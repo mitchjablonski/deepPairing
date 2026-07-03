@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { buildThreads } from "../lib/threading";
 import { useDraft } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
@@ -132,27 +133,13 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
   // Pre-this, CommentThread rendered ONLY roots, so an agent reply (which
   // carries parentCommentId) was invisible on the artifact even though the
   // conversation rail showed it — a question would appear with no answer.
-  const byId = new Map(comments.map((c) => [c.id, c]));
-  const repliesByParent = new Map<string, Comment[]>();
-  for (const c of comments) {
-    if (c.parentCommentId && byId.has(c.parentCommentId)) {
-      const arr = repliesByParent.get(c.parentCommentId) ?? [];
-      arr.push(c);
-      repliesByParent.set(c.parentCommentId, arr);
-    }
-  }
-  // Roots = no parent, OR a parent that isn't in this filtered set (so an
-  // orphaned reply still shows rather than vanishing).
-  const rootComments = comments.filter(
-    (c) => !c.parentCommentId || !byId.has(c.parentCommentId),
-  );
-  const sortByTime = (a: Comment, b: Comment) =>
-    (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+  // F7 — transitive threads: one-level nesting made depth-2 replies (the
+  // Reply button's own output!) invisible. Shared with the rail.
+  const threads = buildThreads(comments);
 
   return (
     <div className="space-y-3">
-      {[...rootComments].sort(sortByTime).map((comment) => {
-        const replies = (repliesByParent.get(comment.id) ?? []).sort(sortByTime);
+      {threads.map(({ root: comment, replies }) => {
         return (
           <div key={comment.id} className="space-y-2">
             <CommentBubble comment={comment} />

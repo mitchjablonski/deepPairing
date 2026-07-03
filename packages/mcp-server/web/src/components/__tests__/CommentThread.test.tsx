@@ -125,3 +125,21 @@ describe("AskTrigger popover — U3 outside-click / Escape dismiss", () => {
     expect((screen.getByPlaceholderText(/ask the agent to explain/i) as HTMLInputElement).value).toBe("why?");
   });
 });
+
+describe("F7 — depth-2 replies render (they used to visibly vanish)", () => {
+  it("a reply to a reply appears in the thread", () => {
+    const mk = (id: string, parentCommentId: string | null, content: string) =>
+      ({ id, parentCommentId, content, artifactId: "a1", author: "human",
+         createdAt: `2026-07-01T00:0${id.length}:00.000Z`, target: { artifactId: "a1" } }) as any;
+    render(
+      <CommentThread
+        artifactId="a1"
+        comments={[mk("q", null, "the question"), mk("an", "q", "the answer"), mk("fup", "an", "the follow-up")]}
+      />,
+    );
+    expect(screen.getByText("the question")).toBeInTheDocument();
+    expect(screen.getByText("the answer")).toBeInTheDocument();
+    // Pre-F7 this was neither a root nor a rendered reply.
+    expect(screen.getByText("the follow-up")).toBeInTheDocument();
+  });
+});

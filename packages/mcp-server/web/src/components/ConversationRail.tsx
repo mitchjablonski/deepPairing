@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { buildThreads } from "../lib/threading";
 import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useModal } from "../hooks/useModal";
@@ -133,27 +134,14 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
     for (const [artifactId, comments] of Object.entries(commentsByArtifact)) {
       if (!comments || comments.length === 0) continue;
 
-      // Index by id for O(1) parent lookup; collect each comment's replies
-      const byId = new Map<string, Comment>();
-      for (const c of comments) byId.set(c.id, c);
-      const repliesByParent = new Map<string, Comment[]>();
-      for (const c of comments) {
-        if (c.parentCommentId && byId.has(c.parentCommentId)) {
-          const arr = repliesByParent.get(c.parentCommentId) ?? [];
-          arr.push(c);
-          repliesByParent.set(c.parentCommentId, arr);
-        }
-      }
-      // Top-level rows = comments without a parent (or whose parent is gone).
-      const tops = comments.filter(
-        (c) => !c.parentCommentId || !byId.has(c.parentCommentId),
-      );
-      const threads: ThreadedRow[] = tops.map((top) => {
-        const replies = (repliesByParent.get(top.id) ?? []).slice().sort(
-          (a, b) => a.createdAt.localeCompare(b.createdAt),
-        );
-        return { comment: top, replies, artifactId };
-      });
+      // F7 — transitive threads (shared lib): one-level nesting made the
+      // rail's OWN Reply output invisible (it targets the last reply →
+      // depth-2 → neither root nor rendered; unread counts missed it too).
+      const threads: ThreadedRow[] = buildThreads(comments).map(({ root, replies }) => ({
+        comment: root,
+        replies,
+        artifactId,
+      }));
       // Newest top-level first within the group.
       threads.sort((a, b) => b.comment.createdAt.localeCompare(a.comment.createdAt));
 
