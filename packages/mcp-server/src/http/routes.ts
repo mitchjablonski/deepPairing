@@ -401,7 +401,9 @@ export function createHttpRoutes(
     // SKIPPED in exactly this case).
     const knownRecord = await store.getDecision(decisionId);
     const knownArtifact = (await store.getArtifacts()).some(
-      (a) => a.type === "decision" && ((a.content as any)?.decisionId === decisionId || a.id === decisionId),
+      (a) =>
+        a.type === "decision" &&
+        ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
     );
     if (!knownRecord && !knownArtifact) {
       return c.json(

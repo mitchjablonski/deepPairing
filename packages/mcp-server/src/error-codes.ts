@@ -38,6 +38,10 @@ export const ERROR_CODES = {
   validation_error: "validation_error",
   /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
   forbidden_host: "forbidden_host",
+  /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
+  artifact_not_in_session: "artifact_not_in_session",
+  /** F6 — decision resolve for a decision the bound session doesn't know. */
+  decision_not_in_session: "decision_not_in_session",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
