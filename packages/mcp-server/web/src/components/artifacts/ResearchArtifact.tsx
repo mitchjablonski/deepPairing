@@ -788,7 +788,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
                     key={i}
                     onClick={() => setFocusIndex(i)}
                     className={`w-1.5 h-1.5 rounded-full transition-colors ${
-                      i === focusIndex ? "bg-accent-blue" : "bg-surface-hover"
+                      i === focusIndex ? "bg-accent-blue-strong" : "bg-surface-hover"
                     }`}
                   />
                 ))}

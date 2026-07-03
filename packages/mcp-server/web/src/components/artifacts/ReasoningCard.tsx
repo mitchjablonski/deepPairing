@@ -238,7 +238,7 @@ function AlternativeRow({
             <button
               onClick={send}
               disabled={!question.trim()}
-              className="px-2 py-1 bg-accent-violet text-white text-2xs rounded hover:bg-accent-violet/80 disabled:opacity-50 press-scale"
+              className="px-2 py-1 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong-hover disabled:opacity-50 press-scale"
             >
               Ask
             </button>

@@ -271,7 +271,7 @@ export function FileViewer({
                       }
                     }}
                     className={`w-12 shrink-0 text-right pr-3 py-0.5 select-none border-r border-border-subtle cursor-pointer hover:bg-accent-blue-dim hover:text-accent-blue transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue focus:ring-inset ${
-                      isSelected ? "text-accent-blue font-semibold" : "text-text-muted"
+                      isSelected ? "text-accent-blue font-semibold" : isEvidenceHighlight ? "text-text-secondary" : "text-text-muted"
                     }`}
                   >
                     {lineNum}
@@ -322,7 +322,7 @@ export function FileViewer({
               <button
                 onClick={handleSubmitComment}
                 disabled={!commentText.trim() || submitting}
-                className="px-3 py-2 bg-accent-blue text-white text-xs font-medium rounded
+                className="px-3 py-2 bg-accent-blue-strong text-white text-xs font-medium rounded
                            hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
               >
                 Comment

@@ -744,8 +744,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   onFocus={() => !submitting && setFocusedIndex(idx)}
                   className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
                     idx === focusedIndex
-                      ? "bg-accent-blue text-white"
-                      : "bg-surface-secondary text-text-secondary hover:bg-accent-blue hover:text-white"
+                      ? "bg-accent-blue-strong text-white"
+                      : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   Select
@@ -854,7 +854,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               onClick={confirmWithPrediction}
               disabled={submitting}
               className="px-3 py-1 text-xs font-medium bg-accent-violet-strong text-white rounded
-                         hover:bg-accent-violet-strong/80 disabled:opacity-50 transition-colors press-scale"
+                         hover:bg-accent-violet-strong-hover disabled:opacity-50 transition-colors press-scale"
             >
               Commit with prediction
             </button>

@@ -34,7 +34,7 @@ const statusDots: Record<string, string> = {
   // the "Your turn" pill so a glance shows where your turn lives; `revised`
   // shares amber deliberately — both mean "awaiting your review".
   draft: "bg-accent-amber",
-  reviewing: "bg-accent-blue",
+  reviewing: "bg-accent-blue-strong",
   approved: "bg-accent-green",
   revised: "bg-accent-amber",
   rejected: "bg-accent-red",

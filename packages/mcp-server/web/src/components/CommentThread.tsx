@@ -20,7 +20,7 @@ function Avatar({ author }: { author: string }) {
     <div
       className={`w-5 h-5 rounded-full flex items-center justify-center text-2xs font-bold shrink-0 ${
         isHuman
-          ? "bg-accent-blue text-white"
+          ? "bg-accent-blue-strong text-white"
           : "bg-accent-violet-dim text-accent-violet"
       }`}
     >
@@ -187,7 +187,7 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
         <button
           onClick={handleSubmit}
           disabled={!input.trim() || submitting}
-          className="px-2.5 py-1.5 bg-accent-blue text-white text-xs rounded
+          className="px-2.5 py-1.5 bg-accent-blue-strong text-white text-xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-colors shrink-0"
         >
@@ -377,7 +377,7 @@ export function AskTrigger({
             <button
               onClick={send}
               disabled={!question.trim() || sending}
-              className="px-2 py-1 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong/80 disabled:opacity-50 press-scale"
+              className="px-2 py-1 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong-hover disabled:opacity-50 press-scale"
             >
               Ask
             </button>

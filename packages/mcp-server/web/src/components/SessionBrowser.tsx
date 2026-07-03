@@ -176,7 +176,7 @@ export function SessionBrowser() {
         <div className="flex flex-col items-center text-text-muted gap-2 pt-2">
           <button
             onClick={loadDemo}
-            className="px-4 py-2 bg-accent-blue text-white text-xs font-medium rounded-lg
+            className="px-4 py-2 bg-accent-blue-strong text-white text-xs font-medium rounded-lg
                        hover:bg-accent-blue/80 transition-all duration-[180ms] ease-out press-scale"
           >
             Or try the demo session

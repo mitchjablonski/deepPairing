@@ -97,12 +97,19 @@ function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Arra
 test("a11y: session view with decision + findings has no serious/critical axe violations", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  // F1 review — the DecisionCard renderer is a LAZY chunk: without this wait
+  // axe scanned the page before the option grid mounted and "passed" while
+  // the Select buttons were failing. Never analyze before the marquee
+  // surface exists.
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     // F1 — the axe net runs with ZERO disabled rules. History of the two
     // exclusions this net launched with (both fixed, keep for archaeology):
-    // - color-contrast: FIXED (F1) — two-token AA re-tint, both themes; the
-    //   muted/secondary ladder is 4.5/8.0/12.5 on the worst dark surface.
+    // - color-contrast: FIXED (F1) — token re-tint, both themes; muted is
+    //   AA on the four RENDERED dark surfaces (4.16 on the unused
+    //   surface-active and 3.6-4.4 on full-strength *-dim fills — don't put
+    //   muted text on those without checking).
     // - nested-interactive: FIXED (D3) — option cards are plain containers
     //   with an explicit per-option Select button.
     // Do not add a disableRules() call without a tracking note + task.

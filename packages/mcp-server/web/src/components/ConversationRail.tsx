@@ -255,7 +255,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
                 Conversation
                 {totalUnread > 0 && (
                   <span
-                    className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1.5 rounded-full bg-accent-blue text-white text-[10px] font-semibold"
+                    className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1.5 rounded-full bg-accent-blue-strong text-white text-[10px] font-semibold"
                     aria-label={`${totalUnread} new since last open`}
                     title={`${totalUnread} new since you last opened the rail`}
                   >
@@ -340,7 +340,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
                         {g.artifact?.type ?? "artifact"}
                         {groupUnread > 0 && (
                           <span
-                            className="inline-flex items-center justify-center min-w-[1rem] h-3.5 px-1 rounded-full bg-accent-blue text-white text-[9px] font-semibold normal-case tracking-normal"
+                            className="inline-flex items-center justify-center min-w-[1rem] h-3.5 px-1 rounded-full bg-accent-blue-strong text-white text-[9px] font-semibold normal-case tracking-normal"
                             aria-label={`${groupUnread} new`}
                           >
                             {groupUnread > 99 ? "99+" : groupUnread}
@@ -511,7 +511,7 @@ function ThreadEntry({
                   type="button"
                   onClick={submitReply}
                   disabled={!replyText.trim() || replySubmitting}
-                  className="px-2.5 py-1 bg-accent-blue text-white text-2xs rounded
+                  className="px-2.5 py-1 bg-accent-blue-strong text-white text-2xs rounded
                              hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
                 >
                   Reply

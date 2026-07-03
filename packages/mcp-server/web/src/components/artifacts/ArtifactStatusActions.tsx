@@ -507,7 +507,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
           onClick={handleRespond}
           disabled={submitting || !comment.trim()}
           className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
-                     hover:bg-accent-violet-strong/80 disabled:bg-surface-elevated disabled:text-text-muted
+                     hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
           title="Send the comment; the agent will iterate (keeps artifact in draft)"
         >
