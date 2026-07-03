@@ -75,7 +75,7 @@ export function TurnIndicator() {
           c.author === "human" &&
           c.intent === "question" &&
           !c.answeredByCommentId &&
-          !(c as any).humanResolvedAt
+          !c.humanResolvedAt
         ) {
           out.push({ artifactId, comment: c });
         }

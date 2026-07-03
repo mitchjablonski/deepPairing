@@ -890,16 +890,16 @@ async function main() {
         // runs the standard cleanup path.
         ws.on("error", (err: any) => {
           log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
-          try { (ws as any).terminate?.(); } catch {}
+          try { ws.terminate(); } catch {}
         });
         ws.on("close", () => {
-          clients!.delete(ws as any);
+          clients!.delete(ws);
           if (clients!.size === 0) wsClients.delete(sessionId);
           checkAutoShutdown();
         });
       } else {
         // Global client — sees all sessions
-        globalClients.add(ws as any);
+        globalClients.add(ws);
 
         // Send list of active sessions
         const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
@@ -913,10 +913,10 @@ async function main() {
         // II5 — see session-client comment above. Same crash mode applies.
         ws.on("error", (err: any) => {
           log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
-          try { (ws as any).terminate?.(); } catch {}
+          try { ws.terminate(); } catch {}
         });
         ws.on("close", () => {
-          globalClients.delete(ws as any);
+          globalClients.delete(ws);
           checkAutoShutdown();
         });
       }

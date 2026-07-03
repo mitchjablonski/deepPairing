@@ -27666,7 +27666,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
       ws.on("error", (err) => {
         log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
         try {
-          ws.terminate?.();
+          ws.terminate();
         } catch {
         }
       });
@@ -27685,7 +27685,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
       ws.on("error", (err) => {
         log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
         try {
-          ws.terminate?.();
+          ws.terminate();
         } catch {
         }
       });

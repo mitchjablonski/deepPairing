@@ -51,7 +51,11 @@ export function ProjectSwitcher() {
                 p.label === n.label &&
                 p.projectRoot === n.projectRoot &&
                 p.projectHash === n.projectHash &&
-                p.pendingCount === n.pendingCount
+                p.pendingCount === n.pendingCount &&
+                // isSelf isn't rendered today, but switchProject flips it on
+                // two entries while every compared field matches — omit it
+                // and the state keeps a stale value forever (review NIT).
+                p.isSelf === n.isSelf
               );
             });
           return same ? prev : next;
