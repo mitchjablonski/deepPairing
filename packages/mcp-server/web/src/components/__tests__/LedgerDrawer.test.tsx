@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { YourTasteDrawer } from "../YourTasteDrawer";
+import { LedgerDrawer } from "../LedgerDrawer";
 import { resetLedgerStoreForTests } from "../../stores/ledger";
 
 function mockPhilosophyFetch(entries: any[]) {
@@ -32,13 +32,13 @@ afterEach(() => {
   resetLedgerStoreForTests();
 });
 
-describe("YourTasteDrawer", () => {
+describe("LedgerDrawer", () => {
   it("shows a loading state while fetching, then renders entries", async () => {
     const resolver: { fn?: (v: any) => void } = {};
     const pending = new Promise((resolve) => { resolver.fn = resolve; });
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(pending));
 
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     expect(screen.getByText(/loading…/i)).toBeInTheDocument();
 
     resolver.fn!({
@@ -59,7 +59,7 @@ describe("YourTasteDrawer", () => {
 
   it("shows the empty-state copy when the ledger has no entries", async () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([]));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/nothing here yet/i)).toBeInTheDocument());
     expect(screen.getByText(/compounding/i)).toBeInTheDocument();
   });
@@ -70,7 +70,7 @@ describe("YourTasteDrawer", () => {
   // instead of presupposing taste with a baked-in stance list.
   it("AA9: renders the seed affordance only in the empty state", async () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([]));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/seed your ledger/i)).toBeInTheDocument());
     expect(screen.getByPlaceholderText(/global mutable state/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add to ledger/i })).toBeInTheDocument();
@@ -83,7 +83,7 @@ describe("YourTasteDrawer", () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([
       { key: "x", concept: "x", stance: "avoid", projectCount: 1, projects: ["a"], instanceCount: 1, approved: 0, rejected: 1, firstSeenAt: "2026-01", lastSeenAt: "2026-01" },
     ]));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText("x")).toBeInTheDocument());
     expect(screen.queryByText(/seed your ledger/i)).not.toBeInTheDocument();
   });
@@ -95,7 +95,7 @@ describe("YourTasteDrawer", () => {
       if (init?.method === "POST" && url.includes("/api/philosophy/seed")) return seedFetch(url, init);
       return stancesFetch(url, init);
     }));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => screen.getByText(/seed your ledger/i));
 
     const textarea = screen.getByPlaceholderText(/global mutable state/i);
@@ -115,7 +115,7 @@ describe("YourTasteDrawer", () => {
       { key: "a", concept: "global state", stance: "avoid", projectCount: 1, projects: ["x"], instanceCount: 1, approved: 0, rejected: 1, firstSeenAt: "2026-01", lastSeenAt: "2026-01" },
       { key: "b", concept: "repository pattern", stance: "prefer", projectCount: 1, projects: ["x"], instanceCount: 1, approved: 1, rejected: 0, firstSeenAt: "2026-01", lastSeenAt: "2026-01" },
     ]));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText("global state")).toBeInTheDocument());
     expect(screen.getByText("repository pattern")).toBeInTheDocument();
 
@@ -127,14 +127,14 @@ describe("YourTasteDrawer", () => {
 
   it("surfaces fetch failures without crashing", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/could not load the ledger/i)).toBeInTheDocument());
   });
 
   it("closes on Escape keypress", async () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([]));
     const onClose = vi.fn();
-    render(<YourTasteDrawer onClose={onClose} />);
+    render(<LedgerDrawer onClose={onClose} />);
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalled();
@@ -142,7 +142,7 @@ describe("YourTasteDrawer", () => {
 
   it("hides the 'This week' digest tab by default (O3 gating)", async () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([]));
-    render(<YourTasteDrawer onClose={() => {}} />);
+    render(<LedgerDrawer onClose={() => {}} />);
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /this week/i })).not.toBeInTheDocument();
   });
@@ -150,7 +150,7 @@ describe("YourTasteDrawer", () => {
   it("closes on backdrop click", async () => {
     vi.stubGlobal("fetch", mockPhilosophyFetch([]));
     const onClose = vi.fn();
-    const { container } = render(<YourTasteDrawer onClose={onClose} />);
+    const { container } = render(<LedgerDrawer onClose={onClose} />);
     // Backdrop is the first fixed element with the overlay class.
     const backdrop = container.querySelector(".fixed.inset-0");
     expect(backdrop).toBeTruthy();
@@ -184,7 +184,7 @@ describe("YourTasteDrawer", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
 
-      render(<YourTasteDrawer onClose={() => {}} />);
+      render(<LedgerDrawer onClose={() => {}} />);
       // Wait for initial stances load so the spinner resolves.
       await waitFor(() => expect(screen.queryByText(/loading…/i)).not.toBeInTheDocument());
 
@@ -224,7 +224,7 @@ describe("YourTasteDrawer", () => {
           strengthenedThisPeriod: [],
         },
       }));
-      render(<YourTasteDrawer onClose={() => {}} />);
+      render(<LedgerDrawer onClose={() => {}} />);
       await userEvent.click(screen.getByRole("button", { name: /this week/i }));
       await waitFor(() => expect(screen.getByText(/nothing landed in the ledger this week/i)).toBeInTheDocument());
     });
@@ -235,7 +235,7 @@ describe("YourTasteDrawer", () => {
           ? Promise.resolve({ ok: false, status: 500 })
           : Promise.resolve({ ok: true, json: async () => ({ entries: [], total: 0 }) }),
       ));
-      render(<YourTasteDrawer onClose={() => {}} />);
+      render(<LedgerDrawer onClose={() => {}} />);
       await userEvent.click(screen.getByRole("button", { name: /this week/i }));
       await waitFor(() => expect(screen.getByText(/could not load the digest/i)).toBeInTheDocument());
     });
@@ -247,7 +247,7 @@ describe("YourTasteDrawer", () => {
         "/api/philosophy?": { entries: [], total: 0 },
         "/api/team-preferences": { preferences: [], exists: false },
       }));
-      render(<YourTasteDrawer onClose={() => {}} />);
+      render(<LedgerDrawer onClose={() => {}} />);
       await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
       await waitFor(() => expect(screen.getByText(/no team conventions set up yet/i)).toBeInTheDocument());
       expect(screen.getByText(/npx deeppairing team init/i)).toBeInTheDocument();
@@ -265,7 +265,7 @@ describe("YourTasteDrawer", () => {
           ],
         },
       }));
-      render(<YourTasteDrawer onClose={() => {}} />);
+      render(<LedgerDrawer onClose={() => {}} />);
       await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
 
       await waitFor(() => expect(screen.getByText(/required \(1\)/i)).toBeInTheDocument());
@@ -286,7 +286,7 @@ describe("YourTasteDrawer", () => {
           ? Promise.resolve({ ok: false, status: 500 })
           : Promise.resolve({ ok: true, json: async () => ({ entries: [], total: 0 }) }),
       ));
-      render(<YourTasteDrawer onClose={() => {}} />);
+      render(<LedgerDrawer onClose={() => {}} />);
       await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
       await waitFor(() => expect(screen.getByText(/could not load team preferences/i)).toBeInTheDocument());
     });
@@ -328,7 +328,7 @@ describe("YourTasteDrawer", () => {
       const { useArtifactStore } = await import("../../stores/artifact");
       useArtifactStore.getState().reset();
       const onClose = vi.fn();
-      render(<YourTasteDrawer onClose={onClose} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={onClose} initialTab="ledger" />);
       const conceptText = await screen.findByText("global mutable state");
       const row = conceptText.closest("button")!;
       expect(row).toBeTruthy();
@@ -344,7 +344,7 @@ describe("YourTasteDrawer", () => {
         { concept: "beta", source: "session", citationCount: 2, sampleArtifactId: "art_b" },
       ]));
       render(
-        <YourTasteDrawer
+        <LedgerDrawer
           onClose={() => {}}
           initialTab="ledger"
           highlightConcept="beta"
@@ -364,7 +364,7 @@ describe("YourTasteDrawer", () => {
         { concept: "beta", source: "session", citationCount: 2, sampleArtifactId: "art_b" },
       ]));
       render(
-        <YourTasteDrawer
+        <LedgerDrawer
           onClose={() => {}}
           initialTab="ledger"
           highlightConcept="gamma" // not in the top stances above
@@ -385,7 +385,7 @@ describe("YourTasteDrawer", () => {
         { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
       ]));
       render(
-        <YourTasteDrawer
+        <LedgerDrawer
           onClose={() => {}}
           initialTab="ledger"
           highlightConcept="alpha"
@@ -398,7 +398,7 @@ describe("YourTasteDrawer", () => {
     it("CC2/DD8 — orphan banner uses different copy when there are zero cited stances yet", async () => {
       vi.stubGlobal("fetch", mockLedgerFetch([], { empty: true }));
       render(
-        <YourTasteDrawer
+        <LedgerDrawer
           onClose={() => {}}
           initialTab="ledger"
           highlightConcept="brand new concept"
@@ -419,7 +419,7 @@ describe("YourTasteDrawer", () => {
           { concept: "named exports only", stance: "prefer", citedTimesElsewhere: 3 },
         ],
       }));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       const section = await screen.findByTestId("ledger-seeded-section");
       expect(section.textContent).toContain("Seeded by you");
       expect(section.textContent).toContain("global mutable state");
@@ -446,7 +446,7 @@ describe("YourTasteDrawer", () => {
           ],
         },
       ));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       const seededSection = await screen.findByTestId("ledger-seeded-section");
       expect(seededSection.textContent).toContain("global mutable state");
       // The concept appears once total (in the seeded section), not duplicated in Top cited.
@@ -466,7 +466,7 @@ describe("YourTasteDrawer", () => {
           ],
         },
       ));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       await screen.findByTestId("ledger-seeded-section");
       // No "Top cited stances" header rendered (would be empty).
       expect(screen.queryByText(/top cited stances/i)).toBeNull();
@@ -487,7 +487,7 @@ describe("YourTasteDrawer", () => {
       const { useArtifactStore } = await import("../../stores/artifact");
       useArtifactStore.getState().reset();
       const onClose = vi.fn();
-      render(<YourTasteDrawer onClose={onClose} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={onClose} initialTab="ledger" />);
       const seededSection = await screen.findByTestId("ledger-seeded-section");
       const conceptText = within(seededSection).getByText("FF1 hot seed");
       const button = conceptText.closest("button");
@@ -504,7 +504,7 @@ describe("YourTasteDrawer", () => {
           { concept: "FF1 cold seed", stance: "avoid", citedTimesElsewhere: 0 },
         ],
       }));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       const seededSection = await screen.findByTestId("ledger-seeded-section");
       const conceptText = within(seededSection).getByText("FF1 cold seed");
       expect(conceptText.closest("button")).toBeNull();
@@ -516,7 +516,7 @@ describe("YourTasteDrawer", () => {
           { concept: "alpha", stance: "avoid", citedTimesElsewhere: 0 },
         ],
       }));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       const seededSection = await screen.findByTestId("ledger-seeded-section");
       const seedMore = within(seededSection).getByTestId("ledger-seed-more");
       // Affordance is rendered directly — no "+ Seed more" toggle, no
@@ -532,7 +532,7 @@ describe("YourTasteDrawer", () => {
       vi.stubGlobal("fetch", mockLedgerFetch([
         { concept: "alpha", source: "session", citationCount: 3, sampleArtifactId: "art_a" },
       ]));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       await screen.findByText("alpha");
       expect(screen.queryByTestId("ledger-seeded-section")).toBeNull();
     });
@@ -541,7 +541,7 @@ describe("YourTasteDrawer", () => {
       vi.stubGlobal("fetch", mockLedgerFetch([
         { concept: "no-sample-stance", source: "session", citationCount: 1 },
       ]));
-      render(<YourTasteDrawer onClose={() => {}} initialTab="ledger" />);
+      render(<LedgerDrawer onClose={() => {}} initialTab="ledger" />);
       await screen.findByText("no-sample-stance");
       expect(screen.queryByRole("button", { name: /jump to a citing artifact/i })).toBeNull();
     });

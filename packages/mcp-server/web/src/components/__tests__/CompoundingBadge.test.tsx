@@ -26,7 +26,7 @@ describe("CompoundingBadge", () => {
     expect(screen.queryByText("🛡 0")).toBeNull();
   });
 
-  it("surfaces the cumulative blocks · writes and opens Your taste on click", async () => {
+  it("surfaces the cumulative blocks · writes and opens the Ledger on click", async () => {
     vi.stubGlobal("fetch", mockMetrics(14, 23));
     const onOpen = vi.fn();
     render(<CompoundingBadge onOpen={onOpen} />);

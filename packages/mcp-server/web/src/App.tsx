@@ -18,7 +18,7 @@ import { SettingsSheet } from "./components/SettingsSheet";
 import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { YourTasteDrawer } from "./components/YourTasteDrawer";
+import { LedgerDrawer } from "./components/LedgerDrawer";
 import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
@@ -282,7 +282,7 @@ function App() {
   }, []);
 
   // O2: the PreflightBlockToast action dispatches this event to open the
-  // Your Taste drawer. Decoupled so the toast doesn't need a ref to App state.
+  // Ledger drawer. Decoupled so the toast doesn't need a ref to App state.
   // BB6 — also accepts { initialTab, highlightConcept } in detail so the
   // PreflightBreadcrumb's "Considered:" rows can deep-link into the ledger.
   useEffect(() => {
@@ -368,14 +368,14 @@ function App() {
             }}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
             title="Your cross-project taste from the Philosophy Ledger"
-            aria-label="Open Your Taste drawer"
+            aria-label="Open the Ledger"
           >
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
               <path d="M6 1.5c2.5 0 4.5 2 4.5 4.5 0 1.5-.8 2.8-2 3.5" />
               <circle cx="6" cy="9.5" r="1" fill="currentColor" />
               <path d="M6 1.5v2M1.5 6h2M10.5 6h-2" />
             </svg>
-            <span className="hidden min-[700px]:inline">Your taste</span>
+            <span className="hidden min-[700px]:inline">Ledger</span>
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
@@ -569,9 +569,9 @@ function App() {
       {/* Keyboard shortcut help overlay */}
       {showHelp && <KeyboardShortcutHelp onClose={() => setShowHelp(false)} />}
 
-      {/* Your taste drawer — cross-project Philosophy Ledger, read-only */}
+      {/* Ledger drawer — the cross-project Philosophy Ledger, read-only */}
       {showTaste && (
-        <YourTasteDrawer
+        <LedgerDrawer
           initialTab={tasteOpts.initialTab}
           highlightConcept={tasteOpts.highlightConcept}
           onClose={closeTaste}

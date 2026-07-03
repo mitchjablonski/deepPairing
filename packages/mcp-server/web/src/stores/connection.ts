@@ -335,7 +335,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               },
               ttl: 12000,
               action: {
-                label: "Open Your taste",
+                label: "Open the Ledger",
                 onClick: () => window.dispatchEvent(new CustomEvent("dp:open-your-taste")),
               },
             });
@@ -357,7 +357,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               body: `"${trimmed}"`,
               ttl: 5000,
               action: {
-                label: "Open Your taste",
+                label: "Open the Ledger",
                 onClick: () => window.dispatchEvent(new CustomEvent("dp:open-your-taste")),
               },
             });

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LedgerPanel, SeedAffordance } from "./YourTasteDrawer";
+import { LedgerPanel, SeedAffordance } from "./ledger/LedgerPanel";
 import { SessionBrowser } from "./SessionBrowser";
 import { useArtifactStore } from "../stores/artifact";
 import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
@@ -17,7 +17,7 @@ import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
  *   - "Your ledger"  (default) — LedgerPanel digest + AA9 SeedAffordance
  *   - "Past sessions"          — the existing SessionBrowser
  *
- * The ledger headline reuses the same component the YourTaste drawer
+ * The ledger headline reuses the same component the Ledger drawer
  * renders so the user's first impression here matches their later
  * exploration in the drawer.
  */
@@ -28,7 +28,7 @@ export function IdleHome() {
   // EE2 — subscribe to the shared ledger store. CC4's per-component
   // dp:preflight-trace listener moved into stores/ledger.ts so a single
   // refetch fans out to every subscriber (PreflightBreadcrumb +
-  // YourTasteDrawer + IdleHome) instead of one fetch per surface.
+  // LedgerDrawer + IdleHome) instead of one fetch per surface.
   useEffect(() => {
     ensureLedgerSubscriptions();
   }, []);
@@ -48,7 +48,7 @@ export function IdleHome() {
         <PrimaryTab
           active={tab === "ledger"}
           onClick={() => setTab("ledger")}
-          label="Your ledger"
+          label="Ledger"
         />
         <SecondaryPill
           active={tab === "sessions"}
@@ -74,7 +74,7 @@ export function IdleHome() {
                 ledger. Pre-DD10 the affordance kept rendering even
                 after the user seeded their first rule, doubling up
                 with the "Seeded by you" section DD1 added (and with
-                the YourTasteDrawer drawer's own empty-state-only
+                the Ledger drawer's own empty-state-only
                 seed affordance). After the first seed the LedgerPanel
                 already shows the seeded list; the inline affordance
                 becomes redundant chrome. */}
