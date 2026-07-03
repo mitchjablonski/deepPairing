@@ -719,7 +719,7 @@ describe("F10 (G1) — corrupt metrics.json must never break approve/reject", ()
     store.createArtifact({ id: "a_m", type: "research", title: "t", content: {} });
     // Pre-fix: reviewLatencies = {} → recordArtifactReviewed .push threw →
     // EVERY human approve/reject 500'd (and the corrupt file never healed).
-    expect(() => store.updateArtifactStatus("a_m", "approved", "ui_approve_button" as any)).not.toThrow();
+    expect(() => store.updateArtifactStatus("a_m", "approved", "ui_approve_button")).not.toThrow();
     expect(store.getArtifacts().find((a) => a.id === "a_m")?.status).toBe("approved");
   });
 
@@ -744,7 +744,7 @@ describe("F10 (G1) — corrupt metrics.json must never break approve/reject", ()
     fs.writeFileSync(path.join(dir, "metrics.json"), "{}");
     const store = createStore("metrics_heal");
     store.createArtifact({ id: "a_h", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });
-    store.updateArtifactStatus("a_h", "approved", "ui_approve_button" as any);
+    store.updateArtifactStatus("a_h", "approved", "ui_approve_button");
     store.forceFlush();
     const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "metrics.json"), "utf-8"));
     expect(Array.isArray(onDisk)).toBe(true);

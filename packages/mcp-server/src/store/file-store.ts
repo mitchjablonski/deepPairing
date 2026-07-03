@@ -236,7 +236,7 @@ export class FileStore implements IStore {
       }
       this.reviewLatencies = kept;
     } else {
-      if (rawMetrics != null && !Array.isArray(rawMetrics)) {
+      if (rawMetrics != null) {
         FileStore.salvageLog(`${this.sessionId}:metrics.json`, `expected an array, got ${typeof rawMetrics} — using []`);
       }
       this.reviewLatencies = [];

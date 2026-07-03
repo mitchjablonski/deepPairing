@@ -22869,7 +22869,7 @@ var FileStore = class _FileStore {
       }
       this.reviewLatencies = kept;
     } else {
-      if (rawMetrics != null && !Array.isArray(rawMetrics)) {
+      if (rawMetrics != null) {
         _FileStore.salvageLog(`${this.sessionId}:metrics.json`, `expected an array, got ${typeof rawMetrics} \u2014 using []`);
       }
       this.reviewLatencies = [];
@@ -25239,7 +25239,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.resolvePlanReview(artifactId, status, feedback);
     }
     await maybeUpdateTaskStatus(null, artifactId, store);
-    await store.forceFlush();
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
+    }
     if (feedback) {
       const comment = await store.addComment({
         id: `cmt_${nanoid3(10)}`,

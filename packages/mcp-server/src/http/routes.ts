@@ -552,7 +552,17 @@ export function createHttpRoutes(
     // can mean the hook reads stale `draft` and traps the agent in a poll
     // loop even though the user just approved.
     // AA7b — forceFlush is required on IStore, no cast needed.
-    await store.forceFlush();
+    // F10 review — the split-state class must not escape via persistence: the
+    // verdict already landed in memory and notifyFeedbackWaiters released the
+    // agent's check_feedback, so a disk throw here (ENOSPC/EACCES/dir-removed
+    // race) must NOT 500 the route — the UI would roll back and toast failure
+    // for a verdict the agent is already acting on. Log loudly, return 200;
+    // the debounced flush self-corrects persistence on the next write.
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
+    }
 
     if (feedback) {
       const comment = await store.addComment({
