@@ -708,3 +708,46 @@ describe("D1 review — flush-time external-merge salvage (the permanent-failure
     expect(sessions.map((s) => s.id)).toContain("salvage_list");
   });
 });
+
+describe("F10 (G1) — corrupt metrics.json must never break approve/reject", () => {
+  it("a parseable non-array metrics.json ({}) no longer crashes updateArtifactStatus", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "metrics_corrupt");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "metrics.json"), "{}");
+
+    const store = createStore("metrics_corrupt");
+    store.createArtifact({ id: "a_m", type: "research", title: "t", content: {} });
+    // Pre-fix: reviewLatencies = {} → recordArtifactReviewed .push threw →
+    // EVERY human approve/reject 500'd (and the corrupt file never healed).
+    expect(() => store.updateArtifactStatus("a_m", "approved", "ui_approve_button")).not.toThrow();
+    expect(store.getArtifacts().find((a) => a.id === "a_m")?.status).toBe("approved");
+  });
+
+  it("malformed latency elements are dropped; valid ones survive", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "metrics_mixed");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "metrics.json"), JSON.stringify([
+      { type: "plan", latencyMs: 1200 },
+      "garbage",
+      { type: "research" },          // missing latencyMs
+      { type: "spec", latencyMs: "NaN-ish" },
+    ]));
+    const store = createStore("metrics_mixed");
+    const metrics = store.getEngagementMetrics();
+    expect(metrics.reviewsByType.plan?.count).toBe(1);
+    expect(Object.keys(metrics.reviewsByType)).toEqual(["plan"]);
+  });
+
+  it("the corrupt file self-heals on the next review (flush writes the salvaged array)", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "metrics_heal");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "metrics.json"), "{}");
+    const store = createStore("metrics_heal");
+    store.createArtifact({ id: "a_h", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });
+    store.updateArtifactStatus("a_h", "approved", "ui_approve_button");
+    store.forceFlush();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, "metrics.json"), "utf-8"));
+    expect(Array.isArray(onDisk)).toBe(true);
+    expect(onDisk).toHaveLength(1);
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
 import { useArtifactStore } from "../../stores/artifact";
@@ -153,5 +153,34 @@ describe("B7' — reaching the end re-opens a minimized panel", () => {
     // Scroll back to the end — the rising edge clears the collapse.
     act(() => io.fire(true));
     expect(screen.getByPlaceholderText(/respond to the agent/i)).toBeInTheDocument();
+  });
+});
+
+describe("F10 (G5) — the a-shortcut never drops a typed note", () => {
+  it("with text pending, `a` focuses the composer instead of arming an approve that would lose the note", async () => {
+    render(<ArtifactStatusActions artifact={artifact as any} />);
+    const ta = screen.getByPlaceholderText(/respond to the agent/i);
+    fireEvent.change(ta, { target: { value: "one more thing —" } });
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", {
+        detail: { artifactId: artifact.id, action: "approve" },
+      }));
+    });
+
+    // No countdown armed (the zero-tick path can't carry the note)...
+    expect(screen.queryByText(/auto-approve in/i)).toBeNull();
+    // ...and the note is still there for a deliberate action.
+    expect(ta).toHaveValue("one more thing —");
+  });
+
+  it("with NO text, `a` arms the confirm countdown as before", () => {
+    render(<ArtifactStatusActions artifact={artifact as any} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", {
+        detail: { artifactId: artifact.id, action: "approve" },
+      }));
+    });
+    expect(screen.getByText(/auto-approve in/i)).toBeInTheDocument();
   });
 });

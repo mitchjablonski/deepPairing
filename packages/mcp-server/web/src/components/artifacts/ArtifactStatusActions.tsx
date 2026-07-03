@@ -185,6 +185,10 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   // exist while compact). An effect keyed on forceExpanded is deterministic
   // where a requestAnimationFrame race isn't (and rAF never fires in jsdom).
   const wantFocusRef = useRef(false);
+  // F10 (G5) — the shortcut listener's deps deliberately exclude `comment`
+  // (re-subscribing per keystroke); a ref keeps the read fresh.
+  const hasCommentRef = useRef(false);
+  hasCommentRef.current = comment.trim().length > 0;
   useEffect(() => {
     if (forceExpanded && wantFocusRef.current) {
       wantFocusRef.current = false;
@@ -243,7 +247,14 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       if (!detail || detail.artifactId !== artifact.id) return;
       if (artifact.status !== "draft") return;
 
-      if (detail.action === "approve" && !hideApprove) {
+      // F10 (G5) — a typed note must never be silently dropped: the zero-tick
+      // approves via updateArtifactStatus directly (no submitComment), so
+      // arming with text pending lost the note while the visible button
+      // promised 'Approve with note'. With a note, `a` behaves like the
+      // revise branch instead: expand + focus so the user finishes the
+      // thought and clicks the action that carries it. (The confidence
+      // auto-arm already gates on !comment for the same reason.)
+      if (detail.action === "approve" && !hideApprove && !hasCommentRef.current) {
         // Arm the same countdown UI used for confidence-auto-approve, but
         // shorter. User can press Esc (via Cancel) to bail.
         dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });

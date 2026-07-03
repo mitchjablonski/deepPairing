@@ -22859,10 +22859,21 @@ var FileStore = class _FileStore {
       "artifactId"
     );
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
-    this.reviewLatencies = this.loadJsonFile(
-      path2.join(dir, "metrics.json"),
-      []
-    );
+    const rawMetrics = this.loadJsonFile(path2.join(dir, "metrics.json"), []);
+    if (Array.isArray(rawMetrics)) {
+      const kept = rawMetrics.filter(
+        (e) => !!e && typeof e === "object" && typeof e.type === "string" && typeof e.latencyMs === "number" && Number.isFinite(e.latencyMs)
+      );
+      if (kept.length !== rawMetrics.length) {
+        _FileStore.salvageLog(`${this.sessionId}:metrics.json`, `dropped ${rawMetrics.length - kept.length} malformed latency entr(ies)`);
+      }
+      this.reviewLatencies = kept;
+    } else {
+      if (rawMetrics != null) {
+        _FileStore.salvageLog(`${this.sessionId}:metrics.json`, `expected an array, got ${typeof rawMetrics} \u2014 using []`);
+      }
+      this.reviewLatencies = [];
+    }
   }
   /**
    * D1 — the disk trust boundary. JSON.parse returns `any`; every collection
@@ -23125,7 +23136,11 @@ var FileStore = class _FileStore {
       }
       const agentDriven = reason.startsWith("agent_") || reason === "demo_script";
       if (wasDraft && status !== "draft" && !agentDriven) {
-        this.recordArtifactReviewed(artifactId);
+        try {
+          this.recordArtifactReviewed(artifactId);
+        } catch (err) {
+          console.error(`[deepPairing] metrics recording failed (verdict unaffected): ${err}`);
+        }
       }
       this.scheduleFlush();
       this.notifyFeedbackWaiters();
@@ -25224,7 +25239,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.resolvePlanReview(artifactId, status, feedback);
     }
     await maybeUpdateTaskStatus(null, artifactId, store);
-    await store.forceFlush();
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
+    }
     if (feedback) {
       const comment = await store.addComment({
         id: `cmt_${nanoid3(10)}`,
