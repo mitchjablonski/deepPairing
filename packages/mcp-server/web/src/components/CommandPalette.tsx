@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useArtifactStore } from "../stores/artifact";
+import { useConnectionStore } from "../stores/connection";
 import { usePreferencesStore } from "../stores/preferences";
 import { useModal } from "../hooks/useModal";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
@@ -37,13 +38,24 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
 
   // Build searchable items
+  const boundSessionId = useConnectionStore((st) => st.sessionId);
   const allItems = useMemo((): PaletteItem[] => {
     const items: PaletteItem[] = [];
 
     // Actions
+    // F9 (L7) — the merged store carries OTHER sessions' drafts: a blanket
+    // approve-all silently reviewed work the user may never have looked at
+    // (and F6's owner routing means those writes now LAND). Scope to the
+    // bound session when one is bound; the label discloses the scope + count.
+    const approvableDrafts = artifacts.filter(
+      (a) =>
+        a.status === "draft" &&
+        a.type !== "decision" &&
+        (!boundSessionId || a.sessionId === boundSessionId),
+    );
     items.push({
       id: "action_approve_all",
-      label: "Approve all draft artifacts (except decisions)",
+      label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : ""} (except decisions)`,
       type: "action",
       // F2 — decisions are intentionally EXCLUDED: a blanket "approved" flip
       // records no optionId, so the agent never learns which option was picked
@@ -51,8 +63,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       // the decision card. Await sequentially so a flaky daemon surfaces one
       // error toast, not N parallel ones, and a mid-batch failure stops cleanly.
       action: async () => {
-        const drafts = artifacts.filter((a) => a.status === "draft" && a.type !== "decision");
-        for (const a of drafts) {
+        for (const a of approvableDrafts) {
           try {
             await updateArtifactStatus(a.id, "approved");
           } catch {
@@ -97,7 +108,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     return items;
-  }, [artifacts, theme]);
+  }, [artifacts, theme, boundSessionId]);
 
   // Filter and sort by fuzzy score
   const results = useMemo(() => {

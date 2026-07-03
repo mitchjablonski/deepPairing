@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "../CommandPalette";
 import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
 import { useOverlayStore } from "../../stores/overlay";
 
 const art = (over: any) =>
@@ -19,7 +20,7 @@ describe("CommandPalette — F2 'Approve all' excludes decisions", () => {
     const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
 
     render(<CommandPalette onClose={() => {}} />);
-    await userEvent.click(screen.getByText(/approve all draft artifacts/i));
+    await userEvent.click(screen.getByText(/approve all \d+ draft artifacts?/i));
 
     await waitFor(() => expect(spy).toHaveBeenCalledWith("p1", "approved"));
     // the decision must NOT be blanket-approved (it needs an explicit optionId via the card)
@@ -73,5 +74,24 @@ describe("E3 (L3) — content search", () => {
     fireEvent.change(input, { target: { value: "summary" } });
     expect(screen.queryByText("Cache design")).toBeNull();
     expect(screen.queryByText("Unrelated")).toBeNull();
+  });
+});
+
+describe("F9 (L7) — approve-all scopes to the bound session and discloses", () => {
+  it("only this session's drafts are approved; the label carries scope + count", async () => {
+    useConnectionStore.setState({ sessionId: "s1" } as any);
+    const mk = (id: string, sessionId: string) =>
+      ({ id, sessionId, type: "research", version: 1, parentId: null, title: id,
+         status: "draft", content: {}, agentReasoning: null,
+         createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z" }) as any;
+    useArtifactStore.setState({ artifacts: [mk("mine", "s1"), mk("foreign", "s2")] });
+    const calls: string[] = [];
+    useArtifactStore.setState({
+      updateArtifactStatus: (async (id: string) => { calls.push(id); }) as any,
+    });
+    render(<CommandPalette onClose={() => {}} />);
+    const item = await screen.findByText(/Approve all 1 draft artifact in this session/);
+    fireEvent.click(item);
+    await waitFor(() => expect(calls).toEqual(["mine"]));
   });
 });

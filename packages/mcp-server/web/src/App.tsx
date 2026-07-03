@@ -24,6 +24,7 @@ import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
+import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { countUnansweredQuestions } from "./lib/unanswered";
@@ -198,6 +199,9 @@ function App() {
         setShowSettings(false);
         closeTaste(); // CC9 — also clears tasteOpts
         setShowConversation(false);
+        // F9 (L3) — replay is a MODE, and Escape is how modes end everywhere
+        // else in the app; there was no keyboard exit at all.
+        useReplayStore.getState().exitReplay();
       }
 
       // UX4 — beyond this point are the ARTIFACT shortcuts (j/k/a/r/q). Suppress
@@ -232,6 +236,10 @@ function App() {
       }
 
       if (e.key === "a" || e.key === "r") {
+        // F9 (L3) — no review actions against a REPLAYED (historical) frame:
+        // the rendered state may predate the live artifact, and the write
+        // would hit the live store. j/k/n stay enabled (navigation is safe).
+        if (useReplayStore.getState().active) return;
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
         if (!selected || selected.status !== "draft") return;
         e.preventDefault();
