@@ -6,13 +6,19 @@ import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
+import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
 import { useEffect, useMemo, useState } from "react";
 
 /** Clickable badges that link to the finding artifacts that motivated a step */
 function MotivatedByBadges({ labels }: { labels: string[] }) {
-  const artifacts = useArtifactStore((s) => s.artifacts);
+  // PF2 (verified) — subscribe to research artifacts only, with a length+ids
+  // equality bail: the whole-array subscription re-rendered every badge row
+  // on ANY artifact event (status flips, comments, unrelated types).
+  const artifacts = useArtifactStore(
+    useShallow((s) => s.artifacts.filter((a) => a.type === "research")),
+  );
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
 
   return (
@@ -87,7 +93,10 @@ function PlanStepPreview({ step, artifactId, stepIndex }: { step: PlanStep; arti
   const diff = useMemo(() => {
     if (!step.preview?.before || !step.preview?.after) return null;
     return computeLineDiff(step.preview.before, step.preview.after);
-  }, [step.preview]);
+    // PF2 (verified) — key on the STRINGS: plan_progress_updated replaces the
+    // whole artifact, so [step.preview] (object identity) recomputed every
+    // step's diff on every progress broadcast.
+  }, [step.preview?.before, step.preview?.after]);
 
   if (!step.preview) return null;
 

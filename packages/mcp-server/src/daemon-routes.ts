@@ -402,7 +402,11 @@ export function createDaemonRoutes(
     // opaque throw instead of the handler's crafted isError message (and the
     // client's null path was dead code). 200 + null, like :456's comment read.
     if (!artifact) return c.json({ artifact: null });
-    r.store.forceFlush();
+    // PF1 (verified): forceFlush here was 216ms of SYNC disk I/O per step
+    // update ON THE HOT PATH — the broadcast below reads memory, nothing
+    // downstream reads disk (unlike the status route, whose Stop hook DOES),
+    // and updatePlanProgress already scheduleFlush'd. Progress is
+    // reconstructible; the debounced flush is plenty.
     // Carries the FULL artifact: step statuses live in content, and the web
     // store patches content in place (artifact_updated only patches status).
     broadcast(sessionId, { type: "plan_progress_updated", artifact });

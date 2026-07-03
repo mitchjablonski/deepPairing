@@ -34,7 +34,29 @@ export function ProjectSwitcher() {
     // poll rides the cache.
     fetch(`${apiBase()}/api/projects${fresh ? "?fresh=1" : ""}`)
       .then((r) => r.json())
-      .then((d) => setProjects(d.projects ?? []))
+      .then((d) => {
+        const next: DiscoveredProject[] = d.projects ?? [];
+        // PF3 (verified) — equality bail on the fields this component
+        // renders: every 30s poll produced a fresh array identity and
+        // re-rendered the switcher (and its badge) even when nothing
+        // changed. Compare what we display, not object identity.
+        setProjects((prev) => {
+          const same =
+            prev.length === next.length &&
+            prev.every((p, i) => {
+              const n = next[i];
+              return (
+                n &&
+                p.port === n.port &&
+                p.label === n.label &&
+                p.projectRoot === n.projectRoot &&
+                p.projectHash === n.projectHash &&
+                p.pendingCount === n.pendingCount
+              );
+            });
+          return same ? prev : next;
+        });
+      })
       .catch(() => {});
   };
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildThreads } from "../lib/threading";
 import { useConnectionStore } from "../stores/connection";
+import { timeAgo } from "../lib/time";
 import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useModal } from "../hooks/useModal";
@@ -50,18 +51,6 @@ interface ThreadedRow {
   comment: Comment;
   replies: Comment[];
   artifactId: string;
-}
-
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "just now";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 /** Pick a short location tag from a comment's target — line range or

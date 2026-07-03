@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { timeAgo } from "../lib/time";
 import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -147,19 +148,6 @@ export function SessionBrowser() {
     }
   };
 
-  const timeAgo = (dateStr: string) => {
-    try {
-      const ms = Date.now() - new Date(dateStr).getTime();
-      const mins = Math.floor(ms / 60000);
-      if (mins < 60) return `${mins}m ago`;
-      const hours = Math.floor(mins / 60);
-      if (hours < 24) return `${hours}h ago`;
-      const days = Math.floor(hours / 24);
-      return `${days}d ago`;
-    } catch {
-      return "";
-    }
-  };
 
   if (loading) {
     return (

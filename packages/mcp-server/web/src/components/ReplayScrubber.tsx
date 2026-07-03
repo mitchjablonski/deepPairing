@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { formatClockTime } from "../lib/time";
 import { useReplayStore, useAnnotationsByEvent } from "../stores/replay";
 import type { TimelineEvent } from "../lib/timeline";
 
@@ -336,10 +337,6 @@ function CurrentEventRow({
 }
 
 function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  } catch {
-    return iso;
-  }
+  // G4 — shared clock formatter; keep the raw-iso fallback this surface had.
+  return formatClockTime(iso, true) || iso;
 }

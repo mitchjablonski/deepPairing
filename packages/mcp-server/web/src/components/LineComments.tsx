@@ -190,8 +190,8 @@ export function LineCommentChips({
     // shows whether the agent has drained it (delivered vs seen), read-only.
     const isHuman = c.author === "human";
     const isQuestion = c.intent === "question";
-    const answered = !!(c as any).answeredByCommentId;
-    const humanResolved = !!(c as any).humanResolvedAt;
+    const answered = !!c.answeredByCommentId;
+    const humanResolved = !!c.humanResolvedAt;
     return (
       <div key={c.id} className="mb-0.5">
         <div className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs">

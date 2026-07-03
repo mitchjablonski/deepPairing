@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { buildThreads } from "../lib/threading";
+import { formatClockTime as formatTime } from "../lib/time";
 import { useDraft } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
@@ -30,14 +31,6 @@ function Avatar({ author }: { author: string }) {
   );
 }
 
-function formatTime(dateStr: string): string {
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}
 
 function CommentBubble({ comment }: { comment: Comment }) {
   const isHuman = comment.author === "human";
