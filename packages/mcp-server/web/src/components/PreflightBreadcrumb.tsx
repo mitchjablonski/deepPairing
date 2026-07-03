@@ -304,7 +304,7 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   // Considered-concepts + extra-near-miss expansion. Identical for both
   // tiers; the styling stays neutral so it works inside or outside the
   // violet card.
-  // BB6 — clicking a concept opens the YourTasteDrawer at the ledger tab
+  // BB6 — clicking a concept opens the LedgerDrawer at the ledger tab
   // and highlights the matching row. Closes the breadcrumb→ledger loop:
   // the breadcrumb says "considered N stances", the ledger now answers
   // "here's the same stance and N more citations of it" without the user

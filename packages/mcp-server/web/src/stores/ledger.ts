@@ -3,7 +3,7 @@ import { apiBase, sessionHeaders } from "../lib/api";
 
 /**
  * EE2 — shared ledger digest store. Pre-EE2 three independent fetchers
- * (PreflightBreadcrumb, IdleHome, YourTasteDrawer LedgerPanel) each
+ * (PreflightBreadcrumb, IdleHome, LedgerDrawer LedgerPanel) each
  * mounted their own /api/ledger/digest fetch + dp:preflight-trace
  * listener. With 50 artifacts on screen + a fresh trace event, that
  * was 50 redundant network roundtrips per broadcast. The 2s server
@@ -165,7 +165,7 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
       useToastStore.getState().push({
         kind: "success",
         title: "🧭 Overridden — won't block this again",
-        body: `"${label}" scoped down in Your taste.`,
+        body: `"${label}" scoped down in your Ledger.`,
         ttl: 5000,
       });
       void get().refetch();

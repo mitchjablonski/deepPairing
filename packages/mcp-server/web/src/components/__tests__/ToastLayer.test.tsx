@@ -86,10 +86,10 @@ describe("ToastLayer", () => {
       push("preflight-block", {
         title: "x",
         hero: heroOf({ source: "session" }),
-        action: { label: "Open Your taste", onClick: onAction },
+        action: { label: "Open the Ledger", onClick: onAction },
       });
       render(<ToastLayer />);
-      await userEvent.click(screen.getByRole("button", { name: /open your taste/i }));
+      await userEvent.click(screen.getByRole("button", { name: /open the ledger/i }));
       expect(onAction).toHaveBeenCalled();
     });
 

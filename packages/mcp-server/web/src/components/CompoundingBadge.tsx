@@ -46,7 +46,7 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
       title={isZero
         ? "Your taste will compound here: pre-flight blocks and ledger writes accumulate across this project. Click to see how it works."
         : `Your taste is compounding: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project. Click for the full breakdown.`}
-      aria-label="Cumulative taste stats — open Your taste"
+      aria-label="Cumulative taste stats — open the Ledger"
       className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs text-text-muted
                  hover:text-text-secondary hover:bg-surface-hover transition-colors font-mono"
     >

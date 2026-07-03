@@ -93,7 +93,7 @@ describe("IdleHome (BB7)", () => {
   it("CC3 — primary 'Your ledger' tab is sized larger than the secondary 'Past sessions' pill", async () => {
     vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerEmpty }));
     render(<IdleHome />);
-    const ledgerTab = await screen.findByRole("button", { name: /your ledger/i });
+    const ledgerTab = await screen.findByRole("button", { name: /^ledger$/i });
     const sessionsPill = screen.getByRole("button", { name: /past sessions/i });
     // Asymmetric weighting per PMF council: primary tab is text-sm
     // semibold; secondary pill is text-2xs and pill-shaped (rounded).

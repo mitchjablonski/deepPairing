@@ -21,7 +21,7 @@ import { normalizeConceptKey } from "@deeppairing/shared";
  * badge shows the recurrence ("seen 3×") and your stance direction ("you
  * avoid this" / "matches your preference") — the positive-alignment pip the
  * UX review asked for, delivered exactly where the concept appears — and the
- * expanded panel deep-links into the YourTasteDrawer highlighted on that row
+ * expanded panel deep-links into the LedgerDrawer highlighted on that row
  * (the same BB6 event PreflightBreadcrumb uses).
  */
 
