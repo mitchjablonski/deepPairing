@@ -175,6 +175,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   };
 
   const handleSelect = async (optionId: string) => {
+    // F8 review — ANY select disarms the pending keyboard-commit: without
+    // this, a manual click whose POST failed (phase rolls back to idle) left
+    // the armed timer alive to commit the ABANDONED option. Idempotent on
+    // the expiry path (which already cleared it).
+    setArmedSelect(null);
     if (phase.kind !== "idle") return;
     // FF9 — gate on stakes==='high' AND user opted in to prediction
     // capture for THIS decision. Pre-FF9 the predicting phase fired
@@ -288,12 +293,18 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
   // F8 (M4) — keyboard-armed select confirm. null = disarmed.
   const [armedSelect, setArmedSelect] = useState<{ optionId: string; left: number } | null>(null);
+  // Latest-ref (the F10/G5 idiom): handleSelect is an inline arrow with new
+  // identity every render — keying the tick on it reset the pending timeout
+  // on ANY re-render (hover, composer keystrokes, WS traffic), stalling the
+  // bar at "3s" indefinitely (review-caught).
+  const handleSelectRef = useRef<(optionId: string) => void>(() => {});
+  handleSelectRef.current = handleSelect;
   useEffect(() => {
     if (!armedSelect) return;
     if (armedSelect.left <= 0) {
       const { optionId } = armedSelect;
       setArmedSelect(null);
-      handleSelect(optionId);
+      handleSelectRef.current(optionId);
       return;
     }
     const t = setTimeout(
@@ -301,9 +312,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       1000,
     );
     return () => clearTimeout(t);
-    // handleSelect in deps for the same stale-closure reason as the container
-    // Enter handler (field bug precedent).
-  }, [armedSelect, handleSelect]);
+  }, [armedSelect]);
+  // F8 review — focus-move disarms: expiry committing the option captured at
+  // arm time while the ring shows another is the D3/U4 wrong-selection
+  // hazard. `a` again re-arms at the new focus.
+  useEffect(() => {
+    setArmedSelect(null);
+    // focusedIndex only — arming itself must not immediately disarm.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedIndex]);
   useEffect(() => {
     if (!armedSelect) return;
     const onKey = (e: KeyboardEvent) => {
@@ -341,9 +358,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     };
     window.addEventListener("dp:artifact-shortcut", onShortcut);
     return () => window.removeEventListener("dp:artifact-shortcut", onShortcut);
-    // handleSelect closes over phase/stakes/predictOptIn/reasoning — keep it in
-    // deps so the approve shortcut never fires with stale selection state.
-  }, [artifactId, resolved, focusedIndex, event.options, handleSelect]);
+    // (The approve branch only ARMS now — no handleSelect in deps; the tick
+    // effect reads it through the latest-ref.)
+  }, [artifactId, resolved, focusedIndex, event.options]);
 
   // Send-back-with-comment: posts a tagged question comment that the
   // server's firstCallHint promotes to "REVISION REQUEST" priority. Agent

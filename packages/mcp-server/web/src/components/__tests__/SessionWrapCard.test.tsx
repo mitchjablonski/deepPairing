@@ -62,3 +62,18 @@ describe("D9 (H3) — SessionWrapCard", () => {
     expect(screen.getByText(/Session wrapped/)).toBeInTheDocument();
   });
 });
+
+describe("F8 (M2) — the wrap card recaps ITS session, not the merged store", () => {
+  it("a live neighbor's draft neither suppresses the card nor inflates its stats", () => {
+    useArtifactStore.setState({
+      artifacts: [
+        art(),                                                          // s1, wrapped
+        art({ id: "a_n1", sessionId: "s2", status: "draft" }),          // neighbor draft (pre-fix: suppressed the card)
+        art({ id: "a_n2", sessionId: "s2" }),                           // neighbor (pre-fix: inflated the count)
+      ],
+    });
+    render(<SessionWrapCard sessionId="s1" />);
+    expect(screen.getByText(/Session wrapped/)).toBeInTheDocument();
+    expect(screen.getByText(/1 artifact\b/)).toBeInTheDocument();
+  });
+});

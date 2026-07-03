@@ -380,9 +380,12 @@ function ThreadEntry({
 }) {
   const { comment, replies } = thread;
   const submitComment = useArtifactStore((s) => s.submitComment);
-  // F8 (M6) — liveness for honest copy (see the unanswered line below).
+  // F8 (M6, review-hardened) — liveness of the COMMENT's owning session,
+  // not the tab's: in the merged view a dead foreign session's question
+  // otherwise promised a check-in whenever the TAB was live (the M6 lie,
+  // one hop over — F6 owner-routing precedent).
   const boundLive = useConnectionStore(
-    (st) => st.activeSessions.find((x) => x.sessionId === st.sessionId)?.live !== false,
+    (st) => st.activeSessions.find((x) => x.sessionId === comment.sessionId)?.live !== false,
   );
   // U5 — use the SAME predicate as the pill/filter (it also drops questions the
   // human resolved or the agent answered out-of-band), so the inline "awaiting
