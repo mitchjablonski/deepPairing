@@ -228,6 +228,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
   const confidence = (artifact.content as any)?.confidence;
   const shouldAutoApprove =
+    // F12 review — without this the countdown armed INVISIBLY during replay
+    // (the chip hides the bar) and phantom-toasted a refusal ~10s later.
+    !replayActive &&
     artifact.status === "draft" &&
     confidence === "high" &&
     autonomyLevel !== "supervised" &&

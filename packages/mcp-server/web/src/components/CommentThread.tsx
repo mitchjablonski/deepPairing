@@ -318,7 +318,7 @@ export function AskTrigger({
                         <span className="text-text-muted italic">awaiting answer</span>
                         <button
                           type="button"
-                          onClick={() => markQuestionResolved(q.id)}
+                          onClick={() => void markQuestionResolved(q.id).catch(() => {})}
                           title="Mark this question resolved — stops it counting as waiting on the agent"
                           className="text-2xs text-accent-blue hover:underline"
                         >

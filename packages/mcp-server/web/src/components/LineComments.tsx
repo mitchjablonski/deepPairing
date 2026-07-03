@@ -233,7 +233,7 @@ export function LineCommentChips({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    void markQuestionResolved(c.id);
+                    void markQuestionResolved(c.id).catch(() => {}); // store toasts (incl. replay refusal)
                   }}
                   className="text-text-muted hover:text-text-secondary underline-offset-2 hover:underline"
                   title="Mark this question resolved — clears it from your 'waiting' list without an agent answer"

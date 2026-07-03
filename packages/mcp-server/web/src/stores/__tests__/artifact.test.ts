@@ -441,23 +441,28 @@ describe("F12 — the store refuses ALL mutations during replay (the mouse path)
     useReplayStore.getState().exitReplay();
   });
 
-  it("status writes, comments, renames, and decision resolves all refuse — zero fetches, one toast each", async () => {
+  it("all five mutations REJECT (toast-then-throw, so callers' catch paths preserve drafts) — zero fetches", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     useArtifactStore.setState({ artifacts: [art("a_h")] });
 
+    // THROW, not silent return (review): a silent return ran every caller's
+    // SUCCESS path — composers wiped drafts, send-back showed a false
+    // terminal "sent" state.
     const store = useArtifactStore.getState();
-    await store.updateArtifactStatus("a_h", "approved");
-    await store.submitComment("a_h", "into the past");
-    await store.renameArtifact("a_h", "rewritten history");
-    await store.resolveDecision("dec_h", "o1");
-    await store.markQuestionResolved("cmt_h");
+    await expect(store.updateArtifactStatus("a_h", "approved")).rejects.toThrow(/disabled during replay/);
+    await expect(store.submitComment("a_h", "into the past")).rejects.toThrow(/disabled during replay/);
+    await expect(store.renameArtifact("a_h", "rewritten history")).rejects.toThrow(/disabled during replay/);
+    await expect(store.resolveDecision("dec_h", "o1")).rejects.toThrow(/disabled during replay/);
+    await expect(store.markQuestionResolved("cmt_h")).rejects.toThrow(/disabled during replay/);
 
     expect(fetchSpy).not.toHaveBeenCalled();
     // The artifact is untouched (no optimistic flip either).
     expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
     const { useToastStore } = await import("../../stores/toast");
-    expect(useToastStore.getState().toasts.some((t) => t.title.includes("disabled during replay"))).toBe(true);
+    expect(
+      useToastStore.getState().toasts.filter((t) => t.title.includes("disabled during replay")),
+    ).toHaveLength(5);
   });
 
   it("mutations work again after exitReplay", async () => {

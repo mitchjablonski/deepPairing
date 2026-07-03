@@ -4,6 +4,7 @@ import { useArtifactStore } from "../stores/artifact";
 import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 import { useConnectionStore } from "../stores/connection";
+import { useReplayStore } from "../stores/replay";
 import { useDraft } from "../hooks/useDraft";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { useSentFlash } from "../hooks/useSentFlash";
@@ -25,6 +26,10 @@ const EMPTY_COMMENTS: Comment[] = [];
  * - Last 3 session messages surfaced as thread history above the input
  */
 export function MessageInput() {
+  // F12 review — this composer BYPASSES the store choke point (own safeFetch)
+  // and rendered against the replayed session's thread while SENDING into
+  // the live tab binding: a visual reply into history that lands elsewhere.
+  const replayActive = useReplayStore((st) => st.active);
   const agentRecentlyActive = useAgentRecentlyActive();
   // D9 (H5) — survives reloads; keyed per session so a draft can never
   // follow you across a session switch (M5).
@@ -137,6 +142,14 @@ export function MessageInput() {
       setSending(false);
     }
   };
+
+  if (replayActive) {
+    return (
+      <div className="px-3 py-2 border-t border-border-default text-xs text-text-muted">
+        ⏸ Replay — read-only. Exit replay (Esc) to message the agent.
+      </div>
+    );
+  }
 
   return (
     <div className="px-3 py-2 border-t border-border-default bg-surface-secondary">

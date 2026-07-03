@@ -6,6 +6,7 @@ import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
+import { useReplayStore } from "../../stores/replay";
 import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
@@ -181,6 +182,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
     });
   };
 
+  const replayActive = useReplayStore((st) => st.active);
   const hasUnchecked = checkedSteps.some((c) => !c);
 
   // C1 — mirror ArtifactStatusActions.handleAction: a submitting guard (a
@@ -371,7 +373,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
           so the human couldn't reject / request revision / respond / ask while
           a step was deselected. Now it sits above the standard actions, which
           always render. */}
-      {artifact.status === "draft" && hasUnchecked && (
+      {/* F12 review — this custom approve is store-gated but the affordance
+          sat right next to the read-only chip; hide it during replay. */}
+      {artifact.status === "draft" && hasUnchecked && !replayActive && (
         <div className="pt-3 border-t border-border-default">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-2xs text-accent-amber">
