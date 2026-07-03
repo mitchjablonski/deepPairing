@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
@@ -17,9 +17,122 @@ const COUNTDOWN_SECONDS = 10;
 
 const KEYBOARD_CONFIRM_SECONDS = 3;
 
+// ---------------------------------------------------------------------------
+// E6 — the footer state machine.
+// ---------------------------------------------------------------------------
+interface FooterState {
+  comment: string;
+  submitting: boolean;
+  rejecting: boolean;
+  rejectConcept: string;
+  /** Armed auto/keyboard-approve countdown; null = disarmed. */
+  countdown: number | null;
+  countdownMax: number;
+  /** A cancelled countdown STAYS paused so confidence-auto-arm can't re-fire. */
+  countdownPaused: boolean;
+  /** B6 — sentinel visibility (user reached the artifact's natural end). */
+  atEnd: boolean;
+  /** Voluntary expansion (Respond… click, textarea focus, `r` shortcut). */
+  forceExpanded: boolean;
+  /** B7 — manual Minimize; cleared by reaching the end (rising edge) or any engagement. */
+  userCollapsed: boolean;
+}
+
+export const INITIAL_FOOTER_STATE: FooterState = {
+  comment: "",
+  submitting: false,
+  rejecting: false,
+  rejectConcept: "",
+  countdown: null,
+  countdownMax: COUNTDOWN_SECONDS,
+  countdownPaused: false,
+  atEnd: true,
+  forceExpanded: false,
+  userCollapsed: false,
+};
+
+type FooterAction =
+  | { type: "typed"; comment: string }
+  | { type: "armCountdown"; seconds: number }
+  | { type: "cancelCountdown" }
+  | { type: "tick" }
+  | { type: "beginReject"; concept: string }
+  | { type: "cancelReject" }
+  | { type: "submitStart" }
+  | { type: "submitEnd" }
+  | { type: "actionSucceeded" }
+  | { type: "respondSucceeded" }
+  | { type: "rejectConceptTyped"; concept: string }
+  | { type: "sentinel"; atEnd: boolean }
+  | { type: "expand" }
+  | { type: "minimize" };
+
+/** The ONE cancellation semantics (B7 review: cancelling is ENGAGEMENT —
+ *  without un-collapse, a user who minimized earlier had the panel snap to
+ *  compact under their Cancel click). */
+function cancelled(s: FooterState): FooterState {
+  return { ...s, countdown: null, countdownPaused: true, userCollapsed: false };
+}
+
+export function footerReducer(s: FooterState, a: FooterAction): FooterState {
+  switch (a.type) {
+    case "typed": {
+      const next = { ...s, comment: a.comment };
+      // Typing cancels an armed countdown (was a dedicated effect).
+      return a.comment && s.countdown !== null ? cancelled(next) : next;
+    }
+    case "armCountdown":
+      return {
+        ...s,
+        countdownPaused: false,
+        countdownMax: a.seconds,
+        countdown: a.seconds,
+      };
+    case "cancelCountdown":
+      return cancelled(s);
+    case "tick":
+      return s.countdown === null ? s : { ...s, countdown: s.countdown - 1 };
+    case "beginReject":
+      return { ...cancelled(s), rejecting: true, rejectConcept: a.concept };
+    case "cancelReject":
+      return { ...s, rejecting: false };
+    case "submitStart":
+      return { ...cancelled(s), submitting: true };
+    case "submitEnd":
+      return { ...s, submitting: false };
+    case "actionSucceeded":
+      // Only on success — a failed action keeps the text to retry. (Terminal
+      // actions unmount the interactive footer anyway; the clearing matters
+      // for state hygiene, not visibly.)
+      return { ...s, comment: "", rejecting: false, rejectConcept: "" };
+    case "respondSucceeded":
+      // E6 review — Respond keeps an open reject panel AND the user's edited
+      // concept (main's behavior): a clarifying comment mid-reject must not
+      // discard the hand-tuned ledger key.
+      return { ...s, comment: "" };
+    case "rejectConceptTyped":
+      // E6 review — typing the concept is JUST typing (main: setRejectConcept
+      // only). Routing it through beginReject re-ran the cancel semantics —
+      // convergent, but the machine should say what it does.
+      return { ...s, rejectConcept: a.concept };
+    case "sentinel":
+      // B7' — reaching the end re-opens a minimized panel (rising edge only:
+      // minimizing while AT the end sticks until you scroll away and return).
+      // Duplicate notifications bail (matches main's same-value setState):
+      // IntersectionObserver only notifies on crossings per spec, but a
+      // duplicate must not clear a Minimize or mint a render.
+      if (a.atEnd === s.atEnd) return s;
+      return a.atEnd
+        ? { ...s, atEnd: true, userCollapsed: false }
+        : { ...s, atEnd: false };
+    case "expand":
+      return { ...s, userCollapsed: false, forceExpanded: true };
+    case "minimize":
+      return { ...s, userCollapsed: true, forceExpanded: false };
+  }
+}
+
 export function ArtifactStatusActions({ artifact, hideApprove = false }: ArtifactStatusActionsProps) {
-  const [comment, setComment] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const autonomyLevel = useConnectionStore((s) => s.autonomyLevel);
@@ -30,46 +143,44 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   // of letting the moat key on the artifact title. Clicking Reject reveals a
   // field pre-filled with the agent's own concept (when it named one), editable.
   const agentConcept = (artifact.content as { concept?: { name?: string } } | null)?.concept?.name;
-  const [rejecting, setRejecting] = useState(false);
-  const [rejectConcept, setRejectConcept] = useState("");
 
-  // Auto-proceed countdown state
-  const [countdown, setCountdown] = useState<number | null>(null);
-  const [countdownMax, setCountdownMax] = useState(COUNTDOWN_SECONDS);
-  const [countdownPaused, setCountdownPaused] = useState(false);
+  // E6 — the footer machine is a REDUCER (was 10 useState + 8 effects, three
+  // of which existed only to cancel the countdown when some OTHER state
+  // changed). The cross-state rules are transitions now:
+  //   - typing cancels an armed countdown (was its own effect)
+  //   - reaching the end clears a manual Minimize — rising edge, B7' (was its
+  //     own effect)
+  //   - EVERY countdown cancellation (user Cancel, typing, submit-start,
+  //     hideApprove suppression) shares ONE semantics: pause + clear +
+  //     un-collapse (the B7 engagement rule)
+  // Remaining effects are IO only: interval tick + approve-at-zero, the
+  // IntersectionObserver, focus-after-expand, and the shortcut listener.
+  const [state, dispatch] = useReducer(footerReducer, INITIAL_FOOTER_STATE);
+  const {
+    comment, submitting, rejecting, rejectConcept,
+    countdown, countdownMax, countdownPaused,
+    atEnd, forceExpanded, userCollapsed,
+  } = state;
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // B6 — compact-while-floating. The full footer (~180px: textarea + three
-  // action rows) permanently occluded a big slice of the pane while sticky
-  // mid-scroll. A sentinel sits at the artifact's natural end: while it's
-  // off-screen (user still reading) the footer collapses to one slim row
-  // (Approve stays one click; "Respond…" expands + focuses the textarea);
-  // reaching the end — or arming a countdown, typing, or rejecting — expands
-  // the full panel. atEnd defaults TRUE so test envs without a working
-  // IntersectionObserver (and short artifacts) keep today's full footer.
+  // B6 — end-of-artifact sentinel drives compact-while-floating (see the
+  // render). atEnd defaults TRUE so test envs without IntersectionObserver
+  // (and short artifacts) keep the full footer.
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const [atEnd, setAtEnd] = useState(true);
-  const [forceExpanded, setForceExpanded] = useState(false);
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([entry]) => setAtEnd(entry.isIntersecting));
+    const io = new IntersectionObserver(([entry]) =>
+      dispatch({ type: "sentinel", atEnd: entry.isIntersecting }),
+    );
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  // B7 — manual collapse. B6 made expansion a one-way latch: once expanded
-  // (reached the end / clicked the expander) there was no way back to the slim
-  // bar. Minimize collapses the VOLUNTARY expanders; the mandatory ones (an
-  // armed countdown, an in-flight reject, typed text) still force the panel —
-  // the countdown can never be hidden.
-  const [userCollapsed, setUserCollapsed] = useState(false);
-  // B7' — reaching the end re-opens a minimized panel (rising edge only:
-  // minimizing while AT the end sticks until you scroll away and return).
-  useEffect(() => {
-    if (atEnd) setUserCollapsed(false);
-  }, [atEnd]);
+
   const mustExpand = countdown !== null || rejecting || comment.trim().length > 0;
   const expanded = mustExpand || (!userCollapsed && (atEnd || forceExpanded));
+
   // Focus must happen AFTER the expanded render commits (the textarea doesn't
   // exist while compact). An effect keyed on forceExpanded is deterministic
   // where a requestAnimationFrame race isn't (and rAF never fires in jsdom).
@@ -83,8 +194,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   }, [forceExpanded]);
   const expandAndFocus = () => {
     wantFocusRef.current = true;
-    setUserCollapsed(false);
-    setForceExpanded(true);
+    dispatch({ type: "expand" });
     // Already expanded (e.g. atEnd) → the effect won't re-fire; focus directly.
     commentRef.current?.focus();
   };
@@ -99,22 +209,16 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
   useEffect(() => {
     if (shouldAutoApprove && countdown === null && !comment) {
-      setCountdownMax(COUNTDOWN_SECONDS);
-      setCountdown(COUNTDOWN_SECONDS);
+      dispatch({ type: "armCountdown", seconds: COUNTDOWN_SECONDS });
     }
   }, [shouldAutoApprove]);
-
-  // Cancel countdown when user starts typing
-  useEffect(() => {
-    if (comment && countdown !== null) cancelCountdown();
-  }, [comment]);
 
   // U3 — if approval gets suppressed mid-countdown (e.g. the user unchecks a
   // plan step after pressing `a`), cancel the armed countdown. Otherwise it
   // would tick to 0 and approve the plan as-is, discarding the deselection —
   // exactly the footgun hideApprove exists to prevent.
   useEffect(() => {
-    if (hideApprove && countdown !== null) cancelCountdown();
+    if (hideApprove && countdown !== null) dispatch({ type: "cancelCountdown" });
   }, [hideApprove]);
 
   useEffect(() => {
@@ -128,15 +232,11 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       return;
     }
     intervalRef.current = setInterval(() => {
-      setCountdown((c) => (c !== null ? c - 1 : null));
+      dispatch({ type: "tick" });
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [countdown, countdownPaused]);
 
-  // Keyboard shortcut handler. App.tsx dispatches "dp:artifact-shortcut" when
-  // the user presses `a` or `r` on the selected artifact. We NEVER commit
-  // silently — `a` arms a short confirm countdown; `r` focuses the comment
-  // textarea so the user must provide reasoning.
   useEffect(() => {
     const handler = (evt: Event) => {
       const detail = (evt as CustomEvent).detail as { artifactId: string; action: "approve" | "revise" } | undefined;
@@ -146,9 +246,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       if (detail.action === "approve" && !hideApprove) {
         // Arm the same countdown UI used for confidence-auto-approve, but
         // shorter. User can press Esc (via Cancel) to bail.
-        setCountdownPaused(false);
-        setCountdownMax(KEYBOARD_CONFIRM_SECONDS);
-        setCountdown(KEYBOARD_CONFIRM_SECONDS);
+        dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });
       } else {
         // Request Revision (needs a reason), OR an approve shortcut while the
         // parent owns approval (hideApprove) — either way, focus the comment
@@ -158,8 +256,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         // `r` shortcut died on exactly the long artifacts that float). Expand
         // first; the forceExpanded effect focuses after the commit.
         wantFocusRef.current = true;
-        setUserCollapsed(false);
-        setForceExpanded(true);
+        dispatch({ type: "expand" });
         commentRef.current?.focus();
         commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
       }
@@ -168,14 +265,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     return () => window.removeEventListener("dp:artifact-shortcut", handler);
   }, [artifact.id, artifact.status, hideApprove]);
 
-  const cancelCountdown = () => {
-    setCountdownPaused(true);
-    setCountdown(null);
-    // B7 review — cancelling a countdown is ENGAGEMENT: without this, a user
-    // who minimized earlier had the whole panel snap to compact under their
-    // Cancel click (countdown was the only thing mandating expansion).
-    setUserCollapsed(false);
-  };
+  // B7 review semantics (cancel = engagement) live in the reducer's
+  // `cancelled()` — shared by user Cancel, typing, submit-start, hideApprove.
+  const cancelCountdown = () => dispatch({ type: "cancelCountdown" });
 
   if (artifact.status === "approved") {
     return (
@@ -249,8 +341,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   }
 
   const handleAction = async (action: "approved" | "revised" | "rejected") => {
-    cancelCountdown();
-    setSubmitting(true);
+    dispatch({ type: "submitStart" });
     try {
       // Submit comment alongside the action if the user typed one
       const trimmedComment = comment.trim();
@@ -261,26 +352,20 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       // server falls back to the agent's concept, then the title).
       const concept = action === "rejected" ? rejectConcept.trim() || undefined : undefined;
       await updateArtifactStatus(artifact.id, action, trimmedComment || undefined, concept);
-      setComment(""); // only clear on success, so a failed action keeps the text to retry
-      setRejecting(false);
-      setRejectConcept("");
+      dispatch({ type: "actionSucceeded" }); // only on success — a failed action keeps the text to retry
     } catch {
       // The store mutations re-throw AFTER toasting a user-facing error. Swallow
       // here so the click handler doesn't reject — but the `finally` MUST run so
       // the panel re-enables; otherwise a single failed Approve/Reject disables
       // every action forever (the U3 "approve doesn't land" class of bug).
     } finally {
-      setSubmitting(false);
+      dispatch({ type: "submitEnd" });
     }
   };
 
   // Reject is two-step: the first click reveals the "name the pattern" field
   // (pre-filled with the agent's concept); the confirm click does the reject.
-  const beginReject = () => {
-    cancelCountdown();
-    setRejectConcept(agentConcept ?? "");
-    setRejecting(true);
-  };
+  const beginReject = () => dispatch({ type: "beginReject", concept: agentConcept ?? "" });
 
   /**
    * "Respond" — post the comment to the artifact WITHOUT changing status.
@@ -292,15 +377,14 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   const handleRespond = async () => {
     const trimmedComment = comment.trim();
     if (!trimmedComment) return;
-    cancelCountdown();
-    setSubmitting(true);
+    dispatch({ type: "submitStart" });
     try {
       await submitComment(artifact.id, trimmedComment);
-      setComment(""); // only clear on success
+      dispatch({ type: "respondSucceeded" }); // only clears on success
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
-      setSubmitting(false);
+      dispatch({ type: "submitEnd" });
     }
   };
 
@@ -311,15 +395,14 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
    * Any typed comment rides along as the reason.
    */
   const handleDismissObsolete = async () => {
-    cancelCountdown();
-    setSubmitting(true);
+    dispatch({ type: "submitStart" });
     try {
       await updateArtifactStatus(artifact.id, "obsolete", comment.trim() || undefined);
-      setComment(""); // only clear on success
+      dispatch({ type: "actionSucceeded" }); // only clears on success
     } catch {
       // store already toasted; keep the panel usable (see handleAction)
     } finally {
-      setSubmitting(false);
+      dispatch({ type: "submitEnd" });
     }
   };
 
@@ -401,8 +484,8 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         // B6 review — once the user engages the panel, latch it open:
         // otherwise select-all-delete while scrolled mid-artifact flipped
         // `expanded` false and unmounted the textarea UNDER their cursor.
-        onFocus={() => setForceExpanded(true)}
-        onChange={(e) => setComment(e.target.value)}
+        onFocus={() => dispatch({ type: "expand" })}
+        onChange={(e) => dispatch({ type: "typed", comment: e.target.value })}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
@@ -474,10 +557,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         {!mustExpand && (
           <button
             type="button"
-            onClick={() => {
-              setUserCollapsed(true);
-              setForceExpanded(false);
-            }}
+            onClick={() => dispatch({ type: "minimize" })}
             className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors shrink-0"
             title="Collapse to the slim bar (Approve stays one click; reaching the end re-opens)"
           >
@@ -500,10 +580,10 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             id="reject-concept"
             autoFocus
             value={rejectConcept}
-            onChange={(e) => setRejectConcept(e.target.value)}
+            onChange={(e) => dispatch({ type: "rejectConceptTyped", concept: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === "Enter") { e.preventDefault(); handleAction("rejected"); }
-              if (e.key === "Escape") { e.preventDefault(); setRejecting(false); }
+              if (e.key === "Escape") { e.preventDefault(); dispatch({ type: "cancelReject" }); }
             }}
             placeholder="e.g. “global mutable state for config”"
             className="w-full px-2 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
@@ -525,7 +605,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
               Reject &amp; remember
             </button>
             <button
-              onClick={() => setRejecting(false)}
+              onClick={() => dispatch({ type: "cancelReject" })}
               disabled={submitting}
               className="text-2xs text-text-muted hover:text-text-secondary"
             >
