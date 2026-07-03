@@ -3,11 +3,12 @@
  * shortcut's failure modes (fires while typing, mis-cycles) are exactly what
  * refactors silently break.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import App from "../../App";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
+import { useReplayStore } from "../../stores/replay";
 
 const art = (id: string, status = "draft") =>
   ({
@@ -54,5 +55,30 @@ describe("E3 (L1) — the n shortcut", () => {
     fireEvent.keyDown(document, { key: "n", ctrlKey: true });
     fireEvent.keyDown(document, { key: "j", metaKey: true });
     expect(useArtifactStore.getState().selectedArtifactId).toBe("a1");
+  });
+});
+
+describe("F9 (L3) — replay clamps + Escape exit", () => {
+  afterEach(() => useReplayStore.getState().exitReplay());
+
+  it("`a` is inert while replay is active (no shortcut event dispatched)", () => {
+    render(<App />);
+    useReplayStore.setState({ active: true } as any);
+    const fired: Event[] = [];
+    const listener = (e: Event) => fired.push(e);
+    window.addEventListener("dp:artifact-shortcut", listener);
+    try {
+      fireEvent.keyDown(document, { key: "a" });
+      expect(fired).toHaveLength(0);
+    } finally {
+      window.removeEventListener("dp:artifact-shortcut", listener);
+    }
+  });
+
+  it("Escape exits replay when no overlay is open", () => {
+    render(<App />);
+    useReplayStore.setState({ active: true } as any);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(useReplayStore.getState().active).toBe(false);
   });
 });

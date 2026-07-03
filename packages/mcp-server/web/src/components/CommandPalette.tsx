@@ -53,9 +53,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         a.type !== "decision" &&
         (!boundSessionId || a.sessionId === boundSessionId),
     );
+    const draftSessionCount = new Set(approvableDrafts.map((a) => a.sessionId)).size;
     items.push({
       id: "action_approve_all",
-      label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : ""} (except decisions)`,
+      label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : !boundSessionId && draftSessionCount > 1 ? ` across ${draftSessionCount} sessions` : ""} (except decisions)`,
       type: "action",
       // F2 — decisions are intentionally EXCLUDED: a blanket "approved" flip
       // records no optionId, so the agent never learns which option was picked

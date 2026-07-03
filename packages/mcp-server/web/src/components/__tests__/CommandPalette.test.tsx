@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "../CommandPalette";
@@ -78,6 +78,16 @@ describe("E3 (L3) — content search", () => {
 });
 
 describe("F9 (L7) — approve-all scopes to the bound session and discloses", () => {
+  // Review — restore what this suite stubs: reset() only restores DATA
+  // fields, not replaced store METHODS, and nothing resets the connection
+  // binding. Without this the stub leaks into any test appended below
+  // (correctness-by-ordering).
+  const origUpdate = useArtifactStore.getState().updateArtifactStatus;
+  afterEach(() => {
+    useArtifactStore.setState({ updateArtifactStatus: origUpdate });
+    useConnectionStore.setState({ sessionId: null } as any);
+  });
+
   it("only this session's drafts are approved; the label carries scope + count", async () => {
     useConnectionStore.setState({ sessionId: "s1" } as any);
     const mk = (id: string, sessionId: string) =>
