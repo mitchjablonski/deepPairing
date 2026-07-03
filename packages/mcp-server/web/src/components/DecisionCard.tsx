@@ -318,8 +318,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // hazard. `a` again re-arms at the new focus.
   useEffect(() => {
     setArmedSelect(null);
-    // focusedIndex only — arming itself must not immediately disarm.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // focusedIndex only — arming itself must not immediately disarm. (No
+    // exhaustive-deps disable needed: the react-hooks plugin isn't wired
+    // yet — G8 backlog.)
   }, [focusedIndex]);
   useEffect(() => {
     if (!armedSelect) return;
