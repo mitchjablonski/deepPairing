@@ -14,7 +14,7 @@ import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
  * answer to "why deepPairing".
  *
  * Two tabs:
- *   - "Your ledger"  (default) — LedgerPanel digest + AA9 SeedAffordance
+ *   - "Ledger"  (default) — LedgerPanel digest + AA9 SeedAffordance
  *   - "Past sessions"          — the existing SessionBrowser
  *
  * The ledger headline reuses the same component the Ledger drawer

@@ -116,7 +116,7 @@ function DigestEntry({
   );
 }
 
-export function stanceBadgeClasses(stance: string): string {
+function stanceBadgeClasses(stance: string): string {
   if (stance === "avoid") return "bg-accent-red-dim text-accent-red";
   if (stance === "prefer") return "bg-accent-green-dim text-accent-green";
   return "bg-surface-hover text-text-secondary";

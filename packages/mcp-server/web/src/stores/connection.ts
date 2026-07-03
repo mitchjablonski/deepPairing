@@ -353,7 +353,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             const icon = kind === "approved" ? "+ prefer" : "+ avoid";
             useToastStore.getState().push({
               kind: "info",
-              title: `🧭 Added to Your taste: ${icon}`,
+              title: `🧭 Added to your Ledger: ${icon}`,
               body: `"${trimmed}"`,
               ttl: 5000,
               action: {
