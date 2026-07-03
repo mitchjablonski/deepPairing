@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+import { useReplayStore } from "./replay";
 
 // Monotonic counter for provisional (optimistic) comment ids until the server
 // assigns a real one. Module-scoped so ids stay unique across submits.
@@ -12,6 +13,29 @@ let localCommentSeq = 0;
  * top-of-file (toast store is lazy-loaded to avoid Zustand circular-import
  * pain — same pattern as connection.ts).
  */
+/**
+ * F12 — the store is the ONE choke point every mutating surface funnels
+ * through (footer buttons, decision select, composers, rename, palette).
+ * Replay loads a HISTORICAL session's artifacts into this store, and F6
+ * owner-routing means writes would land in that session's persisted store.
+ * Refuse loudly; the footer/decision surfaces also show read-only UI.
+ */
+function refuseInReplay(action: string): boolean {
+  // SYNCHRONOUS check — an await here delayed the optimistic flip a
+  // microtask and broke its "already flipped before the POST" contract
+  // (the U3 tests caught it). replay.ts imports nothing from this store,
+  // so the static import is cycle-safe; only the toast lazy-loads.
+  if (!useReplayStore.getState().active) return false;
+  void import("./toast").then(({ useToastStore }) =>
+    useToastStore.getState().push({
+      kind: "error",
+      title: `${action} is disabled during replay`,
+      body: "Exit replay (Esc) to make changes.",
+    }),
+  );
+  return true;
+}
+
 async function toastApiError(action: string, err: unknown): Promise<void> {
   const { useToastStore } = await import("./toast");
   const apiErr = err instanceof ApiError ? err : null;
@@ -326,6 +350,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   // user can react (re-try, run doctor, restart Claude Code, etc).
 
   submitComment: async (artifactId, content, target, options) => {
+    if (refuseInReplay("Commenting")) return;
     // Optimistic: render the comment immediately instead of waiting on the
     // session-scoped `comment_added` WS broadcast. Pre-this, submitComment was
     // the last broadcast-only mutation — the user hit send and nothing appeared
@@ -420,6 +445,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
 
   updateArtifactStatus: async (artifactId, status, feedback, concept) => {
+    if (refuseInReplay("Review")) return;
     // Optimistic: flip the local status immediately so the item leaves the
     // "waiting for you" set (PendingBanner/TurnIndicator/cross-project badge)
     // the instant you act on it — don't wait on the WS `artifact_updated`
@@ -443,6 +469,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
+    if (refuseInReplay("Resolving a decision")) return;
     // Optimistic: flip the decision artifact to "approved" locally so it leaves
     // the "waiting for you" set the instant you choose — don't wait on the
     // session-scoped `decision_resolved` WS broadcast (which never reaches a
@@ -472,6 +499,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
 
   renameArtifact: async (artifactId, title) => {
+    if (refuseInReplay("Renaming")) return;
     await optimisticArtifactPatch(
       (a) => a.id === artifactId,
       "title",
@@ -487,6 +515,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
 
   markQuestionResolved: async (commentId) => {
+    if (refuseInReplay("Resolving a question")) return;
     const resolvedAt = new Date().toISOString();
     // Optimistic: stamp humanResolvedAt locally so the waiting signal clears
     // immediately. SURGICAL rollback: remember only this comment's prior

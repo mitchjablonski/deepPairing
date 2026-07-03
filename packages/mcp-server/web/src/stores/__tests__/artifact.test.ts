@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useArtifactStore } from "../artifact";
+import { useReplayStore } from "../replay";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function artifact(id: string, overrides: Partial<Artifact> = {}): Artifact {
@@ -422,5 +423,51 @@ describe("F6 — mutations route by the OWNING session", () => {
 
     const [, init] = fetchSpy.mock.calls[0];
     expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_owner");
+  });
+});
+
+describe("F12 — the store refuses ALL mutations during replay (the mouse path)", () => {
+  const art = (id: string) =>
+    ({
+      id, sessionId: "s_hist", type: "research", version: 1, parentId: null,
+      title: id, status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z",
+    }) as any;
+
+  beforeEach(() => {
+    useReplayStore.setState({ active: true } as any);
+  });
+  afterEach(() => {
+    useReplayStore.getState().exitReplay();
+  });
+
+  it("status writes, comments, renames, and decision resolves all refuse — zero fetches, one toast each", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({ artifacts: [art("a_h")] });
+
+    const store = useArtifactStore.getState();
+    await store.updateArtifactStatus("a_h", "approved");
+    await store.submitComment("a_h", "into the past");
+    await store.renameArtifact("a_h", "rewritten history");
+    await store.resolveDecision("dec_h", "o1");
+    await store.markQuestionResolved("cmt_h");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The artifact is untouched (no optimistic flip either).
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+    const { useToastStore } = await import("../../stores/toast");
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes("disabled during replay"))).toBe(true);
+  });
+
+  it("mutations work again after exitReplay", async () => {
+    useReplayStore.getState().exitReplay();
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({ artifacts: [art("a_live")] });
+    await useArtifactStore.getState().updateArtifactStatus("a_live", "approved");
+    expect(fetchSpy).toHaveBeenCalled();
   });
 });
