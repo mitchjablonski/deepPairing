@@ -136,6 +136,13 @@ export function TurnIndicator() {
   const elapsedMin =
     !idle && agentActiveSince ? Math.floor((Date.now() - agentActiveSince) / 60_000) : 0;
 
+  // F8 (M6, review-hardened) — "waiting on the agent" is a promise; the
+  // badge aggregates questions ACROSS sessions, so it stays honest if ANY
+  // question's owning session can still answer. Hook lives ABOVE the early
+  // returns (D10's exact rules-of-hooks lesson — the local e2e caught the
+  // repeat before push).
+  const activeSessions = useConnectionStore((st) => st.activeSessions);
+
   if (!connected) return null;
 
   // UX1 — derive the whose-turn signal from the SAME predicate PendingBanner
@@ -153,15 +160,20 @@ export function TurnIndicator() {
   // Q4 — badge rendered alongside the turn pill. Violet = "waiting on agent"
   // (inverse of the amber "your turn"). Click jumps to the oldest unanswered
   // question so the user can see what was asked.
+  const anyAnswerable = unanswered.some(
+    (q) => activeSessions.find((x) => x.sessionId === q.comment.sessionId)?.live !== false,
+  );
   const questionsBadge = unanswered.length > 0 ? (
     <button
       type="button"
       onClick={() => selectArtifact(unanswered[0].artifactId)}
-      title={`${unanswered.length} question${unanswered.length > 1 ? "s" : ""} waiting on the agent — click to jump`}
+      title={anyAnswerable
+        ? `${unanswered.length} question${unanswered.length > 1 ? "s" : ""} waiting on the agent — click to jump`
+        : `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — the agent exited; they'll be seen if the session resumes`}
       className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-violet-dim text-accent-violet shrink-0 hover:bg-accent-violet-dim/80 transition-colors"
     >
       <span className="font-bold">❓</span>
-      {unanswered.length} question{unanswered.length > 1 ? "s" : ""} waiting
+      {unanswered.length} question{unanswered.length > 1 ? "s" : ""} {anyAnswerable ? "waiting" : "unanswered (agent exited)"}
     </button>
   ) : null;
 

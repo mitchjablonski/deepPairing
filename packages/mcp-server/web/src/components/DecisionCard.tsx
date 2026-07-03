@@ -175,6 +175,11 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   };
 
   const handleSelect = async (optionId: string) => {
+    // F8 review — ANY select disarms the pending keyboard-commit: without
+    // this, a manual click whose POST failed (phase rolls back to idle) left
+    // the armed timer alive to commit the ABANDONED option. Idempotent on
+    // the expiry path (which already cleared it).
+    setArmedSelect(null);
     if (phase.kind !== "idle") return;
     // FF9 — gate on stakes==='high' AND user opted in to prediction
     // capture for THIS decision. Pre-FF9 the predicting phase fired
@@ -286,6 +291,49 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     if (!resolved) containerRef.current?.focus({ preventScroll: true });
   }, [resolved]);
 
+  // F8 (M4) — keyboard-armed select confirm. null = disarmed.
+  const [armedSelect, setArmedSelect] = useState<{ optionId: string; left: number } | null>(null);
+  // Latest-ref (the F10/G5 idiom): handleSelect is an inline arrow with new
+  // identity every render — keying the tick on it reset the pending timeout
+  // on ANY re-render (hover, composer keystrokes, WS traffic), stalling the
+  // bar at "3s" indefinitely (review-caught).
+  const handleSelectRef = useRef<(optionId: string) => void>(() => {});
+  handleSelectRef.current = handleSelect;
+  useEffect(() => {
+    if (!armedSelect) return;
+    if (armedSelect.left <= 0) {
+      const { optionId } = armedSelect;
+      setArmedSelect(null);
+      handleSelectRef.current(optionId);
+      return;
+    }
+    const t = setTimeout(
+      () => setArmedSelect((a) => (a ? { ...a, left: a.left - 1 } : a)),
+      1000,
+    );
+    return () => clearTimeout(t);
+  }, [armedSelect]);
+  // F8 review — focus-move disarms: expiry committing the option captured at
+  // arm time while the ring shows another is the D3/U4 wrong-selection
+  // hazard. `a` again re-arms at the new focus.
+  useEffect(() => {
+    setArmedSelect(null);
+    // focusedIndex only — arming itself must not immediately disarm. (No
+    // exhaustive-deps disable needed: the react-hooks plugin isn't wired
+    // yet — G8 backlog.)
+  }, [focusedIndex]);
+  useEffect(() => {
+    if (!armedSelect) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setArmedSelect(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [armedSelect]);
+
   // UX6 — the global a/r shortcuts (App dispatches dp:artifact-shortcut) did
   // nothing on a decision: only ArtifactStatusActions listened, and a decision
   // renders DecisionCard. Map approve → select the focused option, revise →
@@ -296,7 +344,13 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       const detail = (evt as CustomEvent).detail as { artifactId?: string; action?: string } | undefined;
       if (!detail || detail.artifactId !== artifactId) return;
       if (detail.action === "approve") {
-        handleSelect(event.options[focusedIndex]?.id ?? event.options[0]?.id);
+        // F8 (M4) — decisions are the highest-stakes artifact and got the
+        // LEAST confirmation: one `a` keystroke committed the resolution
+        // irreversibly (feeding the ledger + calibration data) while
+        // App.tsx's contract and the ? help both promise a 3s confirm.
+        // Arm the same countdown the footer uses; Escape/Cancel bails.
+        const optionId = event.options[focusedIndex]?.id ?? event.options[0]?.id;
+        if (optionId) setArmedSelect({ optionId, left: 3 });
       } else if (detail.action === "revise") {
         // mirror the footer button — the two composers are mutually exclusive
         setShowSendBack(true);
@@ -305,9 +359,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     };
     window.addEventListener("dp:artifact-shortcut", onShortcut);
     return () => window.removeEventListener("dp:artifact-shortcut", onShortcut);
-    // handleSelect closes over phase/stakes/predictOptIn/reasoning — keep it in
-    // deps so the approve shortcut never fires with stale selection state.
-  }, [artifactId, resolved, focusedIndex, event.options, handleSelect]);
+    // (The approve branch only ARMS now — no handleSelect in deps; the tick
+    // effect reads it through the latest-ref.)
+  }, [artifactId, resolved, focusedIndex, event.options]);
 
   // Send-back-with-comment: posts a tagged question comment that the
   // server's firstCallHint promotes to "REVISION REQUEST" priority. Agent
@@ -603,6 +657,29 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter selects highlighted</span>
       </div>
       <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
+
+      {/* F8 (M4) — keyboard-select confirm bar (mirrors the footer's). */}
+      {armedSelect && (
+        <div className="mb-2 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-2xs text-accent-green">
+              Will select “{event.options.find((o) => o.id === armedSelect.optionId)?.title ?? armedSelect.optionId}” in {armedSelect.left}s… (Esc to cancel)
+            </span>
+            <button
+              onClick={() => setArmedSelect(null)}
+              className="text-2xs text-text-muted hover:text-text-secondary press-scale"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="h-0.5 bg-surface-elevated rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent-green transition-all duration-1000 ease-linear"
+              style={{ width: `${(armedSelect.left / 3) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Options grid */}
       <div className={`grid gap-2 ${gridCols}`}>

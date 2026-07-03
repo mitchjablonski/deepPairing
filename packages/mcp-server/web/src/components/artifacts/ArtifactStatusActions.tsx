@@ -203,6 +203,24 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     commentRef.current?.focus();
   };
 
+  // F8 (M3) — the ? help and the arm comment BOTH promised "Esc to cancel";
+  // no Escape path existed (App's handler only closes overlays). Scoped to
+  // an armed countdown so it can't swallow overlay Escapes.
+  const countdownArmed = countdown !== null && !countdownPaused;
+  useEffect(() => {
+    if (!countdownArmed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        dispatch({ type: "cancelCountdown" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // Derived boolean, not [countdown, paused] — the tick decrements countdown
+    // every second and re-attaching the window listener per tick is waste.
+  }, [countdownArmed]);
+
   const confidence = (artifact.content as any)?.confidence;
   const shouldAutoApprove =
     artifact.status === "draft" &&
@@ -311,8 +329,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       <div className="flex items-center gap-2 pt-2 border-t border-border-default">
         {/* UX7b — same glyph as the sidebar/header statusGlyph.revised (↻),
             not a pencil, so "revised" reads consistently across surfaces. */}
-        <span className="text-accent-amber text-sm">↻</span>
-        <span className="text-xs text-accent-amber font-medium">Revision requested</span>
+        {/* F8 (L4) — violet with the panel dot: revised = agent's turn. */}
+        <span className="text-accent-violet text-sm">↻</span>
+        <span className="text-xs text-accent-violet font-medium">Revision requested</span>
         <span className="text-2xs text-text-muted ml-1">awaiting agent</span>
       </div>
     );

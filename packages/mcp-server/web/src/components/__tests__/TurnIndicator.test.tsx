@@ -236,3 +236,24 @@ describe("B1 — the 'Your turn' pill is a jump button, not a dead label", () =>
     expect(useArtifactStore.getState().selectedArtifactId).toBe("d1");
   });
 });
+
+describe("F8 (M6) — the questions badge stops promising check-ins from dead sessions", () => {
+  it("says 'agent exited' when every unanswered question's owning session is dead", () => {
+    useConnectionStore.setState({
+      connected: true,
+      sessionId: "s1",
+      activeSessions: [{ sessionId: "s1", live: false }],
+    } as any);
+    useArtifactStore.setState({
+      comments: {
+        art_q: [{
+          id: "c_q", artifactId: "art_q", sessionId: "s1", author: "human",
+          intent: "question", content: "?", createdAt: "2026-07-01T00:00:00.000Z",
+          target: { artifactId: "art_q" },
+        } as any],
+      },
+    });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/agent exited/i)).toBeInTheDocument();
+  });
+});

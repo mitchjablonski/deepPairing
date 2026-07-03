@@ -36,7 +36,10 @@ const statusDots: Record<string, string> = {
   draft: "bg-accent-amber",
   reviewing: "bg-accent-blue-strong",
   approved: "bg-accent-green",
-  revised: "bg-accent-amber",
+  // F8 (L4) — revised means BACK TO THE AGENT (its own glyph comment says
+  // so, and computePending excludes it); wearing the your-turn amber made
+  // the sidebar dot signal a false turn. Violet = the agent's-turn family.
+  revised: "bg-accent-violet",
   rejected: "bg-accent-red",
   superseded: "bg-text-muted opacity-40",
   retracted: "bg-text-muted opacity-60",
@@ -49,7 +52,7 @@ const statusColors: Record<string, string> = {
   draft: "bg-accent-amber-dim text-accent-amber",
   reviewing: "bg-accent-blue-dim text-accent-blue",
   approved: "bg-accent-green-dim text-accent-green",
-  revised: "bg-accent-amber-dim text-accent-amber",
+  revised: "bg-accent-violet-dim text-accent-violet",
   rejected: "bg-accent-red-dim text-accent-red",
   superseded: "bg-surface-elevated text-text-muted",
   retracted: "bg-surface-elevated text-text-muted",

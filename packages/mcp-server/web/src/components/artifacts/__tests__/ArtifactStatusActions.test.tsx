@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Artifact } from "@deeppairing/shared";
 import { ArtifactStatusActions } from "../ArtifactStatusActions";
@@ -267,5 +267,30 @@ describe("ArtifactStatusActions — keyboard shortcut event", () => {
       );
     });
     expect(screen.queryByText(/Will auto-approve/)).not.toBeInTheDocument();
+  });
+});
+
+describe("F8 (M3) — Escape cancels the armed countdown (the help finally tells the truth)", () => {
+  it("shortcut-armed approve + Escape → no status write, ever", () => {
+    vi.useFakeTimers();
+    try {
+      const art = artifact({ status: "draft" });
+      render(<ArtifactStatusActions artifact={art} />);
+      act(() => {
+        window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", {
+          detail: { artifactId: art.id, action: "approve" },
+        }));
+      });
+      expect(screen.getByText(/auto-approve in/i)).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByText(/auto-approve in/i)).toBeNull();
+      for (let i = 0; i < 5; i++) act(() => { vi.advanceTimersByTime(1100); });
+      expect(fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/status"),
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
