@@ -216,10 +216,31 @@ export class FileStore implements IStore {
     // dropped on every daemon idle-shutdown — review-latency metrics
     // would silently reset to zero and the engagement view in YourTaste
     // looked broken. Now they round-trip through metrics.json on flush.
-    this.reviewLatencies = this.loadJsonFile<{ type: string; latencyMs: number }[]>(
-      path.join(dir, "metrics.json"),
-      [],
-    );
+    // F10 (G1) — the ONE load D1 missed: any parseable non-array ({}, "hi")
+    // landed here as-is, and the .push in recordArtifactReviewed then threw
+    // on EVERY human approve/reject (500s, and the corrupt file never
+    // self-healed because flush only writes when length > 0). Latency
+    // entries carry no id field, so this is an element-shape salvage rather
+    // than salvageArray.
+    const rawMetrics = this.loadJsonFile<unknown>(path.join(dir, "metrics.json"), []);
+    if (Array.isArray(rawMetrics)) {
+      const kept = rawMetrics.filter(
+        (e): e is { type: string; latencyMs: number } =>
+          !!e && typeof e === "object" &&
+          typeof (e as { type?: unknown }).type === "string" &&
+          typeof (e as { latencyMs?: unknown }).latencyMs === "number" &&
+          Number.isFinite((e as { latencyMs: number }).latencyMs),
+      );
+      if (kept.length !== rawMetrics.length) {
+        FileStore.salvageLog(`${this.sessionId}:metrics.json`, `dropped ${rawMetrics.length - kept.length} malformed latency entr(ies)`);
+      }
+      this.reviewLatencies = kept;
+    } else {
+      if (rawMetrics != null && !Array.isArray(rawMetrics)) {
+        FileStore.salvageLog(`${this.sessionId}:metrics.json`, `expected an array, got ${typeof rawMetrics} — using []`);
+      }
+      this.reviewLatencies = [];
+    }
   }
 
   /**
@@ -571,7 +592,16 @@ export class FileStore implements IStore {
       // with agent-paced, non-human samples.
       const agentDriven = reason.startsWith("agent_") || reason === "demo_script";
       if (wasDraft && status !== "draft" && !agentDriven) {
-        this.recordArtifactReviewed(artifactId);
+        // F10 (split-state) — the status/history mutation above already
+        // happened; a metrics throw here used to 500 the route AFTER the
+        // in-memory flip, so the UI rolled back + toasted failure while a
+        // LATER flush persisted the phantom approval. Metrics must never
+        // block a review verdict.
+        try {
+          this.recordArtifactReviewed(artifactId);
+        } catch (err) {
+          console.error(`[deepPairing] metrics recording failed (verdict unaffected): ${err}`);
+        }
       }
       this.scheduleFlush();
       this.notifyFeedbackWaiters();
