@@ -6939,7 +6939,13 @@ var ERROR_CODES = {
   /** Zod (or hand-rolled) validation failed on a request body. */
   validation_error: "validation_error",
   /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
-  forbidden_host: "forbidden_host"
+  forbidden_host: "forbidden_host",
+  /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
+  artifact_not_in_session: "artifact_not_in_session",
+  /** F6 — decision resolve for a decision the bound session doesn't know. */
+  decision_not_in_session: "decision_not_in_session",
+  /** F6 — mark-resolved for a comment the bound session doesn't own. */
+  comment_not_in_session: "comment_not_in_session"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -25059,6 +25065,24 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = CommentBodySchema.safeParse(await c.req.json());
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, content, target, intent, parentCommentId } = parsed.data;
+    const targetArtifactId = target?.artifactId;
+    const idsToOwn = [artifactId, targetArtifactId].filter(
+      (id) => !!id && id !== "__session__"
+    );
+    if (idsToOwn.length > 0) {
+      const arts = await store.getArtifacts();
+      const owns = idsToOwn.every((id) => arts.some((a) => a.id === id));
+      if (!owns) {
+        return c.json(
+          {
+            error: "artifact_not_in_session",
+            code: "artifact_not_in_session",
+            message: "This artifact belongs to a different session than the one this tab is bound to."
+          },
+          404
+        );
+      }
+    }
     const newId = `cmt_${nanoid3(10)}`;
     const comment = await store.addComment({
       id: newId,
@@ -25097,6 +25121,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const commentId = c.req.param("commentId");
+    if (!await store.getComment(commentId)) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
     const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
     await store.markCommentHumanResolved(commentId, resolvedAt);
     const comment = await store.getComment(commentId);
@@ -25113,6 +25147,20 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = DecisionResolveBodySchema.safeParse(await c.req.json());
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
+    const knownRecord = await store.getDecision(decisionId);
+    const knownArtifact = (await store.getArtifacts()).some(
+      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+    );
+    if (!knownRecord && !knownArtifact) {
+      return c.json(
+        {
+          error: "decision_not_in_session",
+          code: "decision_not_in_session",
+          message: "This decision belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
     const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
     await store.resolveDecision(decisionId, optionId, reasoning, prediction);
     const decision = await store.getDecision(decisionId);
@@ -25161,6 +25209,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     log2(
       `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason}`
     );
+    if (!target) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
     await store.updateArtifactStatus(artifactId, status, reason);
     if (status !== "obsolete") {
       await store.resolvePlanReview(artifactId, status, feedback);
@@ -25209,6 +25267,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = RenameBodySchema.safeParse(await c.req.json());
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const title = parsed.data.title.trim();
+    if (!(await store.getArtifacts()).some((a) => a.id === artifactId)) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
     await store.renameArtifact(artifactId, title);
     broadcast3({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });

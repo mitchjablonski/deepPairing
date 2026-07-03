@@ -121,6 +121,8 @@ describe("HTTP Routes", () => {
   });
 
   it("POST /api/comments creates a comment", async () => {
+    // F6 — comments now require the bound session to OWN the artifact.
+    store.createArtifact({ id: "art_1", type: "research", title: "t", content: {} });
     const res = await app.request("/api/comments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -172,7 +174,7 @@ describe("HTTP Routes", () => {
     expect(updated.comment.humanResolvedAt).toBeTruthy();
   });
 
-  it("POST /api/comments/:id/mark-resolved is a graceful no-op for an unknown comment", async () => {
+  it("F6 — mark-resolved for an unknown comment FAILS LOUDLY (was: graceful 200 no-op that resurrected questions on reload)", async () => {
     const events: any[] = [];
     const local = withHash(
       createHttpRoutes(store, tmpDir, (event) => events.push(event)),
@@ -183,9 +185,8 @@ describe("HTTP Routes", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.comment).toBeNull();
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe("comment_not_in_session");
     // No comment_updated broadcast for a comment that doesn't exist.
     expect(events.some((e) => e.type === "comment_updated")).toBe(false);
   });
@@ -1063,6 +1064,8 @@ describe("HTTP Routes", () => {
     it("POST /api/comments routes to the store named by X-Session-Id", async () => {
       const storeA = new FileStore(tmpDir, "session_a");
       const storeB = new FileStore(tmpDir, "session_b");
+      // F6 — the routed-to session must OWN the artifact now.
+      storeB.createArtifact({ id: "art_b1", type: "research", title: "b", content: {} });
       const broadcasts: Array<{ event: any; sessionId?: string }> = [];
       const multiApp = withHash(
         createHttpRoutes(
@@ -1133,6 +1136,8 @@ describe("HTTP Routes", () => {
     it("falls back to default store when X-Session-Id is absent", async () => {
       const storeDefault = new FileStore(tmpDir, "default_session");
       const storeOther = new FileStore(tmpDir, "other_session");
+      // F6 — ownership guard: seed the artifact in the default store.
+      storeDefault.createArtifact({ id: "art_d", type: "research", title: "d", content: {} });
       const multiApp = withHash(
         createHttpRoutes(
           (sid?: string) => (sid === "other_session" ? storeOther : storeDefault),
@@ -1876,5 +1881,72 @@ describe("HTTP Routes", () => {
       });
       expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
     });
+  });
+});
+
+describe("F6 — cross-session mutation guards (the silent-no-op class)", () => {
+  // Round-4 review, verified: mutations on artifacts the bound session
+  // doesn't own returned 200 while writing nothing (status/resolve/rename)
+  // or writing into the WRONG session (comments). Every guard fails loudly;
+  // the UI's safeFetch toasts non-2xx and rolls back the optimistic flip.
+
+  it("status write on a foreign artifact → 404 artifact_not_in_session (was: 200 + silent no-op)", async () => {
+    const res = await app.request("/api/artifacts/art_foreign/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "approved" }),
+    });
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe("artifact_not_in_session");
+  });
+
+  it("artifact-targeted comment on a foreign artifact → 404 (was: stored in the WRONG session)", async () => {
+    const res = await app.request("/api/comments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artifactId: "art_foreign", content: "lost forever", target: { artifactId: "art_foreign" } }),
+    });
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe("artifact_not_in_session");
+    expect((await store.getUnacknowledgedComments()).some((c) => c.content === "lost forever")).toBe(false);
+  });
+
+  it("session-level (__session__) comments keep working without an artifact", async () => {
+    const res = await app.request("/api/comments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artifactId: "__session__", content: "directive", target: { artifactId: "__session__" } }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("decision resolve for an unknown decision → 404 decision_not_in_session (was: 200 'resolved' with the F2 guard skipped)", async () => {
+    const res = await app.request("/api/decisions/dec_foreign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "o1" }),
+    });
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe("decision_not_in_session");
+  });
+
+  it("rename on a foreign artifact → 404", async () => {
+    const res = await app.request("/api/artifacts/art_foreign/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "new name" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("owned artifacts still mutate normally (the guard is scoped, not a lockout)", async () => {
+    store.createArtifact({ id: "art_owned", type: "research", title: "mine", content: {} });
+    const res = await app.request("/api/artifacts/art_owned/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "approved" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await store.getArtifacts()).find((a) => a.id === "art_owned")?.status).toBe("approved");
   });
 });

@@ -142,7 +142,13 @@ function App() {
         if (requested && sessions.some((s: any) => s.sessionId === requested)) {
           connect(requested);
         } else if (sessions.length > 0) {
-          connect(sessions[0].sessionId);
+          // F6 (M1) — prefer a LIVE session: the daemon retains dead sessions
+          // in insertion order (oldest first), so after any Claude restart a
+          // plain sessions[0] bound the tab to a corpse — making the
+          // cross-session no-op path the DEFAULT state, with composer
+          // directives flowing into a store no agent reads.
+          const live = sessions.find((s: { sessionId: string; live?: boolean }) => s.live !== false);
+          connect((live ?? sessions[0]).sessionId);
         } else {
           connect(); // Fallback: global connection
         }

@@ -115,6 +115,10 @@ export interface ArtifactState {
     options?: { intent?: "comment" | "question" | "suggestion"; parentCommentId?: string | null },
   ) => Promise<void>;
 
+  /** F6 — the session that owns an artifact (merged stores carry foreign artifacts). */
+  owningSession: (artifactId: string) => string | undefined;
+  /** F6 — the decision artifact carrying a decisionId (or the artifact-id fallback). */
+  findDecisionArtifact: (decisionId: string) => Artifact | undefined;
   updateArtifactStatus: (
     artifactId: string,
     // "obsolete" = human dismisses a draft as overcome by new information
@@ -181,7 +185,7 @@ function resolveToLiveId(artifacts: Artifact[], id: string): string {
   return current?.id ?? id;
 }
 
-export const useArtifactStore = create<ArtifactState>((set) => ({
+export const useArtifactStore = create<ArtifactState>((set, get) => ({
   artifacts: [],
   comments: {},
   selectedArtifactId: null,
@@ -351,7 +355,13 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     try {
       const res = await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
-        headers: sessionHeaders(),
+        // F6 — comments on merged artifacts were STORED IN THE WRONG SESSION
+        // (looked successful in the UI forever; the owning agent's
+        // check_feedback never saw them). Route by the artifact's owner;
+        // session-level (__session__) comments keep the tab binding.
+        headers: sessionHeaders(
+          artifactId === "__session__" ? undefined : useArtifactStore.getState().owningSession(artifactId),
+        ),
         body: JSON.stringify({
           artifactId,
           content,
@@ -385,6 +395,30 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     }
   },
 
+  /**
+   * F6 — mutations must route to the session that OWNS the artifact, not the
+   * tab's bound session: MultiAgentSync merges other sessions' artifacts into
+   * this store, and routing by the tab silently no-op'd (or mis-stored
+   * comments) on every cross-session write. Falls back to the tab binding
+   * for artifacts without a sessionId (shouldn't exist, but never break the
+   * single-session path).
+   */
+  /** F6 — one predicate for 'the artifact carrying this decision' (used by
+   *  the optimistic match AND the owner lookup — review NIT: they had
+   *  drifted-in-duplicate). */
+  findDecisionArtifact: (decisionId) =>
+    get().artifacts.find(
+      (a) => (a.content as { decisionId?: string } | null)?.decisionId === decisionId ||
+             (a.type === "decision" && a.id === decisionId),
+    ),
+
+  owningSession: (artifactId) => {
+    // zustand's own get(): referencing useArtifactStore here would be a
+    // circular type reference that collapses every selector to `any`.
+    const a = get().artifacts.find((x) => x.id === artifactId);
+    return a?.sessionId || undefined;
+  },
+
   updateArtifactStatus: async (artifactId, status, feedback, concept) => {
     // Optimistic: flip the local status immediately so the item leaves the
     // "waiting for you" set (PendingBanner/TurnIndicator/cross-project badge)
@@ -400,7 +434,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       () =>
         safeFetch(`${apiBase()}/api/artifacts/${artifactId}/status`, {
           method: "POST",
-          headers: sessionHeaders(),
+          headers: sessionHeaders(get().owningSession(artifactId)),
           // `concept` is sent on reject only — the human-named ledger key.
           body: JSON.stringify({ status, feedback, concept }),
         }),
@@ -425,7 +459,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       () =>
         safeFetch(`${apiBase()}/api/decisions/${decisionId}`, {
           method: "POST",
-          headers: sessionHeaders(),
+          headers: sessionHeaders(get().findDecisionArtifact(decisionId)?.sessionId || undefined),
           body: JSON.stringify({
             optionId,
             reasoning,
@@ -445,7 +479,7 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
       () =>
         safeFetch(`${apiBase()}/api/artifacts/${artifactId}/rename`, {
           method: "POST",
-          headers: sessionHeaders(),
+          headers: sessionHeaders(get().owningSession(artifactId)),
           body: JSON.stringify({ title }),
         }),
       "Rename artifact",
@@ -469,7 +503,12 @@ export const useArtifactStore = create<ArtifactState>((set) => ({
     try {
       await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-resolved`, {
         method: "POST",
-        headers: sessionHeaders(),
+        // F6 review — the FIFTH route with the silent-no-op class: a comment
+        // on a merged foreign artifact lives in the OWNER's session; routing
+        // by the tab resolved nothing and the question resurrected on reload.
+        headers: sessionHeaders(
+          Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined,
+        ),
         body: JSON.stringify({ resolvedAt }),
       });
     } catch (err) {
