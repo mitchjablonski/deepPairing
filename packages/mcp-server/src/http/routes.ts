@@ -299,6 +299,21 @@ export function createHttpRoutes(
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, content, target, intent, parentCommentId } = parsed.data;
 
+    // F6 — an artifact-targeted comment stored into a session that doesn't
+    // own the artifact is WORSE than a no-op: it renders in the merged UI
+    // (looks successful forever) while the owning agent's check_feedback
+    // never sees it. Session-level comments (__session__) are exempt.
+    if (artifactId !== "__session__") {
+      const owns = (await store.getArtifacts()).some((a) => a.id === artifactId);
+      if (!owns) {
+        return c.json(
+          { error: "artifact_not_in_session", code: "artifact_not_in_session",
+            message: "This artifact belongs to a different session than the one this tab is bound to." },
+          404,
+        );
+      }
+    }
+
     const newId = `cmt_${nanoid(10)}`;
     const comment = await store.addComment({
       id: newId,
@@ -378,6 +393,23 @@ export function createHttpRoutes(
     const parsed = DecisionResolveBodySchema.safeParse(await c.req.json());
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
+
+    // F6 — a decision this store doesn't know (no record AND no artifact
+    // carrying the decisionId) means the tab is bound to a different session
+    // than the one that owns this decision. Fail loudly instead of a 200
+    // that resolves nothing (round-4 review: the F2 guard was silently
+    // SKIPPED in exactly this case).
+    const knownRecord = await store.getDecision(decisionId);
+    const knownArtifact = (await store.getArtifacts()).some(
+      (a) => a.type === "decision" && ((a.content as any)?.decisionId === decisionId || a.id === decisionId),
+    );
+    if (!knownRecord && !knownArtifact) {
+      return c.json(
+        { error: "decision_not_in_session", code: "decision_not_in_session",
+          message: "This decision belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
 
     const prediction = confidence || predictedOutcome
       ? { confidence, predictedOutcome }
@@ -469,6 +501,20 @@ export function createHttpRoutes(
       `targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason}`,
     );
 
+    // F6 — hypothesis A, CONFIRMED in the round-4 review: the U0.6 log above
+    // fired with targetFound=false and the route still returned 200 while
+    // updateArtifactStatus silently no-op'd. A verdict on an artifact this
+    // store doesn't own must FAIL LOUDLY (the UI's safeFetch toasts non-2xx
+    // and rolls back the optimistic flip) — never report success for a write
+    // that didn't land.
+    if (!target) {
+      return c.json(
+        { error: "artifact_not_in_session", code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+
     await store.updateArtifactStatus(artifactId, status, reason as any);
     // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
     // plan review with it (and it narrows status to the three verdicts).
@@ -543,6 +589,14 @@ export function createHttpRoutes(
     const parsed = RenameBodySchema.safeParse(await c.req.json());
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const title = parsed.data.title.trim();
+    // F6 — same cross-session guard as status/comments/decisions.
+    if (!(await store.getArtifacts()).some((a) => a.id === artifactId)) {
+      return c.json(
+        { error: "artifact_not_in_session", code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
     await store.renameArtifact(artifactId, title);
     broadcast({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });
