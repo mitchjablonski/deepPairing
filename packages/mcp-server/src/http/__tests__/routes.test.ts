@@ -174,7 +174,7 @@ describe("HTTP Routes", () => {
     expect(updated.comment.humanResolvedAt).toBeTruthy();
   });
 
-  it("POST /api/comments/:id/mark-resolved is a graceful no-op for an unknown comment", async () => {
+  it("F6 — mark-resolved for an unknown comment FAILS LOUDLY (was: graceful 200 no-op that resurrected questions on reload)", async () => {
     const events: any[] = [];
     const local = withHash(
       createHttpRoutes(store, tmpDir, (event) => events.push(event)),
@@ -185,9 +185,8 @@ describe("HTTP Routes", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.comment).toBeNull();
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe("comment_not_in_session");
     // No comment_updated broadcast for a comment that doesn't exist.
     expect(events.some((e) => e.type === "comment_updated")).toBe(false);
   });

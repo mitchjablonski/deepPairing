@@ -303,8 +303,17 @@ export function createHttpRoutes(
     // own the artifact is WORSE than a no-op: it renders in the merged UI
     // (looks successful forever) while the owning agent's check_feedback
     // never sees it. Session-level comments (__session__) are exempt.
-    if (artifactId !== "__session__") {
-      const owns = (await store.getArtifacts()).some((a) => a.id === artifactId);
+    // Review NIT — also guard target.artifactId: {artifactId:"__session__",
+    // target:{artifactId:"art_foreign"}} would otherwise bypass into the
+    // wrong-session-store case. Current clients send them equal; this is
+    // defense-in-depth for hand-rolled callers.
+    const targetArtifactId = (target as { artifactId?: string } | undefined)?.artifactId;
+    const idsToOwn = [artifactId, targetArtifactId].filter(
+      (id): id is string => !!id && id !== "__session__",
+    );
+    if (idsToOwn.length > 0) {
+      const arts = await store.getArtifacts();
+      const owns = idsToOwn.every((id) => arts.some((a) => a.id === id));
       if (!owns) {
         return c.json(
           { error: "artifact_not_in_session", code: "artifact_not_in_session",
@@ -375,6 +384,17 @@ export function createHttpRoutes(
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const commentId = c.req.param("commentId");
+    // F6 review — the fifth mutation route with the silent-no-op class: an
+    // unknown comment (owned by another session) used to no-op and return
+    // 200 {comment: null}; the optimistic stamp then resurrected the
+    // question into the waiting set on reload. Fail loudly.
+    if (!(await store.getComment(commentId))) {
+      return c.json(
+        { error: "comment_not_in_session", code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
     const resolvedAt = new Date().toISOString();
     await store.markCommentHumanResolved(commentId, resolvedAt);
     const comment = await store.getComment(commentId);

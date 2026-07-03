@@ -380,3 +380,47 @@ describe("D9 (M10) — WS echo replaces the optimistic provisional", () => {
     expect(useArtifactStore.getState().comments["art_2"]).toHaveLength(2);
   });
 });
+
+describe("F6 — mutations route by the OWNING session", () => {
+  const art = (id: string, sessionId: string) =>
+    ({
+      id, sessionId, type: "research", version: 1, parentId: null,
+      title: id, status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z",
+    }) as any;
+
+  it("updateArtifactStatus on a merged FOREIGN artifact carries the owner's X-Session-Id", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({ artifacts: [art("art_mine", "sess_tab"), art("art_foreign", "sess_owner")] });
+
+    await useArtifactStore.getState().updateArtifactStatus("art_foreign", "approved");
+
+    const [, init] = fetchSpy.mock.calls[0];
+    // Pre-F6 this carried the TAB's session and the write silently no-op'd.
+    expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_owner");
+  });
+
+  it("markQuestionResolved routes by the COMMENT's owning session (the fifth route)", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "resolved" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({
+      comments: {
+        art_foreign: [{
+          id: "cmt_q", artifactId: "art_foreign", sessionId: "sess_owner", author: "human",
+          content: "?", intent: "question", createdAt: "2026-07-01T00:00:00.000Z",
+          target: { artifactId: "art_foreign" },
+        } as any],
+      },
+    });
+
+    await useArtifactStore.getState().markQuestionResolved("cmt_q");
+
+    const [, init] = fetchSpy.mock.calls[0];
+    expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_owner");
+  });
+});

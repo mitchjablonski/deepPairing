@@ -54,6 +54,21 @@ describe("sessionHeaders", () => {
     expect(h["X-Session-Id"]).toBe("sess_abc");
   });
 
+  it("F6 — forSessionId OVERRIDES the tab binding (owner routing) and keeps the hash/token attach", () => {
+    vi.stubGlobal("window", {
+      __dpConnectionStore: {
+        getState: () => ({ sessionId: "sess_tab", projectHash: "hashX" }),
+      },
+      __deepPairingToken: "tok_1",
+    });
+    const h = sessionHeaders("sess_owner");
+    expect(h["X-Session-Id"]).toBe("sess_owner");
+    expect(h["X-Project-Hash"]).toBe("hashX"); // AA4 pairing survives the override
+    expect(h["Authorization"]).toBe("Bearer tok_1");
+    // Without the override, the tab binding applies as before.
+    expect(sessionHeaders()["X-Session-Id"]).toBe("sess_tab");
+  });
+
   it("SP1 — carries the bearer token (window.__deepPairingToken) so mutations pass the gate", () => {
     vi.stubGlobal("window", {
       __dpConnectionStore: { getState: () => ({ sessionId: "s1", projectHash: "h1" }) },

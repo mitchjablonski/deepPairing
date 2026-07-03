@@ -44,6 +44,9 @@ export const API_BASE = defaultHost ? `http://${defaultHost}` : "";
 /** Get headers with session ID for daemon routing */
 export function sessionHeaders(forSessionId?: string): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // The explicit owner override applies unconditionally — it doesn't depend
+  // on the window-injected connection store.
+  if (forSessionId) headers["X-Session-Id"] = forSessionId;
   if (typeof window === "undefined") return headers;
   try {
     const connState = (window as any).__dpConnectionStore?.getState?.();

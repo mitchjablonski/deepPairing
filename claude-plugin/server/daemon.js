@@ -6943,7 +6943,9 @@ var ERROR_CODES = {
   /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
   artifact_not_in_session: "artifact_not_in_session",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
-  decision_not_in_session: "decision_not_in_session"
+  decision_not_in_session: "decision_not_in_session",
+  /** F6 — mark-resolved for a comment the bound session doesn't own. */
+  comment_not_in_session: "comment_not_in_session"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -25063,8 +25065,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = CommentBodySchema.safeParse(await c.req.json());
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, content, target, intent, parentCommentId } = parsed.data;
-    if (artifactId !== "__session__") {
-      const owns = (await store.getArtifacts()).some((a) => a.id === artifactId);
+    const targetArtifactId = target?.artifactId;
+    const idsToOwn = [artifactId, targetArtifactId].filter(
+      (id) => !!id && id !== "__session__"
+    );
+    if (idsToOwn.length > 0) {
+      const arts = await store.getArtifacts();
+      const owns = idsToOwn.every((id) => arts.some((a) => a.id === id));
       if (!owns) {
         return c.json(
           {
@@ -25114,6 +25121,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const commentId = c.req.param("commentId");
+    if (!await store.getComment(commentId)) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
     const resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
     await store.markCommentHumanResolved(commentId, resolvedAt);
     const comment = await store.getComment(commentId);

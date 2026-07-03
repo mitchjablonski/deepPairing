@@ -117,6 +117,8 @@ export interface ArtifactState {
 
   /** F6 — the session that owns an artifact (merged stores carry foreign artifacts). */
   owningSession: (artifactId: string) => string | undefined;
+  /** F6 — the decision artifact carrying a decisionId (or the artifact-id fallback). */
+  findDecisionArtifact: (decisionId: string) => Artifact | undefined;
   updateArtifactStatus: (
     artifactId: string,
     // "obsolete" = human dismisses a draft as overcome by new information
@@ -401,6 +403,15 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
    * for artifacts without a sessionId (shouldn't exist, but never break the
    * single-session path).
    */
+  /** F6 — one predicate for 'the artifact carrying this decision' (used by
+   *  the optimistic match AND the owner lookup — review NIT: they had
+   *  drifted-in-duplicate). */
+  findDecisionArtifact: (decisionId) =>
+    get().artifacts.find(
+      (a) => (a.content as { decisionId?: string } | null)?.decisionId === decisionId ||
+             (a.type === "decision" && a.id === decisionId),
+    ),
+
   owningSession: (artifactId) => {
     // zustand's own get(): referencing useArtifactStore here would be a
     // circular type reference that collapses every selector to `any`.
@@ -448,12 +459,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       () =>
         safeFetch(`${apiBase()}/api/decisions/${decisionId}`, {
           method: "POST",
-          headers: sessionHeaders(
-            get().artifacts.find(
-              (a) => (a.content as { decisionId?: string } | null)?.decisionId === decisionId ||
-                     (a.type === "decision" && a.id === decisionId),
-            )?.sessionId || undefined,
-          ),
+          headers: sessionHeaders(get().findDecisionArtifact(decisionId)?.sessionId || undefined),
           body: JSON.stringify({
             optionId,
             reasoning,
@@ -497,7 +503,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     try {
       await safeFetch(`${apiBase()}/api/comments/${commentId}/mark-resolved`, {
         method: "POST",
-        headers: sessionHeaders(),
+        // F6 review — the FIFTH route with the silent-no-op class: a comment
+        // on a merged foreign artifact lives in the OWNER's session; routing
+        // by the tab resolved nothing and the question resurrected on reload.
+        headers: sessionHeaders(
+          Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined,
+        ),
         body: JSON.stringify({ resolvedAt }),
       });
     } catch (err) {

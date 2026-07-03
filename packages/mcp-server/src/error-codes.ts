@@ -42,6 +42,8 @@ export const ERROR_CODES = {
   artifact_not_in_session: "artifact_not_in_session",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
+  /** F6 — mark-resolved for a comment the bound session doesn't own. */
+  comment_not_in_session: "comment_not_in_session",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
