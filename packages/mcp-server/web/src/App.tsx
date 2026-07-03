@@ -24,6 +24,7 @@ import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { HookStatus } from "./components/HookStatus";
 import { useArtifactStore } from "./stores/artifact";
+import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { countUnansweredQuestions } from "./lib/unanswered";
@@ -198,6 +199,12 @@ function App() {
         setShowSettings(false);
         closeTaste(); // CC9 — also clears tasteOpts
         setShowConversation(false);
+        // F9 (L3) — replay is a MODE, and Escape is how modes end everywhere
+        // else in the app; there was no keyboard exit at all.
+        // Layered (review): overlay-registered surfaces get their own Esc
+        // first; replay exits on the NEXT press even if focus escaped the
+        // panel (useModal's stopPropagation covers the focused case).
+        if (!overlayOpenRef.current) useReplayStore.getState().exitReplay();
       }
 
       // UX4 — beyond this point are the ARTIFACT shortcuts (j/k/a/r/q). Suppress
@@ -212,7 +219,14 @@ function App() {
 
       if (e.key === "j" || e.key === "k") {
         e.preventDefault();
-        const visible = store.artifacts.filter((a) => a.status !== "superseded");
+        // F9 review — during replay, match the sidebar's cursor filter so
+        // j/k can't select artifacts the replayed frame hides.
+        const replay = useReplayStore.getState();
+        const visible = store.artifacts.filter(
+          (a) =>
+            a.status !== "superseded" &&
+            (!replay.active || !replay.cursor || a.createdAt <= replay.cursor),
+        );
         if (visible.length === 0) return;
         const currentIdx = visible.findIndex((a) => a.id === store.selectedArtifactId);
         const nextIdx = e.key === "j"
@@ -232,6 +246,10 @@ function App() {
       }
 
       if (e.key === "a" || e.key === "r") {
+        // F9 (L3) — no review actions against a REPLAYED (historical) frame:
+        // the rendered state may predate the live artifact, and the write
+        // would hit the live store. j/k/n stay enabled (navigation is safe).
+        if (useReplayStore.getState().active) return;
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
         if (!selected || selected.status !== "draft") return;
         e.preventDefault();
@@ -246,6 +264,9 @@ function App() {
       }
 
       if (e.key === "q") {
+        // F9 review — q posts a COMMENT (QuickAskModal submit); same clamp
+        // as a/r. "Navigation is safe" — q is not navigation.
+        if (useReplayStore.getState().active) return;
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
         if (!selected) return;
         e.preventDefault();
