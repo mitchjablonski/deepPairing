@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useArtifactStore } from "../artifact";
+import { useReplayStore } from "../replay";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function artifact(id: string, overrides: Partial<Artifact> = {}): Artifact {
@@ -422,5 +423,56 @@ describe("F6 — mutations route by the OWNING session", () => {
 
     const [, init] = fetchSpy.mock.calls[0];
     expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_owner");
+  });
+});
+
+describe("F12 — the store refuses ALL mutations during replay (the mouse path)", () => {
+  const art = (id: string) =>
+    ({
+      id, sessionId: "s_hist", type: "research", version: 1, parentId: null,
+      title: id, status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z",
+    }) as any;
+
+  beforeEach(() => {
+    useReplayStore.setState({ active: true } as any);
+  });
+  afterEach(() => {
+    useReplayStore.getState().exitReplay();
+  });
+
+  it("all five mutations REJECT (toast-then-throw, so callers' catch paths preserve drafts) — zero fetches", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({ artifacts: [art("a_h")] });
+
+    // THROW, not silent return (review): a silent return ran every caller's
+    // SUCCESS path — composers wiped drafts, send-back showed a false
+    // terminal "sent" state.
+    const store = useArtifactStore.getState();
+    await expect(store.updateArtifactStatus("a_h", "approved")).rejects.toThrow(/disabled during replay/);
+    await expect(store.submitComment("a_h", "into the past")).rejects.toThrow(/disabled during replay/);
+    await expect(store.renameArtifact("a_h", "rewritten history")).rejects.toThrow(/disabled during replay/);
+    await expect(store.resolveDecision("dec_h", "o1")).rejects.toThrow(/disabled during replay/);
+    await expect(store.markQuestionResolved("cmt_h")).rejects.toThrow(/disabled during replay/);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The artifact is untouched (no optimistic flip either).
+    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+    const { useToastStore } = await import("../../stores/toast");
+    expect(
+      useToastStore.getState().toasts.filter((t) => t.title.includes("disabled during replay")),
+    ).toHaveLength(5);
+  });
+
+  it("mutations work again after exitReplay", async () => {
+    useReplayStore.getState().exitReplay();
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({ artifacts: [art("a_live")] });
+    await useArtifactStore.getState().updateArtifactStatus("a_live", "approved");
+    expect(fetchSpy).toHaveBeenCalled();
   });
 });

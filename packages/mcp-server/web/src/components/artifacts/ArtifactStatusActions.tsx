@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
+import { useReplayStore } from "../../stores/replay";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
@@ -133,6 +134,10 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
 }
 
 export function ArtifactStatusActions({ artifact, hideApprove = false }: ArtifactStatusActionsProps) {
+  // F12 — replay renders HISTORICAL artifacts through the live components,
+  // and F6 owner-routing means a footer click would write a verdict into a
+  // long-exited session's store. The whole footer goes read-only.
+  const replayActive = useReplayStore((s) => s.active);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const autonomyLevel = useConnectionStore((s) => s.autonomyLevel);
@@ -223,6 +228,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
   const confidence = (artifact.content as any)?.confidence;
   const shouldAutoApprove =
+    // F12 review — without this the countdown armed INVISIBLY during replay
+    // (the chip hides the bar) and phantom-toasted a refusal ~10s later.
+    !replayActive &&
     artifact.status === "draft" &&
     confidence === "high" &&
     autonomyLevel !== "supervised" &&
@@ -297,6 +305,19 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   // B7 review semantics (cancel = engagement) live in the reducer's
   // `cancelled()` — shared by user Cancel, typing, submit-start, hideApprove.
   const cancelCountdown = () => dispatch({ type: "cancelCountdown" });
+
+  // F12 — replay: replace the mutating footer with a read-only chip.
+  // Terminal statuses fall through to their passive chips below (they don't
+  // mutate). This sits above the draft footer so no approve/reject/dismiss
+  // affordance renders against a historical frame.
+  if (replayActive && artifact.status === "draft") {
+    return (
+      <div className="flex items-center gap-2 pt-2 border-t border-border-default">
+        <span className="text-xs text-text-muted font-medium">⏸ Replay — read-only</span>
+        <span className="text-2xs text-text-muted">exit replay to review</span>
+      </div>
+    );
+  }
 
   if (artifact.status === "approved") {
     return (

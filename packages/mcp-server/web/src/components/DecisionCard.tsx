@@ -180,6 +180,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // the armed timer alive to commit the ABANDONED option. Idempotent on
     // the expiry path (which already cleared it).
     setArmedSelect(null);
+    // F12 — no resolving decisions against a replayed frame (the write
+    // would land in the historical session's store via owner routing).
+    if (useReplayStore.getState().active) return;
     if (phase.kind !== "idle") return;
     // FF9 — gate on stakes==='high' AND user opted in to prediction
     // capture for THIS decision. Pre-FF9 the predicting phase fired

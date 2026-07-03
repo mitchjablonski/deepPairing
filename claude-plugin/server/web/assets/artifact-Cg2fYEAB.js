@@ -1,0 +1,1 @@
+import{t as e}from"./artifact-sozBYj1x.js";export{e as useArtifactStore};
