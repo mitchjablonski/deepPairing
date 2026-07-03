@@ -196,21 +196,23 @@ export class FileStore implements IStore {
   private loadPreferences(): void {
     const prefsPath = path.join(this.basePath, "preferences.json");
     const prefs = FileStore.salvageRecord(
-      "preferences.json", this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
+      // G6 — labels are the once-per-process suppression KEY: session-scope
+      // them (F10's sid:file format) so a second corrupt session still logs.
+      `${this.sessionId}:preferences.json`, this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
     if (prefs.autonomyLevel) this.autonomyLevel = prefs.autonomyLevel;
   }
 
   private load(): void {
     const dir = this.sessionDir();
     this.artifacts = FileStore.salvageArray<Artifact>(
-      "artifacts.json", this.loadJsonFile<unknown>(path.join(dir, "artifacts.json"), []), "id");
+      `${this.sessionId}:artifacts.json`, this.loadJsonFile<unknown>(path.join(dir, "artifacts.json"), []), "id");
     this.comments = FileStore.salvageArray<Comment>(
-      "comments.json", this.loadJsonFile<unknown>(path.join(dir, "comments.json"), []), "id");
+      `${this.sessionId}:comments.json`, this.loadJsonFile<unknown>(path.join(dir, "comments.json"), []), "id");
     const decArr = FileStore.salvageArray<DecisionRecord>(
-      "decisions.json", this.loadJsonFile<unknown>(path.join(dir, "decisions.json"), []), "decisionId");
+      `${this.sessionId}:decisions.json`, this.loadJsonFile<unknown>(path.join(dir, "decisions.json"), []), "decisionId");
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = FileStore.salvageArray<PlanReviewRecord>(
-      "plan-reviews.json", this.loadJsonFile<unknown>(path.join(dir, "plan-reviews.json"), []), "artifactId");
+      `${this.sessionId}:plan-reviews.json`, this.loadJsonFile<unknown>(path.join(dir, "plan-reviews.json"), []), "artifactId");
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
     // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
     // dropped on every daemon idle-shutdown — review-latency metrics
@@ -430,7 +432,7 @@ export class FileStore implements IStore {
     if (diskArtifacts) {
       this.artifacts = this.mergeArrayById(
         this.artifacts,
-        FileStore.salvageArray<Artifact>("artifacts.json (external)", diskArtifacts, "id"),
+        FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, diskArtifacts, "id"),
         "id",
       );
       delete this.lastSerialized[artifactsPath];

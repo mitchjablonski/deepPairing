@@ -751,3 +751,24 @@ describe("F10 (G1) — corrupt metrics.json must never break approve/reject", ()
     expect(onDisk).toHaveLength(1);
   });
 });
+
+describe("F11 (G6) — salvage-log suppression keys are session-scoped", () => {
+  it("a second session's corrupt artifacts.json still logs (was: suppressed by the first)", () => {
+    const errors: string[] = [];
+    const orig = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+    try {
+      for (const sid of ["g6_a", "g6_b"]) {
+        const dir = path.join(tmpDir, ".deeppairing", "sessions", sid);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "artifacts.json"), '{"not":"an array"}');
+        createStore(sid);
+      }
+      const salvageLines = errors.filter((e) => e.includes("artifacts.json"));
+      expect(salvageLines.some((e) => e.includes("g6_a"))).toBe(true);
+      expect(salvageLines.some((e) => e.includes("g6_b"))).toBe(true);
+    } finally {
+      console.error = orig;
+    }
+  });
+});

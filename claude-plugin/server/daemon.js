@@ -22829,7 +22829,9 @@ var FileStore = class _FileStore {
   loadPreferences() {
     const prefsPath = path2.join(this.basePath, "preferences.json");
     const prefs = _FileStore.salvageRecord(
-      "preferences.json",
+      // G6 — labels are the once-per-process suppression KEY: session-scope
+      // them (F10's sid:file format) so a second corrupt session still logs.
+      `${this.sessionId}:preferences.json`,
       this.loadJsonFile(prefsPath, {}),
       {}
     );
@@ -22838,23 +22840,23 @@ var FileStore = class _FileStore {
   load() {
     const dir = this.sessionDir();
     this.artifacts = _FileStore.salvageArray(
-      "artifacts.json",
+      `${this.sessionId}:artifacts.json`,
       this.loadJsonFile(path2.join(dir, "artifacts.json"), []),
       "id"
     );
     this.comments = _FileStore.salvageArray(
-      "comments.json",
+      `${this.sessionId}:comments.json`,
       this.loadJsonFile(path2.join(dir, "comments.json"), []),
       "id"
     );
     const decArr = _FileStore.salvageArray(
-      "decisions.json",
+      `${this.sessionId}:decisions.json`,
       this.loadJsonFile(path2.join(dir, "decisions.json"), []),
       "decisionId"
     );
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = _FileStore.salvageArray(
-      "plan-reviews.json",
+      `${this.sessionId}:plan-reviews.json`,
       this.loadJsonFile(path2.join(dir, "plan-reviews.json"), []),
       "artifactId"
     );
@@ -23020,7 +23022,7 @@ var FileStore = class _FileStore {
     if (diskArtifacts) {
       this.artifacts = this.mergeArrayById(
         this.artifacts,
-        _FileStore.salvageArray("artifacts.json (external)", diskArtifacts, "id"),
+        _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, diskArtifacts, "id"),
         "id"
       );
       delete this.lastSerialized[artifactsPath];
@@ -26163,7 +26165,6 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     );
     const artifact = r.store.updatePlanProgress(artifactId, clean);
     if (!artifact) return c.json({ artifact: null });
-    r.store.forceFlush();
     broadcast3(sessionId, { type: "plan_progress_updated", artifact });
     return c.json({ artifact });
   });
@@ -27665,7 +27666,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
       ws.on("error", (err) => {
         log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
         try {
-          ws.terminate?.();
+          ws.terminate();
         } catch {
         }
       });
@@ -27684,7 +27685,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
       ws.on("error", (err) => {
         log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
         try {
-          ws.terminate?.();
+          ws.terminate();
         } catch {
         }
       });

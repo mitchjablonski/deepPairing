@@ -73,9 +73,9 @@ export function TurnIndicator() {
       for (const c of list as Comment[]) {
         if (
           c.author === "human" &&
-          (c as any).intent === "question" &&
-          !(c as any).answeredByCommentId &&
-          !(c as any).humanResolvedAt
+          c.intent === "question" &&
+          !c.answeredByCommentId &&
+          !c.humanResolvedAt
         ) {
           out.push({ artifactId, comment: c });
         }

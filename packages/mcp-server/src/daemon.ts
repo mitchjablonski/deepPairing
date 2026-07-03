@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { WebSocketServer } from "ws";
+import type { WebSocket } from "ws";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -162,13 +163,13 @@ function broadcast(sessionId: string, event: any): void {
   const sessionClients = wsClients.get(sessionId);
   if (sessionClients) {
     for (const ws of sessionClients) {
-      try { (ws as any).send(data); } catch { sessionClients.delete(ws); }
+      try { ws.send(data); } catch { sessionClients.delete(ws); }
     }
   }
 
   // Send to global (all-sessions) clients
   for (const ws of globalClients) {
-    try { (ws as any).send(data); } catch { globalClients.delete(ws); }
+    try { ws.send(data); } catch { globalClients.delete(ws); }
   }
 
   // R1: local telemetry. Broadcast is the canonical point where every
@@ -193,12 +194,12 @@ function broadcastAll(event: any): void {
   for (const [sid, sessionClients] of wsClients) {
     const data = JSON.stringify({ ...event, sessionId: sid });
     for (const ws of sessionClients) {
-      try { (ws as any).send(data); } catch { sessionClients.delete(ws); }
+      try { ws.send(data); } catch { sessionClients.delete(ws); }
     }
   }
   const globalData = JSON.stringify({ ...event, sessionId: null });
   for (const ws of globalClients) {
-    try { (ws as any).send(globalData); } catch { globalClients.delete(ws); }
+    try { ws.send(globalData); } catch { globalClients.delete(ws); }
   }
   try {
     recordBroadcastMetric(projectRoot, "__all__", event);
@@ -869,7 +870,7 @@ async function main() {
         // Subscribe to a specific session
         let clients = wsClients.get(sessionId);
         if (!clients) { clients = new Set(); wsClients.set(sessionId, clients); }
-        clients.add(ws as any);
+        clients.add(ws);
 
         // Send session state on connect. U4 — include `daemonStartedAt` so
         // the client can detect a daemon-restart on reconnect (a different
@@ -889,16 +890,16 @@ async function main() {
         // runs the standard cleanup path.
         ws.on("error", (err: any) => {
           log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
-          try { (ws as any).terminate?.(); } catch {}
+          try { ws.terminate(); } catch {}
         });
         ws.on("close", () => {
-          clients!.delete(ws as any);
+          clients!.delete(ws);
           if (clients!.size === 0) wsClients.delete(sessionId);
           checkAutoShutdown();
         });
       } else {
         // Global client — sees all sessions
-        globalClients.add(ws as any);
+        globalClients.add(ws);
 
         // Send list of active sessions
         const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
@@ -912,10 +913,10 @@ async function main() {
         // II5 — see session-client comment above. Same crash mode applies.
         ws.on("error", (err: any) => {
           log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
-          try { (ws as any).terminate?.(); } catch {}
+          try { ws.terminate(); } catch {}
         });
         ws.on("close", () => {
-          globalClients.delete(ws as any);
+          globalClients.delete(ws);
           checkAutoShutdown();
         });
       }

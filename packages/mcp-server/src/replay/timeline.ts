@@ -80,14 +80,14 @@ export function buildTimeline(state: SessionSnapshot): TimelineEvent[] {
 
   for (const c of state.comments ?? []) {
     const loc = c.target?.artifactId ?? "session";
-    const prefix = (c as any).intent === "question" ? "Q" : c.author === "agent" ? "A" : "You";
+    const prefix = c.intent === "question" ? "Q" : c.author === "agent" ? "A" : "You";
     events.push({
       id: `evt_comment_${c.id}`,
       kind: "comment_added",
       at: c.createdAt,
       artifactId: c.target?.artifactId,
       label: `${prefix} [${loc}]: ${c.content.slice(0, 80)}${c.content.length > 80 ? "…" : ""}`,
-      payload: { author: c.author, intent: (c as any).intent, content: c.content },
+      payload: { author: c.author, intent: c.intent, content: c.content },
     });
   }
 
