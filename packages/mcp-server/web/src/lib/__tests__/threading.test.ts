@@ -35,6 +35,22 @@ describe("F7 — transitive threading", () => {
     expect(threads[0].replies.map((r) => r.id)).toEqual(["b"]);
   });
 
+  it("a tail entering a cycle (with a timestamp inversion) still yields ONE thread", () => {
+    // a(t0, OLDER than the cycle) → b(t1) → c(t2) → b. Rooting on the whole
+    // walk path made a root at itself while b/c rooted at b — a split.
+    const a = c("a", "b", "2026-07-01T00:00:00.000Z");
+    const b = c("b", "c", "2026-07-01T00:01:00.000Z");
+    const cy = c("c", "b", "2026-07-01T00:02:00.000Z");
+    const byId = new Map([["a", a], ["b", b], ["c", cy]]);
+    // Every entry point roots at the CYCLE's oldest member.
+    expect(threadRootId(a, byId)).toBe("b");
+    expect(threadRootId(b, byId)).toBe("b");
+    expect(threadRootId(cy, byId)).toBe("b");
+    const threads = buildThreads([a, b, cy]);
+    expect(threads).toHaveLength(1);
+    expect(threads[0].replies.map((r) => r.id).sort()).toEqual(["a", "c"]);
+  });
+
   it("roots chronological; descendants chronological within a thread", () => {
     const threads = buildThreads([
       c("r2", null, "2026-07-01T00:05:00.000Z"),

@@ -21,10 +21,19 @@ export function threadRootId(comment: Comment, byId: Map<string, Comment>): stri
   while (current.parentCommentId && byId.has(current.parentCommentId)) {
     const parent = byId.get(current.parentCommentId)!;
     if (seen.has(parent.id)) {
-      // Cycle: root at the chronologically-first member of the walk.
-      const members = [...seen].map((id) => byId.get(id)!).filter(Boolean);
-      members.sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
-      return members[0]?.id ?? current.id;
+      // Cycle: root at the chronologically-first member OF THE CYCLE ITSELF
+      // (review — using the whole walk path split threads when a tail with a
+      // timestamp inversion entered the cycle: different entry points saw
+      // different "oldest"). Walk the cycle from the revisited node to
+      // collect exactly its members; every entry point sees the same set.
+      const cycle: Comment[] = [];
+      let node = parent;
+      do {
+        cycle.push(node);
+        node = byId.get(node.parentCommentId ?? "")!;
+      } while (node && node.id !== parent.id && cycle.length <= byId.size);
+      cycle.sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+      return cycle[0]?.id ?? current.id;
     }
     seen.add(parent.id);
     current = parent;
