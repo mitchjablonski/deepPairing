@@ -4,23 +4,39 @@ import { buildThreads } from "./threading";
 /**
  * The single source of truth for "a human question still awaiting the agent".
  * Used by ConversationRail (pill count, filter, inline marker) AND App (the
- * Conversation-button badge) so they can't drift. A question is unanswered when
- * it's a human question with no threaded reply, not answered out-of-band
- * (answeredByCommentId), and not resolved by the human (humanResolvedAt).
+ * Conversation-button badge) so they can't drift.
+ *
+ * A thread is unanswered when its ROOT is a human question AND its chronological
+ * TAIL is itself an open human question — one that lacks an out-of-band answer
+ * (answeredByCommentId) and a human resolution (humanResolvedAt). Judging the
+ * TAIL (not just "has any reply") is the fix for the blind spot where a thread
+ * whose LAST message was a human FOLLOW-UP question read as "answered" merely
+ * because a reply existed. When `replies` is empty the tail IS the root, so this
+ * reduces exactly to the pre-fix no-reply behavior.
+ *
+ * The root-question requirement stays: a thread rooted at a non-question does
+ * not become one just because a later follow-up is a question.
  */
 export function isUnansweredQuestion(comment: Comment, replies: Comment[]): boolean {
-  const c = comment as {
-    intent?: string;
-    answeredByCommentId?: string | null;
-    humanResolvedAt?: string | null;
+  const isOpenHumanQuestion = (m: Comment): boolean => {
+    const x = m as {
+      intent?: string;
+      answeredByCommentId?: string | null;
+      humanResolvedAt?: string | null;
+    };
+    return (
+      m.author === "human" &&
+      x.intent === "question" &&
+      !x.answeredByCommentId &&
+      !x.humanResolvedAt
+    );
   };
-  return (
-    comment.author === "human" &&
-    c.intent === "question" &&
-    !c.answeredByCommentId &&
-    !c.humanResolvedAt &&
-    replies.length === 0
-  );
+  const root = comment as { intent?: string };
+  // Root must be a human question (see doc: a non-question root never re-opens).
+  if (comment.author !== "human" || root.intent !== "question") return false;
+  // replies arrive chronological from buildThreads; the tail governs.
+  const tail = replies.length === 0 ? comment : replies[replies.length - 1]!;
+  return isOpenHumanQuestion(tail);
 }
 
 /**

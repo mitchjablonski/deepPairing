@@ -30,6 +30,40 @@ describe("isUnansweredQuestion", () => {
   it("false for an agent question", () => {
     expect(isUnansweredQuestion(mk({ intent: "question", author: "agent" }), [])).toBe(false);
   });
+
+  // The TAIL blind spot (the fix): the predicate judges the thread's
+  // chronological last message, not merely "does a reply exist". replies come
+  // from buildThreads already sorted, so replies[last] IS the tail.
+  describe("the thread TAIL governs, not 'has any reply'", () => {
+    const root = mk({ id: "root", intent: "question" });
+    const agentAns = mk({ id: "ans", author: "agent", parentCommentId: "root" });
+
+    it("(a) ends in an un-answered human follow-up question → UNANSWERED", () => {
+      const followup = mk({ id: "fu", intent: "question", parentCommentId: "ans" });
+      expect(isUnansweredQuestion(root, [agentAns, followup])).toBe(true);
+    });
+
+    it("(b) ends in an agent reply → answered", () => {
+      const followup = mk({ id: "fu", intent: "question", parentCommentId: "root" });
+      expect(isUnansweredQuestion(root, [followup, agentAns])).toBe(false);
+    });
+
+    it("(c) tail follow-up question answered out-of-band → answered", () => {
+      const followup = mk({ id: "fu", intent: "question", parentCommentId: "ans", answeredByCommentId: "x" } as any);
+      expect(isUnansweredQuestion(root, [agentAns, followup])).toBe(false);
+    });
+
+    it("(d) tail follow-up question human-resolved → answered", () => {
+      const followup = mk({ id: "fu", intent: "question", parentCommentId: "ans", humanResolvedAt: "t" } as any);
+      expect(isUnansweredQuestion(root, [agentAns, followup])).toBe(false);
+    });
+
+    it("root requirement stays: a non-question root does not re-open on a follow-up question", () => {
+      const plainRoot = mk({ id: "root", intent: "comment" });
+      const followup = mk({ id: "fu", intent: "question", parentCommentId: "root" });
+      expect(isUnansweredQuestion(plainRoot, [followup])).toBe(false);
+    });
+  });
 });
 
 describe("countUnansweredQuestions (flat list — the App badge)", () => {
@@ -45,12 +79,23 @@ describe("countUnansweredQuestions (flat list — the App badge)", () => {
     expect(countUnansweredQuestions(all)).toBe(1);
   });
 
-  it("does NOT count a human question posted as a REPLY (matches the rail's top-level-only scan)", () => {
+  it("counts a thread ending in a human follow-up question ONCE (top-level-only scan)", () => {
     const all = [
       mk({ id: "root", intent: "question" }),
       mk({ id: "r_q", intent: "question", parentCommentId: "root" }), // a reply that is itself a question
     ];
-    // root has a reply → not counted; the reply is not a root → not counted.
+    // The tail is an open human follow-up question → the root thread counts.
+    // The reply is not its own root, so it is counted once (not twice) — the
+    // rail's top-level-only scan is preserved.
+    expect(countUnansweredQuestions(all)).toBe(1);
+  });
+
+  it("does NOT count a thread whose human follow-up question was answered by the agent", () => {
+    const all = [
+      mk({ id: "root", intent: "question" }),
+      mk({ id: "r_q", intent: "question", parentCommentId: "root", createdAt: "2026-06-26T00:01:00.000Z" }),
+      mk({ id: "a1", author: "agent", parentCommentId: "r_q", createdAt: "2026-06-26T00:02:00.000Z" }), // tail = agent
+    ];
     expect(countUnansweredQuestions(all)).toBe(0);
   });
 });
