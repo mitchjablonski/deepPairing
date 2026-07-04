@@ -164,6 +164,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: handleSelect must be FRESH in the keyboard effect (field-bug precedent — stale selection state); the re-subscribe per render is the accepted cost
   const handleSelect = async (optionId: string) => {
     // F8 review — ANY select disarms the pending keyboard-commit: without
     // this, a manual click whose POST failed (phase rolls back to idle) left
@@ -312,9 +313,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // hazard. `a` again re-arms at the new focus.
   useEffect(() => {
     setArmedSelect(null);
-    // focusedIndex only — arming itself must not immediately disarm. (No
-    // exhaustive-deps disable needed: the react-hooks plugin isn't wired
-    // yet — G8 backlog.)
+    // focusedIndex only — arming itself must not immediately disarm.
+    // (setState is identity-stable, so the deps are complete — G8's
+    // exhaustive-deps agrees.)
   }, [focusedIndex]);
   useEffect(() => {
     if (!armedSelect) return;

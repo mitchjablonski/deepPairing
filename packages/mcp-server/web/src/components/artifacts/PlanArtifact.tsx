@@ -171,6 +171,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
     setCheckedSteps((prev) =>
       prev.length === steps.length ? prev : steps.map((_, i) => prev[i] ?? true),
     );
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: re-sync checkbox state only when the step COUNT changes (in-place content updates preserve checks — see comment above)
   }, [steps.length]);
 
   const toggleStep = (index: number) => {

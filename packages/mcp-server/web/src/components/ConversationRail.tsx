@@ -192,6 +192,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
       if (n > 0) map.set(g.artifactId, n);
     }
     return map;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate freeze: unread counts key on previousLastOpenedAt (the W2 read-marker semantics), not the isUnread closure identity
   }, [grouped, previousLastOpenedAt]);
   const totalUnread = useMemo(
     () => Array.from(unreadByGroup.values()).reduce((a, b) => a + b, 0),

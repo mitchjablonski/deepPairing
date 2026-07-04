@@ -1,4 +1,5 @@
 import tseslint from "typescript-eslint";
+import reactHooks from "eslint-plugin-react-hooks";
 
 /**
  * C4 — the ratchet. Two review rounds measured the `as any` count staying flat
@@ -11,12 +12,13 @@ import tseslint from "typescript-eslint";
  *    pushes the count over the cap and fails CI. Lower the caps as debt is
  *    paid down — never raise them without a tracking note.
  *
- * Deliberately out of scope (tracking notes):
- *  - packages/vscode-extension has no lint script yet (thin webview shell;
- *    add one when it grows real logic).
- *  - no react/react-hooks plugins — effect-deps mistakes in web/ are not
- *    machine-checked; candidate for a later batch (React Compiler adoption
- *    would subsume much of it).
+ * Formerly out of scope, now wired (G7/G8):
+ *  - packages/vscode-extension lints at --max-warnings 0 (G7).
+ *  - react-hooks (G8): rules-of-hooks is an ERROR — the D10 and F8 bugs
+ *    were BOTH hooks-after-early-return, invisible to every unit test and
+ *    caught only by the real-browser e2e; this is the machine catch.
+ *    exhaustive-deps is a WARN under the ratchet (the codebase deliberately
+ *    narrows deps in places — each gets fixed-or-annotated as debt is paid).
  */
 export default tseslint.config(
   {
@@ -43,6 +45,15 @@ export default tseslint.config(
       // Codebase idiom: intentional empty catches carry a comment; the rule
       // can't read comments, and the pattern is pervasive + deliberate.
       "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
+  {
+    // G8 — hooks discipline for the web app (components + hooks dirs).
+    files: ["packages/mcp-server/web/src/**/*.{ts,tsx}"],
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
     },
   },
   {

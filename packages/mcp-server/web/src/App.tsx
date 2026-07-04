@@ -159,6 +159,7 @@ function App() {
       }
     };
     init();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only bind: connect/refreshSessions are stable store actions; re-binding on their identity would re-run the session bootstrap
   }, []);
 
   // PP3 — poll for new sessions only while the tab is visible AND connected

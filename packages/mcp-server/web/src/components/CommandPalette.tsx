@@ -109,6 +109,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     return items;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- zustand actions are stable identities; listing them would re-mint the palette items per render for nothing
   }, [artifacts, theme, boundSessionId]);
 
   // Filter and sort by fuzzy score
