@@ -130,12 +130,17 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
   // chrome + aggregate surface rather than a truly empty app.
   await page.goto(baseURL);
   await page.waitForSelector("text=deepPairing", { timeout: 15000 });
-  // I1 — wait for the shell to be LIVE before scanning, not just for the
-  // static "deepPairing" chrome text. `text=deepPairing` is present during the
-  // brief flash-of-unstyled-content window BEFORE the app's CSS tokens apply;
-  // scanning then, axe read `text-accent-amber` as a near-black fallback on the
-  // dark surface (contrast 1.07) and flagged a phantom serious color-contrast
-  // violation that vanished a frame later — a ~1-in-8 flake even in isolation.
+  // I1 — wait for the shell to be LIVE (WS connected) before scanning, not
+  // just for the static "deepPairing" chrome text. Scanning at first paint
+  // intermittently flagged a phantom serious color-contrast violation
+  // (amber text measured ~1.07 against the dark surface, gone a frame
+  // later; ~1-in-8 in isolation). Review note: the exact mechanism is
+  // unproven — 1.07-on-dark implies a mid-hydration/transient element
+  // rather than a pure unstyled page (which would measure ~21:1 black on
+  // white). If it ever fires again, capture violations[].nodes[].target
+  // before adjusting the wait. Post-connect the app auto-binds the seeded
+  // session, so this test scans the BOUND shell deterministically — the
+  // old "no session selected" name was already a misnomer (see below).
   // The WS `connected` flip (the same signal bootstrap.e2e asserts) only
   // happens after the style-bearing bundle has hydrated, so it's a reliable
   // "styles applied, surface settled" gate. Mirrors this file's session-view

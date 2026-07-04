@@ -24,6 +24,11 @@ test("capture README screenshots", async ({ page }) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cap-home-"));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cap-proj-"));
   let proc: ChildProcess | undefined;
+  // Review BLOCKER — declared OUTSIDE the try: the finally reads info?.port,
+  // and the in-try declaration crashed teardown with ReferenceError, leaking
+  // the daemon this PR exists to clean up. Invisible to every gate (e2e/ is
+  // outside both tsconfigs; the spec is CAPTURE_README-opt-in).
+  let info: any;
   try {
     proc = spawn(process.execPath, [daemonJs], {
       env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_OPEN_BROWSER: "0" },
@@ -32,7 +37,6 @@ test("capture README screenshots", async ({ page }) => {
 
     // wait for daemon
     const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
-    let info: any;
     for (let i = 0; i < 120 && !info?.port; i++) {
       if (fs.existsSync(infoPath)) { try { info = JSON.parse(fs.readFileSync(infoPath, "utf8")); } catch {} }
       if (!info?.port) await new Promise((r) => setTimeout(r, 100));

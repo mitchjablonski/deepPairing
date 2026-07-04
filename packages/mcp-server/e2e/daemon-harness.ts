@@ -42,8 +42,14 @@ function portAccepts(port: number, timeoutMs = 400): Promise<boolean> {
       resolve(accepts);
     };
     socket.once("connect", () => done(true));
-    socket.once("error", () => done(false)); // ECONNREFUSED etc. -> port is free
-    socket.setTimeout(timeoutMs, () => done(false));
+    // Review — only an ACTIVE refusal proves the port is free; any other
+    // error (or a timed-out connect against a full accept backlog — the
+    // wedged-daemon case) is treated as still-bound. The outer deadline
+    // bounds total wait, so pessimism here costs nothing.
+    socket.once("error", (err: NodeJS.ErrnoException) =>
+      done(!(err.code === "ECONNREFUSED" || err.code === "ECONNRESET")),
+    );
+    socket.setTimeout(timeoutMs, () => done(true));
   });
 }
 
@@ -78,7 +84,11 @@ export async function teardownDaemon(
   const timeoutMs = opts.timeoutMs ?? 5000;
 
   // Latch the real exit even if kill(pid,0) is racy around reaping.
-  let exited = false;
+  // Review — SEEDED: if the daemon already exited (60s idle auto-shutdown
+  // during a slow spec), the 'exit' event fired long ago and a fresh
+  // listener would never latch; correctness then rested on kill(pid,0)
+  // against a possibly-REUSED pid.
+  let exited = proc.exitCode !== null || proc.signalCode !== null;
   proc.once("exit", () => {
     exited = true;
   });
@@ -98,7 +108,8 @@ export async function teardownDaemon(
 
   // Wedged daemon - escalate and give the kernel a moment to reap + release.
   try {
-    if (pid !== undefined) process.kill(pid, "SIGKILL");
+    // Handle-scoped kill (review): process.kill(pid) could hit a reused pid.
+    proc.kill("SIGKILL");
   } catch {
     /* already gone */
   }
@@ -107,6 +118,11 @@ export async function teardownDaemon(
     if (await isDown()) return;
     await sleep(50);
   }
+  // Review NIT — a silent give-up reproduces the original flake with zero
+  // diagnostic; say exactly what's stuck.
+  console.warn(
+    `[e2e] teardownDaemon gave up: pid=${pid} port=${port} still up after SIGKILL — the next spec may flake`,
+  );
 }
 
 /** Parse the daemon port out of a `http://localhost:PORT` base URL. */
