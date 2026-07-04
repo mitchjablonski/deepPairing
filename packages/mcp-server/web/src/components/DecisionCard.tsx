@@ -3,16 +3,18 @@ import { useDraft } from "../hooks/useDraft";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
-import { m, AnimatePresence } from "motion/react";
+import { AnimatePresence } from "motion/react";
 import { type DecisionRequestEvent, type Artifact, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
-import { AskTrigger } from "./CommentThread";
 import { RepairDecisionModal } from "./RepairDecisionModal";
-import { ConceptBadge } from "./ConceptBadge";
 import { VisualBody } from "./ArtifactVisuals";
 import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 import { useReplayStore } from "../stores/replay";
+import { OptionCard } from "./decision/OptionCard";
+import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
+import { DecisionFooter } from "./decision/DecisionFooter";
+import type { InitialResolved } from "./decision/types";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -26,23 +28,11 @@ interface DecisionCardProps {
    */
   stakes?: "low" | "medium" | "high";
   /** If set (e.g. in replay mode for past decisions), start in the resolved state. */
-  initialResolved?: {
-    optionId: string;
-    reasoning?: string;
-    resolvedAt?: string;
-    confidence?: "low" | "medium" | "high";
-    predictedOutcome?: string;
-  };
+  initialResolved?: InitialResolved;
   /** For the Re-pair modal: which session this decision was recorded in. */
   sessionId?: string;
   onResolved?: () => void;
 }
-
-const badgeColors = {
-  low: "bg-accent-green-dim text-accent-green",
-  medium: "bg-accent-amber-dim text-accent-amber",
-  high: "bg-accent-red-dim text-accent-red",
-};
 
 /**
  * X5 — DecisionCard state machine.
@@ -425,190 +415,23 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
   // Resolved state
   if (resolved) {
-    const chosen = event.options.find((o) => o.id === selectedId);
-    const rejected = event.options.filter((o) => o.id !== selectedId);
-
     return (
       <>
-        <m.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
-          className="mx-3 my-2 p-4 bg-accent-green-dim border border-accent-green/20 rounded-lg"
-        >
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-accent-green text-lg">✓</span>
-            <span className="text-sm font-semibold text-accent-green">Decision Made</span>
-            {sessionId && (
-              <button
-                onClick={() => setShowRepair(true)}
-                className="ml-auto px-2 py-0.5 rounded text-2xs font-medium text-accent-violet hover:bg-accent-violet-dim/40 transition-colors"
-                title="Generate a prompt to revisit this decision with fresh eyes in a new Claude Code session"
-              >
-                ↻ Re-pair
-              </button>
-            )}
-          </div>
-          <p className="text-sm text-text-primary">
-            <span className="font-medium">{chosen?.title}</span>
-            {reasoning && <span className="text-text-muted"> — {reasoning}</span>}
-          </p>
-          {/* C2 — the handoff gets a receipt. Comments already had one
-              ("seen by agent"); the app's MOST important interaction didn't. */}
-          <p className="text-2xs" aria-live="polite">
-            {agentPickedUp ? (
-              <span className="text-accent-green">✓ Claude picked this up — proceeding with "{chosen?.title}"</span>
-            ) : (
-              <span className="text-text-muted">Delivered — Claude will pick it up next time it checks in</span>
-            )}
-          </p>
-          {(initialResolved?.predictedOutcome || initialResolved?.confidence) && (
-            <div className="mt-2 pt-2 border-t border-accent-green/15">
-              <div className="flex items-start gap-2">
-                <span className="text-2xs font-semibold text-accent-amber shrink-0 mt-0.5">
-                  Predicted:
-                </span>
-                <div className="flex-1 min-w-0">
-                  {initialResolved.predictedOutcome && (
-                    <p className="text-xs text-text-secondary">{initialResolved.predictedOutcome}</p>
-                  )}
-                  {initialResolved.confidence && (
-                    <span className="inline-block mt-1 text-2xs text-text-muted italic">
-                      ({initialResolved.confidence} confidence)
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-          {rejected.length > 0 && (
-            <div className="mt-2 pt-2 border-t border-accent-green/15">
-              <span className="text-xs text-text-muted">
-                Rejected: {rejected.map((o) => o.title).join(", ")}
-              </span>
-            </div>
-          )}
-
-          {/* Read-only review of every option, so you can see what each one
-              entailed (description, concept, pros/cons, effort/risk) without
-              hitting Re-pair. Collapsed by default to keep the resolved card
-              compact; Re-pair stays for actually re-deciding in a new session. */}
-          <div className="mt-2 pt-2 border-t border-accent-green/15">
-            <button
-              onClick={() => setShowOptions((v) => !v)}
-              aria-expanded={showOptions}
-              className="text-2xs font-medium text-text-muted hover:text-text-primary transition-colors"
-            >
-              {showOptions ? "Hide options ▴" : "Show options ▾"}
-            </button>
-            {showOptions && (
-              <div className="mt-2 space-y-2">
-                {event.options.map((option) => {
-                  const isChosen = option.id === selectedId;
-                  return (
-                    <div
-                      key={option.id}
-                      className={`p-3 rounded-lg border ${
-                        isChosen
-                          ? "border-accent-green/40 bg-accent-green-dim/20"
-                          : "border-white/[0.06] bg-surface-elevated/60 opacity-80"
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
-                        <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
-                        {isChosen ? (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-green text-white rounded">
-                            ✓ Chosen
-                          </span>
-                        ) : (
-                          <span className="px-1.5 py-0.5 text-2xs font-medium text-text-muted bg-surface-elevated rounded">
-                            Not chosen
-                          </span>
-                        )}
-                        {option.recommendation && (
-                          <span
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet-strong text-white rounded"
-                            title="Agent recommended this option"
-                          >
-                            ★ Recommended
-                          </span>
-                        )}
-                      </div>
-                      <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
-                      {option.concept?.name && (
-                        <div className="mb-2">
-                          <ConceptBadge name={option.concept.name} explanation={option.concept.oneLineExplanation} />
-                        </div>
-                      )}
-                      {Array.isArray(option.pros) && option.pros.length > 0 && (
-                        <div className="space-y-0.5 mb-1.5">
-                          {option.pros.map((pro, i) => (
-                            <div key={i} className="flex items-start gap-1.5 text-xs">
-                              <span className="text-accent-green shrink-0 mt-0.5">✓</span>
-                              <span className="text-text-secondary">{pro}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {Array.isArray(option.cons) && option.cons.length > 0 && (
-                        <div className="space-y-0.5 mb-2">
-                          {option.cons.map((con, i) => (
-                            <div key={i} className="flex items-start gap-1.5 text-xs">
-                              <span className="text-accent-red shrink-0 mt-0.5">✗</span>
-                              <span className="text-text-secondary">{con}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex gap-1">
-                        <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>
-                          {option.effort}
-                        </span>
-                        <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>
-                          {option.risk} risk
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Q3: horizon-check trigger — only on high-stakes decisions. Fires a
-              question-intent comment asking the agent for a failure-mode
-              prediction at the chosen horizon (the agent answers it directly).
-              Most useful for schema, auth, caching, pipeline, and queue
-              semantics — exactly what `stakes: "high"` flags. */}
-          {stakes === "high" && artifactId && (
-            <div className="mt-2 pt-2 border-t border-accent-green/15">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-2xs text-text-muted italic shrink-0">
-                  Ask for a horizon prediction:
-                </span>
-                {horizonRequested ? (
-                  <span className="text-2xs text-accent-violet font-medium">
-                    ✓ Asked ({horizonRequested}) — the agent will respond via a comment.
-                  </span>
-                ) : (
-                  <>
-                    {(["3mo", "1y", "2y"] as const).map((h) => (
-                      <button
-                        key={h}
-                        type="button"
-                        onClick={() => requestHorizonCheck(h)}
-                        className="px-2 py-0.5 rounded border border-accent-violet/40 text-2xs text-accent-violet hover:bg-accent-violet-dim/30 transition-colors"
-                        aria-label={`Request horizon check at ${h}`}
-                      >
-                        {h}
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-        </m.div>
+        <ResolvedDecisionView
+          event={event}
+          selectedId={selectedId}
+          reasoning={reasoning}
+          agentPickedUp={agentPickedUp}
+          initialResolved={initialResolved}
+          sessionId={sessionId}
+          artifactId={artifactId}
+          stakes={stakes}
+          showOptions={showOptions}
+          setShowOptions={setShowOptions}
+          horizonRequested={horizonRequested}
+          onRequestHorizon={requestHorizonCheck}
+          onOpenRepair={() => setShowRepair(true)}
+        />
 
         {showRepair && sessionId && (
           <RepairDecisionModal
@@ -688,150 +511,17 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       <div className={`grid gap-2 ${gridCols}`}>
         <AnimatePresence>
           {event.options.map((option, idx) => (
-            <m.div
+            <OptionCard
               key={option.id}
-              layout
-              // D3 — AT restructure. The card was a role="button" DIV with
-              // focusable children (concept badges, AskTrigger, ledger links)
-              // — the axe nested-interactive violation, and a misclick hazard
-              // (one stray click on 'compare these options' CHOSE one). The
-              // card is now a plain container: selection lives in the explicit
-              // Select button below (a real <button>, per-option accessible
-              // name) plus the container's roving j/k + Enter. Card click no
-              // longer selects — misclick-safe by construction.
-              // X11 — affordance hierarchy. Recommended option gets a
-              // visible "Recommended" pill + a violet border that matches
-              // the card frame, so it reads as the primary path at a glance.
-              className={`text-left p-3 border-2 rounded-lg transition-all duration-[180ms] ease-out relative ${
-                submitting ? "opacity-50" : ""
-              } ${
-                idx === focusedIndex
-                  ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
-                  : option.recommendation
-                    ? "border-accent-violet/50 bg-accent-violet-dim/15 hover:border-accent-violet/70 shadow-[0_0_0_1px_rgba(124,92,252,0.08)]"
-                    : "border-white/[0.06] bg-surface-elevated hover:border-white/[0.1]"
-              }`}
-              onMouseEnter={() => setFocusedIndex(idx)}
-              // U4 — keep the visual highlight (focusedIndex) in lockstep with
-              // real DOM focus. Without this, Tab moves :focus into an option
-              // while the j/k-driven blue ring sat elsewhere, and the
-              // container's Enter handler (which selects options[focusedIndex])
-              // could fire a different option than the one the eye was on.
-              onFocus={() => !submitting && setFocusedIndex(idx)}
-            >
-              {/* Title + badges */}
-              <div className="flex items-start justify-between gap-2 mb-1.5">
-                <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                  <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
-                  {option.recommendation && (
-                    <span
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet-strong text-white rounded"
-                      title="Agent recommends this option"
-                    >
-                      <span aria-hidden>★</span>
-                      Recommended
-                    </span>
-                  )}
-                </div>
-                {artifactId && (
-                  <div
-                    // Stop click here so asking a question doesn't also select
-                    // the option.
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
-                    className="shrink-0"
-                  >
-                    <AskTrigger artifactId={artifactId} target={{ optionId: option.id }} />
-                  </div>
-                )}
-              </div>
-
-              {/* Description */}
-              <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
-
-              {/* Y5 — concept badge. Names the underlying pattern so this
-                  option's rejection (or approval) compounds across projects
-                  via the philosophy ledger. Click to expand the explanation.
-                  Z5 — concept is now properly typed on DecisionOptionSchema
-                  (was a (as any) cast pre-Z5; the wire shape lacked the
-                  field that Y5 had hoisted only into the stored shape). */}
-              {option.concept?.name && (
-                <div
-                  className="mb-2 -mx-1 px-1 py-0.5 rounded cursor-default"
-                  // B6 — the WHOLE badge row is a selection-dead zone (same
-                  // treatment AskTrigger gets above). The badge itself already
-                  // stops propagation, but a near-miss a few px around it hit
-                  // the option card and CHOSE THE DECISION. Full-row wrapper
-                  // means a misclick around the ledger pip does nothing.
-                  // Keydown: stop ONLY activation keys — swallowing everything
-                  // killed the global j/k/a/r/q shortcuts while the badge had
-                  // focus (review catch).
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
-                  }}
-                >
-                  <ConceptBadge
-                    name={option.concept.name}
-                    explanation={option.concept.oneLineExplanation}
-                    size="md"
-                  />
-                </div>
-              )}
-
-              {/* Pros */}
-              {Array.isArray(option.pros) && option.pros.length > 0 && (
-                <div className="space-y-0.5 mb-1.5">
-                  {option.pros.map((pro, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-xs">
-                      <span className="text-accent-green shrink-0 mt-0.5">✓</span>
-                      <span className="text-text-secondary">{pro}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Cons */}
-              {Array.isArray(option.cons) && option.cons.length > 0 && (
-                <div className="space-y-0.5 mb-2">
-                  {option.cons.map((con, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-xs">
-                      <span className="text-accent-red shrink-0 mt-0.5">✗</span>
-                      <span className="text-text-secondary">{con}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Effort + Risk badges + the explicit select affordance (D3) */}
-              <div className="flex items-center gap-1 mt-auto">
-                <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>
-                  {option.effort}
-                </span>
-                <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>
-                  {option.risk} risk
-                </span>
-                <button
-                  ref={(el) => { selectBtnRefs.current[idx] = el; }}
-                  data-select-option
-                  onClick={() => !submitting && handleSelect(option.id)}
-                  disabled={submitting}
-                  // Accessible name carries the option title so a SR user
-                  // choosing from the buttons list can tell them apart.
-                  aria-label={`Select ${option.title}`}
-                  // U4 — keep the roving highlight in lockstep with Tab focus
-                  // (this button is now the card's only focusable selector).
-                  onFocus={() => !submitting && setFocusedIndex(idx)}
-                  className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
-                    idx === focusedIndex
-                      ? "bg-accent-blue-strong text-white"
-                      : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  Select
-                </button>
-              </div>
-            </m.div>
+              option={option}
+              index={idx}
+              focused={idx === focusedIndex}
+              submitting={submitting}
+              artifactId={artifactId}
+              onSelect={handleSelect}
+              onFocus={setFocusedIndex}
+              selectButtonRef={(el) => { selectBtnRefs.current[idx] = el; }}
+            />
           ))}
         </AnimatePresence>
       </div>
@@ -956,137 +646,27 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         </div>
       )}
 
-      {/* X11 — escape hatches grouped under one footer instead of two
-          stacked bordered blocks. Pre-X11 "Send back" and "Why this choice"
-          each rendered with their own border + spacing, competing with the
-          option grid for visual weight. Now they share a single muted
-          footer; only the active composer expands above the row. They're
-          mutually exclusive in practice — opening one closes the other. */}
-      <div className="mt-3 pt-3 border-t border-accent-violet/15">
-        {showSendBack && !sendBackSent && (
-          <div className="space-y-2 mb-2">
-            <label className="block text-2xs text-text-muted">
-              What should change about the options? (the agent will revise the set, not just answer)
-            </label>
-            <textarea
-              rows={3}
-              autoFocus
-              value={sendBackText}
-              onChange={(e) => setSendBackText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  submitSendBack();
-                }
-                if (e.key === "Escape") {
-                  setShowSendBack(false);
-                  setSendBackText("");
-                }
-              }}
-              placeholder="e.g. all 4 are matchers — what about a hybrid? Or: option B should use Y instead of X…"
-              className="w-full px-2.5 py-1.5 bg-surface-secondary border border-accent-amber/30 rounded text-xs text-text-primary
-                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber resize-none"
-            />
-            <div className="flex items-center gap-2">
-              <button
-                onClick={submitSendBack}
-                disabled={!sendBackText.trim()}
-                className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
-                           hover:bg-accent-amber/80 disabled:opacity-50 transition-colors press-scale"
-              >
-                ↻ Send back for revision
-              </button>
-              <button
-                onClick={() => { setShowSendBack(false); setSendBackText(""); }}
-                className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
-              >
-                Cancel
-              </button>
-              <span className="ml-auto text-2xs text-text-muted italic">⌘⏎ to send</span>
-            </div>
-          </div>
-        )}
-
-        {showReasoning && (
-          <div className="flex gap-2 mb-2">
-            <input
-              type="text"
-              placeholder="Why — becomes the 'don't propose these' reason for rejected options"
-              value={reasoning}
-              onChange={(e) => setReasoning(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleSelect(event.options[focusedIndex].id);
-                }
-                if (e.key === "Escape") {
-                  setShowReasoning(false);
-                  setReasoning("");
-                }
-              }}
-              autoFocus
-              className="flex-1 px-3 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
-                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
-            />
-            <button
-              onClick={() => { setShowReasoning(false); setReasoning(""); }}
-              className="text-xs text-text-muted hover:text-text-secondary"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {/* Tertiary affordance row — both triggers live here as muted
-            text links. The "decision sent back" indicator displaces them
-            once revision is requested (the user already escaped). */}
-        {sendBackSent ? (
-          <div className="flex items-center gap-2 text-2xs text-accent-amber">
-            <span aria-hidden>↻</span>
-            <span>
-              Revision requested — the agent will post a revised set of options.
-              You can still pick from these if you change your mind.
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 flex-wrap text-2xs text-text-muted">
-            {!showReasoning && (
-              <button
-                onClick={() => { setShowReasoning(true); setShowSendBack(false); }}
-                className="hover:text-accent-blue transition-colors"
-                title="The reason you pick gets recorded as the why for every rejected option"
-              >
-                + Add reasoning <span className="opacity-60">(remembered across sessions)</span>
-              </button>
-            )}
-            {/* FF9 — opt-in prediction capture toggle on high-stakes
-                decisions. When ON, clicking an option enters the
-                predicting phase (confidence + outcome inputs) before
-                submitting; when OFF (default), the pick submits
-                immediately. Surfaces only when stakes='high'. */}
-            {stakes === "high" && (
-              <button
-                onClick={() => setPredictOptIn((v) => !v)}
-                className={`transition-colors ${predictOptIn ? "text-accent-violet" : "hover:text-accent-violet"}`}
-                title="Capture confidence + predicted outcome on this pick — for calibration over time"
-                aria-pressed={predictOptIn}
-              >
-                {predictOptIn ? "✓ Predicting outcome" : "+ Capture prediction with my pick"}
-              </button>
-            )}
-            {artifactId && !showSendBack && (
-              <button
-                onClick={() => { setShowSendBack(true); setShowReasoning(false); }}
-                className="hover:text-accent-amber transition-colors"
-                title="None of these options fit — send the decision back to the agent for a revised option set"
-                aria-label="Send decision back for revised options"
-              >
-                ↻ None of these fit
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      {/* X11 — escape-hatch footer (send-back + reasoning composers, FF9
+          prediction opt-in toggle, tertiary affordance row). */}
+      <DecisionFooter
+        options={event.options}
+        focusedIndex={focusedIndex}
+        artifactId={artifactId}
+        stakes={stakes}
+        showSendBack={showSendBack}
+        setShowSendBack={setShowSendBack}
+        sendBackText={sendBackText}
+        setSendBackText={setSendBackText}
+        submitSendBack={submitSendBack}
+        sendBackSent={sendBackSent}
+        showReasoning={showReasoning}
+        setShowReasoning={setShowReasoning}
+        reasoning={reasoning}
+        setReasoning={setReasoning}
+        onSelect={handleSelect}
+        predictOptIn={predictOptIn}
+        setPredictOptIn={setPredictOptIn}
+      />
     </div>
   );
 }
