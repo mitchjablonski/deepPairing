@@ -849,3 +849,31 @@ describe("D3 review — keyboard nav from a focused Select button", () => {
     expect(document.activeElement).toBe(ask);
   });
 });
+
+describe("F3 decomp — pins for the extracted seams (review NITs)", () => {
+  it("resolved view renders the Predicted block when initialResolved carries a prediction", () => {
+    render(
+      <DecisionCard
+        event={event}
+        decisionId="dec_abc"
+        initialResolved={{ optionId: "o1", predictedOutcome: "cuts p95 in half", confidence: "high" }}
+      />,
+    );
+    expect(screen.getByText(/predicted/i)).toBeInTheDocument();
+    expect(screen.getByText(/cuts p95 in half/)).toBeInTheDocument();
+  });
+
+  it("reasoning-Enter commits the focused option with the trimmed reasoning (the onSelect substitution seam)", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" />);
+    fireEvent.click(screen.getByText(/add reasoning/i));
+    const input = screen.getByPlaceholderText(/becomes the 'don't propose these' reason/i);
+    fireEvent.change(input, { target: { value: "  matcher-first fits the grammar  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/decisions/dec_abc"),
+        expect.objectContaining({ body: expect.stringContaining('"reasoning":"matcher-first fits the grammar"') }),
+      ),
+    );
+  });
+});
