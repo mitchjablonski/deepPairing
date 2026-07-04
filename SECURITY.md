@@ -33,7 +33,7 @@ model assumes:
 ### What deepPairing protects against
 
 - **Cross-LAN access**: the daemon binds explicitly to `127.0.0.1`
-  (see `daemon.ts` and `http/server.ts`). Sibling devices on the same
+  (see `src/daemon/index.ts` and `http/server.ts`). Sibling devices on the same
   wifi cannot reach it.
 - **Cross-Origin browser attacks** (tightened in D5): CORS allows
   cross-origin reads ONLY from `vscode-webview://` origins — a page on

@@ -29,7 +29,7 @@ sessions match against before the agent can paraphrase past you.
 │ localhost:<port> │ deterministic │   (one per project, on a       │
 │ (React + Vite)   │  per-project  │    deterministic port —        │
 └──────────────────┘   port        │    multi-session)              │
-                                   │   src/daemon.ts + http/        │
+                                   │   src/daemon/index.ts + http/        │
                                    └────────────────────────────────┘
                                                          │
                                                          ▼ FileStore
@@ -48,7 +48,7 @@ Three processes:
   session. Implements the 12 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
-- **deepPairing daemon** (`src/daemon.ts`) — one per project, bound to
+- **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to
   a deterministic per-project port in the `3847-3974` range (derived
   from the project hash; the first project gets `3847`). Owns the
   HTTP+WebSocket server, the per-session FileStores, and the global
@@ -58,7 +58,7 @@ Three processes:
 This split was the X-series refactor. Pre-X, every wrapper ran its own
 HTTP server and the companion UI couldn't see other sessions. Post-X,
 one daemon per project is the single owner; wrappers register sessions
-with it and DaemonClient (`src/daemon-client.ts`) implements `IStore`
+with it and DaemonClient (`src/daemon/client.ts`) implements `IStore`
 over HTTP so the same code paths work in standalone or daemon mode. The
 companion UI can aggregate across several projects' daemons.
 
@@ -142,7 +142,7 @@ an edit) and short-circuits cheaply when there are no rejections seeded.
   philosophy/v1.json              # Cross-project Philosophy Ledger
 
 $XDG_RUNTIME_DIR/deeppairing/     # (POSIX hosts where .deeppairing can't hold 0600)
-  <projectHash>.json              # Bearer-token sidecar, mode 0600 — see daemon-token.ts
+  <projectHash>.json              # Bearer-token sidecar, mode 0600 — see daemon/token.ts
 ```
 
 All writes go through `writeJsonAtomic` (`.tmp.PID.TS.RAND` +
@@ -212,10 +212,10 @@ directly off disk.
 |-----------------------------------|---------------------------------------------------------|
 | Add a new MCP tool                | `src/mcp/tools/` (mirror the `present-*.ts` pattern)    |
 | Change the preflight matcher      | `src/mcp/preflight-validator.ts`                        |
-| Wire a new HTTP route             | `src/http/routes.ts` or `src/daemon-routes.ts`          |
+| Wire a new HTTP route             | `src/http/routes.ts` or `src/daemon/routes.ts`          |
 | Add a UI surface                  | `web/src/components/` + a Zustand store in `web/src/stores/` |
 | Change the global ledger          | `src/store/global-store.ts` + `routes.ts:/api/ledger/*` |
-| Surface a WS event to the UI      | `src/daemon.ts` broadcast + `web/src/stores/connection.ts` switch |
+| Surface a WS event to the UI      | `src/daemon/index.ts` broadcast + `web/src/stores/connection.ts` switch |
 
 ## Schemas live in `packages/shared`
 
