@@ -223,3 +223,10 @@ Zod schemas in `packages/shared/src/schemas/` are the single source of
 truth for `Artifact`, `Comment`, `Evidence`, `Finding`, etc. Both the
 MCP server and the companion UI import from `@deeppairing/shared`. New
 fields must be optional for back-compat (per CLAUDE.md).
+
+## Roadmap notes
+
+- **MCP SDK v2** — the spike verdict is **GO** for a ~2-4 day legacy-parity
+  port once v2 stabilizes. Details, adoptions needed, and the refuted
+  upstream-issue candidates are recorded in
+  [docs/sdk-v2-spike.md](sdk-v2-spike.md).

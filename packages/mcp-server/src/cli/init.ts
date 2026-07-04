@@ -551,8 +551,13 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   //    sweep the candidate range to find a daemon that belongs to us.
   let port = info?.port;
   if (!port) {
+    // Sweep from THIS project's deterministic preferred port — the same base
+    // the daemon binds from (see preferredPortFor / lifecycle bind loop). The
+    // old `DEFAULT_PORT + attempt` only probed 3847–3856, so doctor never found
+    // a project whose hash-derived port landed elsewhere in 3847–3974.
+    const preferred = preferredPortFor(cwd);
     for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-      const candidate = DEFAULT_PORT + attempt;
+      const candidate = preferred + attempt;
       const identity = await probeDaemonIdentity(candidate);
       if (identity && identity.projectRoot === cwd) {
         port = candidate;
@@ -560,7 +565,7 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         break;
       }
     }
-    if (!port) port = DEFAULT_PORT; // fall through and report the failed probe
+    if (!port) port = preferred; // fall through and report the failed probe
   }
 
   // Z5b / AA3 — project-mismatch remediation. When the wrapper hits

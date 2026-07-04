@@ -20,6 +20,56 @@ no account, no telemetry — everything lives on your disk.*
 
 ![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
 
+## Quickstart
+
+Three ways in, fastest first — all give you the same MCP tools + companion UI.
+
+```bash
+# 1. Marketplace (recommended) — run inside Claude Code, no build step:
+/plugin marketplace add mitchjablonski/deepPairing
+/plugin install deeppairing@deeppairing
+
+# 2. Local plugin — slash commands + the pairing skill, from a clone:
+claude --plugin-dir ./claude-plugin
+
+# 3. From source — sets up .mcp.json + hooks for this project and turns the
+#    cross-project rejection gate on:
+pnpm install && pnpm build
+node packages/mcp-server/dist/cli/init.js init
+```
+
+<!-- Marketplace install validated structurally against Claude Code's
+     plugin-marketplace docs (required marketplace.json fields + install
+     syntax); live end-to-end verification in a real Claude Code client is
+     still pending. If it fails, path 2 (--plugin-dir) always works from a
+     clone. -->
+
+> **Just want to watch it?** `node packages/mcp-server/dist/cli/init.js demo`
+> fires the hero flow against a real companion UI in ~90 seconds — no Claude
+> Code install needed. Node 22+, pnpm 10+.
+
+## What you get
+
+- **Decision cards.** Options arrive as cards you pick in the UI. High-stakes
+  ones capture your prediction + confidence up front; a later breadcrumb closes
+  the loop with a ✓/✗/◐ calibration retrospective against what you called.
+- **The Philosophy Ledger.** Reject an approach with a reason and it's
+  remembered across *every* project. A pre-flight gate then blocks the agent
+  from re-proposing it — by name or by paraphrased concept — so "no Railway"
+  also catches "Fly.io for pay-per-request hosting" a month later.
+- **Live plan checklists.** Plans render as checklists that tick off as the
+  work lands, so "what's left" never lies.
+- **Session replay.** Reopen any past session from the command palette →
+  **Past sessions** and step back through its artifacts, comments, and
+  decisions in order.
+- **Multi-project switcher.** One companion UI aggregates every project you're
+  pairing on, with a "waiting on you" badge when it's your move.
+- **Keyboard-first review.** Navigate artifacts, comment, pick options, and ask
+  "why" without leaving the keyboard.
+
+The rest of this page is the why and the how — read on, or just run one of the
+three commands above.
+
 ## Why this exists
 
 Today's AI coding tools push you to two unhappy ends: full autonomy (review 500
@@ -53,7 +103,8 @@ BUILD    → only after you've shaped the direction; changes show as diffs
 
 The companion UI is where you review and steer; the terminal stays your primary
 chat surface. The MCP server runs *inside* Claude Code (it IS the agent — no
-separate orchestrator) and serves the UI on a deterministic per-project port.
+separate orchestrator) and serves the UI on a deterministic per-project port in
+`3847-3974`, derived from the project path (recorded in `.deeppairing/daemon.json`).
 
 ## What makes it feel collaborative
 
@@ -129,9 +180,10 @@ node packages/mcp-server/dist/cli/init.js demo
 > for this path.
 
 The demo auto-opens the companion UI (the daemon binds a deterministic
-per-project port in `3847-3974` — the first project gets `3847`). The hero flow
-fires within a few seconds. Everything else is whether you'd want this in your
-daily Claude Code loop.
+per-project port in `3847-3974`, derived from the project path — check
+`.deeppairing/daemon.json` for the actual one). The hero flow fires within a
+few seconds. Everything else is whether you'd want this in your daily Claude
+Code loop.
 
 ## Use it in Claude Code
 
@@ -151,13 +203,19 @@ the protocol preamble. It's the only path that turns the rejection gate on.
 **Prefer the plugin (slash commands + the up-front skill)?**
 
 ```bash
+# One-command marketplace install (recommended) — inside Claude Code:
+/plugin marketplace add mitchjablonski/deepPairing
+/plugin install deeppairing@deeppairing
+
+# Or load a local clone for this session only:
 claude --plugin-dir ./claude-plugin
 ```
 
-Adds `/deeppairing:start`, `/deeppairing:review`, etc. and the proactively-loaded
-`pairing-protocol` skill. (Needs `--plugin-dir` each launch. A one-command
-`/plugin marketplace add` install is planned once the server bundle ships /
-`@deeppairing/mcp-server` is on npm — it doesn't work yet.)
+Either adds `/deeppairing:start`, `/deeppairing:review`, etc. and the
+proactively-loaded `pairing-protocol` skill. The marketplace path installs the
+committed, self-contained server bundle (no `pnpm install` or build); the
+`--plugin-dir` path needs the flag each launch and a built clone. If the
+marketplace install doesn't resolve, `--plugin-dir` always works.
 
 Either way you get the tools, the companion UI, and an always-on first-call
 protocol preamble. Then just work normally — *"Let's analyze the auth module"* — and Claude routes
@@ -221,9 +279,12 @@ not a bolt-on. (More detail in [docs/faq.md](docs/faq.md).)
 
 ## Status
 
-Pre-1.0. Installable from this repo only — no npm publish or marketplace listing
-yet (~1,300 tests, an explicit threat model, real hardening). The next step is
-earning a handful of delighted real users before broader distribution.
+Pre-1.0. Installable from this repo — via the Claude Code plugin marketplace
+(`/plugin marketplace add mitchjablonski/deepPairing`, which ships the
+committed self-contained server bundle), `--plugin-dir`, or from source. No npm
+publish or listing in a public/community marketplace yet (~1,300 tests, an
+explicit threat model, real hardening). The next step is earning a handful of
+delighted real users before broader distribution.
 
 ## License
 
