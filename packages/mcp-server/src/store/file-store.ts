@@ -1,114 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference, Retrospective, RetrospectiveVerdict, PreflightTrace } from "@deeppairing/shared";
-import { parseTeamPreferencesFile } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
+import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
+import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
+import type { ProjectGuardrail } from "./project-signals.js";
+import { computeEngagementMetrics } from "./engagement-metrics.js";
+import { listSessions, searchAll, findPastPredictions, addRetrospective } from "./session-scan.js";
+import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
+// Re-exported so existing `import { ProjectGuardrail } from "./file-store.js"`
+// consumers keep working after the G10 extraction into project-signals.ts.
+export type { ProjectGuardrail };
 
 /**
  * File-based store for deepPairing artifacts, comments, and decisions.
  * Stores data in .deeppairing/ directory within the project root.
  * In-memory cache with debounced disk flush.
  */
-export interface ProjectGuardrail {
-  /** Short identifier like "migrations" or "workflows". */
-  category: string;
-  /** Relative path(s) that triggered the guardrail. */
-  paths: string[];
-  /** Human-readable rationale — why the agent should escalate here. */
-  rationale: string;
-}
-
-/**
- * Sense the project's sensitive areas by filesystem signals alone — no
- * config. Runs once on FileStore construction; cached per instance. The
- * agent receives these in firstCallHint and knows to stay supervised for
- * changes in these paths even when global autonomy is "autonomous".
- */
-function senseProjectGuardrails(projectRoot: string): ProjectGuardrail[] {
-  const guardrails: ProjectGuardrail[] = [];
-  const exists = (rel: string) => {
-    try { return fs.existsSync(path.join(projectRoot, rel)); } catch { return false; }
-  };
-
-  const migrationPaths = ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations"].filter(exists);
-  if (migrationPaths.length > 0) {
-    guardrails.push({
-      category: "migrations",
-      paths: migrationPaths,
-      rationale: "Migrations are hard to reverse — escalate to supervised for changes here.",
-    });
-  }
-
-  const workflowPath = ".github/workflows";
-  if (exists(workflowPath)) {
-    guardrails.push({
-      category: "workflows",
-      paths: [workflowPath],
-      rationale: "CI workflows affect every future deploy — escalate for changes here.",
-    });
-  }
-
-  const infraPaths = ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", "infrastructure", "terraform", "k8s", "kubernetes", "helm"].filter(exists);
-  if (infraPaths.length > 0) {
-    guardrails.push({
-      category: "infrastructure",
-      paths: infraPaths,
-      rationale: "Infrastructure changes affect production surfaces — escalate here.",
-    });
-  }
-
-  const secretPaths = [".env", ".env.local", ".env.production", "config/secrets.yml"].filter(exists);
-  if (secretPaths.length > 0) {
-    guardrails.push({
-      category: "secrets",
-      paths: secretPaths,
-      rationale: "Secret files must never leak into the session or a commit — escalate here.",
-    });
-  }
-
-  return guardrails;
-}
-
-/**
- * Load and validate `.deeppairing/team.json`. Returns [] for any failure
- * mode (missing, unreadable, malformed) — team prefs are advisory; we never
- * crash a session over a broken file. The caller can log if it cares.
- */
-/**
- * Strip JSONC-style `//` line comments so team.json can ship with a header
- * explaining what the kinds mean. Naive but good enough: strips a leading
- * `//...` only when the comment starts at the beginning of the line
- * (after whitespace) — avoids clobbering `//` inside strings like URLs.
- */
-function stripJsoncComments(src: string): string {
-  return src
-    .split("\n")
-    .map((line) => (/^\s*\/\//.test(line) ? "" : line))
-    .join("\n");
-}
-
-function loadTeamPreferences(basePath: string): TeamPreference[] {
-  const filePath = path.join(basePath, "team.json");
-  try {
-    if (!fs.existsSync(filePath)) return [];
-    const raw = JSON.parse(stripJsoncComments(fs.readFileSync(filePath, "utf-8")));
-    const parsed = parseTeamPreferencesFile(raw);
-    if (!parsed) {
-      console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
-      return [];
-    }
-    return parsed.preferences;
-  } catch (err) {
-    console.warn(`[deepPairing] Could not load team.json: ${err}`);
-    return [];
-  }
-}
-
 export class FileStore implements IStore {
   private basePath: string;
   private projectHint: string;
@@ -245,44 +158,12 @@ export class FileStore implements IStore {
     }
   }
 
-  /**
-   * D1 — the disk trust boundary. JSON.parse returns `any`; every collection
-   * read used to cast it blind, so one garbage element in a hand-edited or
-   * corrupted-but-parseable file (a string in artifacts.json, null in
-   * decisions.json) crashed whatever downstream code touched it first.
-   * salvageArray enforces STRUCTURE (array of objects, each carrying its
-   * identity field) and drops+logs anything else. Field-level leniency stays
-   * the coercers' job — legacy shapes keep loading.
-   */
-  /** D1 review — once-per-label guard: listSessions/search run per request,
-   *  so a persistently corrupted file would otherwise log on every poll. */
-  private static salvageLogged = new Set<string>();
-  private static salvageLog(label: string, message: string): void {
-    if (FileStore.salvageLogged.has(label)) return;
-    FileStore.salvageLogged.add(label);
-    console.error(`[deepPairing] ${label}: ${message}`);
-  }
-
-  static salvageArray<T>(label: string, raw: unknown, idField: string): T[] {
-    if (!Array.isArray(raw)) {
-      if (raw != null) FileStore.salvageLog(label, `expected an array, got ${typeof raw} — using []`);
-      return [];
-    }
-    const kept = raw.filter(
-      (el) => el !== null && typeof el === "object" && typeof (el as Record<string, unknown>)[idField] === "string",
-    );
-    if (kept.length !== raw.length) {
-      FileStore.salvageLog(label, `dropped ${raw.length - kept.length} malformed element(s) (missing string '${idField}')`);
-    }
-    return kept as T[];
-  }
-
-  /** D1 — Record-shaped files must be plain objects (not arrays/primitives). */
-  static salvageRecord<T extends Record<string, unknown>>(label: string, raw: unknown, fallback: T): T {
-    if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) return raw as T;
-    if (raw != null) FileStore.salvageLog(label, `expected an object, got ${Array.isArray(raw) ? "array" : typeof raw} — using fallback`);
-    return fallback;
-  }
+  // D1 — the salvage helpers (disk trust boundary) live in salvage.ts since
+  // the G10 decomposition. These statics are byte-compatible delegates so
+  // every existing FileStore.salvage* call site keeps working unchanged.
+  private static salvageLog = salvageLog;
+  static salvageArray = salvageArray;
+  static salvageRecord = salvageRecord;
 
   /** Load a JSON file with graceful error handling. Records mtime + size so a
    *  later flush can detect external writes and merge instead of clobber. */
@@ -909,56 +790,14 @@ export class FileStore implements IStore {
     decisionsWithPredictions: number;
     highStakesDecisions: number;
   } {
-    // FN4 — approvalRate = approved / (artifacts the human actually decided on).
-    // Exclude draft (undecided) and the agent-driven terminal states
-    // (superseded/retracted/obsolete) — they aren't human approve/reject calls,
-    // so counting them in the denominator depressed the rate artificially.
-    // Keep this status-set in sync with the reason-based recordArtifactReviewed
-    // gate above (agent_*/demo_script there ↔ the agent terminal states here).
-    const reviewed = this.artifacts.filter(
-      (a) => a.status !== "draft" && a.status !== "superseded" && a.status !== "retracted" && a.status !== "obsolete",
-    );
-    const approved = this.artifacts.filter((a) => a.status === "approved");
-    const approvalRate = reviewed.length > 0 ? approved.length / reviewed.length : 1;
-
-    const humanComments = this.comments.filter((c) => c.author === "human" && c.target.artifactId !== "__session__");
-    const commentDensity = this.artifacts.length > 0 ? humanComments.length / this.artifacts.length : 0;
-
-    const avgReviewLatencyMs = this.reviewLatencies.length > 0
-      ? this.reviewLatencies.reduce((sum, r) => sum + r.latencyMs, 0) / this.reviewLatencies.length
-      : 0;
-
-    // Per-type breakdown
-    const reviewsByType: Record<string, { totalMs: number; count: number }> = {};
-    for (const r of this.reviewLatencies) {
-      const entry = reviewsByType[r.type] ?? { totalMs: 0, count: 0 };
-      entry.totalMs += r.latencyMs;
-      entry.count += 1;
-      reviewsByType[r.type] = entry;
-    }
-    const typeSummary: Record<string, { avgLatencyMs: number; count: number }> = {};
-    for (const [type, data] of Object.entries(reviewsByType)) {
-      typeSummary[type] = { avgLatencyMs: Math.round(data.totalMs / data.count), count: data.count };
-    }
-
-    // K2: craft-development signals — how often the user captures predictions
-    // and how often the agent flags decisions as high-stakes.
-    let decisionsWithPredictions = 0;
-    let highStakesDecisions = 0;
-    for (const d of this.decisions.values()) {
-      const r = d.response as any;
-      if (r && (r.confidence || r.predictedOutcome)) decisionsWithPredictions++;
-      if ((d as any).stakes === "high") highStakesDecisions++;
-    }
-
-    return {
-      avgReviewLatencyMs: Math.round(avgReviewLatencyMs),
-      commentDensity,
-      approvalRate,
-      reviewsByType: typeSummary,
-      decisionsWithPredictions,
-      highStakesDecisions,
-    };
+    // G10 — the FN4/K2 computation is a pure function of session state;
+    // extracted to engagement-metrics.ts. This method just feeds it.
+    return computeEngagementMetrics({
+      artifacts: this.artifacts,
+      comments: this.comments,
+      decisions: this.decisions.values(),
+      reviewLatencies: this.reviewLatencies,
+    });
   }
 
   // --- Session Memory (persists across sessions) ---
@@ -1384,506 +1223,30 @@ export class FileStore implements IStore {
   }
 
   // --- Static methods for multi-session access ---
+  // G10 — the cross-session read helpers (listSessions / searchAll /
+  // findPastPredictions / addRetrospective) and the AA5 ledger digest with
+  // its BB2 cache now live in session-scan.ts and ledger-digest.ts. The
+  // statics below are byte-compatible delegates so every FileStore.* call
+  // site — HTTP routes, CLI, tests — keeps working unchanged.
 
-  static listSessions(projectRoot: string): Array<{
-    id: string;
-    createdAt: string;
-    lastActivity: string;
-    summary: string;
-    artifactCount: number;
-    hasDecisions: boolean;
-  }> {
-    const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
-    if (!fs.existsSync(sessionsDir)) return [];
-
-    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    const sessions: Array<{
-      id: string;
-      createdAt: string;
-      lastActivity: string;
-      summary: string;
-      artifactCount: number;
-      hasDecisions: boolean;
-    }> = [];
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-
-      const sessionDir = path.join(sessionsDir, entry.name);
-      try {
-        const artFile = path.join(sessionDir, "artifacts.json");
-        if (!fs.existsSync(artFile)) continue;
-
-        const artifacts: Artifact[] = FileStore.salvageArray<Artifact>(
-          `${entry.name}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
-        if (artifacts.length === 0) continue;
-
-        const decFile = path.join(sessionDir, "decisions.json");
-        // D1 review — a null decisions.json threw here and the per-session
-        // catch SKIPPED the whole (otherwise healthy) session from the list.
-        const decRaw = fs.existsSync(decFile) ? JSON.parse(fs.readFileSync(decFile, "utf-8")) : [];
-        const hasDecisions = Array.isArray(decRaw) && decRaw.length > 0;
-
-        const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        const firstArtifact = sorted[0];
-        const lastArtifact = sorted.at(-1);
-        // Unreachable (length checked above) — skip like any other bad session.
-        if (!firstArtifact || !lastArtifact) continue;
-
-        sessions.push({
-          id: entry.name,
-          createdAt: firstArtifact.createdAt,
-          lastActivity: lastArtifact.updatedAt ?? lastArtifact.createdAt,
-          summary: firstArtifact.title,
-          artifactCount: artifacts.length,
-          hasDecisions,
-        });
-      } catch {
-        // Skip corrupted sessions
-      }
-    }
-
-    return sessions.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
-  }
+  static listSessions = listSessions;
 
   static loadSession(projectRoot: string, sessionId: string) {
     const store = new FileStore(projectRoot, sessionId);
     return store.getFullState();
   }
 
-  /**
-   * Search every session in the project for artifacts matching a free-text query.
-   * Scoring (simple, transparent):
-   *   concept name match   × 3
-   *   rejected-approach    × 2
-   *   title match          × 2
-   *   content match        × 1
-   * Case-insensitive substring across all token positions. Capped at {@link limit}
-   * results total so the UI stays fast on large projects.
-   */
-  static searchAll(
-    projectRoot: string,
-    query: string,
-    limit = 50,
-  ): Array<{
-    sessionId: string;
-    sessionTitle: string;
-    artifactId: string;
-    artifactType: string;
-    title: string;
-    excerpt: string;
-    score: number;
-    matchedVia: Array<"concept" | "title" | "content" | "rejected">;
-  }> {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    const results: Array<{
-      sessionId: string;
-      sessionTitle: string;
-      artifactId: string;
-      artifactType: string;
-      title: string;
-      excerpt: string;
-      score: number;
-      matchedVia: Array<"concept" | "title" | "content" | "rejected">;
-    }> = [];
+  static searchAll = searchAll;
 
-    const sessions = FileStore.listSessions(projectRoot);
-    for (const session of sessions) {
-      const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
-      const artFile = path.join(sessionDir, "artifacts.json");
-      if (!fs.existsSync(artFile)) continue;
-      let artifacts: Artifact[];
-      try {
-        artifacts = FileStore.salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
-      } catch {
-        continue;
-      }
+  /** N3.3 — see findPastPredictions in session-scan.ts. */
+  static findPastPredictions = findPastPredictions;
 
-      // Pull rejected approaches from preferences.json for this project
-      const prefsFile = path.join(projectRoot, ".deeppairing", "preferences.json");
-      let rejected: Array<{ description?: string; concept?: string; reason?: string; sourceArtifactId?: string }> = [];
-      try {
-        if (fs.existsSync(prefsFile)) {
-          const prefs = JSON.parse(fs.readFileSync(prefsFile, "utf-8"));
-          const raw = prefs.rejectedApproaches ?? [];
-          rejected = Array.isArray(raw)
-            ? raw.map((r: any) => (typeof r === "string" ? { description: r } : r))
-            : [];
-        }
-      } catch {}
+  /** P2 — see addRetrospective in session-scan.ts. */
+  static addRetrospective = addRetrospective;
 
-      for (const artifact of artifacts) {
-        const matchedVia = new Set<"concept" | "title" | "content" | "rejected">();
-        let score = 0;
+  // BB2 — targeted cache invalidation for the digest below.
+  static invalidateLedgerDigestCache = invalidateLedgerDigestCache;
 
-        // Title
-        if (artifact.title && artifact.title.toLowerCase().includes(q)) {
-          score += 2;
-          matchedVia.add("title");
-        }
-
-        // Concept (reasoning artifacts)
-        const concept = (artifact.content as any)?.concept;
-        if (concept?.name && String(concept.name).toLowerCase().includes(q)) {
-          score += 3;
-          matchedVia.add("concept");
-        }
-
-        // Rejected approach tied to this artifact (or matching the query directly)
-        for (const rej of rejected) {
-          const matchesArtifact = rej.sourceArtifactId === artifact.id;
-          const desc = (rej.description ?? "").toLowerCase();
-          const reason = (rej.reason ?? "").toLowerCase();
-          const conceptStr = (rej.concept ?? "").toLowerCase();
-          const hit = desc.includes(q) || reason.includes(q) || conceptStr.includes(q);
-          if (matchesArtifact && hit) {
-            score += 2;
-            matchedVia.add("rejected");
-          }
-        }
-
-        // Content fallback — stringify and substring-check
-        let contentBlob = "";
-        try {
-          contentBlob = JSON.stringify(artifact.content ?? {}).toLowerCase();
-        } catch {}
-        if (contentBlob.includes(q)) {
-          score += 1;
-          matchedVia.add("content");
-        }
-
-        if (score === 0) continue;
-
-        // Excerpt: short context window around the first match in content/title
-        const source = artifact.title + " — " + contentBlob;
-        const idx = source.indexOf(q);
-        const excerpt =
-          idx >= 0
-            ? source
-                .slice(Math.max(0, idx - 40), idx + q.length + 80)
-                .replace(/\s+/g, " ")
-                .trim()
-            : artifact.title;
-
-        results.push({
-          sessionId: session.id,
-          sessionTitle: session.summary,
-          artifactId: artifact.id,
-          artifactType: artifact.type,
-          title: artifact.title,
-          excerpt,
-          score,
-          matchedVia: Array.from(matchedVia),
-        });
-      }
-    }
-
-    // Sort by score desc, then recency (session.lastActivity is already in
-    // listSessions order; we preserve insertion order via stable sort).
-    return results.sort((a, b) => b.score - a.score).slice(0, limit);
-  }
-
-  /**
-   * N3.3: find the user's past predictions on similar past decisions.
-   * Source: resolved decisions with a non-empty `response.predictedOutcome`
-   * (captured by the companion UI on high-stakes decisions).
-   *
-   * Match is concept-token overlap between `query` and each past decision's
-   * artifact title + context + chosen option text. We don't use exact match
-   * because the phrasing of a decision evolves; we do cap at tokens ≥4 chars
-   * to keep the signal-to-noise reasonable.
-   */
-  static findPastPredictions(
-    projectRoot: string,
-    query: string,
-    opts: { excludeArtifactId?: string; limit?: number } = {},
-  ): Array<{
-    sessionId: string;
-    sessionTitle?: string;
-    artifactId: string;
-    artifactTitle: string;
-    context: string;
-    decisionId: string;
-    chosenOptionTitle: string;
-    predictedOutcome: string;
-    confidence?: "low" | "medium" | "high";
-    resolvedAt: string;
-    daysAgo: number;
-    retrospective?: Retrospective;
-  }> {
-    const q = query.toLowerCase().trim();
-    if (!q) return [];
-    const tokens = q.split(/\s+/).filter((t) => t.length >= 4);
-    if (tokens.length === 0) return [];
-
-    const limit = opts.limit ?? 3;
-    const now = Date.now();
-
-    const out: ReturnType<typeof FileStore.findPastPredictions> = [];
-    const sessions = FileStore.listSessions(projectRoot);
-    for (const session of sessions) {
-      const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
-      const artFile = path.join(sessionDir, "artifacts.json");
-      const decFile = path.join(sessionDir, "decisions.json");
-      if (!fs.existsSync(artFile) || !fs.existsSync(decFile)) continue;
-
-      let artifacts: Artifact[];
-      let decisions: DecisionRecord[];
-      try {
-        artifacts = FileStore.salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
-        decisions = FileStore.salvageArray(`${session.id}/decisions.json`, JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
-      } catch {
-        continue;
-      }
-
-      for (const dec of decisions) {
-        if (!dec.response?.predictedOutcome) continue;
-        if (opts.excludeArtifactId && dec.artifactId === opts.excludeArtifactId) continue;
-        const artifact = artifacts.find((a) => a.id === dec.artifactId);
-        if (!artifact) continue;
-
-        const haystack = (
-          artifact.title + " " +
-          (dec.context ?? "") + " " +
-          ((dec.options ?? []).find((o: any) => o.id === dec.response!.optionId)?.title ?? "") + " " +
-          ((dec.options ?? []).find((o: any) => o.id === dec.response!.optionId)?.description ?? "")
-        ).toLowerCase();
-
-        const hits = tokens.filter((t) => haystack.includes(t));
-        // N3.3 — match on concept-token OVERLAP, not a majority of the (broad)
-        // title+context query. The old `ceil(tokens.length / 2)` rule scaled
-        // with query length, so a paraphrased decision that shared the real
-        // concept but differed in wording almost never cleared the bar — the
-        // calibration loop basically never fired. Require a fixed floor of
-        // shared ≥4-char tokens instead (2, or the single token when that's all
-        // the query has). Decisions that recorded a prediction are rare, so this
-        // surfaces the relevant ones without flooding.
-        const required = Math.min(2, tokens.length);
-        if (hits.length < required) continue;
-
-        const chosen = (dec.options ?? []).find((o: any) => o.id === dec.response!.optionId);
-        const resolvedAt = dec.resolvedAt ?? dec.createdAt;
-        const daysAgo = Math.max(0, Math.floor((now - new Date(resolvedAt).getTime()) / (24 * 60 * 60 * 1000)));
-
-        // Hydrate any existing retrospective for this decision so the
-        // breadcrumb can render the verdict alongside the prediction.
-        const retrosPath = path.join(sessionDir, "retrospectives.json");
-        let retrospective: Retrospective | undefined;
-        try {
-          if (fs.existsSync(retrosPath)) {
-            const retros: Retrospective[] = FileStore.salvageArray<Retrospective>(
-              "retrospectives.json", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
-            retrospective = retros.find((r) => r.decisionId === dec.decisionId);
-          }
-        } catch {}
-
-        out.push({
-          sessionId: session.id,
-          sessionTitle: session.summary,
-          artifactId: dec.artifactId,
-          artifactTitle: artifact.title,
-          context: dec.context ?? "",
-          decisionId: dec.decisionId,
-          chosenOptionTitle: chosen?.title ?? dec.response!.optionId,
-          predictedOutcome: dec.response!.predictedOutcome,
-          confidence: (dec.response as any).confidence,
-          resolvedAt,
-          daysAgo,
-          retrospective,
-        });
-      }
-    }
-
-    // Newest first — the user likely remembers recent predictions better.
-    return out.sort((a, b) => b.resolvedAt.localeCompare(a.resolvedAt)).slice(0, limit);
-  }
-
-  /**
-   * P2 — write a retrospective for a decision that was made in some past
-   * session. Walks sessions to find the one owning the decisionId; replaces
-   * any existing retrospective for that decision (users can change their
-   * minds as more evidence comes in).
-   *
-   * Returns the hydrated retrospective on success, or null if no session
-   * owns the decisionId (caller should 404).
-   */
-  static addRetrospective(
-    projectRoot: string,
-    params: { decisionId: string; verdict: RetrospectiveVerdict; note?: string },
-  ): { retrospective: Retrospective; sessionId: string } | null {
-    const sessions = FileStore.listSessions(projectRoot);
-    for (const session of sessions) {
-      const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
-      const decFile = path.join(sessionDir, "decisions.json");
-      if (!fs.existsSync(decFile)) continue;
-      let decisions: DecisionRecord[];
-      try {
-        decisions = FileStore.salvageArray(`${session.id}/decisions.json`, JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
-      } catch {
-        continue;
-      }
-      if (!decisions.some((d) => d.decisionId === params.decisionId)) continue;
-
-      const retrospective: Retrospective = {
-        id: `retro_${nanoid(10)}`,
-        decisionId: params.decisionId,
-        verdict: params.verdict,
-        note: params.note?.trim() || undefined,
-        createdAt: new Date().toISOString(),
-      };
-
-      const retrosPath = path.join(sessionDir, "retrospectives.json");
-      let existing: Retrospective[] = [];
-      try {
-        if (fs.existsSync(retrosPath)) {
-          existing = FileStore.salvageArray("retrospectives.json (write path)", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
-        }
-      } catch {}
-      const filtered = existing.filter((r) => r.decisionId !== params.decisionId);
-      filtered.push(retrospective);
-      writeJsonAtomic(retrosPath, filtered);
-
-      return { retrospective, sessionId: session.id };
-    }
-    return null;
-  }
-
-  /**
-   * AA5 — ledger digest. Aggregates every preflight-traces.json across
-   * every session in this project + cross-references the global
-   * Philosophy Ledger. Drives the cross-project moat surface that Z1's
-   * durable traces unlocked.
-   *
-   * Headline: "N proposals shaped this project; M cross-project stances."
-   * Detail: top stances by citation count (with sample artifact + session
-   * for jump-back), and the count of near-misses caught.
-   *
-   * Pure read — no side effects, safe to call from a public route.
-   * Bounded: at most 200 stances returned (capped after sort), and the
-   * per-trace iteration is O(traces × stances-per-trace) which in
-   * practice is small (≤25 considered concepts × ≤50 sessions).
-   */
-  // BB2 — short-TTL cache + targeted invalidation. The YourTaste drawer
-  // re-mounts on every open and React re-renders within a single mount
-  // can call this multiple times. The walk is sync fs (readdir + per-
-  // session readFileSync + JSON.parse) and blocks the event loop. Cache
-  // for DIGEST_CACHE_TTL_MS so a burst of polls is one fs walk; bust on
-  // recordPreflightTrace so newly persisted traces show up immediately.
-  private static ledgerDigestCache = new Map<
-    string,
-    { computedAt: number; result: ReturnType<typeof FileStore.ledgerDigest> }
-  >();
-  private static readonly DIGEST_CACHE_TTL_MS = 2000;
-
-  static invalidateLedgerDigestCache(projectRoot: string): void {
-    FileStore.ledgerDigestCache.delete(projectRoot);
-  }
-
-  static ledgerDigest(projectRoot: string): {
-    shapedThisProject: number;
-    nearMissesThisProject: number;
-    blockedThisProject: number;
-    sessionsTouched: number;
-    topCitedStances: Array<{
-      concept: string;
-      source: "session" | "team";
-      citationCount: number;
-      sampleArtifactId?: string;
-      sampleSessionId?: string;
-    }>;
-  } {
-    const cached = FileStore.ledgerDigestCache.get(projectRoot);
-    if (cached && Date.now() - cached.computedAt < FileStore.DIGEST_CACHE_TTL_MS) {
-      return cached.result;
-    }
-    const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
-    if (!fs.existsSync(sessionsDir)) {
-      const empty = {
-        shapedThisProject: 0,
-        nearMissesThisProject: 0,
-        blockedThisProject: 0,
-        sessionsTouched: 0,
-        topCitedStances: [],
-      };
-      FileStore.ledgerDigestCache.set(projectRoot, { computedAt: Date.now(), result: empty });
-      return empty;
-    }
-    let shapedThisProject = 0;
-    let nearMissesThisProject = 0;
-    let blockedThisProject = 0;
-    let sessionsTouched = 0;
-    // concept → { citationCount, source, sample artifactId/sessionId }
-    type Cite = { concept: string; source: "session" | "team"; citationCount: number; sampleArtifactId?: string; sampleSessionId?: string };
-    const cites = new Map<string, Cite>();
-
-    for (const entry of fs.readdirSync(sessionsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const tracesPath = path.join(sessionsDir, entry.name, "preflight-traces.json");
-      if (!fs.existsSync(tracesPath)) continue;
-      let map: Record<string, any>;
-      try {
-        map = FileStore.salvageRecord("preflight-traces.json", JSON.parse(fs.readFileSync(tracesPath, "utf-8")), {});
-      } catch { continue; }
-      const traceIds = Object.keys(map);
-      if (traceIds.length === 0) continue;
-      sessionsTouched++;
-      for (const artifactId of traceIds) {
-        const t = map[artifactId];
-        if (!t || typeof t !== "object") continue;
-        // Only count "shaped this project" when there was something to
-        // weigh — empty consideredCount is the bootstrap state, not a
-        // real moat moment.
-        if (Array.isArray(t.consideredConcepts) && t.consideredConcepts.length > 0) {
-          shapedThisProject++;
-        }
-        if (t.decision === "blocked") blockedThisProject++;
-        if (Array.isArray(t.nearMisses) && t.nearMisses.length > 0) {
-          nearMissesThisProject += t.nearMisses.length;
-        }
-        // Tally citations per considered concept.
-        for (const c of t.consideredConcepts ?? []) {
-          if (!c?.concept) continue;
-          const key = `${c.source}:${c.concept}`;
-          const existing = cites.get(key);
-          if (existing) {
-            existing.citationCount++;
-          } else {
-            cites.set(key, {
-              concept: c.concept,
-              source: c.source ?? "session",
-              citationCount: 1,
-              sampleArtifactId: artifactId,
-              sampleSessionId: entry.name,
-            });
-          }
-        }
-      }
-    }
-
-    // GG5 — raised from 50 to 200. Pre-GG5 the cap meant FF1's seeded-row
-    // sample lookup silently dropped seeds whose concept wasn't in the
-    // top 50 by citation count — a power user with a busy project saw
-    // inconsistent jump affordances on the seeded list ("why does THIS
-    // seed click but that one doesn't?"). PMF council called the lift
-    // the most-leveraged GG move because it makes the seeded → real
-    // citation causal-graph link universal across the seeded panel.
-    // 200 covers virtually every project (a user with 200+ distinct
-    // concepts in one project is a 99.9th percentile case); the digest
-    // walk is already O(traces × concepts-per-trace) so the slice
-    // size doesn't change the dominant cost.
-    const topCitedStances = Array.from(cites.values())
-      .sort((a, b) => b.citationCount - a.citationCount)
-      .slice(0, 200);
-
-    const result = {
-      shapedThisProject,
-      nearMissesThisProject,
-      blockedThisProject,
-      sessionsTouched,
-      topCitedStances,
-    };
-    FileStore.ledgerDigestCache.set(projectRoot, { computedAt: Date.now(), result });
-    return result;
-  }
+  /** AA5 — project-wide preflight-trace digest; see ledger-digest.ts. */
+  static ledgerDigest = ledgerDigest;
 }
