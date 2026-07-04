@@ -3744,7 +3744,7 @@ var init_project_root = __esm({
   }
 });
 
-// src/daemon-token.ts
+// src/daemon/token.ts
 import fs8 from "node:fs";
 import os3 from "node:os";
 import path7 from "node:path";
@@ -3845,16 +3845,16 @@ function unlinkTokenSidecar(projectRoot2) {
   } catch {
   }
 }
-var init_daemon_token = __esm({
-  "src/daemon-token.ts"() {
+var init_token = __esm({
+  "src/daemon/token.ts"() {
     "use strict";
     init_project_root();
   }
 });
 
-// src/daemon-lifecycle.ts
-var daemon_lifecycle_exports = {};
-__export(daemon_lifecycle_exports, {
+// src/daemon/lifecycle.ts
+var lifecycle_exports = {};
+__export(lifecycle_exports, {
   DEFAULT_PORT: () => DEFAULT_PORT,
   MAX_PORT_ATTEMPTS: () => MAX_PORT_ATTEMPTS,
   daemonAuthHeaders: () => daemonAuthHeaders,
@@ -4025,7 +4025,7 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path8.join(__thisDir, "../dist/daemon.js");
+  const daemonScript = path8.join(__thisDir, "../../dist/daemon/index.js");
   const scriptPath = fs9.existsSync(daemonScript) ? daemonScript : path8.join(__thisDir, "daemon.js");
   const child = spawn("node", [scriptPath], {
     cwd: projectRoot2,
@@ -4062,10 +4062,10 @@ ${tail}`);
   }
 }
 var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS;
-var init_daemon_lifecycle = __esm({
-  "src/daemon-lifecycle.ts"() {
+var init_lifecycle = __esm({
+  "src/daemon/lifecycle.ts"() {
     "use strict";
-    init_daemon_token();
+    init_token();
     init_project_root();
     __thisDir = path8.dirname(fileURLToPath2(import.meta.url));
     DAEMON_FILE = "daemon.json";
@@ -6913,7 +6913,7 @@ var import_subprotocol = __toESM(require_subprotocol(), 1);
 var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 
-// src/daemon.ts
+// src/daemon/index.ts
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import crypto4 from "node:crypto";
 import fs10 from "node:fs";
@@ -25954,7 +25954,7 @@ function applyTopLevelGuards(app2, opts) {
   });
 }
 
-// src/daemon-routes.ts
+// src/daemon/routes.ts
 var RecordRejectedBody = external_exports.object({
   description: external_exports.string().min(1),
   reason: external_exports.string().optional(),
@@ -27156,8 +27156,8 @@ async function sendPing(url2, payload) {
   }
 }
 
-// src/daemon.ts
-init_daemon_token();
+// src/daemon/index.ts
+init_token();
 init_project_root();
 async function openBrowser(url2) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -27365,7 +27365,7 @@ app.get("/api/projects", async (c) => {
   return c.json(payload);
 });
 async function sweepProjects() {
-  const { probeDaemonIdentity: probeDaemonIdentity2 } = await Promise.resolve().then(() => (init_daemon_lifecycle(), daemon_lifecycle_exports));
+  const { probeDaemonIdentity: probeDaemonIdentity2 } = await Promise.resolve().then(() => (init_lifecycle(), lifecycle_exports));
   const probes = [];
   for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
     probes.push(probeDaemonIdentity2(port, 300).then((identity) => ({ port, identity })));
@@ -27462,7 +27462,7 @@ app.post("/api/demo/run", (c) => {
 });
 app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
 var __thisDir2 = path9.dirname(fileURLToPath3(import.meta.url));
-var webDistCandidates = [path9.join(__thisDir2, "../dist/web"), path9.join(__thisDir2, "web")];
+var webDistCandidates = [path9.join(__thisDir2, "../../dist/web"), path9.join(__thisDir2, "web")];
 var webDistPath = webDistCandidates.find((p) => fs10.existsSync(p)) ?? webDistCandidates[0];
 mountStaticUi(app, {
   webDistPath,

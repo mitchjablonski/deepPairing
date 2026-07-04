@@ -2,7 +2,7 @@
  * IV7 — drift-protect the ERROR_CODES contract.
  *
  * The same code string lives in four places:
- *   1. routes.ts / daemon-routes.ts / daemon.ts emit them.
+ *   1. http/routes.ts / daemon/routes.ts / daemon/index.ts emit them.
  *   2. error-codes.ts is the single source of truth.
  *   3. docs/troubleshooting.md keys H2 headers off the user-facing subset.
  *   4. DaemonClient (and future MCP clients) match on them to decide retry.
@@ -90,15 +90,15 @@ describe("IV7 — ERROR_CODES drift protection", () => {
     expect(drift, `Found code literals not in ERROR_CODES: ${JSON.stringify(drift, null, 2)}`).toEqual([]);
   });
 
-  it("no `code: \"literal\"` survives in routes.ts / daemon-routes.ts / daemon.ts (post-migration)", () => {
+  it("no `code: \"literal\"` survives in http/routes.ts / daemon/routes.ts / daemon/index.ts (post-migration)", () => {
     // After IV7 migration these three files MUST reference ERROR_CODES
     // instead of inlining string literals. The previous test would
     // catch a typo'd literal but not a *correct* literal that bypassed
     // the const — this one pins the import-from-const convention.
     const targets = [
       "packages/mcp-server/src/http/routes.ts",
-      "packages/mcp-server/src/daemon-routes.ts",
-      "packages/mcp-server/src/daemon.ts",
+      "packages/mcp-server/src/daemon/routes.ts",
+      "packages/mcp-server/src/daemon/index.ts",
     ];
     for (const rel of targets) {
       const src = fs.readFileSync(path.join(repoRoot, rel), "utf-8");

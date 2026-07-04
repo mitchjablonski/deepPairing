@@ -13,8 +13,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { daemonAuthHeaders } from "../daemon-lifecycle.js";
-import { writeTokenSidecar } from "../daemon-token.js";
+import { daemonAuthHeaders } from "../daemon/lifecycle.js";
+import { writeTokenSidecar } from "../daemon/token.js";
 import { projectHashOf } from "../project-root.js";
 
 function writeDaemonJson(projectRoot: string, obj: Record<string, unknown>): void {

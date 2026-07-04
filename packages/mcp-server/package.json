@@ -7,7 +7,7 @@
   "main": "./dist/standalone.js",
   "bin": {
     "deeppairing-server": "./dist/standalone.js",
-    "deeppairing-daemon": "./dist/daemon.js",
+    "deeppairing-daemon": "./dist/daemon/index.js",
     "deeppairing": "./dist/cli/init.js"
   },
   "files": [

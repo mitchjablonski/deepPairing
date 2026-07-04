@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { evictDaemon } from "../daemon-lifecycle.js";
+import { evictDaemon } from "../daemon/lifecycle.js";
 
 // AA3 — distinct from port-sweep.test.ts (24847..24851) so the suites
 // can run in parallel without colliding on bind.

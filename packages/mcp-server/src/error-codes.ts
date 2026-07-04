@@ -3,8 +3,8 @@
  * deepPairing's HTTP routes and surfaced in docs/troubleshooting.md.
  *
  * Failure mode this closes: the same code string was previously
- * hand-typed at every emission site (`routes.ts`, `daemon-routes.ts`,
- * `daemon.ts`) AND referenced as an H2 in docs/troubleshooting.md. A typo
+ * hand-typed at every emission site (`http/routes.ts`, `daemon/routes.ts`,
+ * `daemon/index.ts`) AND referenced as an H2 in docs/troubleshooting.md. A typo
  * at any site or in the doc silently drifted the contract — a user
  * who pasted the daemon's "code: session_not_registereed" string into
  * their search bar would not find the troubleshooting entry.

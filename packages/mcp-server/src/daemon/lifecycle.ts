@@ -6,8 +6,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readTokenSidecar } from "./daemon-token.js";
-import { projectHashOf, preferredPortFor } from "./project-root.js";
+import { readTokenSidecar } from "./token.js";
+import { projectHashOf, preferredPortFor } from "../project-root.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -278,7 +278,10 @@ async function describePortHolders(projectRoot: string): Promise<string> {
 
 /** Spawn the daemon as a detached background process. */
 function spawnDaemon(projectRoot: string): { stderrTail: () => string } {
-  const daemonScript = path.join(__thisDir, "../dist/daemon.js");
+  // F4 — this file lives in src/daemon/ (or dist/daemon/) now: the tsc-built
+  // entry is two levels up at dist/daemon/index.js. The flat-bundle fallback
+  // below is unchanged (esbuild inlines this file beside daemon.js).
+  const daemonScript = path.join(__thisDir, "../../dist/daemon/index.js");
   const scriptPath = fs.existsSync(daemonScript)
     ? daemonScript
     : path.join(__thisDir, "daemon.js");

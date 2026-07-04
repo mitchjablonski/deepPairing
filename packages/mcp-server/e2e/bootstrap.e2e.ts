@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
  * 403" cannot regress silently.
  */
 const __dir = path.dirname(fileURLToPath(import.meta.url));
-const daemonJs = path.resolve(__dir, "../dist/daemon.js");
+const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
 
 let proc: ChildProcess | undefined;
 let projectRoot: string;
@@ -30,7 +30,7 @@ let expectedHash: string;
 
 test.beforeAll(async () => {
   if (!fs.existsSync(daemonJs)) {
-    throw new Error(`dist/daemon.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
+    throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-e2e-"));
   proc = spawn(process.execPath, [daemonJs], {

@@ -22,7 +22,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { projectHashOf } from "./project-root.js";
+import { projectHashOf } from "../project-root.js";
 
 /**
  * Does this directory's filesystem actually honor POSIX mode bits? We

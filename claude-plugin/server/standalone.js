@@ -6850,7 +6850,7 @@ var init_project_root = __esm({
   }
 });
 
-// src/daemon-token.ts
+// src/daemon/token.ts
 import fs4 from "node:fs";
 import os2 from "node:os";
 import path3 from "node:path";
@@ -6876,16 +6876,16 @@ function readTokenSidecar(projectRoot2) {
     return null;
   }
 }
-var init_daemon_token = __esm({
-  "src/daemon-token.ts"() {
+var init_token = __esm({
+  "src/daemon/token.ts"() {
     "use strict";
     init_project_root();
   }
 });
 
-// src/daemon-lifecycle.ts
-var daemon_lifecycle_exports = {};
-__export(daemon_lifecycle_exports, {
+// src/daemon/lifecycle.ts
+var lifecycle_exports = {};
+__export(lifecycle_exports, {
   DEFAULT_PORT: () => DEFAULT_PORT,
   MAX_PORT_ATTEMPTS: () => MAX_PORT_ATTEMPTS,
   daemonAuthHeaders: () => daemonAuthHeaders,
@@ -7056,7 +7056,7 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path4.join(__thisDir, "../dist/daemon.js");
+  const daemonScript = path4.join(__thisDir, "../../dist/daemon/index.js");
   const scriptPath = fs5.existsSync(daemonScript) ? daemonScript : path4.join(__thisDir, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
@@ -7093,10 +7093,10 @@ ${tail}`);
   }
 }
 var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS;
-var init_daemon_lifecycle = __esm({
-  "src/daemon-lifecycle.ts"() {
+var init_lifecycle = __esm({
+  "src/daemon/lifecycle.ts"() {
     "use strict";
-    init_daemon_token();
+    init_token();
     init_project_root();
     __thisDir = path4.dirname(fileURLToPath(import.meta.url));
     DAEMON_FILE = "daemon.json";
@@ -29840,9 +29840,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 }
 
 // src/standalone.ts
-init_daemon_lifecycle();
+init_lifecycle();
 
-// src/daemon-client.ts
+// src/daemon/client.ts
 init_project_root();
 var DaemonClient = class {
   baseUrl;
@@ -29937,7 +29937,7 @@ var DaemonClient = class {
     if (!this.projectRoot) return false;
     if (this.lastRegisterMeta && !this.lastRegisterMeta.expectedProjectRoot) return false;
     try {
-      const { ensureDaemon: ensureDaemon2 } = await Promise.resolve().then(() => (init_daemon_lifecycle(), daemon_lifecycle_exports));
+      const { ensureDaemon: ensureDaemon2 } = await Promise.resolve().then(() => (init_lifecycle(), lifecycle_exports));
       const info = await ensureDaemon2(this.projectRoot);
       if (!info) return false;
       if (info.authToken) this.authToken = info.authToken;

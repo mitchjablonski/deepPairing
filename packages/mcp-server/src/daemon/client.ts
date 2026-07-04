@@ -11,8 +11,8 @@ import type {
   AddCommentParams,
   RecordDecisionParams,
   RejectedApproach,
-} from "./store/store-interface.js";
-import { projectHashOf } from "./project-root.js";
+} from "../store/store-interface.js";
+import { projectHashOf } from "../project-root.js";
 
 export class DaemonClient implements IStore {
   private baseUrl: string;
@@ -116,7 +116,7 @@ export class DaemonClient implements IStore {
     if (this.lastRegisterMeta && !this.lastRegisterMeta.expectedProjectRoot) return false;
     try {
       // Dynamic import — avoids any static cycle with daemon-lifecycle.
-      const { ensureDaemon } = await import("./daemon-lifecycle.js");
+      const { ensureDaemon } = await import("./lifecycle.js");
       const info = await ensureDaemon(this.projectRoot);
       if (!info) return false;
       if (info.authToken) this.authToken = info.authToken;
@@ -364,7 +364,7 @@ export class DaemonClient implements IStore {
   async updateArtifactStatus(
     artifactId: string,
     status: ArtifactStatus,
-    reason?: import("./store/store-interface.js").StatusTransitionReason,
+    reason?: import("../store/store-interface.js").StatusTransitionReason,
   ): Promise<void> {
     await this.post(`/artifacts/${artifactId}/status`, { status, reason });
   }
