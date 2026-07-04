@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders } from "../daemon-lifecycle.js";
+import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders } from "../daemon/lifecycle.js";
 import {
   ensureDeepPairingDir,
   ensureGitignoreEntry,
@@ -1187,7 +1187,7 @@ function teamInitCmd(force: boolean): void {
  * new user sees the agent being refused by concept" thesis, made concrete.
  */
 async function demoCmd(): Promise<void> {
-  const { ensureDaemon } = await import("../daemon-lifecycle.js");
+  const { ensureDaemon } = await import("../daemon/lifecycle.js");
   console.log(bold("\n  deepPairing demo"));
   console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
 

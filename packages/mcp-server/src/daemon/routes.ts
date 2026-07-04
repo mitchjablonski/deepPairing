@@ -5,10 +5,10 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
-import type { FileStore } from "./store/file-store.js";
-import { ERROR_CODES } from "./error-codes.js";
-import { recordMetricEvent } from "./store/metrics-store.js";
-import { projectHashGate } from "./http/guards.js";
+import type { FileStore } from "../store/file-store.js";
+import { ERROR_CODES } from "../error-codes.js";
+import { recordMetricEvent } from "../store/metrics-store.js";
+import { projectHashGate } from "../http/guards.js";
 
 // BB8 — wire-input validation for the typed-object signatures AA1
 // introduced. AA1's typing protected only in-process callers; routes

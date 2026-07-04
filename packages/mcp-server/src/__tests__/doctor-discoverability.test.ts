@@ -32,13 +32,13 @@ describe("`deeppairing doctor --fix` surfaces (U6)", () => {
   });
 
   it("daemon.ts non-EADDRINUSE bind failure stderr mentions doctor --fix", () => {
-    const daemon = read("daemon.ts");
+    const daemon = read("daemon/index.ts");
     // The bind-failed branch:
     expect(daemon).toMatch(/bind failed[\s\S]+?npx deeppairing doctor --fix/);
   });
 
   it("daemon.ts no-free-port FATAL stderr mentions doctor --fix", () => {
-    const daemon = read("daemon.ts");
+    const daemon = read("daemon/index.ts");
     expect(daemon).toMatch(/No free port[\s\S]+?npx deeppairing doctor --fix/);
   });
 

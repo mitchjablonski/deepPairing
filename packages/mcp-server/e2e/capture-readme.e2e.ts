@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
  * Run: pnpm build && npx playwright test capture-readme.e2e.ts
  */
 const __dir = path.dirname(fileURLToPath(import.meta.url));
-const daemonJs = path.resolve(__dir, "../dist/daemon.js");
+const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
 const ASSETS = path.resolve(__dir, "../../../docs/assets");
 
 test("capture README screenshots", async ({ page }) => {

@@ -28,7 +28,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const daemonSrc = fs.readFileSync(path.resolve(here, "../daemon.ts"), "utf-8");
+const daemonSrc = fs.readFileSync(path.resolve(here, "../daemon/index.ts"), "utf-8");
 
 describe("II5 — WS error handler wiring", () => {
   it("daemon.ts registers ws.on('error') on the session-client path", () => {

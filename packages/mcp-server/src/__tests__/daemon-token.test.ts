@@ -15,7 +15,7 @@ import {
   writeTokenSidecar,
   readTokenSidecar,
   unlinkTokenSidecar,
-} from "../daemon-token.js";
+} from "../daemon/token.js";
 import { projectHashOf } from "../project-root.js";
 
 describe("tokenPlacement (pure routing)", () => {

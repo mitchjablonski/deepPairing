@@ -20,23 +20,23 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { spawn } from "node:child_process";
-import { ERROR_CODES } from "./error-codes.js";
-import { FileStore } from "./store/file-store.js";
-import { createHttpRoutes } from "./http/routes.js";
-import { mountStaticUi } from "./http/static-ui.js";
-import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./daemon-routes.js";
-import { applyTopLevelGuards } from "./http/guards.js";
-import { runDaemonStartupSetup } from "./cli/setup-tasks.js";
-import { runDemoScript } from "./demo-script.js";
-import { recordMetricEvent, flushAllMetrics } from "./store/metrics-store.js";
-import { recordBroadcastMetric } from "./store/metrics-tap.js";
-import { buildPingPayload, decidePing, sendPing } from "./ping.js";
+import { ERROR_CODES } from "../error-codes.js";
+import { FileStore } from "../store/file-store.js";
+import { createHttpRoutes } from "../http/routes.js";
+import { mountStaticUi } from "../http/static-ui.js";
+import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./routes.js";
+import { applyTopLevelGuards } from "../http/guards.js";
+import { runDaemonStartupSetup } from "../cli/setup-tasks.js";
+import { runDemoScript } from "../demo-script.js";
+import { recordMetricEvent, flushAllMetrics } from "../store/metrics-store.js";
+import { recordBroadcastMetric } from "../store/metrics-tap.js";
+import { buildPingPayload, decidePing, sendPing } from "../ping.js";
 import {
   fsHonorsPosixMode,
   tokenPlacement,
   writeTokenSidecar,
   unlinkTokenSidecar,
-} from "./daemon-token.js";
+} from "./token.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -59,8 +59,8 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // /api/daemon-info + the WS `connected` event. The browser echoes it
 // back in `X-Project-Hash` and any per-session route 403s on mismatch,
 // closing the stale-tab-after-port-recycling write hole.
-import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "./project-root.js";
-import { corsAllowedOrigin, isAllowedWsOrigin } from "./http/origin-policy.js";
+import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
+import { corsAllowedOrigin, isAllowedWsOrigin } from "../http/origin-policy.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 // MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
 // so route handlers defined before the server starts can read it at call time
@@ -388,7 +388,7 @@ app.get("/api/projects", async (c) => {
 });
 
 async function sweepProjects(): Promise<unknown> {
-  const { probeDaemonIdentity } = await import("./daemon-lifecycle.js");
+  const { probeDaemonIdentity } = await import("./lifecycle.js");
   const probes: Array<Promise<{ port: number; identity: any | null }>> = [];
   for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
     probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
@@ -549,10 +549,14 @@ app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHas
 // the /api routes so they win the match.
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
+// F4 — this file lives one level deeper now (src/daemon/ resp. dist/daemon/),
+// so the monorepo candidate gains a level. The FLAT bundle candidate (web/
+// beside daemon.js in claude-plugin/server) is unchanged — esbuild emits a
+// single file at the server root.
 // E1 — two layouts: monorepo dist (../dist/web from src/, i.e. dist/web from
 // the compiled file) and the self-contained plugin bundle (web/ BESIDE the
 // bundled daemon.js). Mirrors daemon-lifecycle's daemon.js spawn fallback.
-const webDistCandidates = [path.join(__thisDir, "../dist/web"), path.join(__thisDir, "web")];
+const webDistCandidates = [path.join(__thisDir, "../../dist/web"), path.join(__thisDir, "web")];
 const webDistPath = webDistCandidates.find((p) => fs.existsSync(p)) ?? webDistCandidates[0];
 
 mountStaticUi(app, {

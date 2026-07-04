@@ -11,8 +11,8 @@
  */
 
 import { createMcpServer } from "./mcp/server.js";
-import { ensureDaemon } from "./daemon-lifecycle.js";
-import { DaemonClient } from "./daemon-client.js";
+import { ensureDaemon } from "./daemon/lifecycle.js";
+import { DaemonClient } from "./daemon/client.js";
 import { resolveProjectRoot } from "./project-root.js";
 import crypto from "node:crypto";
 import fs from "node:fs";

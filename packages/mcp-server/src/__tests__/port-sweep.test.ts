@@ -10,7 +10,7 @@ import { serve } from "@hono/node-server";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isDaemonRunning, probeDaemonIdentity } from "../daemon-lifecycle.js";
+import { isDaemonRunning, probeDaemonIdentity } from "../daemon/lifecycle.js";
 
 function fakeDaemon(port: number, projectRoot: string, pid = 99999, startedAt = "2026-04-19T00:00:00.000Z") {
   const app = new Hono();

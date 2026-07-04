@@ -5,8 +5,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { serve } from "@hono/node-server";
-import { createDaemonRoutes, createActiveSessionRoutes } from "../daemon-routes.js";
-import { DaemonClient } from "../daemon-client.js";
+import { createDaemonRoutes, createActiveSessionRoutes } from "../daemon/routes.js";
+import { DaemonClient } from "../daemon/client.js";
 import { FileStore } from "../store/file-store.js";
 import { setGlobalStoreForTests } from "../store/global-store.js";
 import { readMetrics, __resetMetricsCacheForTests } from "../store/metrics-store.js";
@@ -16,7 +16,7 @@ import path from "node:path";
 
 // --- Test helpers ---
 
-import type { SessionMeta } from "../daemon-routes.js";
+import type { SessionMeta } from "../daemon/routes.js";
 
 let tmpDir: string;
 let sessions: Map<string, FileStore>;

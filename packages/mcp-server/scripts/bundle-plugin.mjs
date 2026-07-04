@@ -66,7 +66,7 @@ await build({
 });
 await build({
   ...shared,
-  entryPoints: [resolve(pkgRoot, "src/daemon.ts")],
+  entryPoints: [resolve(pkgRoot, "src/daemon/index.ts")],
   outfile: resolve(pluginDir, "daemon.js"),
 });
 // E1 review — setup-tasks resolves preflight-hook-core.js ON DISK beside the
