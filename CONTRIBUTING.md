@@ -67,7 +67,7 @@ claude-plugin/    # Claude Code plugin (.mcp.json + slash commands + skill)
 
 - Pure functions (diff, fuzzy search, preflight matcher) get unit tests.
 - FileStore changes get round-trip tests with temp directories.
-- HTTP routes get Hono `.request()` tests (see `http/__tests__/routes.test.ts`).
+- HTTP routes get Hono `.request()` tests (see `http/__tests__/routes.*.test.ts` (shared setup in `routes.harness.ts`)).
 - MCP tools get integration tests via the SDK's `InMemoryTransport` (see `mcp/__tests__/server.test.ts`).
 - New error codes need a docs/troubleshooting.md entry if user-facing.
 
