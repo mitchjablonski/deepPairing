@@ -7,7 +7,9 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
@@ -38,12 +40,14 @@
   },
   "scripts": {
     "build": "tsc && node build.mjs",
+    "lint": "eslint src --max-warnings 0",
     "watch": "tsc --watch"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.5.0",
+    "eslint": "^10.6.0",
     "typescript": "^5.7.0"
   },
   "dependencies": {

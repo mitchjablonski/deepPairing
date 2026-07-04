@@ -36,6 +36,7 @@ export function useAbortableFetch<T>(
       if (result !== undefined && !ac.signal.aborted) setData(result);
     })();
     return () => ac.abort();
-  }, deps); // caller-owned deps — the hook's contract (no exhaustive-deps plugin loaded)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the hook forwards a caller-supplied deps array by design (the E7 contract); static verification is impossible here
+  }, deps); // caller-owned deps — the hook's contract (the disable above carries it)
   return data;
 }

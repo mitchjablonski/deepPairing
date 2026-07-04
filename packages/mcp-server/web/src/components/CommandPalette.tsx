@@ -109,6 +109,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
 
     return items;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- store actions are stable identities; onClose (prop) is identity-unstable but behaviorally constant (a stale one still closes via stable setState)
   }, [artifacts, theme, boundSessionId]);
 
   // Filter and sort by fuzzy score

@@ -9,6 +9,8 @@ import { useArtifactStore } from "../../stores/artifact";
 import { computeLineDiff, collapseDiff, type DiffLine, type DiffRow } from "../../lib/diff";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../LineComments";
 
+const EMPTY_COMMENTS: Comment[] = [];
+
 /**
  * Shared props that make the diff views comment-capable. Comments anchor to
  * the NEW-side line number so a comment made on a diff row is byte-identical
@@ -429,7 +431,11 @@ export function CodeChangeArtifact({ artifact }: { artifact: Artifact }) {
   // Show the human's line comments inline on the code (GitHub-style), keyed by
   // line number — mirrors ResearchArtifact. Code_change comments target a line
   // directly (no finding/step/evidence index).
-  const allComments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  // G8 — the `?? []` fallback OUTSIDE the selector minted a new array
+  // identity every render, so commentsByLine recomputed per render (the
+  // exhaustive-deps rule flagged it). A module-stable empty keeps the memo
+  // honest.
+  const allComments = useArtifactStore((s) => s.comments[artifact.id]) ?? EMPTY_COMMENTS;
   const commentsByLine = useMemo(() => {
     const map = new Map<number, Comment[]>();
     for (const c of allComments) {

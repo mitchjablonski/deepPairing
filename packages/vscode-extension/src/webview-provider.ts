@@ -125,8 +125,9 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
       void fetch(`http://localhost:${this.serverPort}/api/daemon-info`)
         .then((res) => (res.ok ? res.json() : null))
         .catch(() => null)
-        .then((info: any) => {
-          const projectHash = typeof info?.projectHash === "string" ? info.projectHash : null;
+        .then((info: unknown) => {
+          const hash = (info as { projectHash?: unknown } | null)?.projectHash;
+          const projectHash = typeof hash === "string" ? hash : null;
           const url = projectHash
             ? `ws://localhost:${this.serverPort}/ws?projectHash=${encodeURIComponent(projectHash)}`
             : `ws://localhost:${this.serverPort}/ws`;

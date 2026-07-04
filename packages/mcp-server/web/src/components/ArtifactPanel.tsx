@@ -589,6 +589,7 @@ function MultiAgentSync() {
     // sessionKey (not the array) so a same-content refresh doesn't churn the
     // interval; activeSessions is read via a ref-stable closure re-created
     // only when membership actually changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: sessionKey (not the array) so a same-content refresh doesn't churn the 5s interval — see comment above
   }, [sessionKey, knownSessionIds.size]); // Re-run on new sessions / merges
 
   return null; // No visual output — just syncs data
