@@ -41,27 +41,27 @@ describe("CommentableCode", () => {
   it("clicking + opens Comment mode with the inline input", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[1]);
+    await userEvent.click(commentBtns[1]!);
     expect(screen.getByPlaceholderText(/add a comment on this line/i)).toBeInTheDocument();
   });
 
   it("clicking ? opens Ask mode with the ask placeholder", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const askBtns = screen.getAllByRole("button", { name: /ask a question about this line/i });
-    await userEvent.click(askBtns[0]);
+    await userEvent.click(askBtns[0]!);
     expect(screen.getByPlaceholderText(/ask the agent about this line/i)).toBeInTheDocument();
   });
 
   it("Ask mode submits the comment with intent: 'question' on that line", async () => {
     render(<CommentableCode code={code} lineStart={10} artifactId="art_x" filePath="auth.ts" />);
     const askBtns = screen.getAllByRole("button", { name: /ask a question about this line/i });
-    await userEvent.click(askBtns[1]); // line 11
+    await userEvent.click(askBtns[1]!); // line 11
     const input = screen.getByPlaceholderText(/ask the agent about this line/i);
     await userEvent.type(input, "why 10 rounds?");
     // Two "Ask" buttons in play now — the tab and the submit. The submit is
     // the last one in DOM order.
     const askButtons = screen.getAllByRole("button", { name: /^Ask$/ });
-    await userEvent.click(askButtons[askButtons.length - 1]);
+    await userEvent.click(askButtons[askButtons.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.content).toBe("why 10 rounds?");
@@ -73,13 +73,13 @@ describe("CommentableCode", () => {
   it("Comment mode submits without intent", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[0]);
+    await userEvent.click(commentBtns[0]!);
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "cleanup needed");
     // "Comment" is both the panel tab and the submit button; grab the submit
     // one (the one inside the form row — it's the last "Comment" button).
     const submitButtons = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitButtons[submitButtons.length - 1]);
+    await userEvent.click(submitButtons[submitButtons.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.content).toBe("cleanup needed");
@@ -89,7 +89,7 @@ describe("CommentableCode", () => {
   it("Suggest mode pre-fills the textarea with the current line", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[1]); // line 2 → "  return bcrypt.hash(pw, 10);"
+    await userEvent.click(commentBtns[1]!); // line 2 → "  return bcrypt.hash(pw, 10);"
     await userEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
 
     const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
@@ -99,7 +99,7 @@ describe("CommentableCode", () => {
   it("R2 — span input is hidden in Suggest mode (suggestions stay single-line)", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[0]);
+    await userEvent.click(commentBtns[0]!);
     // Visible in comment mode
     expect(screen.getByLabelText(/comment end line/i)).toBeInTheDocument();
     // Hidden in suggest mode
@@ -110,7 +110,7 @@ describe("CommentableCode", () => {
   it("R2 — submitting with extended end line sends a span comment", async () => {
     render(<CommentableCode code={code} lineStart={10} artifactId="art_x" filePath="auth.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[0]); // line 10
+    await userEvent.click(commentBtns[0]!); // line 10
     // Extend the span end to line 12 (covers all 3 lines).
     const endInput = screen.getByLabelText(/comment end line/i) as HTMLInputElement;
     await userEvent.clear(endInput);
@@ -118,7 +118,7 @@ describe("CommentableCode", () => {
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "the whole hash function");
     const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.target.lineStart).toBe(10);
@@ -129,7 +129,7 @@ describe("CommentableCode", () => {
   it("R2 — caps lineEnd at the file's last line (no out-of-range spans)", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[0]); // line 1, file has 3 lines
+    await userEvent.click(commentBtns[0]!); // line 1, file has 3 lines
     const endInput = screen.getByLabelText(/comment end line/i) as HTMLInputElement;
     // Try to extend past EOF.
     await userEvent.clear(endInput);
@@ -137,7 +137,7 @@ describe("CommentableCode", () => {
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "spans the file");
     const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.target.lineEnd).toBe(3); // clamped to total lines
@@ -146,7 +146,7 @@ describe("CommentableCode", () => {
   it("R2 — backwards range (end < start) clamps to start, never produces a negative span", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[1]); // line 2
+    await userEvent.click(commentBtns[1]!); // line 2
     const endInput = screen.getByLabelText(/comment end line/i) as HTMLInputElement;
     // The input enforces min=lineStart at the HTML level, but the submit
     // path also clamps defensively in case the user bypasses the input.
@@ -157,7 +157,7 @@ describe("CommentableCode", () => {
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "test");
     const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.target.lineEnd).toBeGreaterThanOrEqual(body.target.lineStart);
@@ -431,7 +431,7 @@ describe("CommentableCode", () => {
   it("switching between Comment / Ask / Suggest modes changes the active input", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
-    await userEvent.click(commentBtns[0]);
+    await userEvent.click(commentBtns[0]!);
 
     // Default mode shows the Comment placeholder
     expect(screen.getByPlaceholderText(/add a comment on this line/i)).toBeInTheDocument();

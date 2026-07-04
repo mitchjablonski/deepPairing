@@ -42,7 +42,7 @@ describe("parseArtifactContent (U2)", () => {
   it("returns ok=false when a required field is missing", async () => {
     const r = parseArtifactContent(art("research", { summary: "x" }));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.issues[0].path.join(".")).toBe("findings");
+    if (!r.ok) expect(r.error.issues[0]!.path.join(".")).toBe("findings");
   });
 
   it("validates a decision artifact (matches DecisionContentSchema)", async () => {

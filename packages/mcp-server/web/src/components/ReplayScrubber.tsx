@@ -112,13 +112,16 @@ export function ReplayScrubber() {
   }, [active, playing, stepForward, stepBackward, play, pause]);
 
   const { minT, span } = useMemo(() => {
-    if (events.length === 0) return { minT: 0, maxT: 0, span: 1 };
-    const first = new Date(events[0].at).getTime();
-    const last = new Date(events[events.length - 1].at).getTime();
+    const firstEvent = events[0];
+    const lastEvent = events.at(-1);
+    if (!firstEvent || !lastEvent) return { minT: 0, maxT: 0, span: 1 };
+    const first = new Date(firstEvent.at).getTime();
+    const last = new Date(lastEvent.at).getTime();
     return { minT: first, maxT: last, span: Math.max(1, last - first) };
   }, [events]);
 
   const cursorIdx = events.findIndex((e) => e.at === cursor);
+  const cursorEvent = cursorIdx >= 0 ? events[cursorIdx] : undefined;
   const totalEvents = events.length;
   const shownEvents = cursorIdx + 1;
 
@@ -238,11 +241,11 @@ export function ReplayScrubber() {
       </div>
 
       {/* Current event detail + annotation affordance */}
-      {cursorIdx >= 0 && (
+      {cursorEvent && (
         <CurrentEventRow
-          event={events[cursorIdx]}
-          annotating={annotatingEvent === events[cursorIdx].id}
-          setAnnotating={(on) => setAnnotatingEvent(on ? events[cursorIdx].id : null)}
+          event={cursorEvent}
+          annotating={annotatingEvent === cursorEvent.id}
+          setAnnotating={(on) => setAnnotatingEvent(on ? cursorEvent.id : null)}
         />
       )}
     </div>

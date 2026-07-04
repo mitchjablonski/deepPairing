@@ -77,7 +77,7 @@ export function matchesGlob(pathStr: string, glob: string): boolean {
     } else if (glob[i] === "*") {
       re += "[^/]*";
     } else {
-      re += escape(glob[i]);
+      re += escape(glob[i]!); // `!` safe: i < glob.length loop bound
     }
   }
   return new RegExp(`^${re}$`).test(pathStr);

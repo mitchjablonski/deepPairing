@@ -176,9 +176,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([entry]) =>
-      dispatch({ type: "sentinel", atEnd: entry.isIntersecting }),
-    );
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry) dispatch({ type: "sentinel", atEnd: entry.isIntersecting });
+    });
     io.observe(el);
     return () => io.disconnect();
   }, []);

@@ -196,7 +196,13 @@ export function MessageInput() {
               }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
-                applyMention(mentionSuggestions[mentionSelectedIdx].title);
+                // Guarded: a live artifact update can shrink the suggestion
+                // list under a stale selected index — this used to throw.
+                // F5 review — clamp to the last suggestion rather than
+                // swallowing the keypress (preventDefault already fired).
+                const selected =
+                  mentionSuggestions[Math.min(mentionSelectedIdx, mentionSuggestions.length - 1)];
+                if (selected) applyMention(selected.title);
                 return;
               }
               if (e.key === "Escape") {

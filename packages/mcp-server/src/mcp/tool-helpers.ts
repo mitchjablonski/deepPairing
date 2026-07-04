@@ -313,8 +313,8 @@ export async function revisionNudge(
         titlesSimilar(a.title ?? "", title),
     )
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  if (prior.length === 0) return "";
-  const match = prior[prior.length - 1]; // most recent live look-alike
+  const match = prior.at(-1); // most recent live look-alike
+  if (!match) return "";
   return (
     `\n\n↻ This looks like a revision of a live ${type} you already presented ` +
     `(${match.id}${match.title ? ` "${match.title}"` : ""}). Next time, call ` +

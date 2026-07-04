@@ -198,11 +198,11 @@ describe("CodeChangeArtifact — inline comments on the diff views", () => {
     // Split is the default view. The added "NEW" line is new-side line 2.
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
     // Click the last gutter + button (the changed/added line, new-side L2).
-    await userEvent.click(commentBtns[commentBtns.length - 1]);
+    await userEvent.click(commentBtns[commentBtns.length - 1]!);
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "rename this var");
     const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.content).toBe("rename this var");
@@ -218,11 +218,11 @@ describe("CodeChangeArtifact — inline comments on the diff views", () => {
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
     // The added row (new-side L2) is the last commentable row; the removed
     // row ("OLD") has no new-side line and no comment button.
-    await userEvent.click(commentBtns[commentBtns.length - 1]);
+    await userEvent.click(commentBtns[commentBtns.length - 1]!);
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "why NEW?");
     const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.target.lineStart).toBe(2);
@@ -295,11 +295,11 @@ describe("CodeChangeArtifact — inline comments on the diff views", () => {
     // Result view shows the full after-text; line 2 is "NEW".
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
     expect(commentBtns).toHaveLength(2); // both lines commentable in the result view
-    await userEvent.click(commentBtns[1]); // line 2
+    await userEvent.click(commentBtns[1]!); // line 2
     const input = screen.getByPlaceholderText(/add a comment on this line/i);
     await userEvent.type(input, "from result view");
     const submitBtns = screen.getAllByRole("button", { name: /^Comment$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     const body = JSON.parse((fetch as any).mock.calls[0][1].body);
     expect(body.target.lineStart).toBe(2);

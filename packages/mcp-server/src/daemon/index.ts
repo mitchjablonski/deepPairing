@@ -556,8 +556,9 @@ const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 // E1 — two layouts: monorepo dist (../dist/web from src/, i.e. dist/web from
 // the compiled file) and the self-contained plugin bundle (web/ BESIDE the
 // bundled daemon.js). Mirrors daemon-lifecycle's daemon.js spawn fallback.
-const webDistCandidates = [path.join(__thisDir, "../../dist/web"), path.join(__thisDir, "web")];
-const webDistPath = webDistCandidates.find((p) => fs.existsSync(p)) ?? webDistCandidates[0];
+const monorepoWebDist = path.join(__thisDir, "../../dist/web");
+const webDistCandidates = [monorepoWebDist, path.join(__thisDir, "web")];
+const webDistPath = webDistCandidates.find((p) => fs.existsSync(p)) ?? monorepoWebDist;
 
 mountStaticUi(app, {
   webDistPath,
@@ -709,7 +710,8 @@ async function main() {
     rejectionTimes.push(now);
     // Trim out anything older than the window. O(n) trim is fine —
     // n caps at the threshold so this is bounded.
-    while (rejectionTimes.length && now - rejectionTimes[0] > REJECTION_WINDOW_MS) {
+    // `!` safe: the length check in the same condition guarantees [0] exists.
+    while (rejectionTimes.length && now - rejectionTimes[0]! > REJECTION_WINDOW_MS) {
       rejectionTimes.shift();
     }
     if (rejectionTimes.length >= REJECTION_THRESHOLD) {

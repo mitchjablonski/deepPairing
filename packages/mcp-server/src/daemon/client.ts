@@ -700,7 +700,7 @@ export class DaemonClient implements IStore {
 
   private portFromBaseUrl(): number {
     // baseUrl = http://localhost:{port}/api/internal/sessions/{sessionId}
-    const match = this.baseUrl.match(/localhost:(\d+)/);
-    return match ? parseInt(match[1], 10) : 3847;
+    const port = this.baseUrl.match(/localhost:(\d+)/)?.[1];
+    return port ? parseInt(port, 10) : 3847;
   }
 }

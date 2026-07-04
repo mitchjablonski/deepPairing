@@ -453,10 +453,10 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     const textarea = screen.getByPlaceholderText(/continue the thread/i);
     await userEvent.type(textarea, "follow-up question");
     const submitBtns = screen.getAllByRole("button", { name: /^Reply$/ });
-    await userEvent.click(submitBtns[submitBtns.length - 1]);
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
 
     expect(fetchMock).toHaveBeenCalled();
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
     expect(body.content).toBe("follow-up question");
     // Parent is the latest agent reply (ans1), not the original human Q.
     expect(body.parentCommentId).toBe("ans1");

@@ -9,7 +9,7 @@ describe("preferences store — buildEditorLink", () => {
   beforeEach(() => {
     // Fresh store state
     usePreferencesStore.setState({
-      editorScheme: EDITOR_PRESETS.vscode.template,
+      editorScheme: EDITOR_PRESETS.vscode!.template,
     });
   });
 
@@ -49,7 +49,7 @@ describe("preferences store — buildEditorLink", () => {
   });
 
   it("uses the configured editor scheme (Cursor)", () => {
-    usePreferencesStore.setState({ editorScheme: EDITOR_PRESETS.cursor.template });
+    usePreferencesStore.setState({ editorScheme: EDITOR_PRESETS.cursor!.template });
     const link = usePreferencesStore.getState().buildEditorLink(
       "/abs/src/a.ts",
       10,
@@ -59,7 +59,7 @@ describe("preferences store — buildEditorLink", () => {
   });
 
   it("JetBrains scheme uses query-string style", () => {
-    usePreferencesStore.setState({ editorScheme: EDITOR_PRESETS.jetbrains.template });
+    usePreferencesStore.setState({ editorScheme: EDITOR_PRESETS.jetbrains!.template });
     const link = usePreferencesStore.getState().buildEditorLink(
       "/abs/src/a.ts",
       10,

@@ -47,11 +47,12 @@ export function EditorPicker() {
         value={currentPreset}
         onChange={(e) => {
           const key = e.target.value;
-          if (key === "custom") {
+          const preset = EDITOR_PRESETS[key];
+          if (key === "custom" || !preset) {
             setShowCustom(true);
           } else {
             setShowCustom(false);
-            setEditorScheme(EDITOR_PRESETS[key].template);
+            setEditorScheme(preset.template);
           }
         }}
         className="bg-surface-secondary border border-border-default rounded px-1.5 py-0.5 text-2xs text-text-primary"

@@ -358,9 +358,10 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     // outside .local would be hostile.
     const otherScopes = detectCrossScopeDpEntries(projectRoot, "Stop", STOP_HOOK_MARKER)
       .filter((s) => s.scope !== "project-local" && s.count > 0);
-    if (otherScopes.length > 0) {
+    const [firstScope] = otherScopes;
+    if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${otherScopes[0].count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
@@ -587,9 +588,10 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     // X2 — same cross-scope detection as Stop hook.
     const otherScopes = detectCrossScopeDpEntries(projectRoot, "PostToolUse", CHECKPOINT_HOOK_MARKER)
       .filter((s) => s.scope !== "project-local" && s.count > 0);
-    if (otherScopes.length > 0) {
+    const [firstScope] = otherScopes;
+    if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${otherScopes[0].count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
@@ -620,15 +622,16 @@ const PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
  *  none exists (e.g. an unbuilt dev tree) the hook fails OPEN at import time. */
 function resolvePreflightCoreUrl(): { url: string; exists: boolean } {
   const here = path.dirname(fileURLToPath(import.meta.url));
+  const distCandidate = path.join(here, "preflight-hook-core.js"); // dist/cli (built / prod)
   const candidates = [
-    path.join(here, "preflight-hook-core.js"), // dist/cli (built / prod)
+    distCandidate,
     path.join(here, "../../dist/cli/preflight-hook-core.js"), // src/cli via tsx, after a build
   ];
   const found = candidates.find((c) => fs.existsSync(c));
   // Stamp the best-guess path even when missing so a later build self-heals on
   // the next daemon startup (re-stamp); `exists` lets the installer report
   // honestly that the gate is inactive until then.
-  return { url: pathToFileURL(found ?? candidates[0]).href, exists: Boolean(found) };
+  return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
 }
 
 function preflightHookScript(coreUrl: string): string {

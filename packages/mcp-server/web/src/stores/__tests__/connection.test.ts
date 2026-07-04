@@ -106,7 +106,7 @@ describe("connection store — handleMessage dispatch", () => {
 
     const art = useArtifactStore.getState();
     expect(art.artifacts).toHaveLength(1);
-    expect(art.artifacts[0].id).toBe("a1");
+    expect(art.artifacts[0]!.id).toBe("a1");
     expect(art.comments["a1"]).toHaveLength(1);
   });
 
@@ -182,7 +182,7 @@ describe("connection store — handleMessage dispatch", () => {
     activeAdapter.emit({ type: "artifact_updated", artifactId: "a1", status: "approved" });
     await flush();
 
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("approved");
   });
 
   it("appends comments on `comment_added`", async () => {
@@ -224,7 +224,7 @@ describe("connection store — handleMessage dispatch", () => {
 
     const list = useArtifactStore.getState().comments["a1"];
     expect(list).toHaveLength(1); // upsert, not append
-    expect((list[0] as any).humanResolvedAt).toBe("2026-04-16T11:00:00.000Z");
+    expect((list![0] as any).humanResolvedAt).toBe("2026-04-16T11:00:00.000Z");
   });
 
   it("renames artifact on `artifact_renamed`", async () => {
@@ -238,7 +238,7 @@ describe("connection store — handleMessage dispatch", () => {
     activeAdapter.emit({ type: "artifact_renamed", artifactId: "a1", title: "New title" });
     await flush();
 
-    expect(useArtifactStore.getState().artifacts[0].title).toBe("New title");
+    expect(useArtifactStore.getState().artifacts[0]!.title).toBe("New title");
   });
 
   it("updates autonomyLevel on `preference_changed`", async () => {
@@ -259,7 +259,7 @@ describe("connection store — handleMessage dispatch", () => {
     activeAdapter.emit({ type: "decision_resolved", artifactId: "a1", optionId: "opt_x" });
     await flush();
 
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("approved");
   });
 
   describe("pair-tempo events (O7)", () => {
@@ -284,10 +284,10 @@ describe("connection store — handleMessage dispatch", () => {
 
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0].kind).toBe("preflight-block");
-      expect(toasts[0].hero?.source).toBe("team");
-      expect(toasts[0].hero?.concept).toBe("global state");
-      expect(toasts[0].hero?.addedBy).toBe("alex");
+      expect(toasts[0]!.kind).toBe("preflight-block");
+      expect(toasts[0]!.hero?.source).toBe("team");
+      expect(toasts[0]!.hero?.concept).toBe("global state");
+      expect(toasts[0]!.hero?.addedBy).toBe("alex");
     });
 
     it("II3 — pushes a sticky 'reload to re-bind' toast on a fatal project mismatch (no silent rebind)", async () => {
@@ -318,9 +318,9 @@ describe("connection store — handleMessage dispatch", () => {
 
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0].kind).toBe("info");
-      expect(toasts[0].title).toContain("+ avoid");
-      expect(toasts[0].body).toContain("Auth refactor");
+      expect(toasts[0]!.kind).toBe("info");
+      expect(toasts[0]!.title).toContain("+ avoid");
+      expect(toasts[0]!.body).toContain("Auth refactor");
     });
 
     it("differentiates approved vs rejected in the ledger-write title", async () => {
@@ -329,7 +329,7 @@ describe("connection store — handleMessage dispatch", () => {
       useConnectionStore.getState().connect();
       activeAdapter.emit({ type: "ledger_write", kind: "approved", description: "Service layer" });
       await flush();
-      expect(useToastStore.getState().toasts[0].title).toContain("+ prefer");
+      expect(useToastStore.getState().toasts[0]!.title).toContain("+ prefer");
     });
 
     it("pushes a success toast on `question_answered` with a jump-to-answer action", async () => {
@@ -348,9 +348,9 @@ describe("connection store — handleMessage dispatch", () => {
 
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0].kind).toBe("success");
-      expect(toasts[0].title).toMatch(/question was answered/i);
-      expect(toasts[0].action?.label).toMatch(/jump to answer/i);
+      expect(toasts[0]!.kind).toBe("success");
+      expect(toasts[0]!.title).toMatch(/question was answered/i);
+      expect(toasts[0]!.action?.label).toMatch(/jump to answer/i);
     });
 
     it("BB9 — pushes a sticky error toast on `daemon_evicting` and flips connected=false", async () => {
@@ -370,10 +370,10 @@ describe("connection store — handleMessage dispatch", () => {
 
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0].kind).toBe("error");
-      expect(toasts[0].title).toMatch(/daemon shut down/i);
-      expect(toasts[0].body).toContain("/Users/alice/other-project");
-      expect(toasts[0].ttl).toBe(0); // sticky — user must dismiss
+      expect(toasts[0]!.kind).toBe("error");
+      expect(toasts[0]!.title).toMatch(/daemon shut down/i);
+      expect(toasts[0]!.body).toContain("/Users/alice/other-project");
+      expect(toasts[0]!.ttl).toBe(0); // sticky — user must dismiss
       expect(useConnectionStore.getState().connected).toBe(false);
     });
 
@@ -394,9 +394,9 @@ describe("connection store — handleMessage dispatch", () => {
 
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0].title).toContain("argon2id");
-      expect(toasts[0].body).toContain("zero-downtime migration");
-      expect(toasts[0].body).toContain("medium confidence");
+      expect(toasts[0]!.title).toContain("argon2id");
+      expect(toasts[0]!.body).toContain("zero-downtime migration");
+      expect(toasts[0]!.body).toContain("medium confidence");
     });
 
     it("pushes an info toast on `feedback_received` (Q5 pair-tempo signal)", async () => {
@@ -414,8 +414,8 @@ describe("connection store — handleMessage dispatch", () => {
 
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
-      expect(toasts[0].kind).toBe("info");
-      expect(toasts[0].title).toMatch(/claude will see this/i);
+      expect(toasts[0]!.kind).toBe("info");
+      expect(toasts[0]!.title).toMatch(/claude will see this/i);
     });
 
     it("debounces `feedback_received` bursts — 2 emits in quick succession = 1 toast", async () => {

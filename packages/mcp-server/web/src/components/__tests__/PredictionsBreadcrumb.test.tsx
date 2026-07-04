@@ -69,7 +69,7 @@ describe("PredictionsBreadcrumb", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<PredictionsBreadcrumb concept="password hashing" excludeArtifactId="art_current" />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const url = String(fetchMock.mock.calls[0][0]);
+    const url = String(fetchMock.mock.calls[0]![0]);
     expect(url).toContain("concept=password+hashing");
     expect(url).toContain("excludeArtifactId=art_current");
   });

@@ -610,6 +610,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             prev.length === next.length &&
             prev.every((p, i) => {
               const n = next[i];
+              if (!n) return false; // unreachable: lengths compared above
               return (
                 p.sessionId === n.sessionId &&
                 p.title === n.title &&

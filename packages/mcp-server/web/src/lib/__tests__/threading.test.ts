@@ -12,14 +12,14 @@ describe("F7 — transitive threading", () => {
                       c("ans2", "followup", "2026-07-01T00:03:00.000Z")];
     const threads = buildThreads(comments);
     expect(threads).toHaveLength(1);
-    expect(threads[0].root.id).toBe("root");
-    expect(threads[0].replies.map((r) => r.id)).toEqual(["ans", "followup", "ans2"]);
+    expect(threads[0]!.root.id).toBe("root");
+    expect(threads[0]!.replies.map((r) => r.id)).toEqual(["ans", "followup", "ans2"]);
   });
 
   it("orphaned replies (parent filtered out) root at themselves — never vanish", () => {
     const threads = buildThreads([c("orphan", "gone")]);
     expect(threads).toHaveLength(1);
-    expect(threads[0].root.id).toBe("orphan");
+    expect(threads[0]!.root.id).toBe("orphan");
   });
 
   it("a parent cycle neither hangs nor vanishes — one thread, deterministic root", () => {
@@ -31,8 +31,8 @@ describe("F7 — transitive threading", () => {
     expect(threadRootId(b, byId)).toBe("a");
     const threads = buildThreads([a, b]);
     expect(threads).toHaveLength(1);
-    expect(threads[0].root.id).toBe("a");
-    expect(threads[0].replies.map((r) => r.id)).toEqual(["b"]);
+    expect(threads[0]!.root.id).toBe("a");
+    expect(threads[0]!.replies.map((r) => r.id)).toEqual(["b"]);
   });
 
   it("a tail entering a cycle (with a timestamp inversion) still yields ONE thread", () => {
@@ -48,7 +48,7 @@ describe("F7 — transitive threading", () => {
     expect(threadRootId(cy, byId)).toBe("b");
     const threads = buildThreads([a, b, cy]);
     expect(threads).toHaveLength(1);
-    expect(threads[0].replies.map((r) => r.id).sort()).toEqual(["a", "c"]);
+    expect(threads[0]!.replies.map((r) => r.id).sort()).toEqual(["a", "c"]);
   });
 
   it("roots chronological; descendants chronological within a thread", () => {
@@ -59,6 +59,6 @@ describe("F7 — transitive threading", () => {
       c("r1a", "r1", "2026-07-01T00:02:00.000Z"),
     ]);
     expect(threads.map((t) => t.root.id)).toEqual(["r1", "r2"]);
-    expect(threads[0].replies.map((r) => r.id)).toEqual(["r1a", "r1b"]);
+    expect(threads[0]!.replies.map((r) => r.id)).toEqual(["r1a", "r1b"]);
   });
 });

@@ -566,6 +566,13 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
   const [focusIndex, setFocusIndex] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("significance");
   const findings = content.findings;
+  // A revision can shrink `findings` under a stale focusIndex — render
+  // nothing for that frame instead of crashing (line 769 already hedged
+  // the title lookup for the same reason).
+  // F5 review — clamp rather than skip: a revision shrinking findings under
+  // a stale focusIndex left the pane EMPTY with a "5 / 3" counter until the
+  // user navigated. Showing the last finding is strictly better.
+  const focusedFinding = findings[Math.min(focusIndex, findings.length - 1)];
 
   // Arrow key navigation in focus mode
   useEffect(() => {
@@ -779,7 +786,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
                 </button>
               </div>
 
-              {renderFinding(findings[focusIndex], focusIndex)}
+              {focusedFinding && renderFinding(focusedFinding, focusIndex)}
 
               {/* Dot indicators */}
               <div className="flex items-center justify-center gap-1.5">

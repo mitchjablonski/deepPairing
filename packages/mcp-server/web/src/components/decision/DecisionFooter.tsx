@@ -104,7 +104,8 @@ export function DecisionFooter({
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                onSelect(options[focusedIndex].id);
+                const focusedOption = options[focusedIndex];
+                if (focusedOption) onSelect(focusedOption.id);
               }
               if (e.key === "Escape") {
                 setShowReasoning(false);

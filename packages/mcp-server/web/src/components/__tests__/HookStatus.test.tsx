@@ -121,6 +121,6 @@ describe("HookStatus", () => {
     store.pushFire(fire({ at, hook: "stop", reason: "first" }));
     store.pushFire(fire({ at, hook: "stop", reason: "duplicate" }));
     expect(useHookStatusStore.getState().fires).toHaveLength(1);
-    expect(useHookStatusStore.getState().fires[0].reason).toBe("first");
+    expect(useHookStatusStore.getState().fires[0]!.reason).toBe("first");
   });
 });

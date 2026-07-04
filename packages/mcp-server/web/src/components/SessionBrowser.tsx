@@ -54,7 +54,8 @@ export function SessionBrowser() {
     for (const comment of demoComments) {
       addComment(comment);
     }
-    selectArtifact(demoArtifacts[0].id);
+    const [firstDemo] = demoArtifacts;
+    if (firstDemo) selectArtifact(firstDemo.id);
   };
 
   useEffect(() => {
@@ -312,7 +313,7 @@ export function SearchResults({
         <div key={sessionId} className="space-y-1.5">
           <div className="text-2xs text-text-muted truncate">
             <span className="opacity-70">session:</span>{" "}
-            <span className="text-text-secondary font-mono">{hits[0].sessionTitle || sessionId}</span>
+            <span className="text-text-secondary font-mono">{hits[0]?.sessionTitle || sessionId}</span>
           </div>
           {hits.map((r) => (
             <button

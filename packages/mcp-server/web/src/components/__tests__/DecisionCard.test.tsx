@@ -611,7 +611,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
     // Cancel.
     const cancelBtns = screen.getAllByRole("button", { name: /^Cancel$/ });
-    await userEvent.click(cancelBtns[cancelBtns.length - 1]);
+    await userEvent.click(cancelBtns[cancelBtns.length - 1]!);
     // Back to idle: prediction form gone, options re-clickable.
     expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
     const redisBtn = screen.getByRole("button", { name: "Select Redis" });
@@ -634,7 +634,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     const calls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes("/api/decisions"));
     expect(calls.length).toBeGreaterThanOrEqual(1);
     // Body has no prediction payload.
-    const body = JSON.parse(calls[0][1].body as string);
+    const body = JSON.parse(calls[0]![1]!.body as string);
     expect(body.predictedOutcome).toBeUndefined();
     expect(body.confidence).toBeUndefined();
   });
@@ -655,7 +655,7 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     await userEvent.click(confirmBtn);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const calls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes("/api/decisions"));
-    const body = JSON.parse(calls[calls.length - 1][1].body as string);
+    const body = JSON.parse(calls[calls.length - 1]![1]!.body as string);
     expect(body.predictedOutcome).toBe("smooth rollout");
   });
 
@@ -702,10 +702,10 @@ describe("DV1 — decision-level 'Compare diagrams' bar", () => {
     ...event,
     options: [
       {
-        ...event.options[0],
+        ...event.options[0]!,
         visuals: [{ id: "o1_v0", kind: "diagram" as const, source: "graph TD; A-->B", title: "Redis topology" }],
       },
-      event.options[1], // no visuals
+      event.options[1]!, // no visuals
     ],
   };
 
@@ -770,8 +770,8 @@ describe("B4 review — Enter on a nested concept badge must not resolve the dec
     const eventWithConcept = {
       ...event,
       options: [
-        { ...event.options[0], concept: { name: "external cache service" } },
-        event.options[1],
+        { ...event.options[0]!, concept: { name: "external cache service" } },
+        event.options[1]!,
       ],
     };
     render(<DecisionCard event={eventWithConcept} decisionId="dec_abc" />);
@@ -799,7 +799,7 @@ describe("C2 — decision consumption receipt", () => {
       <DecisionCard
         event={event}
         decisionId="dec_abc"
-        initialResolved={{ optionId: event.options[0].id }}
+        initialResolved={{ optionId: event.options[0]!.id }}
       />,
     );
     expect(screen.getByText(/delivered — claude will pick it up/i)).toBeInTheDocument();
@@ -840,7 +840,7 @@ describe("D3 review — keyboard nav from a focused Select button", () => {
 
   it("j on an AskTrigger button does NOT hijack the option highlight (pass-through scoped to Select buttons)", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_1" />);
-    const ask = screen.getAllByRole("button", { name: /ask/i })[0];
+    const ask = screen.getAllByRole("button", { name: /ask/i })[0]!;
     ask.focus();
     fireEvent.keyDown(ask, { key: "j" });
     // Focus stayed on the AskTrigger — the nav pass-through is data-select-option

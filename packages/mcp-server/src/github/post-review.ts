@@ -36,11 +36,13 @@ export class GhNotAuthedError extends Error {
 export function parsePrRef(ref: string): { owner?: string; repo?: string; number: number } {
   const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
   if (urlMatch) {
-    return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
+    // `!` safe: group 3 is a required capture — a match always carries it.
+    return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3]!, 10) };
   }
   const numMatch = ref.replace(/^#/, "").match(/^(\d+)$/);
   if (numMatch) {
-    return { number: parseInt(numMatch[1], 10) };
+    // `!` safe: group 1 is a required capture — a match always carries it.
+    return { number: parseInt(numMatch[1]!, 10) };
   }
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
 }

@@ -17,8 +17,12 @@ export const SIDEBAR_WIDTHS: Record<SidebarWidth, number> = {
   xwide: 440,
 };
 
+// Hoisted so fallbacks can reference the default preset without the
+// Record<string, …> index turning it `| undefined`.
+const VSCODE_PRESET = { label: "VS Code", template: "vscode://file/{path}:{line}:{column}" };
+
 export const EDITOR_PRESETS: Record<string, { label: string; template: string }> = {
-  vscode: { label: "VS Code", template: "vscode://file/{path}:{line}:{column}" },
+  vscode: VSCODE_PRESET,
   cursor: { label: "Cursor", template: "cursor://file/{path}:{line}:{column}" },
   windsurf: { label: "Windsurf", template: "windsurf://file/{path}:{line}:{column}" },
   zed: { label: "Zed", template: "zed://file/{path}:{line}:{column}" },
@@ -103,7 +107,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
   applyFontSize(initialFontSize);
 
   const editorKey = getStoredEditor();
-  const editorScheme = EDITOR_PRESETS[editorKey]?.template ?? EDITOR_PRESETS.vscode.template;
+  const editorScheme = EDITOR_PRESETS[editorKey]?.template ?? VSCODE_PRESET.template;
 
   return {
     theme: initial,
