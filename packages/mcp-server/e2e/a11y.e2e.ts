@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { teardownDaemon, portOf } from "./daemon-harness.js";
 
 /**
  * C3 — automated a11y regression net (@axe-core/playwright). The UI invests
@@ -84,7 +85,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  proc?.kill();
+  // I1 — teardown BARRIER: block until the daemon is provably down (process
+  // exited AND its port refuses connections) before the next spec spawns.
+  // Pre-I1 this was a fire-and-forget `proc?.kill()` that let the daemon keep
+  // LISTENING inside the shared [3847,3974] port window while the next spec's
+  // daemon started, causing EADDRINUSE rescans + a slow/degraded boot that
+  // tripped that spec's 15s waits. See daemon-harness.ts.
+  await teardownDaemon(proc, portOf(baseURL));
   try { fs.rmSync(projectRoot, { recursive: true, force: true }); } catch {}
 });
 
@@ -123,6 +130,27 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
   // chrome + aggregate surface rather than a truly empty app.
   await page.goto(baseURL);
   await page.waitForSelector("text=deepPairing", { timeout: 15000 });
+  // I1 — wait for the shell to be LIVE (WS connected) before scanning, not
+  // just for the static "deepPairing" chrome text. Scanning at first paint
+  // intermittently flagged a phantom serious color-contrast violation
+  // (amber text measured ~1.07 against the dark surface, gone a frame
+  // later; ~1-in-8 in isolation). Review note: the exact mechanism is
+  // unproven — 1.07-on-dark implies a mid-hydration/transient element
+  // rather than a pure unstyled page (which would measure ~21:1 black on
+  // white). If it ever fires again, capture violations[].nodes[].target
+  // before adjusting the wait. Post-connect the app auto-binds the seeded
+  // session, so this test scans the BOUND shell deterministically — the
+  // old "no session selected" name was already a misnomer (see below).
+  // The WS `connected` flip (the same signal bootstrap.e2e asserts) only
+  // happens after the style-bearing bundle has hydrated, so it's a reliable
+  // "styles applied, surface settled" gate. Mirrors this file's session-view
+  // test, which already waits for its marquee surface before analyzing.
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as any).__dpConnectionStore?.getState?.()?.connected ?? false),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     // F1 — no disabled rules: the axe net is fully live

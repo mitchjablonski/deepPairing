@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { teardownDaemon, portOf } from "./daemon-harness.js";
 
 /**
  * The real-browser regression guard for the companion UI bootstrap (II2.2 /
@@ -67,20 +68,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  // Await the daemon's actual exit before removing its project dir. The demo
-  // test makes the daemon create + asynchronously flush a session; killing it
-  // and rmSync-ing immediately races those writes (ENOTEMPTY on a sessions/
-  // subdir that gets a late flush after the recursive walk started). Wait for
-  // the process to be gone, then remove with retries as a belt-and-suspenders
-  // for any straggling FS settle.
-  if (proc) {
-    await new Promise<void>((resolve) => {
-      const done = () => resolve();
-      proc!.once("exit", done);
-      proc!.kill();
-      setTimeout(done, 3000); // safety net if exit never fires
-    });
-  }
+  // I1 — teardown BARRIER. This spec already awaited process exit (to dodge an
+  // ENOTEMPTY race: the demo test makes the daemon asynchronously flush a
+  // session, so killing + rmSync-ing immediately raced those writes). The
+  // barrier keeps that guarantee AND additionally waits for the port to be
+  // released, so a still-LISTENING daemon can't contend with the next spec's
+  // daemon in the shared [3847,3974] window. See daemon-harness.ts.
+  await teardownDaemon(proc, portOf(baseURL));
   if (projectRoot) {
     fs.rmSync(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
