@@ -22,8 +22,11 @@ describe("isUnansweredQuestion", () => {
     expect(isUnansweredQuestion(mk({ intent: "comment" }), [])).toBe(false);
     expect(isUnansweredQuestion(mk({ intent: "suggestion" }), [])).toBe(false);
   });
-  it("false once it has a reply, or is answered out-of-band, or human-resolved", () => {
-    expect(isUnansweredQuestion(mk({ intent: "question" }), [mk({ id: "r" })])).toBe(false);
+  it("false once the AGENT replies, or answered out-of-band, or human-resolved", () => {
+    // Tail-walk: an AGENT reply answers; a human plain reply does NOT (that
+    // was the shared (1b) gap — "btw also consider X" silently closed the
+    // thread with zero agent involvement).
+    expect(isUnansweredQuestion(mk({ intent: "question" }), [mk({ id: "r", author: "agent" })])).toBe(false);
     expect(isUnansweredQuestion(mk({ intent: "question", answeredByCommentId: "x" } as any), [])).toBe(false);
     expect(isUnansweredQuestion(mk({ intent: "question", humanResolvedAt: "t" } as any), [])).toBe(false);
   });
@@ -97,5 +100,33 @@ describe("countUnansweredQuestions (flat list — the App badge)", () => {
       mk({ id: "a1", author: "agent", parentCommentId: "r_q", createdAt: "2026-06-26T00:02:00.000Z" }), // tail = agent
     ];
     expect(countUnansweredQuestions(all)).toBe(0);
+  });
+});
+
+describe("tail-walk (review) — trailing human non-questions don't decide", () => {
+  const root = mk({ id: "q", intent: "question" } as any);
+
+  it("open root + trailing human CONTEXT comment stays UNANSWERED (no agent involvement)", () => {
+    const context = mk({ id: "ctx", parentCommentId: "q", createdAt: "2026-06-26T00:01:00.000Z" } as any);
+    expect(isUnansweredQuestion(root, [context])).toBe(true);
+  });
+
+  it("agent answer + trailing human context stays ANSWERED", () => {
+    const ans = mk({ id: "ans", author: "agent", parentCommentId: "q", createdAt: "2026-06-26T00:01:00.000Z" } as any);
+    const context = mk({ id: "ctx", parentCommentId: "q", createdAt: "2026-06-26T00:02:00.000Z" } as any);
+    expect(isUnansweredQuestion(root, [ans, context])).toBe(false);
+  });
+
+  it("open follow-up question + trailing human context stays UNANSWERED", () => {
+    const ans = mk({ id: "ans", author: "agent", parentCommentId: "q", createdAt: "2026-06-26T00:01:00.000Z" } as any);
+    const fup = mk({ id: "fup", intent: "question", parentCommentId: "q", createdAt: "2026-06-26T00:02:00.000Z" } as any);
+    const context = mk({ id: "ctx", parentCommentId: "q", createdAt: "2026-06-26T00:03:00.000Z" } as any);
+    expect(isUnansweredQuestion(root, [ans, fup, context])).toBe(true);
+  });
+
+  it("resolved root + only human context replies stays ANSWERED (resolution holds)", () => {
+    const resolved = mk({ id: "q2", intent: "question", humanResolvedAt: "2026-06-26T00:00:30.000Z" } as any);
+    const context = mk({ id: "ctx", parentCommentId: "q2", createdAt: "2026-06-26T00:01:00.000Z" } as any);
+    expect(isUnansweredQuestion(resolved, [context])).toBe(false);
   });
 });

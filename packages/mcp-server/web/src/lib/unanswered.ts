@@ -34,9 +34,20 @@ export function isUnansweredQuestion(comment: Comment, replies: Comment[]): bool
   const root = comment as { intent?: string };
   // Root must be a human question (see doc: a non-question root never re-opens).
   if (comment.author !== "human" || root.intent !== "question") return false;
-  // replies arrive chronological from buildThreads; the tail governs.
-  const tail = replies.length === 0 ? comment : replies[replies.length - 1]!;
-  return isOpenHumanQuestion(tail);
+  // Review (tail-walk) — a trailing human NON-question ("btw also consider X")
+  // must not flip an unanswered thread to answered: walk backward past human
+  // non-question comments; the first substantive message governs. Hitting an
+  // agent reply or a closed question = answered; hitting an open human
+  // question = unanswered; exhausting the replies falls through to the root
+  // (which the guard above ensured is a question — open-ness decides).
+  for (let i = replies.length - 1; i >= 0; i--) {
+    const r = replies[i]!;
+    if (r.author !== "human") return false; // agent replied after the last question
+    const rx = r as { intent?: string };
+    if (rx.intent === "question") return isOpenHumanQuestion(r);
+    // human non-question — keep walking
+  }
+  return isOpenHumanQuestion(comment);
 }
 
 /**
