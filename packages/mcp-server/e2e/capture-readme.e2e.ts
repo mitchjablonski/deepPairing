@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { teardownDaemon } from "./daemon-harness.js";
 
 /**
  * Not a regression test — a SCREENSHOT CAPTURE for the README. Boots a real
@@ -136,7 +137,10 @@ test("capture README screenshots", async ({ page }) => {
     await page.waitForTimeout(1000);
     await page.screenshot({ path: path.join(ASSETS, "ledger.png") });
   } finally {
-    proc?.kill();
+    // I1 — teardown BARRIER: block until the daemon is fully down (process
+    // exited AND port released) before removing its dirs, so this opt-in spec
+    // can't leave a LISTENING daemon behind. See daemon-harness.ts.
+    await teardownDaemon(proc, info?.port);
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(projectRoot, { recursive: true, force: true });
   }
