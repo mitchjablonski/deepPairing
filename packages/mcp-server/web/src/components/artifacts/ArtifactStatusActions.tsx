@@ -250,7 +250,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   // exactly the footgun hideApprove exists to prevent.
   useEffect(() => {
     if (hideApprove && countdown !== null) dispatch({ type: "cancelCountdown" });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- E6 reducer: tick effect keys on armed-state only; countdown value updates via dispatch
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- E6 reducer: the cancel keys on the hideApprove transition; the countdown !== null read is a guard, not an input
   }, [hideApprove]);
 
   useEffect(() => {
@@ -267,7 +267,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       dispatch({ type: "tick" });
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- E6 reducer: auto-arm keys on the gate conditions; store actions are stable
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- E6 reducer: tick keys on armed-state only; each countdown change re-runs with a fresh closure, and updates flow through dispatch
   }, [countdown, countdownPaused]);
 
   useEffect(() => {
