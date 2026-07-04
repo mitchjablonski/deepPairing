@@ -198,7 +198,10 @@ export function MessageInput() {
                 e.preventDefault();
                 // Guarded: a live artifact update can shrink the suggestion
                 // list under a stale selected index — this used to throw.
-                const selected = mentionSuggestions[mentionSelectedIdx];
+                // F5 review — clamp to the last suggestion rather than
+                // swallowing the keypress (preventDefault already fired).
+                const selected =
+                  mentionSuggestions[Math.min(mentionSelectedIdx, mentionSuggestions.length - 1)];
                 if (selected) applyMention(selected.title);
                 return;
               }

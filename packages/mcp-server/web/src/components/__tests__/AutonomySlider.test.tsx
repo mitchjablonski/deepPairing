@@ -95,3 +95,13 @@ describe("C1 — failed save rolls back and warns (this control governs auto-app
     expect(toasts.some((t) => t.kind === "error" && /rolled back/i.test(t.body ?? ""))).toBe(true);
   });
 });
+
+describe("F5 — unknown autonomy level from unvalidated /api/state (the crash class)", () => {
+  it("renders the supervised default instead of throwing on an unrecognized level", async () => {
+    vi.stubGlobal("fetch", mockStateAutonomy("yolo"));
+    render(<AutonomySlider />);
+    // Pre-F5: findIndex -1 → levels[-1].label → TypeError on every render.
+    // Supervised maps to the 'Full' review label (the safe default).
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toHaveTextContent(/Autonomy: Full/i));
+  });
+});

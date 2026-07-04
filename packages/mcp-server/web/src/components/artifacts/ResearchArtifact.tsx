@@ -569,7 +569,10 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
   // A revision can shrink `findings` under a stale focusIndex — render
   // nothing for that frame instead of crashing (line 769 already hedged
   // the title lookup for the same reason).
-  const focusedFinding = findings[focusIndex];
+  // F5 review — clamp rather than skip: a revision shrinking findings under
+  // a stale focusIndex left the pane EMPTY with a "5 / 3" counter until the
+  // user navigated. Showing the last finding is strictly better.
+  const focusedFinding = findings[Math.min(focusIndex, findings.length - 1)];
 
   // Arrow key navigation in focus mode
   useEffect(() => {
