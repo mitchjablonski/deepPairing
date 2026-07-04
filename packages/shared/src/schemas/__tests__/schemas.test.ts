@@ -131,7 +131,7 @@ describe("DecisionRequestSchema", () => {
   it("parses valid decision request", () => {
     const result = DecisionRequestSchema.parse(sampleDecisionRequest);
     expect(result.options).toHaveLength(3);
-    expect(result.options[0].recommendation).toBe(true);
+    expect(result.options[0]!.recommendation).toBe(true);
   });
 
   it("rejects fewer than 2 options", () => {
@@ -171,8 +171,8 @@ describe("DecisionRequestSchema", () => {
           : o,
       ),
     });
-    expect(result.options[0].concept?.name).toBe("service-oriented");
-    expect(result.options[1].concept).toBeUndefined();
+    expect(result.options[0]!.concept?.name).toBe("service-oriented");
+    expect(result.options[1]!.concept).toBeUndefined();
   });
 
   it("Z5a: rejects an empty concept name (low-signal rows are worse than no row)", () => {

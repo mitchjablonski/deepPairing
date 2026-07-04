@@ -68,8 +68,9 @@ function App() {
   // Conservative single-session scope so multi-session global tabs keep
   // their aggregate view.
   useEffect(() => {
-    if (connected && sessionId == null && activeSessions.length === 1) {
-      switchSession(activeSessions[0].sessionId);
+    const [onlySession] = activeSessions;
+    if (connected && sessionId == null && activeSessions.length === 1 && onlySession) {
+      switchSession(onlySession.sessionId);
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
@@ -232,7 +233,8 @@ function App() {
         const nextIdx = e.key === "j"
           ? Math.min(currentIdx + 1, visible.length - 1)
           : Math.max(currentIdx - 1, 0);
-        store.selectArtifact(visible[nextIdx].id);
+        const nextArtifact = visible[nextIdx];
+        if (nextArtifact) store.selectArtifact(nextArtifact.id);
       }
 
       // E3 (L1) — `n`: next thing waiting on you. Same wrap-around cycle as
@@ -242,7 +244,8 @@ function App() {
         if (pending.length === 0) return;
         e.preventDefault();
         const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);
-        store.selectArtifact(pending[(idx + 1) % pending.length].id);
+        const nextPending = pending[(idx + 1) % pending.length];
+        if (nextPending) store.selectArtifact(nextPending.id);
       }
 
       if (e.key === "a" || e.key === "r") {

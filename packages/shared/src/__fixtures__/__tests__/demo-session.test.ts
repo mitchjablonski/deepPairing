@@ -22,7 +22,7 @@ describe("demo-session fixture", () => {
   it("timestamps are monotonically non-decreasing (reads as one session)", () => {
     const stamps = demoArtifacts.map((a) => a.createdAt);
     for (let i = 1; i < stamps.length; i++) {
-      expect(stamps[i] >= stamps[i - 1]).toBe(true);
+      expect(stamps[i]! >= stamps[i - 1]!).toBe(true);
     }
   });
 
@@ -53,7 +53,7 @@ describe("demo-session fixture", () => {
 
   it("exports a decision record with predictedOutcome + confidence (for the predictions breadcrumb)", () => {
     expect(demoDecisionRecords).toHaveLength(1);
-    const rec = demoDecisionRecords[0];
+    const rec = demoDecisionRecords[0]!;
     expect(rec.response.predictedOutcome).toMatch(/migration/i);
     expect(rec.response.confidence).toBe("medium");
     expect(rec.decisionId).toBe("dec_hashing");

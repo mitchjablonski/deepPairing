@@ -196,7 +196,10 @@ export function MessageInput() {
               }
               if (e.key === "Enter" || e.key === "Tab") {
                 e.preventDefault();
-                applyMention(mentionSuggestions[mentionSelectedIdx].title);
+                // Guarded: a live artifact update can shrink the suggestion
+                // list under a stale selected index — this used to throw.
+                const selected = mentionSuggestions[mentionSelectedIdx];
+                if (selected) applyMention(selected.title);
                 return;
               }
               if (e.key === "Escape") {

@@ -136,7 +136,7 @@ describe("AskTrigger", () => {
     expect(call[1].method).toBe("POST");
 
     // Optimistically stamped locally → no longer counted as unanswered.
-    const updated = useArtifactStore.getState().comments["art_x"].find((c) => c.id === "cmt_q1");
+    const updated = useArtifactStore.getState().comments["art_x"]!.find((c) => c.id === "cmt_q1");
     expect((updated as any)?.humanResolvedAt).toBeTruthy();
   });
 

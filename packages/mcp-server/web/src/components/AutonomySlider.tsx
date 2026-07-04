@@ -60,7 +60,10 @@ export function AutonomySlider() {
     }
   };
 
-  const currentIdx = levels.findIndex((l) => l.id === level);
+  // The /api/state response isn't schema-validated, so an unknown
+  // autonomyLevel used to make this lookup miss and crash the header on
+  // render. Fall back to the first (supervised) entry instead.
+  const currentLevel = levels.find((l) => l.id === level) ?? levels[0]!; // `!` safe: levels is a non-empty literal
 
   return (
     <div className="relative">
@@ -73,7 +76,7 @@ export function AutonomySlider() {
           <circle cx="6" cy="6" r="4.5" />
           <path d="M3.5 6h5M6 3.5v5" />
         </svg>
-        Autonomy: {levels[currentIdx].label}
+        Autonomy: {currentLevel.label}
       </button>
 
       {showTooltip && (

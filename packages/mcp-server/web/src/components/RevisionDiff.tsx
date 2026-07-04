@@ -206,7 +206,7 @@ function VisualsDiff({
   );
 }
 
-const tagStyle: Record<string, { glyph: string; cls: string; word: string }> = {
+const tagStyle: Record<"added" | "removed", { glyph: string; cls: string; word: string }> = {
   added: { glyph: "＋", cls: "text-accent-green", word: "added" },
   removed: { glyph: "−", cls: "text-accent-red", word: "removed" },
 };

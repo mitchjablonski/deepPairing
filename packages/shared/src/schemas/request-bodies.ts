@@ -93,8 +93,12 @@ export function formatZodIssues(err: z.ZodError): { error: string; code: string;
     path: i.path.join(".") || "(root)",
     message: i.message,
   }));
+  // noUncheckedIndexedAccess — ZodError.issues is never empty when this is
+  // called, but the type can't know; the fallback keeps the message honest
+  // rather than asserting.
+  const first = issues[0] ?? { path: "(root)", message: "invalid input" };
   const summary = issues.length === 1
-    ? `${issues[0].path}: ${issues[0].message}`
-    : `${issues.length} validation errors (first: ${issues[0].path}: ${issues[0].message})`;
+    ? `${first.path}: ${first.message}`
+    : `${issues.length} validation errors (first: ${first.path}: ${first.message})`;
   return { error: summary, code: "validation_error", issues };
 }

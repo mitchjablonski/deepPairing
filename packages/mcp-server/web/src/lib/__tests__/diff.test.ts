@@ -21,14 +21,14 @@ describe("computeLineDiff", () => {
     const result = computeLineDiff("a\nc", "a\nb\nc");
     const added = result.filter((l) => l.type === "added");
     expect(added).toHaveLength(1);
-    expect(added[0].content).toBe("b");
+    expect(added[0]!.content).toBe("b");
   });
 
   it("detects a single line removal", () => {
     const result = computeLineDiff("a\nb\nc", "a\nc");
     const removed = result.filter((l) => l.type === "removed");
     expect(removed).toHaveLength(1);
-    expect(removed[0].content).toBe("b");
+    expect(removed[0]!.content).toBe("b");
   });
 
   it("handles mixed additions and removals", () => {

@@ -5,11 +5,12 @@ import { detectLanguage } from "../lib/highlighter";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "./LineComments";
 
 /** Presentational treatment for an agent annotation marker, by semantic kind. */
+const contextAnnStyle = { glyph: "›", cls: "text-text-muted" };
 const annStyle: Record<string, { glyph: string; cls: string }> = {
   add: { glyph: "+", cls: "text-accent-green" },
   remove: { glyph: "−", cls: "text-accent-red" },
   change: { glyph: "~", cls: "text-accent-amber" },
-  context: { glyph: "›", cls: "text-text-muted" },
+  context: contextAnnStyle,
 };
 
 interface CommentableCodeProps {
@@ -117,7 +118,7 @@ export function CommentableCode({
                 line that changes, and why"), styled distinctly from human
                 comments so the two don't blur together. */}
             {(annotationsByLine?.get(lineNum) ?? []).map((a, ai) => {
-              const s = annStyle[a.kind ?? "context"] ?? annStyle.context;
+              const s = annStyle[a.kind ?? "context"] ?? contextAnnStyle;
               return (
                 <div
                   key={`ann-${ai}`}

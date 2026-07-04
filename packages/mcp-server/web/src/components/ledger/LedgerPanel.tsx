@@ -118,7 +118,8 @@ export function LedgerPanel({
           <span className="font-mono text-accent-violet">"{highlightConcept}"</span>
           {topCitedStances.length === 0
             ? " was consulted on this proposal but you haven't accumulated any cited stances yet — it'll appear in the list as soon as one fires."
-            : ` was consulted on this proposal but isn't in the top ${topCitedStances.length} cited stances yet — it'll appear here once it's been cited more than the current bottom entry (cited ${topCitedStances[topCitedStances.length - 1].citationCount}×).`}
+            : /* `!` safe: this branch only renders when the list is non-empty */
+              ` was consulted on this proposal but isn't in the top ${topCitedStances.length} cited stances yet — it'll appear here once it's been cited more than the current bottom entry (cited ${topCitedStances.at(-1)!.citationCount}×).`}
         </div>
       )}
 

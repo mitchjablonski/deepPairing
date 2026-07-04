@@ -60,7 +60,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
                       : "bg-surface-secondary text-text-secondary border border-border-default hover:bg-surface-hover"
                   }`}
                 >
-                  {t[0].toUpperCase() + t.slice(1)}
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
                 </button>
               ))}
             </div>
@@ -137,7 +137,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
                       : "text-text-muted hover:text-text-secondary"
                   }`}
                 >
-                  {w === "xwide" ? "X-wide" : w[0].toUpperCase() + w.slice(1)}
+                  {w === "xwide" ? "X-wide" : w.charAt(0).toUpperCase() + w.slice(1)}
                 </button>
               ))}
             </div>

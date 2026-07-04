@@ -393,7 +393,7 @@ function ThreadEntry({
   const [replySubmitting, setReplySubmitting] = useState(false);
 
   // Pick the comment to reply to: the latest reply if any, else the parent.
-  const replyTarget = replies.length > 0 ? replies[replies.length - 1] : comment;
+  const replyTarget = replies.at(-1) ?? comment;
 
   const submitReply = async () => {
     const text = replyText.trim();

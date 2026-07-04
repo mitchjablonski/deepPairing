@@ -67,7 +67,7 @@ describe("coercePlanContent", () => {
     expect(p.visuals).toHaveLength(3);
     expect(p.visuals![0]).toMatchObject({ id: "v1", kind: "diagram", source: "graph TD; A-->B", title: "Arch" });
     // non-object dropped; an invalid change enum dropped, leaving a clean { path }
-    expect(p.visuals![1].files).toEqual([{ path: "a.ts", change: "create" }, { path: "b.ts" }]);
+    expect(p.visuals![1]!.files).toEqual([{ path: "a.ts", change: "create" }, { path: "b.ts" }]);
     expect(p.visuals![2]).toMatchObject({ id: "visual_2", kind: "diagram" });
   });
   it("non-array visuals → omitted (no throw)", () => {
@@ -83,11 +83,11 @@ describe("coercePlanContent", () => {
     const aDia = a.find((v) => v.kind === "diagram")!.id;
     const bDia = b.find((v) => v.kind === "diagram")!.id;
     expect(aDia).toBe(bDia);
-    expect(a[0].id).not.toBe(a[1].id); // distinct visuals → distinct ids
+    expect(a[0]!.id).not.toBe(a[1]!.id); // distinct visuals → distinct ids
   });
 
   it("F4 — an empty visual still falls back to the positional id", () => {
-    expect(coercePlanContent({ visuals: [{ kind: "diagram" }] }).visuals![0].id).toBe("visual_0");
+    expect(coercePlanContent({ visuals: [{ kind: "diagram" }] }).visuals![0]!.id).toBe("visual_0");
   });
 
   it("coerces an annotated_code visual: keeps code/filePath/lineStart, shapes annotations, drops junk", () => {
@@ -110,7 +110,7 @@ describe("coercePlanContent", () => {
         },
       ],
     });
-    const v = p.visuals![0];
+    const v = p.visuals![0]!;
     expect(v).toMatchObject({ id: "ac", kind: "annotated_code", code: "const x = 1;\nreturn x;", filePath: "src/x.ts", language: "ts", lineStart: 40 });
     expect(v.annotations).toEqual([
       { line: 40, note: "declare", kind: "add" },
@@ -121,7 +121,7 @@ describe("coercePlanContent", () => {
   it("annotated_code with wrong-typed fields → safe (no throw, junk dropped)", () => {
     const v = coercePlanContent({
       visuals: [{ id: "ac", kind: "annotated_code", code: 42, lineStart: "x", annotations: "nope" }],
-    }).visuals![0];
+    }).visuals![0]!;
     expect(v.kind).toBe("annotated_code");
     expect(v.code).toBeUndefined(); // non-string dropped
     expect(v.lineStart).toBeUndefined(); // non-number dropped
@@ -154,16 +154,16 @@ describe("coerceDecisionContent", () => {
     });
   });
   it("drops an empty concept (name '') but keeps a real one", () => {
-    expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "" } }] }).options[0].concept).toBeUndefined();
-    expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "DI" } }] }).options[0].concept).toEqual({ name: "DI" });
+    expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "" } }] }).options[0]!.concept).toBeUndefined();
+    expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "DI" } }] }).options[0]!.concept).toEqual({ name: "DI" });
   });
 
   it("DV1 — coerces per-option visuals, keeping an agent-provided id", () => {
     const d = coerceDecisionContent({
       options: [{ id: "o1", visuals: [{ id: "v_custom", kind: "diagram", source: "graph TD; A-->B" }] }],
     });
-    expect(d.options[0].visuals).toHaveLength(1);
-    expect(d.options[0].visuals![0]).toMatchObject({ id: "v_custom", kind: "diagram", source: "graph TD; A-->B" });
+    expect(d.options[0]!.visuals).toHaveLength(1);
+    expect(d.options[0]!.visuals![0]).toMatchObject({ id: "v_custom", kind: "diagram", source: "graph TD; A-->B" });
   });
 
   it("DV1 — id-less visuals get distinct ids (content-hashed), and a content-less one falls back to the option-scoped index", () => {
@@ -175,9 +175,9 @@ describe("coerceDecisionContent", () => {
       ],
     });
     // Different content → different ids: comment threads won't cross-anchor.
-    expect(d.options[0].visuals![0].id).not.toBe(d.options[1].visuals![0].id);
+    expect(d.options[0]!.visuals![0]!.id).not.toBe(d.options[1]!.visuals![0]!.id);
     // The degenerate content-less visual falls back to the option-scoped index.
-    expect(d.options[2].visuals![0].id).toBe("o3_visual_0");
+    expect(d.options[2]!.visuals![0]!.id).toBe("o3_visual_0");
   });
 });
 
@@ -225,7 +225,7 @@ describe("D7 review — mixed evidence arrays keep their string elements", () =>
         },
       ],
     });
-    const ev = out.findings[0].evidence as unknown[];
+    const ev = out.findings[0]!.evidence as unknown[];
     expect(ev).toHaveLength(2);
     expect(ev[0]).toBe("legacy string reference");
     expect(typeof ev[1]).toBe("object");
@@ -242,9 +242,9 @@ describe("D10 — plan step execution status survives coercion", () => {
         { description: "c", reasoning: "r", status: "finished" }, // not a valid status
       ],
     });
-    expect(out.steps[0].status).toBe("done");
-    expect(out.steps[1].status).toBe("in_progress");
-    expect(out.steps[1].statusNote).toBe("waiting on CI");
-    expect(out.steps[2].status).toBeUndefined();
+    expect(out.steps[0]!.status).toBe("done");
+    expect(out.steps[1]!.status).toBe("in_progress");
+    expect(out.steps[1]!.statusNote).toBe("waiting on CI");
+    expect(out.steps[2]!.status).toBeUndefined();
   });
 });

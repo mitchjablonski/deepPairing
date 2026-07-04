@@ -83,8 +83,8 @@ describe("web buildTimeline — chronological interleave", () => {
     const events = buildTimeline({ artifacts: [a] });
     const transitions = events.filter((e) => e.kind === "artifact_status_changed");
     expect(transitions).toHaveLength(2);
-    expect((transitions[0].payload as any).status).toBe("reviewing");
-    expect((transitions[1].payload as any).status).toBe("approved");
+    expect((transitions[0]!.payload as any).status).toBe("reviewing");
+    expect((transitions[1]!.payload as any).status).toBe("approved");
   });
 
   it("tags question comments with `Q` prefix in the label", () => {
@@ -94,8 +94,8 @@ describe("web buildTimeline — chronological interleave", () => {
         comment("c2", "a1", "2026-04-16T10:02:00.000Z"),
       ],
     });
-    expect(events[0].label.startsWith("Q ")).toBe(true);
-    expect(events[1].label.startsWith("You ")).toBe(true);
+    expect(events[0]!.label.startsWith("Q ")).toBe(true);
+    expect(events[1]!.label.startsWith("You ")).toBe(true);
   });
 
   it("skips unresolved decisions and plan reviews", () => {

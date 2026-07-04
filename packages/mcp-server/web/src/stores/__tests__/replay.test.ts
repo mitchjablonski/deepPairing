@@ -63,7 +63,7 @@ describe("replay store — enterReplay", () => {
     expect(s.active).toBe(true);
     expect(s.sessionId).toBe("past_session");
     expect(s.events.length).toBeGreaterThan(0);
-    expect(s.cursor).toBe(s.events[0].at);
+    expect(s.cursor).toBe(s.events[0]!.at);
   });
 
   it("fetches annotations for the session (best-effort)", async () => {
@@ -115,7 +115,7 @@ describe("replay store — cursor navigation", () => {
     const s = useReplayStore.getState();
     // Skip to the last event
     const events = s.events;
-    s.setCursor(events[events.length - 1].at);
+    s.setCursor(events[events.length - 1]!.at);
     const before = useReplayStore.getState().cursor;
     s.stepForward();
     expect(useReplayStore.getState().cursor).toBe(before);
@@ -123,7 +123,7 @@ describe("replay store — cursor navigation", () => {
 
   it("setCursor jumps directly", () => {
     const s = useReplayStore.getState();
-    const target = s.events[s.events.length - 1].at;
+    const target = s.events[s.events.length - 1]!.at;
     s.setCursor(target);
     expect(useReplayStore.getState().cursor).toBe(target);
   });

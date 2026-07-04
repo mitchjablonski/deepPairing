@@ -1261,12 +1261,12 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) 
 
   let chosenSessionId = sessionId;
   if (!chosenSessionId) {
-    const sessions = FileStore.listSessions(cwd);
-    if (sessions.length === 0) {
+    const [firstSession] = FileStore.listSessions(cwd);
+    if (!firstSession) {
       console.error(`  ${red("✗")} No sessions found in this project. Start a deepPairing session first.`);
       process.exit(1);
     }
-    chosenSessionId = sessions[0].id;
+    chosenSessionId = firstSession.id;
   }
 
   let state: any;

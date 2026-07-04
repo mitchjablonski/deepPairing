@@ -22257,7 +22257,8 @@ function formatZodIssues(err) {
     path: i.path.join(".") || "(root)",
     message: i.message
   }));
-  const summary = issues.length === 1 ? `${issues[0].path}: ${issues[0].message}` : `${issues.length} validation errors (first: ${issues[0].path}: ${issues[0].message})`;
+  const first = issues[0] ?? { path: "(root)", message: "invalid input" };
+  const summary = issues.length === 1 ? `${first.path}: ${first.message}` : `${issues.length} validation errors (first: ${first.path}: ${first.message})`;
   return { error: summary, code: "validation_error", issues };
 }
 
@@ -23789,7 +23790,8 @@ var FileStore = class _FileStore {
         const hasDecisions = Array.isArray(decRaw) && decRaw.length > 0;
         const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const firstArtifact = sorted[0];
-        const lastArtifact = sorted[sorted.length - 1];
+        const lastArtifact = sorted.at(-1);
+        if (!firstArtifact || !lastArtifact) continue;
         sessions2.push({
           id: entry.name,
           createdAt: firstArtifact.createdAt,
@@ -26043,8 +26045,8 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     await next();
     if (c.res.status >= 400) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
-    if (!m) return;
-    const sid = m[1];
+    const sid = m?.[1];
+    if (!sid) return;
     const now = Date.now();
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);
@@ -26658,9 +26660,10 @@ function ensureStopHook(projectRoot2) {
     fs7.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
     const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", STOP_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
-    if (otherScopes.length > 0) {
+    const [firstScope] = otherScopes;
+    if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${otherScopes[0].count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err) {
@@ -26833,9 +26836,10 @@ function ensureCheckpointHook(projectRoot2) {
     fs7.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
     const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", CHECKPOINT_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
-    if (otherScopes.length > 0) {
+    const [firstScope] = otherScopes;
+    if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${otherScopes[0].count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err) {
@@ -26847,14 +26851,14 @@ var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_P
 var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
 function resolvePreflightCoreUrl() {
   const here = path6.dirname(fileURLToPath(import.meta.url));
+  const distCandidate = path6.join(here, "preflight-hook-core.js");
   const candidates = [
-    path6.join(here, "preflight-hook-core.js"),
-    // dist/cli (built / prod)
+    distCandidate,
     path6.join(here, "../../dist/cli/preflight-hook-core.js")
     // src/cli via tsx, after a build
   ];
   const found = candidates.find((c) => fs7.existsSync(c));
-  return { url: pathToFileURL(found ?? candidates[0]).href, exists: Boolean(found) };
+  return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
 }
 function preflightHookScript(coreUrl) {
   return `#!/usr/bin/env node
@@ -27462,8 +27466,9 @@ app.post("/api/demo/run", (c) => {
 });
 app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
 var __thisDir2 = path9.dirname(fileURLToPath3(import.meta.url));
-var webDistCandidates = [path9.join(__thisDir2, "../../dist/web"), path9.join(__thisDir2, "web")];
-var webDistPath = webDistCandidates.find((p) => fs10.existsSync(p)) ?? webDistCandidates[0];
+var monorepoWebDist = path9.join(__thisDir2, "../../dist/web");
+var webDistCandidates = [monorepoWebDist, path9.join(__thisDir2, "web")];
+var webDistPath = webDistCandidates.find((p) => fs10.existsSync(p)) ?? monorepoWebDist;
 mountStaticUi(app, {
   webDistPath,
   authToken: daemonAuthToken,

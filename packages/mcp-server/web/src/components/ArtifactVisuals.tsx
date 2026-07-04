@@ -197,7 +197,9 @@ function FileMap({ files }: { files: PlanVisualFile[] }) {
       acc[f.change ?? "modify"]++;
       return acc;
     },
-    { create: 0, modify: 0, delete: 0 } as Record<string, number>,
+    // Exact keys (no Record<string, …> widening) so indexing by the change
+    // enum stays checked under noUncheckedIndexedAccess.
+    { create: 0, modify: 0, delete: 0 },
   );
   const tree = buildTree(files);
 

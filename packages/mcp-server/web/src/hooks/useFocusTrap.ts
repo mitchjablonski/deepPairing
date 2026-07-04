@@ -37,17 +37,17 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
       );
 
     // Auto-focus the first focusable element if focus isn't already inside.
-    const nodes = getFocusable();
-    if (nodes.length > 0 && !el.contains(document.activeElement)) {
-      nodes[0].focus();
+    const [firstNode] = getFocusable();
+    if (firstNode && !el.contains(document.activeElement)) {
+      firstNode.focus();
     }
 
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
       const focusables = getFocusable();
-      if (focusables.length === 0) return;
       const first = focusables[0];
-      const last = focusables[focusables.length - 1];
+      const last = focusables.at(-1);
+      if (!first || !last) return;
       const current = document.activeElement as HTMLElement | null;
 
       if (e.shiftKey) {

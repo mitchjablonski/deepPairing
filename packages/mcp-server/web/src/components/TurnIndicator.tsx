@@ -32,7 +32,7 @@ export function TurnIndicator() {
     // Walk backward through artifacts to find the most recent reasoning
     // artifact; use its action field as the narration.
     for (let i = artifacts.length - 1; i >= 0; i--) {
-      const a = artifacts[i];
+      const a = artifacts[i]!; // `!` safe: 0 <= i < artifacts.length loop bound
       if (a.type === "reasoning" && a.status !== "superseded" && a.status !== "retracted") {
         const action = (a.content as any)?.action;
         if (typeof action === "string" && action.trim()) return action.trim();
@@ -49,7 +49,7 @@ export function TurnIndicator() {
     // half-tracked plan must not mask the one actually executing. Terminal
     // statuses never narrate "Executing".
     for (let i = artifacts.length - 1; i >= 0; i--) {
-      const a = artifacts[i];
+      const a = artifacts[i]!; // `!` safe: 0 <= i < artifacts.length loop bound
       if (
         a.type !== "plan" ||
         ["draft", "superseded", "rejected", "retracted", "obsolete"].includes(a.status)
@@ -166,7 +166,10 @@ export function TurnIndicator() {
   const questionsBadge = unanswered.length > 0 ? (
     <button
       type="button"
-      onClick={() => selectArtifact(unanswered[0].artifactId)}
+      onClick={() => {
+        const first = unanswered[0];
+        if (first) selectArtifact(first.artifactId);
+      }}
       title={anyAnswerable
         ? `${unanswered.length} question${unanswered.length > 1 ? "s" : ""} waiting on the agent — click to jump`
         : `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — the agent exited; they'll be seen if the session resumes`}
@@ -199,7 +202,7 @@ export function TurnIndicator() {
       if (pending.length === 0) return;
       const idx = pending.findIndex((a) => a.id === selectedArtifactId);
       const next = pending[(idx + 1) % pending.length]; // idx=-1 → pending[0]
-      selectArtifact(next.id);
+      if (next) selectArtifact(next.id);
     };
 
     return (

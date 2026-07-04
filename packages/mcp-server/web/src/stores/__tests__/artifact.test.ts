@@ -82,7 +82,7 @@ describe("artifact store — addArtifact", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { title: "v1", status: "draft" }));
     s.addArtifact(artifact("a1", { title: "v1", status: "approved" }));
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("approved");
   });
 });
 
@@ -110,7 +110,7 @@ describe("artifact store — updateArtifact", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { title: "Keep me" }));
     s.updateArtifact("a1", "approved");
-    const a = useArtifactStore.getState().artifacts[0];
+    const a = useArtifactStore.getState().artifacts[0]!;
     expect(a.status).toBe("approved");
     expect(a.title).toBe("Keep me");
   });
@@ -119,14 +119,14 @@ describe("artifact store — updateArtifact", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1", { version: 1 }));
     s.updateArtifact("a1", "superseded", 2);
-    expect(useArtifactStore.getState().artifacts[0].version).toBe(2);
+    expect(useArtifactStore.getState().artifacts[0]!.version).toBe(2);
   });
 
   it("is a no-op for unknown ids (no throw)", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a1"));
     expect(() => s.updateArtifact("art_nope", "approved")).not.toThrow();
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("draft");
   });
 });
 
@@ -139,8 +139,8 @@ describe("artifact store — addComment", () => {
     const { comments } = useArtifactStore.getState();
     expect(comments["a1"]).toHaveLength(2);
     expect(comments["a2"]).toHaveLength(1);
-    expect(comments["a1"][0].id).toBe("c1");
-    expect(comments["a1"][1].id).toBe("c2");
+    expect(comments["a1"]![0]!.id).toBe("c1");
+    expect(comments["a1"]![1]!.id).toBe("c2");
   });
 
   it("can carry __session__ target for free-form messages", () => {
@@ -160,7 +160,7 @@ describe("artifact store — addComment", () => {
     s.addComment({ ...c, content: "ignored — same id wins" });
     const { comments } = useArtifactStore.getState();
     expect(comments["a1"]).toHaveLength(1);
-    expect(comments["a1"][0].id).toBe("c_dup");
+    expect(comments["a1"]![0]!.id).toBe("c_dup");
   });
 });
 
@@ -195,8 +195,8 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].kind).toBe("error");
-    expect(toasts[0].title).toBe("Send comment failed");
+    expect(toasts[0]!.kind).toBe("error");
+    expect(toasts[0]!.title).toBe("Send comment failed");
   });
 
   it("updateArtifactStatus toasts a status-specific title on failure", async () => {
@@ -206,7 +206,7 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     const s = useArtifactStore.getState();
     await expect(s.updateArtifactStatus("a1", "approved")).rejects.toBeDefined();
     const toasts = useToastStore.getState().toasts;
-    expect(toasts[0].title).toBe("Approve failed");
+    expect(toasts[0]!.title).toBe("Approve failed");
   });
 
   it("updateArtifactStatus optimistically flips local status so a dismissed draft leaves the 'waiting' set without the WS broadcast", async () => {
@@ -219,9 +219,9 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     s.addArtifact(artifact("d1", { type: "decision", status: "draft" }));
     // Don't await: status must already be optimistic before the POST settles.
     const p = s.updateArtifactStatus("d1", "obsolete");
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("obsolete");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("obsolete");
     await p;
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("obsolete");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("obsolete");
   });
 
   it("updateArtifactStatus rolls back the optimistic status change on failure", async () => {
@@ -232,7 +232,7 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     useToastStore.getState().dismissAll();
     await expect(s.updateArtifactStatus("d1", "obsolete")).rejects.toBeDefined();
     // After rollback the draft is back so it isn't silently hidden from review.
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("draft");
   });
 
   it("updateArtifactStatus rollback is SURGICAL — a WS artifact that arrived mid-flight survives", async () => {
@@ -272,9 +272,9 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("dec-art", { type: "decision", status: "draft", content: { decisionId: "dec1", context: "c", options: [] } }));
     const p = s.resolveDecision("dec1", "o1");
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("approved");
     await p;
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("approved");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("approved");
   });
 
   it("resolveDecision rolls back the optimistic approval on failure", async () => {
@@ -284,7 +284,7 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     const { useToastStore } = await import("../toast");
     useToastStore.getState().dismissAll();
     await expect(s.resolveDecision("dec1", "o1")).rejects.toBeDefined();
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("draft");
   });
 
   it("submitComment optimistically shows the comment, then reconciles to the server comment (no dup)", async () => {
@@ -313,7 +313,7 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     useToastStore.getState().dismissAll();
     await expect(s.submitComment("a1", "hello")).rejects.toBeDefined();
     expect(useArtifactStore.getState().comments["a1"] ?? []).toEqual([]);
-    expect(useToastStore.getState().toasts[0].title).toBe("Send comment failed");
+    expect(useToastStore.getState().toasts[0]!.title).toBe("Send comment failed");
   });
 
   it("renameArtifact rolls back the optimistic title change on failure", async () => {
@@ -324,8 +324,8 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     useToastStore.getState().dismissAll();
     await expect(s.renameArtifact("a1", "New Name")).rejects.toBeDefined();
     // After rollback the title should be back to the original.
-    expect(useArtifactStore.getState().artifacts[0].title).toBe("Original");
-    expect(useToastStore.getState().toasts[0].title).toBe("Rename artifact failed");
+    expect(useArtifactStore.getState().artifacts[0]!.title).toBe("Original");
+    expect(useToastStore.getState().toasts[0]!.title).toBe("Rename artifact failed");
   });
 
   it("BB10 — project_hash_mismatch toasts a sticky 'reload' action instead of the generic error copy", async () => {
@@ -339,10 +339,10 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].kind).toBe("error");
-    expect(toasts[0].title).toMatch(/stale daemon/i);
-    expect(toasts[0].ttl).toBe(0); // sticky
-    expect(toasts[0].action?.label).toBe("Reload");
+    expect(toasts[0]!.kind).toBe("error");
+    expect(toasts[0]!.title).toMatch(/stale daemon/i);
+    expect(toasts[0]!.ttl).toBe(0); // sticky
+    expect(toasts[0]!.action?.label).toBe("Reload");
   });
 
   it("network-error rejection toasts the doctor hint", async () => {
@@ -351,7 +351,7 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     useToastStore.getState().dismissAll();
     const s = useArtifactStore.getState();
     await expect(s.submitComment("a1", "hi")).rejects.toBeDefined();
-    expect(useToastStore.getState().toasts[0].body).toMatch(/deeppairing doctor/i);
+    expect(useToastStore.getState().toasts[0]!.body).toMatch(/deeppairing doctor/i);
   });
 });
 
@@ -370,7 +370,7 @@ describe("D9 (M10) — WS echo replaces the optimistic provisional", () => {
     } as any);
     const bucket = useArtifactStore.getState().comments["art_1"];
     expect(bucket).toHaveLength(1);
-    expect(bucket[0].id).toBe("cmt_srv");
+    expect(bucket![0]!.id).toBe("cmt_srv");
   });
 
   it("distinct content does NOT replace — only true echoes collapse", () => {
@@ -399,7 +399,7 @@ describe("F6 — mutations route by the OWNING session", () => {
 
     await useArtifactStore.getState().updateArtifactStatus("art_foreign", "approved");
 
-    const [, init] = fetchSpy.mock.calls[0];
+    const [, init] = fetchSpy.mock.calls[0]!;
     // Pre-F6 this carried the TAB's session and the write silently no-op'd.
     expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_owner");
   });
@@ -421,7 +421,7 @@ describe("F6 — mutations route by the OWNING session", () => {
 
     await useArtifactStore.getState().markQuestionResolved("cmt_q");
 
-    const [, init] = fetchSpy.mock.calls[0];
+    const [, init] = fetchSpy.mock.calls[0]!;
     expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_owner");
   });
 });
@@ -458,7 +458,7 @@ describe("F12 — the store refuses ALL mutations during replay (the mouse path)
 
     expect(fetchSpy).not.toHaveBeenCalled();
     // The artifact is untouched (no optimistic flip either).
-    expect(useArtifactStore.getState().artifacts[0].status).toBe("draft");
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("draft");
     const { useToastStore } = await import("../../stores/toast");
     expect(
       useToastStore.getState().toasts.filter((t) => t.title.includes("disabled during replay")),

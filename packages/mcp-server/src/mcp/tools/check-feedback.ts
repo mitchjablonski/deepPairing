@@ -166,8 +166,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // Find oldest pending artifact age
   let oldestPendingAge = "";
   const pendingArts = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type));
-  if (pendingArts.length > 0) {
-    const oldestMs = Date.now() - new Date(pendingArts[0].createdAt).getTime();
+  const [oldestPending] = pendingArts;
+  if (oldestPending) {
+    const oldestMs = Date.now() - new Date(oldestPending.createdAt).getTime();
     const mins = Math.floor(oldestMs / 60000);
     const secs = Math.floor((oldestMs % 60000) / 1000);
     oldestPendingAge = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -506,9 +507,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   };
 
   // If only the preamble exists (no feedback, no waits), give a clean proceed signal
-  if (parts.length === 1) {
+  const [preamble] = parts;
+  if (parts.length === 1 && preamble !== undefined) {
     return {
-      content: [{ type: "text", text: parts[0] }],
+      content: [{ type: "text", text: preamble }],
       structuredContent,
     };
   }

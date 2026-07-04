@@ -146,7 +146,7 @@ describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a f
     expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
 
     // uncheck the first step → the additive mods button appears...
-    fireEvent.click(screen.getAllByTitle(/uncheck to skip this step/i)[0]);
+    fireEvent.click(screen.getAllByTitle(/uncheck to skip this step/i)[0]!);
     expect(screen.getByRole("button", { name: /approve with modifications/i })).toBeInTheDocument();
 
     // ...the rest of the standard footer is STILL there (regression: it used to

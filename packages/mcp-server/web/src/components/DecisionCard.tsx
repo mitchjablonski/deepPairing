@@ -262,7 +262,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         e.preventDefault();
         e.stopPropagation();
         if (showReasoning) return; // Let the reasoning input handle Enter
-        handleSelect(event.options[focusedIndex].id);
+        const focusedOption = event.options[focusedIndex];
+        if (focusedOption) handleSelect(focusedOption.id);
       }
     };
 

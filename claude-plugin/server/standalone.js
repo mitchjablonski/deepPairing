@@ -26865,8 +26865,8 @@ async function revisionNudge(store, type, title, excludeId) {
   const prior = all.filter(
     (a) => a.type === type && a.id !== excludeId && LIVE_STATUSES.has(a.status) && titlesSimilar(a.title ?? "", title)
   ).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  if (prior.length === 0) return "";
-  const match = prior[prior.length - 1];
+  const match = prior.at(-1);
+  if (!match) return "";
   return `
 
 \u21BB This looks like a revision of a live ${type} you already presented (${match.id}${match.title ? ` "${match.title}"` : ""}). Next time, call \`revise_artifact\` mode='supersede' artifactId='${match.id}' with the new content \u2014 it links the versions and gives your pair a clean before/after diff, instead of a separate ${type} that orphans the thread. (This one was still created.)`;
@@ -28170,8 +28170,9 @@ async function handleCheckFeedback(ctx, args) {
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
   let oldestPendingAge = "";
   const pendingArts = allArtifacts.filter((a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type));
-  if (pendingArts.length > 0) {
-    const oldestMs = Date.now() - new Date(pendingArts[0].createdAt).getTime();
+  const [oldestPending] = pendingArts;
+  if (oldestPending) {
+    const oldestMs = Date.now() - new Date(oldestPending.createdAt).getTime();
     const mins = Math.floor(oldestMs / 6e4);
     const secs = Math.floor(oldestMs % 6e4 / 1e3);
     oldestPendingAge = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -28423,9 +28424,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     decisions: structuredDecisions,
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title }))
   };
-  if (parts.length === 1) {
+  const [preamble] = parts;
+  if (parts.length === 1 && preamble !== void 0) {
     return {
-      content: [{ type: "text", text: parts[0] }],
+      content: [{ type: "text", text: preamble }],
       structuredContent
     };
   }
@@ -29627,9 +29629,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         contents: [{ uri, mimeType: "application/json", text: JSON.stringify(past, null, 2) }]
       };
     }
-    const sessionMatch = uri.match(/^deeppairing:\/\/session\/(.+)$/);
-    if (sessionMatch) {
-      const sessionId = sessionMatch[1];
+    const sessionId = uri.match(/^deeppairing:\/\/session\/(.+)$/)?.[1];
+    if (sessionId) {
       if (sessionId === "onboarding" || sessionId === "current") {
         throw new Error(
           `Reserved session id: '${sessionId}'. ` + (sessionId === "onboarding" ? "Read deeppairing://onboarding (top-level) for session onboarding." : "Read deeppairing://session/current for the active session.")
@@ -30300,8 +30301,8 @@ var DaemonClient = class {
     return this.requestPublic("/api/ledger/digest");
   }
   portFromBaseUrl() {
-    const match = this.baseUrl.match(/localhost:(\d+)/);
-    return match ? parseInt(match[1], 10) : 3847;
+    const port = this.baseUrl.match(/localhost:(\d+)/)?.[1];
+    return port ? parseInt(port, 10) : 3847;
   }
 };
 

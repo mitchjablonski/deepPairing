@@ -231,8 +231,8 @@ export function createDaemonRoutes(
     await next();
     if (c.res.status >= 400) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
-    if (!m) return;
-    const sid = m[1];
+    const sid = m?.[1];
+    if (!sid) return;
     const now = Date.now();
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);

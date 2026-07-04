@@ -32,8 +32,8 @@ describe("E7 — useAbortableFetch", () => {
     );
     rerender({ k: 2 });
     await waitFor(() => expect(signals.length).toBe(2));
-    expect(signals[0].aborted).toBe(true);
-    expect(signals[1].aborted).toBe(false);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
   });
 
   it("a rejecting REFETCH keeps the last-known data (transient-blip contract)", async () => {

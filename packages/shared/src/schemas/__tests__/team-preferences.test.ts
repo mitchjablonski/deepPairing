@@ -85,6 +85,6 @@ describe("parseTeamPreferencesFile", () => {
       version: 1,
       preferences: [{ id: "a", kind: "prefer", concept: "x", rationale: "y" }],
     });
-    expect(parsed?.preferences[0].kind).toBe("prefer");
+    expect(parsed?.preferences[0]?.kind).toBe("prefer");
   });
 });

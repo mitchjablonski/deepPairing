@@ -104,7 +104,7 @@ describe("LedgerDrawer", () => {
     await userEvent.click(screen.getByRole("button", { name: /add to ledger/i }));
 
     await waitFor(() => expect(seedFetch).toHaveBeenCalled());
-    const [, init] = seedFetch.mock.calls[0];
+    const [, init] = seedFetch.mock.calls[0]!;
     const body = JSON.parse(init.body as string);
     expect(body.concept).toBe("named exports only");
     expect(body.verdict).toBe("rejected");

@@ -627,9 +627,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       };
     }
 
-    const sessionMatch = uri.match(/^deeppairing:\/\/session\/(.+)$/);
-    if (sessionMatch) {
-      const sessionId = sessionMatch[1];
+    const sessionId = uri.match(/^deeppairing:\/\/session\/(.+)$/)?.[1];
+    if (sessionId) {
       // III2 — defense-in-depth: even though we moved onboarding off
       // session/ at the source, an old client cache or hand-typed URI
       // could still hit session/onboarding. Reserved-name guard rejects

@@ -1426,7 +1426,9 @@ export class FileStore implements IStore {
 
         const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         const firstArtifact = sorted[0];
-        const lastArtifact = sorted[sorted.length - 1];
+        const lastArtifact = sorted.at(-1);
+        // Unreachable (length checked above) — skip like any other bad session.
+        if (!firstArtifact || !lastArtifact) continue;
 
         sessions.push({
           id: entry.name,

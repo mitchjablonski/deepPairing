@@ -120,7 +120,7 @@ describe("formatZodIssues", () => {
       expect(out.code).toBe("validation_error");
       expect(out.error).toMatch(/status/);
       expect(out.issues).toHaveLength(1);
-      expect(out.issues[0].path).toBe("status");
+      expect(out.issues[0]!.path).toBe("status");
     }
   });
 

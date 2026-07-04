@@ -284,7 +284,9 @@ export const _decisionContentSchemaForReference = DecisionContentSchema;
 const ARTIFACT_TITLE = z.string().min(1)
   .describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
 
-export const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
+// `satisfies` (not a Record annotation) keeps the literal keys, so property
+// access stays exact under noUncheckedIndexedAccess.
+export const TOOL_INPUT_SCHEMAS = {
   present_findings: ResearchContentSchema.extend({
     title: ARTIFACT_TITLE.optional(),
   }),
@@ -309,7 +311,7 @@ export const TOOL_INPUT_SCHEMAS: Record<string, z.ZodType> = {
       .describe("Artifact IDs of findings that motivated this change"),
   }),
   log_reasoning: ReasoningContentSchema,
-};
+} satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's
  *  inputSchema slot so call sites need no cast). */

@@ -132,13 +132,13 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     const tick = () => {
       const { events, cursor, speed } = get();
       const idx = events.findIndex((e) => e.at === cursor);
-      const nextIdx = idx + 1;
-      if (nextIdx >= events.length) {
+      const nextEvent = events[idx + 1];
+      if (!nextEvent) {
         clearPlayTimer();
         set({ playing: false });
         return;
       }
-      set({ cursor: events[nextIdx].at });
+      set({ cursor: nextEvent.at });
       // Reschedule with current speed (keeps tick rate honest when speed
       // changes mid-playback).
       clearPlayTimer();
