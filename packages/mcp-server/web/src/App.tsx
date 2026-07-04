@@ -19,6 +19,7 @@ import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LedgerDrawer } from "./components/LedgerDrawer";
+import { SessionBrowserModal } from "./components/SessionBrowserModal";
 import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
@@ -89,6 +90,15 @@ function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTaste, setShowTaste] = useState(false);
+  // H1 — replay was UNREACHABLE with a live daemon: SessionBrowser only
+  // mounted inside IdleHome (which renders when !connected — and then its
+  // own /api/sessions fetch fails too). The palette opens it as an overlay.
+  const [showSessions, setShowSessions] = useState(false);
+  useEffect(() => {
+    const open = () => setShowSessions(true);
+    window.addEventListener("dp:open-sessions", open);
+    return () => window.removeEventListener("dp:open-sessions", open);
+  }, []);
   // BB6 — when a PreflightBreadcrumb concept is clicked, open the drawer
   // straight to the ledger tab and highlight the matching row. Cleared on
   // close so a fresh open from the header button shows the default tab.
@@ -182,6 +192,8 @@ function App() {
       ) return;
 
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        // H1 — palette results select behind the open rail otherwise.
+        setShowConversation(false);
         e.preventDefault();
         setShowPalette((v) => !v);
         return;
@@ -201,12 +213,18 @@ function App() {
         setShowSettings(false);
         closeTaste(); // CC9 — also clears tasteOpts
         setShowConversation(false);
+        setShowSessions(false);
         // F9 (L3) — replay is a MODE, and Escape is how modes end everywhere
         // else in the app; there was no keyboard exit at all.
         // Layered (review): overlay-registered surfaces get their own Esc
         // first; replay exits on the NEXT press even if focus escaped the
         // panel (useModal's stopPropagation covers the focused case).
-        if (!overlayOpenRef.current) useReplayStore.getState().exitReplay();
+        if (!overlayOpenRef.current) {
+          // H1 review — park focus on the landmark here too (the scrubber's
+          // Exit button does; the Escape path shouldn't differ).
+          (document.querySelector("main") as HTMLElement | null)?.focus?.();
+          useReplayStore.getState().exitReplay();
+        }
       }
 
       // UX4 — beyond this point are the ARTIFACT shortcuts (j/k/a/r/q). Suppress
@@ -320,6 +338,11 @@ function App() {
         | { artifactId?: string; anchorKey?: string }
         | undefined;
       if (!detail?.artifactId) return;
+      // H1 — a jump must CLOSE the overlay that covers its target: every
+      // rail row's jump landed behind the rail's full-screen backdrop
+      // (nothing visibly happened until Esc). LedgerDrawer already got
+      // this right; the rail's dispatches route through here.
+      setShowConversation(false);
       useArtifactStore.getState().selectArtifact(detail.artifactId);
       if (detail.anchorKey) {
         // requestAnimationFrame waits one paint — usually enough for the
@@ -531,7 +554,9 @@ function App() {
           </ErrorBoundary>
         )}
 
-      <div className="flex-1 min-h-0">
+      {/* H1 (a11y) — a real <main> landmark, focusable-by-script so
+          teardown paths (scrubber exit) can park focus somewhere stable. */}
+      <main className="flex-1 min-h-0 focus:outline-none" tabIndex={-1}>
         <ErrorBoundary fallback={
           <div className="flex items-center justify-center h-full p-8 text-text-muted text-sm">
             Failed to render — try selecting a different artifact
@@ -555,14 +580,30 @@ function App() {
                 ? <div className="p-5"><WaitingForClaude /></div>
                 : <IdleHome />}
         </ErrorBoundary>
-      </div>
+      </main>
 
       {/* Free-form message to agent. C2 — also shown during the live
           pre-first-artifact wait: that's exactly when a nudge matters, and it
           was the one moment you couldn't send one. Requires a BOUND sessionId
           (review catch: an unbound tab's message routes to the daemon's
           default store — possibly a dead session — while the UI says Sent ✓). */}
-      {(hasArtifacts || (connected && sessionId != null && activeSessions.length > 0)) && <MessageInput />}
+      {/* H1 — the `hasArtifacts ||` arm BYPASSED the bound-session
+          requirement the comment above claims: an unbound aggregate tab
+          (>=2 sessions; C2 auto-bind skips that case) rendered the composer
+          and a send landed in the daemon's default store — the OLDEST
+          session, possibly dead — while flashing Sent. Bound tabs and the
+          single-session auto-bind are unchanged; unbound-with-sessions gets
+          an honest picker hint instead. */}
+      {sessionId != null
+        ? (hasArtifacts || (connected && activeSessions.length > 0)) && <MessageInput />
+        : connected && activeSessions.length > 1 && (
+            <div className="px-3 py-2 border-t border-border-default text-xs text-text-muted">
+              {activeSessions.length} sessions active — pick one in the session bar to message its agent.
+            </div>
+          )}
+
+      {/* H1 — past-sessions browser (replay's front door for connected tabs). */}
+      {showSessions && <SessionBrowserModal onClose={() => setShowSessions(false)} />}
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}

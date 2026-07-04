@@ -107,8 +107,28 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   },
 
   exitReplay: () => {
+    const wasActive = get().active;
     clearPlayTimer();
     set({ active: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
+    // H1 — loadSession RESET the live artifact store and filled it with the
+    // historical session; exiting used to leave that store in place, so
+    // historical drafts rendered with fully-mutable footers (the F12 guard
+    // off) and owner-routed writes landed in the dead session — the exact
+    // mixed-frame lie F12 killed, resurrected at exit. Rehydrate: a bound
+    // tab re-binds (hydration resets then refills from live state); an
+    // unbound one just resets. Dynamic imports keep this store cycle-free.
+    if (!wasActive) return;
+    void Promise.all([import("./connection"), import("./artifact")]).then(
+      ([{ useConnectionStore }, { useArtifactStore }]) => {
+        // Review — reset UNCONDITIONALLY first: the VS Code webview adapter
+        // has no switchSession, so the rehydrate silently no-op'd there and
+        // the historical store stayed live. A double reset is harmless (the
+        // connected handler resets again before hydration).
+        useArtifactStore.getState().reset();
+        const sid = useConnectionStore.getState().sessionId;
+        if (sid) useConnectionStore.getState().switchSession(sid);
+      },
+    );
   },
 
   setCursor: (cursor) => set({ cursor }),

@@ -644,3 +644,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     },
   };
 });
+
+/**
+ * H1 — liveness of a comment/artifact's OWNING session (the F6/F8 owner
+ * precedent), readable inside render maps without a per-row hook. Unknown
+ * sessions default LIVE (never false-alarm during registration transients).
+ */
+export function isSessionLive(sessionId: string | undefined): boolean {
+  if (!sessionId) return true;
+  return (
+    useConnectionStore.getState().activeSessions.find((s) => s.sessionId === sessionId)?.live !==
+    false
+  );
+}

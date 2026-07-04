@@ -193,6 +193,7 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
   // F10 (G5) — the shortcut listener's deps deliberately exclude `comment`
   // (re-subscribing per keystroke); a ref keeps the read fresh.
   const hasCommentRef = useRef(false);
+  const approvedChipFocusedRef = useRef(false);
   hasCommentRef.current = comment.trim().length > 0;
   useEffect(() => {
     if (forceExpanded && wantFocusRef.current) {
@@ -324,7 +325,27 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
   if (artifact.status === "approved") {
     return (
-      <div className="flex items-center gap-2 pt-2 border-t border-border-default animate-approved rounded p-2">
+      <div
+        // H1 (a11y) — the approve paths unmount the focused control (Cancel
+        // button / textarea) when this chip replaces the footer; focus fell
+        // to <body> and keyboard users re-tabbed from the top. The chip is
+        // focusable-by-script and takes focus on mount IF the footer held it.
+        ref={(el) => {
+          // Review — ONE-SHOT: inline refs re-attach on every render, and
+          // re-focusing whenever activeElement is <body> yanked focus (and
+          // scroll) back to the chip on any WS-driven re-render.
+          if (
+            el &&
+            !approvedChipFocusedRef.current &&
+            (document.activeElement === document.body || document.activeElement === null)
+          ) {
+            approvedChipFocusedRef.current = true;
+            el.focus();
+          }
+        }}
+        tabIndex={-1}
+        className="flex items-center gap-2 pt-2 border-t border-border-default animate-approved rounded p-2 focus:outline-none"
+      >
         <span className="text-accent-green text-sm">&#10003;</span>
         <span className="text-xs text-accent-green font-medium">Approved</span>
       </div>

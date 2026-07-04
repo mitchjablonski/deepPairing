@@ -7,6 +7,7 @@ import type { Comment, CommentTarget } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
+import { isSessionLive } from "../stores/connection";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -74,7 +75,7 @@ function CommentBubble({ comment }: { comment: Comment }) {
                 {/* U8 — only a QUESTION leaves the agent owing a reply; a plain
                     comment/suggestion is just delivered, so don't imply the
                     agent is on the hook for it. */}
-                {comment.intent === "question" ? "delivered · awaiting agent" : "delivered"}
+                {comment.intent === "question" ? (isSessionLive(comment.sessionId) ? "delivered · awaiting agent" : "delivered · agent exited") : "delivered"}
               </span>
             ))}
         </div>

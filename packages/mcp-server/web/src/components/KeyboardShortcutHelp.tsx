@@ -8,8 +8,8 @@ const shortcuts = [
   { keys: "a", description: "Arm approve (3s confirm countdown)" },
   { keys: "r", description: "Focus revision textarea" },
   { keys: "q", description: "Ask the agent about this artifact" },
-  { keys: "⌘⏎", description: "Submit approve (from textarea)" },
-  { keys: "Escape", description: "Cancel countdown / close overlay" },
+  { keys: "⌘⏎", description: "Respond with note · empty = approve (from review textarea)" },
+  { keys: "Escape", description: "Cancel countdown / close overlay / exit replay" },
   { keys: "?", description: "Toggle this help" },
 ];
 

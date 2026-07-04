@@ -7,6 +7,7 @@ import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
 import { badgeColors, type InitialResolved } from "./types";
+import { useConnectionStore } from "../../stores/connection";
 
 interface ResolvedDecisionViewProps {
   event: DecisionRequestEvent;
@@ -45,6 +46,10 @@ export function ResolvedDecisionView({
   onRequestHorizon,
   onOpenRepair,
 }: ResolvedDecisionViewProps) {
+  // H1 — receipts stop promising pickups from dead agents (F8 idiom).
+  const ownerLive = useConnectionStore(
+    (st) => st.activeSessions.find((x) => x.sessionId === sessionId)?.live !== false,
+  );
   const chosen = event.options.find((o) => o.id === selectedId);
   const rejected = event.options.filter((o) => o.id !== selectedId);
 
@@ -78,7 +83,11 @@ export function ResolvedDecisionView({
         {agentPickedUp ? (
           <span className="text-accent-green">✓ Claude picked this up — proceeding with "{chosen?.title}"</span>
         ) : (
-          <span className="text-text-muted">Delivered — Claude will pick it up next time it checks in</span>
+          <span className="text-text-muted">
+            {ownerLive
+              ? "Delivered — Claude will pick it up next time it checks in"
+              : "Delivered — the agent exited; it'll be picked up if the session resumes"}
+          </span>
         )}
       </p>
       {(initialResolved?.predictedOutcome || initialResolved?.confidence) && (

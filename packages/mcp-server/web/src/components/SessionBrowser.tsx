@@ -29,7 +29,7 @@ interface SessionSummary {
   hasDecisions: boolean;
 }
 
-export function SessionBrowser() {
+export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
@@ -104,6 +104,8 @@ export function SessionBrowser() {
           selectArtifact(focusArtifactId);
         }
       }
+      // H1 — hosted in the modal, entering replay closes it.
+      onPicked?.();
     } catch {
       // Failed to load
     } finally {
@@ -159,6 +161,17 @@ export function SessionBrowser() {
   }
 
   if (sessions.length === 0) {
+    // H1 review — modal-hosted (onPicked set = opened from a CONNECTED tab):
+    // no demo affordance. loadDemo resets the LIVE store and injects fully
+    // mutable fakes whose approvals would POST to the real daemon; it was
+    // safe only on the disconnected IdleHome path.
+    if (onPicked) {
+      return (
+        <div className="p-4 text-sm text-text-muted">
+          No past sessions recorded for this project yet.
+        </div>
+      );
+    }
     return (
       <div className="p-4 max-w-2xl mx-auto space-y-4">
         <WaitingForClaude />

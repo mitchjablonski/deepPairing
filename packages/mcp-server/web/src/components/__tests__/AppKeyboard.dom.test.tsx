@@ -4,7 +4,7 @@
  * refactors silently break.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act, screen } from "@testing-library/react";
 import App from "../../App";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
@@ -80,5 +80,19 @@ describe("F9 (L3) — replay clamps + Escape exit", () => {
     useReplayStore.setState({ active: true } as any);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(useReplayStore.getState().active).toBe(false);
+  });
+});
+
+describe("H1 — jumps close the rail that covers their target", () => {
+  it("dp:focus-artifact while the Conversation rail is open closes it", () => {
+    render(<App />);
+    // open the rail via its header button
+    fireEvent.click(screen.getByRole("button", { name: /conversation/i }));
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "a1" } }));
+    });
+    // the rail's dialog is gone — the selection is visible, not behind a backdrop
+    expect(screen.queryByRole("dialog", { name: /conversation/i })).toBeNull();
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("a1");
   });
 });
