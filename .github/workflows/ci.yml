@@ -40,7 +40,10 @@ jobs:
         # -c core.filemode=false: esbuild marks shebanged outputs executable;
         # contributor filesystems (WSL /mnt/c) can't represent that faithfully.
         # Content staleness is what we gate, not mode bits.
-        run: git -c core.filemode=false diff --exit-code -- claude-plugin/server || (echo "::error::claude-plugin/server is stale — run pnpm build and commit the result" && exit 1)
+        # Review NIT — `git diff` is blind to UNTRACKED emissions (a newly
+        # generated file the author forgot to `git add` would pass silently);
+        # porcelain catches both modified and untracked.
+        run: test -z "$(git -c core.filemode=false status --porcelain -- claude-plugin/server)" || (git -c core.filemode=false status --porcelain -- claude-plugin/server && echo "::error::claude-plugin/server is stale — run pnpm build and commit the result" && exit 1)
 
   e2e:
     runs-on: ubuntu-latest

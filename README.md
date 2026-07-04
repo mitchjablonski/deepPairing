@@ -11,9 +11,10 @@ move it names the *concept* behind the choice ("dependency inversion",
 and its reasoning sharpens yours.**
 
 The calls you make don't evaporate when the session ends. Reject an approach
-once — with your reason — and deepPairing remembers it across every project, so
-your standards hold even when the agent later paraphrases the same idea in
-different words.
+once — with your reason — and deepPairing remembers it across every project:
+when the agent proposes something matching a concept you've rejected (by name,
+or by the concept the agent itself names at proposal time), it gets stopped
+before the edit lands.
 
 *An MCP server + companion web UI that runs inside Claude Code. MIT-licensed,
 no account, no telemetry — everything lives on your disk.*
@@ -60,7 +61,7 @@ node packages/mcp-server/dist/cli/init.js init
 - **Live plan checklists.** Plans render as checklists that tick off as the
   work lands, so "what's left" never lies.
 - **Session replay.** Reopen any past session from the command palette →
-  **Past sessions** and step back through its artifacts, comments, and
+  **Browse past sessions (replay)** and step back through its artifacts, comments, and
   decisions in order.
 - **Multi-project switcher.** One companion UI aggregates every project you're
   pairing on, with a "waiting on you" badge when it's your move.
@@ -214,7 +215,7 @@ claude --plugin-dir ./claude-plugin
 Either adds `/deeppairing:start`, `/deeppairing:review`, etc. and the
 proactively-loaded `pairing-protocol` skill. The marketplace path installs the
 committed, self-contained server bundle (no `pnpm install` or build); the
-`--plugin-dir` path needs the flag each launch and a built clone. If the
+`--plugin-dir` path needs the flag on each launch and a clone (no build required — the bundled server is committed). If the
 marketplace install doesn't resolve, `--plugin-dir` always works.
 
 Either way you get the tools, the companion UI, and an always-on first-call
