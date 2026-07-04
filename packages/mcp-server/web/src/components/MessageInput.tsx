@@ -30,6 +30,9 @@ export function MessageInput() {
   // and rendered against the replayed session's thread while SENDING into
   // the live tab binding: a visual reply into history that lands elsewhere.
   const replayActive = useReplayStore((st) => st.active);
+  const boundLive = useConnectionStore(
+    (st) => st.activeSessions.find((x) => x.sessionId === st.sessionId)?.live !== false,
+  );
   const agentRecentlyActive = useAgentRecentlyActive();
   // D9 (H5) — survives reloads; keyed per session so a draft can never
   // follow you across a session switch (M5).
@@ -259,9 +262,12 @@ export function MessageInput() {
         {/* D8 (M3) — the "under 30s" promise is only honest while the agent
             heartbeat is fresh; when it's idle/gone, don't promise latency. */}
         <p className="text-2xs text-text-muted">
-          {agentRecentlyActive
-            ? "The agent will see this the next time it checks in — usually under 30s"
-            : "The agent will see this the next time it checks in"}
+          {/* H1 — a dead session gets the F8 honest phrasing, not a promise. */}
+          {!boundLive
+            ? "The agent exited — your message is saved and will be seen if the session resumes"
+            : agentRecentlyActive
+              ? "The agent will see this the next time it checks in — usually under 30s"
+              : "The agent will see this the next time it checks in"}
         </p>
         <button
           onClick={handleSend}

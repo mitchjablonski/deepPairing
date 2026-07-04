@@ -324,7 +324,19 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
   if (artifact.status === "approved") {
     return (
-      <div className="flex items-center gap-2 pt-2 border-t border-border-default animate-approved rounded p-2">
+      <div
+        // H1 (a11y) — the approve paths unmount the focused control (Cancel
+        // button / textarea) when this chip replaces the footer; focus fell
+        // to <body> and keyboard users re-tabbed from the top. The chip is
+        // focusable-by-script and takes focus on mount IF the footer held it.
+        ref={(el) => {
+          if (el && (document.activeElement === document.body || document.activeElement === null)) {
+            el.focus();
+          }
+        }}
+        tabIndex={-1}
+        className="flex items-center gap-2 pt-2 border-t border-border-default animate-approved rounded p-2 focus:outline-none"
+      >
         <span className="text-accent-green text-sm">&#10003;</span>
         <span className="text-xs text-accent-green font-medium">Approved</span>
       </div>

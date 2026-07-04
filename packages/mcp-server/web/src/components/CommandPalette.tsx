@@ -55,6 +55,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     );
     const draftSessionCount = new Set(approvableDrafts.map((a) => a.sessionId)).size;
     items.push({
+      id: "action_past_sessions",
+      label: "Browse past sessions (replay)",
+      type: "action",
+      action: () => {
+        window.dispatchEvent(new CustomEvent("dp:open-sessions"));
+      },
+    });
+    items.push({
       id: "action_approve_all",
       label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : !boundSessionId && draftSessionCount > 1 ? ` across ${draftSessionCount} sessions` : ""} (except decisions)`,
       type: "action",

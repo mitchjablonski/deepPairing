@@ -29,7 +29,7 @@ interface SessionSummary {
   hasDecisions: boolean;
 }
 
-export function SessionBrowser() {
+export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingSession, setLoadingSession] = useState<string | null>(null);
@@ -104,6 +104,8 @@ export function SessionBrowser() {
           selectArtifact(focusArtifactId);
         }
       }
+      // H1 — hosted in the modal, entering replay closes it.
+      onPicked?.();
     } catch {
       // Failed to load
     } finally {

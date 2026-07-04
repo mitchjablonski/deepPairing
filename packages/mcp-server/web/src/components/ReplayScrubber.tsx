@@ -177,7 +177,12 @@ export function ReplayScrubber() {
           </div>
 
           <button
-            onClick={exitReplay}
+            onClick={() => {
+              // H1 (a11y) — this button unmounts with the scrubber; park
+              // focus on a stable landmark first so it doesn't fall to body.
+              (document.querySelector("main") as HTMLElement | null)?.focus?.();
+              exitReplay();
+            }}
             className="ml-2 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-primary hover:bg-surface-hover"
             title="Exit replay (Esc)"
           >

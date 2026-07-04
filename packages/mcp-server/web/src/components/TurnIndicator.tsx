@@ -3,6 +3,8 @@ import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { computePending } from "../lib/pending";
+import { isUnansweredQuestion } from "../lib/unanswered";
+import { buildThreads } from "../lib/threading";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -68,16 +70,17 @@ export function TurnIndicator() {
   // surfaces "N waiting on agent" at a glance. Points at the first-asked
   // unanswered question when clicked.
   const unanswered = useMemo(() => {
+    // H1 — the SHARED predicate over threads, not a private flat filter:
+    // the old filter counted a root as waiting even after the agent
+    // answered a FOLLOW-UP (markCommentAnswered stamps the reply id, not
+    // the root) — this badge said "1 waiting" while the Conversation badge
+    // and rail said answered. buildThreads + isUnansweredQuestion is the
+    // exact pair those surfaces use, so the three can't drift.
     const out: Array<{ artifactId: string; comment: Comment }> = [];
     for (const [artifactId, list] of Object.entries(comments)) {
-      for (const c of list as Comment[]) {
-        if (
-          c.author === "human" &&
-          c.intent === "question" &&
-          !c.answeredByCommentId &&
-          !c.humanResolvedAt
-        ) {
-          out.push({ artifactId, comment: c });
+      for (const t of buildThreads(list as Comment[])) {
+        if (isUnansweredQuestion(t.root, t.replies)) {
+          out.push({ artifactId, comment: t.root });
         }
       }
     }

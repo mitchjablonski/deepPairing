@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
+import { isSessionLive } from "../stores/connection";
 
 /**
  * Shared per-line comment surface: the hover gutter (+ comment / ? ask /
@@ -248,7 +249,7 @@ export function LineCommentChips({
             from the agent's acknowledged drain flag — never sets it). */}
         {isHuman && !isQuestion && (
           <div className="px-3 mt-0.5 text-2xs text-text-muted">
-            {c.acknowledged ? "✓ seen by agent" : "delivered · awaiting agent"}
+            {c.acknowledged ? "✓ seen by agent" : isSessionLive(c.sessionId) ? "delivered · awaiting agent" : "delivered · agent exited"}
           </div>
         )}
         {replyingTo === c.id && (

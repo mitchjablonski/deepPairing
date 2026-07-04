@@ -1,4 +1,5 @@
 import type { Comment } from "@deeppairing/shared";
+import { buildThreads } from "./threading";
 
 /**
  * The single source of truth for "a human question still awaiting the agent".
@@ -29,18 +30,14 @@ export function isUnansweredQuestion(comment: Comment, replies: Comment[]): bool
  * which only evaluates top-level threads, so the badge and the pill agree.
  */
 export function countUnansweredQuestions(comments: Comment[]): number {
-  const repliesByParent = new Map<string, Comment[]>();
-  for (const c of comments) {
-    if (c.parentCommentId) {
-      const arr = repliesByParent.get(c.parentCommentId) ?? [];
-      arr.push(c);
-      repliesByParent.set(c.parentCommentId, arr);
-    }
-  }
+  // H1 — count over buildThreads, the SAME grouping every rendering surface
+  // uses: the old `if (parentCommentId) continue` dropped ORPHANED question
+  // roots (missing parent) that the rail still rendered and counted —
+  // exactly the drift this module's contract forbids. buildThreads roots
+  // orphans at self and flattens transitively (F7), so count == rendered.
   let n = 0;
-  for (const c of comments) {
-    if (c.parentCommentId) continue; // roots only, mirroring the rail's threads
-    if (isUnansweredQuestion(c, repliesByParent.get(c.id) ?? [])) n++;
+  for (const t of buildThreads(comments)) {
+    if (isUnansweredQuestion(t.root, t.replies)) n++;
   }
   return n;
 }
