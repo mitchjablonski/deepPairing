@@ -219,7 +219,12 @@ function App() {
         // Layered (review): overlay-registered surfaces get their own Esc
         // first; replay exits on the NEXT press even if focus escaped the
         // panel (useModal's stopPropagation covers the focused case).
-        if (!overlayOpenRef.current) useReplayStore.getState().exitReplay();
+        if (!overlayOpenRef.current) {
+          // H1 review — park focus on the landmark here too (the scrubber's
+          // Exit button does; the Escape path shouldn't differ).
+          (document.querySelector("main") as HTMLElement | null)?.focus?.();
+          useReplayStore.getState().exitReplay();
+        }
       }
 
       // UX4 — beyond this point are the ARTIFACT shortcuts (j/k/a/r/q). Suppress

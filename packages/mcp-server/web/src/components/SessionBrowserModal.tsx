@@ -12,7 +12,7 @@ export function SessionBrowserModal({ onClose }: { onClose: () => void }) {
   const { dialogProps } = useModal({ onClose });
   return (
     <div
-      className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm flex items-start justify-center pt-16"
+      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start justify-center pt-16"
       onClick={onClose}
     >
       <div

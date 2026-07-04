@@ -60,6 +60,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       type: "action",
       action: () => {
         window.dispatchEvent(new CustomEvent("dp:open-sessions"));
+        onClose(); // review BLOCKER — the modal opened UNDER the still-mounted palette
       },
     });
     items.push({

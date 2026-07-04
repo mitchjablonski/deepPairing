@@ -161,6 +161,17 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
   }
 
   if (sessions.length === 0) {
+    // H1 review — modal-hosted (onPicked set = opened from a CONNECTED tab):
+    // no demo affordance. loadDemo resets the LIVE store and injects fully
+    // mutable fakes whose approvals would POST to the real daemon; it was
+    // safe only on the disconnected IdleHome path.
+    if (onPicked) {
+      return (
+        <div className="p-4 text-sm text-text-muted">
+          No past sessions recorded for this project yet.
+        </div>
+      );
+    }
     return (
       <div className="p-4 max-w-2xl mx-auto space-y-4">
         <WaitingForClaude />
