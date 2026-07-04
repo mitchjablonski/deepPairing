@@ -16,7 +16,7 @@ The plugin ships a self-contained, zero-dependency server bundle in
 
 ```bash
 # Inside Claude Code:
-/plugin marketplace add mitchjablonski/deepPairing
+/plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
 ```
 

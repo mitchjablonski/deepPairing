@@ -27,7 +27,7 @@ Three ways in, fastest first — all give you the same MCP tools + companion UI.
 
 ```bash
 # 1. Marketplace (recommended) — run inside Claude Code, no build step:
-/plugin marketplace add mitchjablonski/deepPairing
+/plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
 
 # 2. Local plugin — slash commands + the pairing skill, from a clone:
@@ -38,6 +38,10 @@ claude --plugin-dir ./claude-plugin
 pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js init
 ```
+
+> Run the two commands separately. The HTTPS URL form works without GitHub
+> SSH keys — the `owner/repo` shorthand can resolve to SSH and fail with
+> `Permission denied (publickey)` on machines without a configured key.
 
 <!-- Marketplace install validated structurally against Claude Code's
      plugin-marketplace docs (required marketplace.json fields + install
@@ -205,7 +209,7 @@ the protocol preamble. It's the only path that turns the rejection gate on.
 
 ```bash
 # One-command marketplace install (recommended) — inside Claude Code:
-/plugin marketplace add mitchjablonski/deepPairing
+/plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
 
 # Or load a local clone for this session only:
@@ -281,7 +285,7 @@ not a bolt-on. (More detail in [docs/faq.md](docs/faq.md).)
 ## Status
 
 Pre-1.0. Installable from this repo — via the Claude Code plugin marketplace
-(`/plugin marketplace add mitchjablonski/deepPairing`, which ships the
+(`/plugin marketplace add https://github.com/mitchjablonski/deepPairing`, which ships the
 committed self-contained server bundle), `--plugin-dir`, or from source. No npm
 publish or listing in a public/community marketplace yet (~1,300 tests, an
 explicit threat model, real hardening). The next step is earning a handful of
