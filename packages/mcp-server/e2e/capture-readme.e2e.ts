@@ -16,11 +16,18 @@ const __dir = path.dirname(fileURLToPath(import.meta.url));
 const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
 const ASSETS = path.resolve(__dir, "../../../docs/assets");
 
-test("capture README screenshots", async ({ page }) => {
-  // Opt-in only — this writes PNGs into docs/assets/, so it must not run (and
-  // dirty the tree) in the normal `pnpm test:e2e`. Run:
-  //   pnpm build && CAPTURE_README=1 npx playwright test capture-readme.e2e.ts
-  test.skip(!process.env.CAPTURE_README, "capture-only (set CAPTURE_README=1)");
+test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_README=1)", async ({ page }) => {
+  // K4 — this ALWAYS runs in CI now, as a selector-integrity check: it drives
+  // the real rendered app through every navigation the README shots depend on
+  // and ASSERTS each target renders, so selector rot (e.g. the F2 "your taste"
+  // → "Ledger" rename, or a wrongly-scoped locator) fails the build instead of
+  // rotting silently behind a CAPTURE_README-opt-in skip. Only the PNG WRITES
+  // are gated on the flag, so a normal CI run never dirties docs/assets/. To
+  // refresh the screenshots: `pnpm build && CAPTURE_README=1 npx playwright test capture-readme.e2e.ts`.
+  const CAPTURE = !!process.env.CAPTURE_README;
+  const shot = async (name: string) => {
+    if (CAPTURE) await page.screenshot({ path: path.join(ASSETS, name) });
+  };
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cap-home-"));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cap-proj-"));
   let proc: ChildProcess | undefined;
@@ -129,12 +136,14 @@ test("capture README screenshots", async ({ page }) => {
     await page.goto(`${base}/?session=${sid}`);
     await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
     await page.waitForTimeout(1500); // syntax highlight + motion settle
-    await page.screenshot({ path: path.join(ASSETS, "review-surface.png") });
+    await shot("review-surface.png");
 
-    // The reasoning card (concept) — an alternative hero candidate.
-    await page.getByText("Single-flight the refresh instead of locking").click().catch(() => {});
+    // The reasoning card (concept). No silent .catch — a broken selector must
+    // FAIL, not screenshot the wrong surface (the ledger break's exact class).
+    await page.getByText("Single-flight the refresh instead of locking").click();
+    await page.getByText("single-flight / request coalescing").waitFor({ state: "visible", timeout: 10_000 });
     await page.waitForTimeout(1000);
-    await page.screenshot({ path: path.join(ASSETS, "reasoning-card.png") });
+    await shot("reasoning-card.png");
 
     // The Ledger drawer. The header control was renamed from "your taste" to
     // "Ledger" (F2 rename) — the old /your taste/i selector matched nothing and
@@ -150,7 +159,7 @@ test("capture README screenshots", async ({ page }) => {
     await page.getByRole("button", { name: "Open the Ledger", exact: true }).first().click();
     await page.getByText("Cross-project Philosophy Ledger").waitFor({ state: "visible", timeout: 10_000 });
     await page.waitForTimeout(1000); // let the drawer's slide-in + digest settle
-    await page.screenshot({ path: path.join(ASSETS, "ledger.png") });
+    await shot("ledger.png");
   } finally {
     // I1 — teardown BARRIER: block until the daemon is fully down (process
     // exited AND port released) before removing its dirs, so this opt-in spec
