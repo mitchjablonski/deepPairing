@@ -69,6 +69,13 @@ function defaultLedgerPath(): string {
   // future test constructs the global store outside that guard (e.g. at
   // module-eval time, before hooks run), refuse the real HOME path loudly so
   // the offending test FAILS in CI instead of silently polluting real memory.
+  // Review NIT — this also fires for a test that execSync-spawns a
+  // deepPairing CLI which constructs a default GlobalStore (e.g. `philosophy
+  // export/import` at cli/init.ts, which inherits VITEST from the parent).
+  // No such test exists today; if one is added, scrub VITEST/NODE_ENV from
+  // the spawned env (or pass an explicit ledger path) rather than relaxing
+  // this guard — the whole point is that the real HOME ledger is untouchable
+  // under any test context.
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     throw new Error(
       "GlobalStore refused to open the real ~/.deeppairing ledger under test " +
