@@ -25921,8 +25921,16 @@ function normalizeConceptKey(name) {
 
 // src/store/global-store.ts
 var LEDGER_VERSION = 1;
-function defaultLedgerPath() {
+function realHomeLedgerPath() {
   return path.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+}
+function defaultLedgerPath() {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    throw new Error(
+      `GlobalStore refused to open the real ~/.deeppairing ledger under test (${realHomeLedgerPath()}). A test constructed the global store without redirecting it. Call setGlobalStoreForTests(<tmpPath>) \u2014 the server vitest setup (src/__tests__/global-store-guard.setup.ts) does this in a beforeEach for every test, so this usually means the global store was constructed at module-eval time before hooks ran.`
+    );
+  }
+  return realHomeLedgerPath();
 }
 var normalizeKey = normalizeConceptKey;
 function isSeededEntry(entry) {
