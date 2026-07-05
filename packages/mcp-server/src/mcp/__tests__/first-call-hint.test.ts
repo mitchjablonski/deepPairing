@@ -65,4 +65,22 @@ describe("first-call hint — always-on protocol preamble", () => {
     // names the failure mode: don't bury / interleave a decision in a plan
     expect(hint).toMatch(/interleave|bury|own card/i);
   });
+
+  it("I7 — pushes the LIVE companion UI URL built from the daemon's real port, and forbids guessing 5173", async () => {
+    const hint = await buildFirstCallHint(store, 4000);
+    // The exact URL from the daemon's port fixture, not a placeholder.
+    expect(hint).toContain("http://localhost:4000");
+    // Names the hallucination it's steering away from (field: agent said 5173).
+    expect(hint).toMatch(/5173/);
+    expect(hint).toMatch(/never guess|NEVER guess|not a guess/i);
+  });
+
+  it("I7 — is honest when the daemon port isn't known yet (no bogus URL)", async () => {
+    const hint = await buildFirstCallHint(store, 0);
+    // Never emit a fabricated localhost URL when we don't have a real port.
+    expect(hint).not.toMatch(/http:\/\/localhost:\d+/);
+    // Point the agent at onboarding instead of guessing.
+    expect(hint).toMatch(/deeppairing:\/\/onboarding/);
+    expect(hint).toMatch(/5173/);
+  });
 });

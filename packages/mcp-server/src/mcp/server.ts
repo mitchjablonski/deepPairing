@@ -178,6 +178,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
               description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear.",
             },
             suggestedAction: { type: "string" },
+            companionUrl: { type: "string", description: "I7 — the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
             summary: {
               type: "object",

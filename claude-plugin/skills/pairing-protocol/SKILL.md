@@ -13,8 +13,14 @@ output cannot.
 
 On your first tool call, the response includes:
 - The companion UI URL — tell the user: "Open <that URL> to review
-  findings, comment on code, and make decisions." Use the exact URL from
-  the tool response (the port is per-project, not always 3847).
+  findings, comment on code, and make decisions." **NEVER guess this URL.**
+  The port is per-project (from the daemon, in the 3847-3974 range), not a
+  fixed default. It is pushed to you: the first-call hint states it, every
+  `check_feedback` response carries it as `companionUrl`, and the
+  `deeppairing://onboarding` resource has it. Read it from there and quote it
+  exactly. **`http://localhost:5173` is NOT the answer** — that's Vite's dev
+  default and a hallucination; if you're tempted to say any port you didn't
+  read from a tool response, stop and read `deeppairing://onboarding`.
 - **Session memory** — rejected approaches from this project (`present_*`
   tools will REFUSE any proposal that matches one), approved patterns, and
   project guardrails (migrations, CI workflows, infra paths).

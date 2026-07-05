@@ -26174,7 +26174,8 @@ async function buildFirstCallHint(store, port) {
   const policyParts = [];
   const contextualParts = [];
   const blockingParts = obligationsParts;
-  const headerLine = `[First use this session] The companion UI is at http://localhost:${port} \u2014 the human can review artifacts, comment, and make decisions there.`;
+  const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : null;
+  const headerLine = companionUrl ? `[First use this session] The companion UI is LIVE at ${companionUrl} \u2014 this is the daemon's REAL, server-provided port (not a guess). The human reviews artifacts, comments, and makes decisions there. When they ask for the URL, give them this exact one; NEVER guess a default \u2014 it is NOT Vite's 5173 or any other made-up port.` : `[First use this session] The companion UI daemon hasn't reported its port yet. Do NOT invent a URL (it is NOT 5173 or any default) \u2014 read the deeppairing://onboarding resource for the live URL once the daemon is up.`;
   const memory = await store.getSessionMemory();
   const memoryParts = [];
   if (memory.rejectedApproaches.length > 0) {
@@ -26452,7 +26453,7 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   }
   const baselineLen = assembled.join("\n").length;
   let runningLen = baselineLen;
-  const contextualCap = HINT_BUDGET_CHARS + PROTOCOL_PREAMBLE.length + 1;
+  const contextualCap = HINT_BUDGET_CHARS + PROTOCOL_PREAMBLE.length + headerLine.length + 1;
   for (const part of contextualParts) {
     if (runningLen + part.length + 1 <= contextualCap) {
       assembled.push(part);
@@ -28064,6 +28065,7 @@ var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"];
 // src/mcp/tools/check-feedback.ts
 async function handleCheckFeedback(ctx, args) {
   const { store, server, broadcast, port } = ctx;
+  const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
   const waitForRaw = typeof args?.waitFor === "string" ? args.waitFor : "any";
   const waitForScope = ["any", "comments", "decision", "plan_review", "artifact_status"].includes(
     waitForRaw
@@ -28156,6 +28158,7 @@ async function handleCheckFeedback(ctx, args) {
           status: "waiting",
           waitFor: waitForScope,
           suggestedAction: `Call check_feedback again with waitFor='${waitForScope}' (or 'any' to drain unrelated chatter).`,
+          companionUrl,
           pendingArtifacts: [],
           questions: [],
           comments: [],
@@ -28419,6 +28422,7 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
+    companionUrl,
     summary: {
       totalArtifacts,
       approved: approvedCount,
@@ -29298,6 +29302,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
               description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear."
             },
             suggestedAction: { type: "string" },
+            companionUrl: { type: "string", description: "I7 \u2014 the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
             summary: {
               type: "object",
