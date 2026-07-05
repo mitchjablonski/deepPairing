@@ -160,6 +160,21 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
     await page.getByText("Cross-project Philosophy Ledger").waitFor({ state: "visible", timeout: 10_000 });
     await page.waitForTimeout(1000); // let the drawer's slide-in + digest settle
     await shot("ledger.png");
+
+    // The enforcement moment — the money shot. The unauthenticated /api/demo/run
+    // route mints a demo session and runs the scripted flow, which fires a REAL
+    // preflight_blocked broadcast ~5s in (12s toast TTL). CAPTURE-gated on
+    // purpose: the fixed ~5s timing is mildly racy (the WS must connect inside
+    // that window), so it stays OUT of the always-on CI selector check (K4) —
+    // the demo route itself is covered by demo-script.test.ts. Only runs when
+    // actually regenerating screenshots.
+    if (CAPTURE) {
+      const demo = (await (await fetch(`${base}/api/demo/run`, { method: "POST" })).json()) as { sessionId: string };
+      await page.goto(`${base}/?session=${demo.sessionId}`);
+      await page.getByText("Blocked by your taste").waitFor({ state: "visible", timeout: 15_000 });
+      await page.waitForTimeout(600); // let the hero card settle
+      await page.screenshot({ path: path.join(ASSETS, "enforcement.png") });
+    }
   } finally {
     // I1 — teardown BARRIER: block until the daemon is fully down (process
     // exited AND port released) before removing its dirs, so this opt-in spec

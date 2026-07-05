@@ -2,76 +2,52 @@
 
 **Pair with Claude Code instead of reviewing its output after the fact.**
 
-deepPairing turns Claude Code from a fire-and-forget agent into a thinking
-partner. Before it writes code, it shows you what it found, the options it's
-weighing, and the plan it wants to follow — as structured artifacts you review
-and shape in a local companion UI, not a wall of terminal text. And on every
-move it names the *concept* behind the choice ("dependency inversion",
-"optimistic UI"), so two things happen at once: **your taste shapes its work,
-and its reasoning sharpens yours.**
+Before Claude Code writes code, deepPairing shows you what it found, the options
+it weighed, and the plan it'll follow — as structured artifacts you approve or
+redirect in a local UI, not a wall of terminal text. Reject an approach once,
+with your reason, and it's remembered across every project: next time the agent
+proposes a concept you've turned down, a gate stops it before the edit lands.
 
-The calls you make don't evaporate when the session ends. Reject an approach
-once — with your reason — and deepPairing remembers it across every project:
-when the agent proposes something matching a concept you've rejected (by name,
-or by the concept the agent itself names at proposal time), it gets stopped
-before the edit lands.
-
-*An MCP server + companion web UI that runs inside Claude Code. MIT-licensed,
-no account, no telemetry — everything lives on your disk.*
+*MIT · no account · no telemetry · 1,500+ tests · everything stays on your disk.*
 
 ![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
 
-## Quickstart
+**Who it's for:** engineers who don't trust an autonomous agent with the
+architecture, and want to stay in the loop at the *decision* level — not the
+keystroke level, and not a 500-line diff after the fact. (Still building your
+taste? The named concepts and visible reasoning make it a craft-learning
+surface too — that's a bonus, not the pitch.)
 
-Three ways in, fastest first — all give you the same MCP tools + companion UI.
+### See it in ~90 seconds
 
 ```bash
-# 1. Marketplace (recommended) — run inside Claude Code, no build step. Ships
-#    the rejection-gate + checkpoint hooks, so the enforcement layer is on:
-/plugin marketplace add https://github.com/mitchjablonski/deepPairing
-/plugin install deeppairing@deeppairing
-
-# 2. Local plugin — same, from a clone (slash commands + skill + hooks):
-claude --plugin-dir ./claude-plugin
-
-# 3. From source — writes .mcp.json + hooks into this project (no plugin):
-pnpm install && pnpm build
-node packages/mcp-server/dist/cli/init.js init
+git clone https://github.com/mitchjablonski/deepPairing.git
+cd deepPairing && pnpm install && pnpm build
+node packages/mcp-server/dist/cli/init.js demo
 ```
 
-> Run the two commands separately. The HTTPS URL form works without GitHub
-> SSH keys — the `owner/repo` shorthand can resolve to SSH and fail with
-> `Permission denied (publickey)` on machines without a configured key.
-
-<!-- Marketplace install VERIFIED end-to-end in a real Claude Code client
-     (2026-07-04): marketplace add + install + reload registered the MCP
-     server, 5 skills, and 6 agents. -->
-
-> **Just want to watch it?** `node packages/mcp-server/dist/cli/init.js demo`
-> fires the hero flow against a real companion UI in ~90 seconds — no Claude
-> Code install needed. Node 22+, pnpm 10+.
+Fires the hero flow against a real companion UI (auto-opens your browser), so
+you feel the review surface + the rejection gate before installing anything.
+Node 22+, pnpm 10+. Then, to use it in your own project:
+**[install in Claude Code ↓](#install-in-claude-code)**.
 
 ## What you get
 
 - **Decision cards.** Options arrive as cards you pick in the UI. High-stakes
   ones capture your prediction + confidence up front; a later breadcrumb closes
   the loop with a ✓/✗/◐ calibration retrospective against what you called.
-- **The Philosophy Ledger.** Reject an approach with a reason and it's
-  remembered across *every* project. A pre-flight gate then blocks the agent
-  from re-proposing it — by name or by paraphrased concept — so "no Railway"
-  also catches "Fly.io for pay-per-request hosting" a month later.
+- **The Philosophy Ledger.** Reject an approach with a reason and the stance is
+  remembered across *every* project. A pre-flight gate then stops the agent from
+  re-proposing that concept — before the edit lands.
 - **Live plan checklists.** Plans render as checklists that tick off as the
   work lands, so "what's left" never lies.
 - **Session replay.** Reopen any past session from the command palette →
-  **Browse past sessions (replay)** and step back through its artifacts, comments, and
-  decisions in order.
+  **Browse past sessions (replay)** and step back through its artifacts,
+  comments, and decisions in order.
 - **Multi-project switcher.** One companion UI aggregates every project you're
   pairing on, with a "waiting on you" badge when it's your move.
 - **Keyboard-first review.** Navigate artifacts, comment, pick options, and ask
   "why" without leaving the keyboard.
-
-The rest of this page is the why and the how — read on, or just run one of the
-three commands above.
 
 ## Why this exists
 
@@ -83,7 +59,7 @@ nothing is built for it. Every tool starts autonomous and bolts human review on
 afterward.
 
 deepPairing starts from collaboration. The agent gathers context, then pauses
-at the decisions that matter and asks you. You answer once; it learns. Over
+at the decisions that matter and asks you. You answer once; it remembers. Over
 weeks it stops re-litigating taste you've already settled and starts sounding
 like *your* pair, on *every* repo.
 
@@ -132,19 +108,24 @@ separate orchestrator) and serves the UI on a deterministic per-project port in
 So you never have to make the same call twice. This is the safety net *under*
 the collaboration, not the headline:
 
+![The enforcement moment — the agent re-proposes a concept you rejected on another project ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click "Not my taste" override.](docs/assets/enforcement.png)
+
 - **Cross-project Philosophy Ledger.** Reject something with a reason and the
   stance is remembered — across every project, at
-  `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo benefits on
-  day one); writes are **opt-in** per project (one prompt at `init`, default
+  `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo sees your
+  ledger); writes are **opt-in** per project (one prompt at `init`, default
   off), so a dependency in one project can't poison the others. Portable via
   `deeppairing philosophy export | import --merge`.
-- **You're not silently paraphrased past.** When the agent proposes something
-  that matches a rejected approach, the `present_*` tool refuses
-  (`REJECTED_APPROACH_BLOCKED`) and a **PreToolUse hook** catches a *direct*
-  edit that tries to skip the protocol — surfacing it to you to decide. So
-  "reject Railway" still catches "Fly.io for pay-per-request hosting" an hour
-  later. **False positives are one click away:** "Not my taste" in the UI
-  scopes the stance down and records the correction. (Blocks from a committed
+- **You're not silently paraphrased past.** When the agent re-proposes a concept
+  you rejected, the `present_*` tool refuses (`REJECTED_APPROACH_BLOCKED`) and a
+  **PreToolUse hook** catches a *direct* edit that tries to skip the protocol —
+  surfacing it to you to decide. The match works on the concept's *words*, so
+  the win is to reject the **concept**, not the instance: turn down
+  *"pay-per-request hosting"* and the agent gets stopped whether it names
+  Railway today or Fly.io next month — anything that reuses those words. (A
+  true synonym it's never seen won't trip it — name the concept well and it
+  generalizes.) **False positives are one click away:** "Not my taste" in the
+  UI scopes the stance down and records the correction. (Blocks from a committed
   **team rule** point you to `.deeppairing/team.json` instead.)
 - **Three-layer memory, never merged.** Filesystem-sensed guardrails
   (migrations, CI), committable team conventions, and personal philosophy are
@@ -155,88 +136,37 @@ the collaboration, not the headline:
 
 ![The Ledger drawer — cross-project stances, each with the reason you gave when you rejected it.](docs/assets/ledger.png)
 
-> **See it in ~90 seconds.** The [demo command](#try-the-demo) fires the live
-> flow against a real companion UI.
-
 ## What it isn't
 
 - **Not a code-review bot** (CodeRabbit, Greptile). It pairs *with* you while
   the code is being written; a PR is just a surface to share what you paired on.
 - **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal —
   and even Minimal stops at the architectural decisions.
-- **Good whether you're senior or still sharpening your taste.** If you have
-  strong opinions, deepPairing makes them compound across repos. If you're
-  building them, the concept-naming + reasoning are a craft-learning surface —
-  you watch a strong pair think, and the vocabulary sticks.
+- **Not another cross-session memory feature.** Copilot/Cursor memory *recalls*
+  your preferences as context the model may consult; deepPairing turns a past
+  decision into a **gate** the agent is stopped by, on every project.
 
-## Try the demo
+## Install in Claude Code
 
-```bash
-git clone https://github.com/mitchjablonski/deepPairing.git
-cd deepPairing
-pnpm install && pnpm build
-node packages/mcp-server/dist/cli/init.js demo
-```
-
-> Requires Node 22+ and pnpm 10+. Cold-clone wall time is ~60-90s for
-> `pnpm install`, ~10s to build, ~5s for the demo. No Claude Code install needed
-> for this path.
-
-The demo auto-opens the companion UI (the daemon binds a deterministic
-per-project port in `3847-3974`, derived from the project path — check
-`.deeppairing/daemon.json` for the actual one). The hero flow fires within a
-few seconds. Everything else is whether you'd want this in your daily Claude
-Code loop.
-
-## Use it in Claude Code
-
-All paths run the same MCP server + companion UI (build the clone first:
-`pnpm install && pnpm build`). They differ in what's set up for you.
-
-**Recommended — `init` sets up this project end-to-end:**
+Three ways in, fastest first — all give you the same MCP tools + companion UI.
+Full setup details, the SSH note, and the `init`-vs-plugin comparison live in
+**[INSTALL.md](INSTALL.md)**.
 
 ```bash
-node packages/mcp-server/dist/cli/init.js init   # run inside your project
-```
-
-Writes `.mcp.json` (so Claude Code auto-loads deepPairing — no launch flag),
-installs the PreToolUse **rejection-gate hook** + the checkpoint hooks into
-`.claude/settings.local.json`, and drops the protocol preamble into `CLAUDE.md`.
-
-**Prefer the plugin (slash commands + the up-front skill)?**
-
-```bash
-# One-command marketplace install (recommended) — inside Claude Code:
+# 1. Marketplace (recommended) — inside Claude Code, no build step. Ships the
+#    rejection-gate + checkpoint hooks, so the enforcement layer is on:
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
 
-# Or load a local clone for this session only:
+# 2. Local plugin — same, from a clone (slash commands + skill + hooks):
 claude --plugin-dir ./claude-plugin
+
+# 3. From source — writes .mcp.json + hooks into this project (no plugin):
+pnpm install && pnpm build
+node packages/mcp-server/dist/cli/init.js init
 ```
 
-Either adds `/deeppairing:start`, `/deeppairing:review`, etc. and the
-proactively-loaded `pairing-protocol` skill. As of I6 the plugin **also ships
-the PreToolUse rejection-gate + Stop checkpoint hooks natively** (declared in
-`claude-plugin/hooks/hooks.json`, active the moment the plugin loads — no
-`init`, no `.mcp.json`, no session restart). The marketplace path installs the
-committed, self-contained server bundle (no `pnpm install` or build); the
-`--plugin-dir` path needs the flag on each launch and a clone. If the
-marketplace install doesn't resolve, `--plugin-dir` always works.
-
-**What `init` still adds over the plugin:** the per-project `.mcp.json` is
-unnecessary under the plugin (the plugin auto-loads the MCP server), and the
-hooks now come with the plugin too. The one thing `init` still does that the
-plugin does not is append the protocol block to your repo's **`CLAUDE.md`** —
-so the collaboration protocol survives even outside the plugin's skill context
-(e.g. a teammate on the same repo who hasn't installed the plugin). If you run
-**both** `init` and the plugin, the daemon detects plugin mode and skips writing
-the Stop/preflight hooks to `settings.local.json` to avoid a double-fire — but a
-manual `init` in a terminal can't detect the plugin, so running `init`
-explicitly *will* double-install those two hooks; `npx deeppairing doctor --fix`
-cleans the redundant `settings.local.json` rows.
-
-Either way you get the tools, the companion UI, and an always-on first-call
-protocol preamble. Then just work normally — *"Let's analyze the auth module"* — and Claude routes
+Then just work normally — *"Let's analyze the auth module"* — and Claude routes
 findings, decisions, plans, and changes through the companion UI with structured
 evidence. You comment, pick, ask "why", request revisions; every rejection (if
 you publish) joins your cross-project ledger.
@@ -263,8 +193,8 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (React + Vite + Zustand).
 - **`packages/shared/`** — Zod schemas + fixtures both server and UI import.
 - **`claude-plugin/`** — the Claude Code plugin: `.mcp.json`, slash commands
-  (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), and
-  the `pairing-protocol` skill.
+  (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), the
+  `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
 12 MCP tools: `present_findings`, `present_options`, `present_spec`,
 `present_plan`, `present_code_change`, `log_reasoning`, `recall`,
@@ -289,20 +219,22 @@ deeppairing export <full|pr-comments|adr|replay|learnings>
 ## How it compares
 
 Cursor's canvases and Claude Code's auto-memory look similar on the surface, but
-neither catches the *paraphrase*: canvases are a presentation surface with no
-gate on the tool call, and auto-memory is context the model is *encouraged* to
-consult, not a constraint. deepPairing is the only one where a past decision
-becomes a hard, cross-project constraint *and* the collaboration is the point,
-not a bolt-on. (More detail in [docs/faq.md](docs/faq.md).)
+neither turns a past decision into a *gate*: canvases are a presentation surface
+with no constraint on the tool call, and auto-memory is context the model is
+*encouraged* to consult, not a rule it's stopped by. deepPairing is the one
+where a decision you already made becomes a hard, cross-project constraint — and
+where the collaboration is the point, not a bolt-on. (More detail, including the
+honest limits of the concept match, in [docs/faq.md](docs/faq.md).)
 
 ## Status
 
 Pre-1.0. Installable from this repo — via the Claude Code plugin marketplace
-(`/plugin marketplace add https://github.com/mitchjablonski/deepPairing`, which ships the
-committed self-contained server bundle), `--plugin-dir`, or from source. No npm
-publish or listing in a public/community marketplace yet (~1,300 tests, an
-explicit threat model, real hardening). The next step is earning a handful of
-delighted real users before broader distribution.
+(`/plugin marketplace add https://github.com/mitchjablonski/deepPairing`, which
+ships the committed self-contained server bundle), `--plugin-dir`, or from
+source. No npm publish or listing in a public/community marketplace yet.
+**1,500+ tests, an explicit threat model, a fully-live accessibility gate (axe,
+zero disabled rules), and strict TypeScript throughout** — the next step is
+earning a handful of delighted real users before broader distribution.
 
 ## License
 

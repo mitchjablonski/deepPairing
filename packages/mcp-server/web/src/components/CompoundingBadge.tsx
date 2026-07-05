@@ -51,8 +51,11 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
                  hover:text-text-secondary hover:bg-surface-hover transition-colors font-mono"
     >
       {isZero ? (
-        // F1 — no opacity stacking: muted IS the floor of the AA ladder
-        <span>🛡 taste ledger</span>
+        // F1 — no opacity stacking: muted IS the floor of the AA ladder.
+        // Naming split (deliberate): "Ledger" is the surface/store you open;
+        // "your taste" is the felt judgment it holds (see the title copy and
+        // the "Blocked by your taste" toast). This label names the surface.
+        <span>🛡 Ledger</span>
       ) : (
         <>
           <span>🛡 {stat.blocks}</span>
