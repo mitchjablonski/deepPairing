@@ -26977,14 +26977,30 @@ function ensurePreflightHook(projectRoot2) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
   }
 }
+function isPluginManaged() {
+  if (process.env.CLAUDE_PLUGIN_ROOT) return true;
+  try {
+    const here = path9.dirname(fileURLToPath(import.meta.url));
+    return fs10.existsSync(path9.join(here, "..", ".claude-plugin", "plugin.json"));
+  } catch {
+    return false;
+  }
+}
 function runDaemonStartupSetup(projectRoot2) {
-  return [
-    ensureDeepPairingDir(projectRoot2),
-    ensureGitignoreEntry(projectRoot2),
-    ensureStopHook(projectRoot2),
-    ensureCheckpointHook(projectRoot2),
-    ensurePreflightHook(projectRoot2)
-  ];
+  const results = [ensureDeepPairingDir(projectRoot2), ensureGitignoreEntry(projectRoot2)];
+  if (isPluginManaged()) {
+    results.push({
+      ok: true,
+      changed: false,
+      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)"
+    });
+    results.push(ensureCheckpointHook(projectRoot2));
+  } else {
+    results.push(ensureStopHook(projectRoot2));
+    results.push(ensureCheckpointHook(projectRoot2));
+    results.push(ensurePreflightHook(projectRoot2));
+  }
+  return results;
 }
 
 // src/demo-script.ts

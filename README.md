@@ -26,15 +26,15 @@ no account, no telemetry — everything lives on your disk.*
 Three ways in, fastest first — all give you the same MCP tools + companion UI.
 
 ```bash
-# 1. Marketplace (recommended) — run inside Claude Code, no build step:
+# 1. Marketplace (recommended) — run inside Claude Code, no build step. Ships
+#    the rejection-gate + checkpoint hooks, so the enforcement layer is on:
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
 
-# 2. Local plugin — slash commands + the pairing skill, from a clone:
+# 2. Local plugin — same, from a clone (slash commands + skill + hooks):
 claude --plugin-dir ./claude-plugin
 
-# 3. From source — sets up .mcp.json + hooks for this project and turns the
-#    cross-project rejection gate on:
+# 3. From source — writes .mcp.json + hooks into this project (no plugin):
 pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js init
 ```
@@ -200,8 +200,8 @@ node packages/mcp-server/dist/cli/init.js init   # run inside your project
 ```
 
 Writes `.mcp.json` (so Claude Code auto-loads deepPairing — no launch flag),
-installs the PreToolUse **rejection-gate hook** + the checkpoint hooks, and drops
-the protocol preamble. It's the only path that turns the rejection gate on.
+installs the PreToolUse **rejection-gate hook** + the checkpoint hooks into
+`.claude/settings.local.json`, and drops the protocol preamble into `CLAUDE.md`.
 
 **Prefer the plugin (slash commands + the up-front skill)?**
 
@@ -215,10 +215,25 @@ claude --plugin-dir ./claude-plugin
 ```
 
 Either adds `/deeppairing:start`, `/deeppairing:review`, etc. and the
-proactively-loaded `pairing-protocol` skill. The marketplace path installs the
+proactively-loaded `pairing-protocol` skill. As of I6 the plugin **also ships
+the PreToolUse rejection-gate + Stop checkpoint hooks natively** (declared in
+`claude-plugin/hooks/hooks.json`, active the moment the plugin loads — no
+`init`, no `.mcp.json`, no session restart). The marketplace path installs the
 committed, self-contained server bundle (no `pnpm install` or build); the
-`--plugin-dir` path needs the flag on each launch and a clone (no build required — the bundled server is committed). If the
+`--plugin-dir` path needs the flag on each launch and a clone. If the
 marketplace install doesn't resolve, `--plugin-dir` always works.
+
+**What `init` still adds over the plugin:** the per-project `.mcp.json` is
+unnecessary under the plugin (the plugin auto-loads the MCP server), and the
+hooks now come with the plugin too. The one thing `init` still does that the
+plugin does not is append the protocol block to your repo's **`CLAUDE.md`** —
+so the collaboration protocol survives even outside the plugin's skill context
+(e.g. a teammate on the same repo who hasn't installed the plugin). If you run
+**both** `init` and the plugin, the daemon detects plugin mode and skips writing
+the Stop/preflight hooks to `settings.local.json` to avoid a double-fire — but a
+manual `init` in a terminal can't detect the plugin, so running `init`
+explicitly *will* double-install those two hooks; `npx deeppairing doctor --fix`
+cleans the redundant `settings.local.json` rows.
 
 Either way you get the tools, the companion UI, and an always-on first-call
 protocol preamble. Then just work normally — *"Let's analyze the auth module"* — and Claude routes

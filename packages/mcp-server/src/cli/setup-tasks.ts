@@ -775,12 +775,48 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
   }
 }
 
+/**
+ * I6 — double-fire guard. When deepPairing runs as the Claude Code plugin, the
+ * plugin already declares the Stop + PreToolUse preflight hooks natively in
+ * claude-plugin/hooks/hooks.json (invoking the self-contained bundles beside
+ * daemon.js). Claude Code does NOT dedupe hooks across sources, so if the
+ * daemon ALSO wrote those hooks into .claude/settings.local.json both copies
+ * would fire on every event. Detected two ways (belt-and-suspenders):
+ *
+ *   1. CLAUDE_PLUGIN_ROOT — Claude Code sets this for plugin-spawned processes;
+ *      the daemon inherits it through the spawn's `{ ...process.env }`.
+ *   2. Filesystem — the bundled daemon lives at <pluginRoot>/server/daemon.js
+ *      (setup-tasks is inlined into it), so a sibling ../.claude-plugin/plugin.json
+ *      marks the plugin layout even if the env var didn't propagate.
+ *
+ * The PostToolUse checkpoint hook has NO plugin equivalent, so the daemon still
+ * installs it in every mode.
+ */
+export function isPluginManaged(): boolean {
+  if (process.env.CLAUDE_PLUGIN_ROOT) return true;
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return fs.existsSync(path.join(here, "..", ".claude-plugin", "plugin.json"));
+  } catch {
+    return false;
+  }
+}
+
 export function runDaemonStartupSetup(projectRoot: string): SetupResult[] {
-  return [
-    ensureDeepPairingDir(projectRoot),
-    ensureGitignoreEntry(projectRoot),
-    ensureStopHook(projectRoot),
-    ensureCheckpointHook(projectRoot),
-    ensurePreflightHook(projectRoot),
-  ];
+  const results: SetupResult[] = [ensureDeepPairingDir(projectRoot), ensureGitignoreEntry(projectRoot)];
+  if (isPluginManaged()) {
+    // Plugin owns the Stop + preflight rows via hooks/hooks.json — writing them
+    // here too would double-fire. Checkpoint has no plugin equivalent; keep it.
+    results.push({
+      ok: true,
+      changed: false,
+      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)",
+    });
+    results.push(ensureCheckpointHook(projectRoot));
+  } else {
+    results.push(ensureStopHook(projectRoot));
+    results.push(ensureCheckpointHook(projectRoot));
+    results.push(ensurePreflightHook(projectRoot));
+  }
+  return results;
 }
