@@ -17,6 +17,14 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store, server, broadcast, port } = ctx;
 
+  // I7 — the LIVE companion UI URL, from the daemon's real bound port. This is
+  // the tool the agent polls in a loop, so carrying the URL in every
+  // structuredContent means the real address is always in reach — the agent
+  // never has to guess (field report: hallucinated "5173"). Null when the port
+  // isn't known so we never emit a bogus URL; the key is then omitted (optional
+  // per repo convention — all new structured fields are optional).
+  const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : undefined;
+
   // BB3 — `waitFor` scopes which feedback signal counts as "ready".
   // The agent can pin its poll to the artifact it just presented
   // (e.g. waitFor='decision' after present_options) so an unrelated
@@ -130,6 +138,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           status: "waiting",
           waitFor: waitForScope,
           suggestedAction: `Call check_feedback again with waitFor='${waitForScope}' (or 'any' to drain unrelated chatter).`,
+          companionUrl,
           pendingArtifacts: [],
           questions: [],
           comments: [],
@@ -492,6 +501,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
+    companionUrl,
     summary: {
       totalArtifacts,
       approved: approvedCount,

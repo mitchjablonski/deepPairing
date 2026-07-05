@@ -54,6 +54,10 @@ describe("MCP Tool Handlers — feedback loop", () => {
       const empty = await callTool("check_feedback");
       expect(empty.structuredContent).toMatchObject({ status: "proceed" });
       expect(typeof (empty.structuredContent as any).suggestedAction).toBe("string");
+      // I7 — every check_feedback carries the LIVE companion UI URL built from
+      // the daemon's real port (harness fixture: 4000), so the polling agent
+      // never has to guess it. Field report: an agent hallucinated "5173".
+      expect((empty.structuredContent as any).companionUrl).toBe("http://localhost:4000");
 
       // A pending draft + a question → status flips and the question is structured.
       await callTool("present_findings", {

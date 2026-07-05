@@ -67,8 +67,19 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // route those into obligations at the bottom of the function. Kept as
   // a const so existing pushes type-check unchanged.
   const blockingParts: string[] = obligationsParts;
-  const headerLine =
-    `[First use this session] The companion UI is at http://localhost:${port} — the human can review artifacts, comment, and make decisions there.`;
+  // I7 — the LIVE companion UI URL, built from the daemon's real port at
+  // hint-build time (standalone.ts threads the daemon's actual bound port
+  // through createMcpServer → here). Field report: an agent asked for the UI
+  // URL answered "http://localhost:5173" (the Vite dev default) — a pure
+  // hallucination; the daemon was on 3880. The URL already lived here (and in
+  // the deeppairing://onboarding resource) but nothing PUSHED it hard enough,
+  // so the agent guessed. Make it unmissable and name the anti-pattern
+  // outright. Handle daemon-not-yet-started honestly: if the port isn't a real
+  // number, say so and point at onboarding rather than emit a bogus URL.
+  const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : null;
+  const headerLine = companionUrl
+    ? `[First use this session] The companion UI is LIVE at ${companionUrl} — this is the daemon's REAL, server-provided port (not a guess). The human reviews artifacts, comments, and makes decisions there. When they ask for the URL, give them this exact one; NEVER guess a default — it is NOT Vite's 5173 or any other made-up port.`
+    : `[First use this session] The companion UI daemon hasn't reported its port yet. Do NOT invent a URL (it is NOT 5173 or any default) — read the deeppairing://onboarding resource for the live URL once the daemon is up.`;
 
   const memory = await store.getSessionMemory();
   const memoryParts: string[] = [];
@@ -462,7 +473,14 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   let runningLen = baselineLen;
   // The fixed protocol preamble rides in the uncapped prefix; don't let it eat
   // into the contextual budget so memory/guardrails keep their full allowance.
-  const contextualCap = HINT_BUDGET_CHARS + PROTOCOL_PREAMBLE.length + 1;
+  // I7 — headerLine (carrying the LIVE companion UI URL + never-guess guidance)
+  // is fixed essential orientation in the same uncapped-prefix tier as the
+  // preamble; exclude its length from the advisory contextual budget too.
+  // Pre-I7 the header WAS charged, so enriching it silently shrank the
+  // contextual allowance and evicted calibrated memory/guardrail/ledger
+  // sections (dropped-context tests flipped). Neutralizing it keeps the
+  // advisory tier at its full HINT_BUDGET_CHARS regardless of header length.
+  const contextualCap = HINT_BUDGET_CHARS + PROTOCOL_PREAMBLE.length + headerLine.length + 1;
   for (const part of contextualParts) {
     if (runningLen + part.length + 1 <= contextualCap) {
       assembled.push(part);
