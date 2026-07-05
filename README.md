@@ -43,11 +43,9 @@ node packages/mcp-server/dist/cli/init.js init
 > SSH keys — the `owner/repo` shorthand can resolve to SSH and fail with
 > `Permission denied (publickey)` on machines without a configured key.
 
-<!-- Marketplace install validated structurally against Claude Code's
-     plugin-marketplace docs (required marketplace.json fields + install
-     syntax); live end-to-end verification in a real Claude Code client is
-     still pending. If it fails, path 2 (--plugin-dir) always works from a
-     clone. -->
+<!-- Marketplace install VERIFIED end-to-end in a real Claude Code client
+     (2026-07-04): marketplace add + install + reload registered the MCP
+     server, 5 skills, and 6 agents. -->
 
 > **Just want to watch it?** `node packages/mcp-server/dist/cli/init.js demo`
 > fires the hero flow against a real companion UI in ~90 seconds — no Claude
