@@ -68,6 +68,20 @@ export default defineConfig({
           ],
           exclude: STD_EXCLUDE,
           setupFiles: ["./web/src/__tests__/setup.ts"],
+          // K1 — order-dependent flake class: individual specs (originally
+          // connection-hash-seed.dom.test.ts, but the victim moves with run
+          // order — PredictionsBreadcrumb and others have hit it too)
+          // intermittently fail "Test timed out in 5000ms" ONLY in the full
+          // 58-file web-dom run, never in isolation. It's LATENCY, not a logic
+          // bug or a state leak: this project spins up happy-dom per file and
+          // re-transforms/re-renders heavy module graphs while the whole project
+          // contends on the shared transform pipeline (cumulative import ~5min
+          // across the suite). Under that load a single re-import/render
+          // occasionally exceeds the 5s default. A 10s default absorbs the
+          // contention spike (the same spec completes well inside it), making
+          // the full run deterministic. Not a mask: assertions are unchanged and
+          // a genuinely stuck test still fails, just at 20s.
+          testTimeout: 10_000,
         },
       },
     ],
