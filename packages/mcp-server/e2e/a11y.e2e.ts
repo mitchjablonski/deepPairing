@@ -23,6 +23,12 @@ const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
 
 let proc: ChildProcess | undefined;
 let projectRoot: string;
+// K2 — isolate HOME so a daemon that ever mirrors a rejection into the global
+// (~/.deeppairing) ledger writes into a throwaway tmp dir, never the
+// developer's real home. Dormant today (the publish gate defaults off) but this
+// is the last test-infra→real-ledger vector; capture-readme.e2e.ts already does
+// this. Cleaned up in afterAll alongside the daemon teardown.
+let home: string;
 let baseURL: string;
 
 async function waitForDaemon(root: string): Promise<{ base: string; token: string }> {
@@ -47,9 +53,10 @@ test.beforeAll(async () => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
+  home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-a11y-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-a11y-"));
   proc = spawn(process.execPath, [daemonJs], {
-    env: { ...process.env, DEEPPAIRING_PROJECT_ROOT: projectRoot },
+    env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot },
     stdio: "ignore",
   });
   const daemon = await waitForDaemon(projectRoot);
@@ -93,6 +100,8 @@ test.afterAll(async () => {
   // tripped that spec's 15s waits. See daemon-harness.ts.
   await teardownDaemon(proc, portOf(baseURL));
   try { fs.rmSync(projectRoot, { recursive: true, force: true }); } catch {}
+  // K2 — drop the isolated HOME once the daemon is provably down.
+  try { fs.rmSync(home, { recursive: true, force: true }); } catch {}
 });
 
 function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Array<{ target: unknown[] }> }>): string {
