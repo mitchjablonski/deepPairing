@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { isSessionLive } from "../stores/connection";
+import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 
 /**
  * Shared per-line comment surface: the hover gutter (+ comment / ? ask /
@@ -107,16 +108,21 @@ export function LineCommentChips({
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replySubmitting, setReplySubmitting] = useState(false);
+  // I4 — mirror the rail: a line reply defaults to a plain comment; flipping to
+  // "Ask" sends intent:"question" so the follow-up re-opens the thread.
+  const [replyMode, setReplyMode] = useState<ReplyMode>("comment");
 
   if (comments.length === 0) return null;
 
   const startReply = (parent: Comment) => {
     setReplyingTo(parent.id);
     setReplyText("");
+    setReplyMode("comment");
   };
   const cancelReply = () => {
     setReplyingTo(null);
     setReplyText("");
+    setReplyMode("comment");
   };
   const submitReply = async (parent: Comment) => {
     const text = replyText.trim();
@@ -129,7 +135,9 @@ export function LineCommentChips({
         // Reply inherits the parent's target so it lands on the same line and
         // renders threaded. Strip artifactId since submitComment re-applies it.
         { ...(parent.target ?? {}), artifactId: undefined } as any,
-        { parentCommentId: parent.id },
+        // parentCommentId threads it; intent:"question" (opt-in) re-flags the
+        // thread as awaiting the agent.
+        { parentCommentId: parent.id, ...(replyMode === "question" ? { intent: "question" as const } : {}) },
       );
       cancelReply();
     } catch {
@@ -253,7 +261,15 @@ export function LineCommentChips({
           </div>
         )}
         {replyingTo === c.id && (
-          <div className="ml-4 mt-1 pl-3 border-l-2 border-accent-blue/30" onClick={(e) => e.stopPropagation()}>
+          <div
+            className={`ml-4 mt-1 pl-3 border-l-2 ${
+              replyMode === "question" ? "border-accent-violet/40" : "border-accent-blue/30"
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-1">
+              <ReplyModeToggle mode={replyMode} setMode={setReplyMode} />
+            </div>
             <textarea
               rows={2}
               autoFocus
@@ -266,20 +282,29 @@ export function LineCommentChips({
                 }
                 if (e.key === "Escape") cancelReply();
               }}
-              placeholder="Reply to the agent… (⌘⏎ to send, Esc to cancel)"
+              placeholder={
+                replyMode === "question"
+                  ? "Ask the agent a follow-up… (⌘⏎ to send, Esc to cancel)"
+                  : "Reply to the agent… (⌘⏎ to send, Esc to cancel)"
+              }
               disabled={replySubmitting}
-              className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
-                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue resize-none"
+              className={`w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                         placeholder-text-muted focus:outline-none focus:ring-1 resize-none ${
+                           replyMode === "question" ? "focus:ring-accent-violet" : "focus:ring-accent-blue"
+                         }`}
             />
             <div className="flex gap-1.5 mt-1">
               <button
                 type="button"
                 onClick={() => submitReply(c)}
                 disabled={!replyText.trim() || replySubmitting}
-                className="px-2.5 py-1 bg-accent-blue-strong text-white text-2xs rounded
-                           hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+                className={`px-2.5 py-1 text-white text-2xs rounded disabled:bg-surface-elevated disabled:text-text-muted transition-colors ${
+                  replyMode === "question"
+                    ? "bg-accent-violet-strong hover:bg-accent-violet-strong-hover"
+                    : "bg-accent-blue-strong hover:bg-accent-blue/80"
+                }`}
               >
-                Reply
+                {replyMode === "question" ? "Ask" : "Reply"}
               </button>
               <button
                 type="button"
