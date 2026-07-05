@@ -80,6 +80,22 @@ opaque "module not found" errors.
 - `pairing-protocol` — Teaches Claude when to use the deepPairing MCP
   tools. Claude reads this on any project where the plugin is active.
 
+**Hooks** (the enforcement layer — declared in `hooks/hooks.json`, active
+the moment the plugin loads)
+
+- **PreToolUse rejection gate** (matcher `Write|Edit|MultiEdit`) — runs the
+  same rejected-approach matcher the MCP-side preflight uses, against the
+  agent's *actual* edit. A direct `Write`/`Edit` that matches a concept you
+  previously rejected is surfaced to you (`permissionDecision: "ask"`) instead
+  of silently landing. This is why "stopped before the edit lands" holds even
+  when the agent skips the `present_*` protocol.
+- **Stop checkpoint** — keeps the agent from declaring "done" while draft
+  artifacts still await your review in the companion UI.
+
+Both run the self-contained bundles under `server/` via
+`node "${CLAUDE_PLUGIN_ROOT}/server/{preflight,stop}.mjs"` — no `init`, no
+`.mcp.json`, no session restart required.
+
 **MCP server** (bundled via `.mcp.json`)
 
 - 12 tools: `present_findings`, `present_spec`, `present_options`,
@@ -104,8 +120,14 @@ runs an idempotent setup pass:
 
 - Creates `.deeppairing/` for session data.
 - Adds `.deeppairing/` to `.gitignore` (only if `.gitignore` already exists).
-- Adds a Claude Code Stop hook to `.claude/settings.local.json` so the
-  agent can't declare "done" while artifacts still need human review.
+- Installs the PostToolUse **checkpoint** hook (per-edit "present it first"
+  nudge) into `.claude/settings.local.json`.
+
+The **Stop checkpoint** and **PreToolUse rejection gate** are NOT written to
+`settings.local.json` under the plugin — they're declared natively in the
+plugin's `hooks/hooks.json` (see *Hooks* above). The daemon detects plugin
+mode (via `CLAUDE_PLUGIN_ROOT` / its own bundled layout) and deliberately
+skips writing those two, so they don't double-fire.
 
 It does **not** touch `CLAUDE.md` — silently rewriting your repo-level
 agent instructions from a backgrounded MCP server would surprise people.
@@ -117,8 +139,16 @@ npx deeppairing init
 
 That appends a deepPairing protocol block to `CLAUDE.md` so the agent
 follows the collaboration protocol even outside the plugin's skill
-context. The plugin's `pairing-protocol` skill already covers most of
-the same ground, so this is optional.
+context. The plugin's `pairing-protocol` skill already covers most of the
+same ground, so this is optional.
+
+> **Running `init` *and* the plugin?** The hooks now ship with the plugin,
+> so `init` is only needed for the `CLAUDE.md` block. A manual `init` runs in
+> a plain terminal where it can't detect the plugin, so it *will*
+> double-install the Stop + preflight hooks into `settings.local.json` (the
+> plugin declares them too). That's noisy, not harmful — run
+> `npx deeppairing doctor --fix` to remove the redundant `settings.local.json`
+> rows.
 
 ## What makes this different
 

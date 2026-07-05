@@ -79,6 +79,24 @@ await build({
   outfile: resolve(pluginDir, "preflight-hook-core.js"),
 });
 
+// I6 — the plugin's hooks/hooks.json declares the Stop + PreToolUse preflight
+// hooks natively (`node "${CLAUDE_PLUGIN_ROOT}/server/{stop,preflight}.mjs"`),
+// so a marketplace / --plugin-dir install gets the SAME enforcement layer the
+// `init` path wires into .claude/settings.local.json — no init, no session
+// restart. Each entry is bundled self-contained (esbuild inlines
+// evaluatePreflightHook + the shared matcher) so the hook runs under plain
+// `node` with zero external deps, regardless of install layout.
+await build({
+  ...shared,
+  entryPoints: [resolve(pkgRoot, "src/cli/stop-hook-entry.ts")],
+  outfile: resolve(pluginDir, "stop.mjs"),
+});
+await build({
+  ...shared,
+  entryPoints: [resolve(pkgRoot, "src/cli/preflight-hook-entry.ts")],
+  outfile: resolve(pluginDir, "preflight.mjs"),
+});
+
 // The companion web UI, served by the bundled daemon via its web/ fallback.
 cpSync(resolve(serverDist, "web"), resolve(pluginDir, "web"), { recursive: true });
 

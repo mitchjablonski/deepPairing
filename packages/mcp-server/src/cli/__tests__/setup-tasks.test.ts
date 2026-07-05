@@ -13,6 +13,7 @@ import {
   cleanDpEntriesFromScope,
   HOOK_MARKERS,
   runDaemonStartupSetup,
+  isPluginManaged,
 } from "../setup-tasks.js";
 
 // The e2e hook run imports the BUILT matcher core; skip those cases on an
@@ -665,6 +666,43 @@ describe("runDaemonStartupSetup", () => {
     fs.writeFileSync(path.join(tmpDir, "CLAUDE.md"), "Original content\n");
     runDaemonStartupSetup(tmpDir);
     expect(fs.readFileSync(path.join(tmpDir, "CLAUDE.md"), "utf-8")).toBe("Original content\n");
+  });
+
+  // I6 — under the plugin, hooks/hooks.json already declares the Stop +
+  // preflight hooks. Claude Code doesn't dedupe across sources, so the daemon
+  // must NOT also write them into settings.local.json (double-fire). Checkpoint
+  // has no plugin equivalent, so it's still installed.
+  describe("plugin-managed mode (double-fire guard)", () => {
+    const prev = process.env.CLAUDE_PLUGIN_ROOT;
+    beforeEach(() => {
+      process.env.CLAUDE_PLUGIN_ROOT = "/fake/plugin/root";
+    });
+    afterEach(() => {
+      if (prev === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+      else process.env.CLAUDE_PLUGIN_ROOT = prev;
+    });
+
+    it("isPluginManaged reflects CLAUDE_PLUGIN_ROOT", () => {
+      expect(isPluginManaged()).toBe(true);
+      delete process.env.CLAUDE_PLUGIN_ROOT;
+      // No plugin.json sibling to the test source → falls back to false.
+      expect(isPluginManaged()).toBe(false);
+    });
+
+    it("skips the Stop + preflight settings.local.json install, keeps checkpoint", () => {
+      const results = runDaemonStartupSetup(tmpDir);
+      expect(results).toHaveLength(4); // dir, gitignore, skip-note, checkpoint
+      expect(results.every((r) => r.ok)).toBe(true);
+      const settingsPath = path.join(tmpDir, ".claude", "settings.local.json");
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      type HookEntry = { hooks?: Array<{ command?: string }> };
+      const cmd = (e: HookEntry) => e.hooks?.[0]?.command ?? "";
+      // No deepPairing Stop / PreToolUse rows written by the daemon.
+      expect((settings.hooks?.Stop ?? []).some((e: HookEntry) => HOOK_MARKERS.Stop(cmd(e)))).toBe(false);
+      expect((settings.hooks?.PreToolUse ?? []).some((e: HookEntry) => HOOK_MARKERS.PreToolUse(cmd(e)))).toBe(false);
+      // Checkpoint (PostToolUse) has no plugin equivalent — still installed.
+      expect((settings.hooks?.PostToolUse ?? []).some((e: HookEntry) => HOOK_MARKERS.PostToolUse(cmd(e)))).toBe(true);
+    });
   });
 });
 
