@@ -3,19 +3,28 @@ import { buildThreads } from "./threading";
 
 /**
  * The single source of truth for "a human question still awaiting the agent".
- * Used by ConversationRail (pill count, filter, inline marker) AND App (the
- * Conversation-button badge) so they can't drift.
+ * Used by ConversationRail (pill count, filter, inline marker), TurnIndicator
+ * (the ❓ badge), and App/countUnansweredQuestions (the Conversation-button
+ * badge) so none of them can drift.
  *
- * A thread is unanswered when its ROOT is a human question AND its chronological
- * TAIL is itself an open human question — one that lacks an out-of-band answer
- * (answeredByCommentId) and a human resolution (humanResolvedAt). Judging the
- * TAIL (not just "has any reply") is the fix for the blind spot where a thread
- * whose LAST message was a human FOLLOW-UP question read as "answered" merely
- * because a reply existed. When `replies` is empty the tail IS the root, so this
- * reduces exactly to the pre-fix no-reply behavior.
+ * A thread is unanswered when — walking its chronological messages from the
+ * TAIL back to the root — the first SUBSTANTIVE message is an OPEN human
+ * question (one lacking an out-of-band answer `answeredByCommentId` and a
+ * human resolution `humanResolvedAt`). The walk: an agent message means the
+ * agent had the last word (not waiting); an open human question means waiting;
+ * a closed human question means done; a human non-question ("btw also…") is
+ * context and the walk continues. No open human question anywhere → not
+ * waiting. When `replies` is empty the tail IS the root.
  *
- * The root-question requirement stays: a thread rooted at a non-question does
- * not become one just because a later follow-up is a question.
+ * History: #130 first made this judge the TAIL (a thread whose last message is
+ * an open follow-up question is waiting, not "answered because a reply
+ * exists"). I4 then DROPPED the earlier "root must be a human question" gate:
+ * comment threads are almost always human-rooted (a human commenting on the
+ * agent's artifact), so the common flow — human comments, agent replies, human
+ * asks a follow-up via the reply Ask-toggle — has a non-question root, and the
+ * gate made that follow-up silently not count. The tail-walk alone already
+ * stops plain-comment threads from flagging, so an open human question now
+ * awaits the agent regardless of what the thread started as.
  */
 export function isUnansweredQuestion(comment: Comment, replies: Comment[]): boolean {
   const isOpenHumanQuestion = (m: Comment): boolean => {
@@ -31,23 +40,28 @@ export function isUnansweredQuestion(comment: Comment, replies: Comment[]): bool
       !x.humanResolvedAt
     );
   };
-  const root = comment as { intent?: string };
-  // Root must be a human question (see doc: a non-question root never re-opens).
-  if (comment.author !== "human" || root.intent !== "question") return false;
-  // Review (tail-walk) — a trailing human NON-question ("btw also consider X")
-  // must not flip an unanswered thread to answered: walk backward past human
-  // non-question comments; the first substantive message governs. Hitting an
-  // agent reply or a closed question = answered; hitting an open human
-  // question = unanswered; exhausting the replies falls through to the root
-  // (which the guard above ensured is a question — open-ness decides).
-  for (let i = replies.length - 1; i >= 0; i--) {
-    const r = replies[i]!;
-    if (r.author !== "human") return false; // agent replied after the last question
-    const rx = r as { intent?: string };
-    if (rx.intent === "question") return isOpenHumanQuestion(r);
-    // human non-question — keep walking
+  // I4 — walk the thread from its chronological TAIL back to the root; the
+  // first SUBSTANTIVE message decides who is waiting:
+  //   - an AGENT message      → the agent has responded; nothing awaited
+  //   - an OPEN human question → awaiting the agent's answer
+  //   - a CLOSED human question (answered out-of-band or human-resolved) → done
+  //   - a human NON-question ("btw also consider X") → context; keep walking
+  // A thread with no open human question anywhere is not waiting.
+  //
+  // Pre-I4 this ALSO required the ROOT to be a human question — which made a
+  // question ASKED AS A REPLY (the common case: human comments on the agent's
+  // artifact, agent replies, human flips the composer to Ask and asks a
+  // follow-up) silently never count. The tail-walk alone already stops
+  // plain-comment threads from flagging (no question anywhere → false), so the
+  // root gate was over-conservative and made the reply Ask-toggle cosmetic.
+  const chain = [comment, ...replies];
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const m = chain[i]!;
+    if (m.author !== "human") return false; // agent had the last substantive word
+    if ((m as { intent?: string }).intent === "question") return isOpenHumanQuestion(m);
+    // human non-question — context; keep walking back
   }
-  return isOpenHumanQuestion(comment);
+  return false;
 }
 
 /**

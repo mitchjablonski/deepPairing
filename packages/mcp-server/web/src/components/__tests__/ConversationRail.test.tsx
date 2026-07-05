@@ -462,6 +462,65 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     expect(body.parentCommentId).toBe("ans1");
     // Inherits the parent's line anchor.
     expect(body.target.lineStart).toBe(5);
+    // Default reply is a plain comment — no question intent (the #130 gap).
+    expect(body.intent).toBeUndefined();
+  });
+
+  it("I4 — a reply flipped to Ask carries intent:'question' + parentCommentId, re-flagging the thread as unanswered", async () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings" }));
+    s.addComment(comment({
+      id: "q1", artifactId: "a1", author: "human", intent: "question",
+      content: "Q", createdAt: "2026-04-26T10:00:00.000Z", target: { lineStart: 5 },
+    }));
+    s.addComment(comment({
+      id: "ans1", artifactId: "a1", author: "agent", parentCommentId: "q1",
+      content: "A", createdAt: "2026-04-26T10:01:00.000Z", target: { lineStart: 5 },
+    }));
+
+    // Thread is answered BEFORE the follow-up (agent reply is the tail).
+    const { isUnansweredQuestion } = await import("../../lib/unanswered");
+    const before = useArtifactStore.getState().comments["a1"]!;
+    expect(isUnansweredQuestion(before[0]!, before.slice(1))).toBe(false);
+
+    // Server echoes the stored comment back (with intent) — the store reconciles
+    // the optimistic provisional against it, so the tail must stay a question.
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        comment: {
+          id: "h_followup", sessionId: "s1", author: "human", intent: "question",
+          parentCommentId: "ans1", content: "ok but what about Y?",
+          target: { artifactId: "a1", lineStart: 5 }, acknowledged: false,
+          createdAt: "2026-04-26T10:02:00.000Z",
+        },
+      }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /reply in this thread/i }));
+    // Flip the composer to Ask mode (the opt-in).
+    await userEvent.click(screen.getByRole("button", { name: /^ask$/i }));
+    const textarea = screen.getByPlaceholderText(/ask a follow-up question/i);
+    await userEvent.type(textarea, "ok but what about Y?");
+    // In Ask mode the submit button reads "Ask".
+    const askBtns = screen.getAllByRole("button", { name: /^Ask$/ });
+    await userEvent.click(askBtns[askBtns.length - 1]!);
+
+    expect(fetchMock).toHaveBeenCalled();
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
+    expect(body.content).toBe("ok but what about Y?");
+    expect(body.intent).toBe("question");
+    expect(body.parentCommentId).toBe("ans1");
+
+    // End-to-end: the optimistic follow-up makes the shared predicate read the
+    // thread as unanswered again (open human question is now the tail).
+    const after = useArtifactStore.getState().comments["a1"]!;
+    const root = after.find((c) => c.id === "q1")!;
+    const replies = after.filter((c) => c.id !== "q1");
+    expect(isUnansweredQuestion(root, replies)).toBe(true);
   });
 
   it("artifact group header shows a per-group unread count when fresh comments exist there", () => {

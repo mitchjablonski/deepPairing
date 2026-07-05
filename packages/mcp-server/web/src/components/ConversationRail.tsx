@@ -7,6 +7,7 @@ import { useArtifactStore } from "../stores/artifact";
 import { useModal } from "../hooks/useModal";
 import { commentAnchorKey } from "../lib/comment-anchor";
 import { isUnansweredQuestion } from "../lib/unanswered";
+import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
 // which comments arrived since the user last looked at the rail. Stored
@@ -392,9 +393,19 @@ function ThreadEntry({
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [replySubmitting, setReplySubmitting] = useState(false);
+  // I4 — a reply defaults to a plain comment; the human can flip it to "Ask"
+  // so the follow-up carries intent:"question" and re-flags the thread as
+  // unanswered (the #130 tail-walk only fires on a question follow-up).
+  const [replyMode, setReplyMode] = useState<ReplyMode>("comment");
 
   // Pick the comment to reply to: the latest reply if any, else the parent.
   const replyTarget = replies.at(-1) ?? comment;
+
+  const closeReply = () => {
+    setReplyOpen(false);
+    setReplyText("");
+    setReplyMode("comment");
+  };
 
   const submitReply = async () => {
     const text = replyText.trim();
@@ -408,10 +419,11 @@ function ThreadEntry({
         // the conversation it's continuing. Strip artifactId from
         // target since submitComment re-applies it.
         { ...(replyTarget.target ?? {}), artifactId: undefined } as any,
-        { parentCommentId: replyTarget.id },
+        // parentCommentId keeps it threaded; intent:"question" (opt-in) makes
+        // it re-open the thread as awaiting the agent.
+        { parentCommentId: replyTarget.id, ...(replyMode === "question" ? { intent: "question" as const } : {}) },
       );
-      setReplyOpen(false);
-      setReplyText("");
+      closeReply();
     } catch {
       // UX7d — store surfaced the error toast; keep the reply open + text for
       // retry instead of an unhandled rejection.
@@ -474,7 +486,12 @@ function ThreadEntry({
       {(comment.author === "agent" || replies.some((r) => r.author === "agent")) && (
         <div className="ml-4 mt-1.5">
           {replyOpen ? (
-            <div className="pl-3 border-l-2 border-accent-blue/30 space-y-1.5">
+            <div
+              className={`pl-3 border-l-2 space-y-1.5 ${
+                replyMode === "question" ? "border-accent-violet/40" : "border-accent-blue/30"
+              }`}
+            >
+              <ReplyModeToggle mode={replyMode} setMode={setReplyMode} />
               <textarea
                 rows={2}
                 autoFocus
@@ -486,28 +503,36 @@ function ThreadEntry({
                     submitReply();
                   }
                   if (e.key === "Escape") {
-                    setReplyOpen(false);
-                    setReplyText("");
+                    closeReply();
                   }
                 }}
-                placeholder="Continue the thread… (⌘⏎ to send, Esc to cancel)"
+                placeholder={
+                  replyMode === "question"
+                    ? "Ask a follow-up question… (⌘⏎ to send, Esc to cancel)"
+                    : "Continue the thread… (⌘⏎ to send, Esc to cancel)"
+                }
                 disabled={replySubmitting}
-                className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-2xs text-text-primary
-                           placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue resize-none"
+                className={`w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-2xs text-text-primary
+                           placeholder-text-muted focus:outline-none focus:ring-1 resize-none ${
+                             replyMode === "question" ? "focus:ring-accent-violet" : "focus:ring-accent-blue"
+                           }`}
               />
               <div className="flex gap-1.5">
                 <button
                   type="button"
                   onClick={submitReply}
                   disabled={!replyText.trim() || replySubmitting}
-                  className="px-2.5 py-1 bg-accent-blue-strong text-white text-2xs rounded
-                             hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
+                  className={`px-2.5 py-1 text-white text-2xs rounded disabled:bg-surface-elevated disabled:text-text-muted transition-colors ${
+                    replyMode === "question"
+                      ? "bg-accent-violet-strong hover:bg-accent-violet-strong-hover"
+                      : "bg-accent-blue-strong hover:bg-accent-blue/80"
+                  }`}
                 >
-                  Reply
+                  {replyMode === "question" ? "Ask" : "Reply"}
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setReplyOpen(false); setReplyText(""); }}
+                  onClick={closeReply}
                   className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary transition-colors"
                 >
                   Cancel
