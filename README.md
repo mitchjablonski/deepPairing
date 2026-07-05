@@ -153,7 +153,7 @@ the collaboration, not the headline:
   confidence; later a breadcrumb shows what you predicted before, with a ✓/✗/◐
   retrospective to close the loop.
 
-![The "Your Taste" drawer — cross-project stances, each with the reason you gave when you rejected it.](docs/assets/ledger.png)
+![The Ledger drawer — cross-project stances, each with the reason you gave when you rejected it.](docs/assets/ledger.png)
 
 > **See it in ~90 seconds.** The [demo command](#try-the-demo) fires the live
 > flow against a real companion UI.
