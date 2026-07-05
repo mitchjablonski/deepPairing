@@ -27288,6 +27288,29 @@ function getClientCount() {
   for (const clients2 of wsClients.values()) count += clients2.size;
   return count;
 }
+var httpServer = null;
+var wsServer = null;
+var shuttingDown = false;
+function releaseListenSocket({ closeWs = true } = {}) {
+  try {
+    httpServer?.close?.();
+  } catch {
+  }
+  if (closeWs) {
+    try {
+      wsServer?.close?.();
+    } catch {
+    }
+  }
+}
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`Shutting down (${signal})`);
+  releaseListenSocket();
+  cleanup();
+  process.exit(0);
+}
 var shutdownTimer = null;
 function checkAutoShutdown() {
   if (activeSessions.size === 0 && getClientCount() === 0) {
@@ -27296,6 +27319,7 @@ function checkAutoShutdown() {
       shutdownTimer = setTimeout(() => {
         if (activeSessions.size === 0 && getClientCount() === 0) {
           log("Auto-shutting down (idle)");
+          releaseListenSocket();
           cleanup();
           process.exit(0);
         }
@@ -27412,6 +27436,7 @@ app.post("/api/evict", async (c) => {
   for (const sid of sessions.keys()) {
     broadcast2(sid, { type: "daemon_evicting", reason: "evicted_by_doctor", projectRoot, pid: process.pid });
   }
+  releaseListenSocket({ closeWs: false });
   cleanup();
   setTimeout(() => process.exit(0), 250);
   return c.json({ status: "evicting", pid: process.pid });
@@ -27607,6 +27632,7 @@ async function main() {
     });
     if (result.ok) {
       server = candidateServer;
+      httpServer = candidateServer;
       port = candidate;
       boundPort = candidate;
       if (attempt > 0) log(`Preferred port ${preferredPort} busy \u2014 bound to ${candidate} instead (recorded in daemon.json).`);
@@ -27635,6 +27661,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
     process.exit(2);
   }
   const wss = new import_websocket_server.default({ noServer: true });
+  wsServer = wss;
   server.on?.("upgrade", (request, socket, head) => {
     if (!request.url?.startsWith("/ws")) {
       socket.destroy();
@@ -27798,16 +27825,8 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
     log(`Install-health ping: skipped (${pingDecision.reason})`);
   }
   process.on("exit", cleanup);
-  process.on("SIGINT", () => {
-    log("Shutting down (SIGINT)");
-    cleanup();
-    process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    log("Shutting down (SIGTERM)");
-    cleanup();
-    process.exit(0);
-  });
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 }
 main().catch((err) => {
   log(`Fatal: ${err}`);
