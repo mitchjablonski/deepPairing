@@ -20,9 +20,8 @@ The plugin ships a self-contained, zero-dependency server bundle in
 /plugin install deeppairing@deeppairing
 ```
 
-<!-- Marketplace structure validated against the Claude Code plugin-marketplace
-     docs; live end-to-end verification in a real Claude Code client still
-     pending. If the marketplace path fails, --plugin-dir below always works. -->
+<!-- Marketplace install VERIFIED end-to-end in a real Claude Code client
+     (2026-07-04). -->
 
 The first command registers this repo's `.claude-plugin/marketplace.json`
 catalog; the second installs the `deeppairing` plugin from it. `deeppairing@deeppairing`
