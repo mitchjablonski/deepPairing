@@ -54,8 +54,39 @@ interface LedgerFile {
 
 const LEDGER_VERSION = 1 as const;
 
-function defaultLedgerPath(): string {
+function realHomeLedgerPath(): string {
   return path.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+}
+
+function defaultLedgerPath(): string {
+  // J1 — defense in depth. Field incident: a unit suite (search.test.ts)
+  // constructed a FileStore that mirrors rejected approaches into the global
+  // ledger via getGlobalStore(), but never redirected the singleton with
+  // setGlobalStoreForTests(...). The default path is the developer's REAL
+  // ~/.deeppairing ledger, so 222 test runs wrote "Deploy: Railway" rejects
+  // into cross-project memory. The server vitest setup (global-store-guard)
+  // now redirects the singleton in a beforeEach for EVERY test — but if any
+  // future test constructs the global store outside that guard (e.g. at
+  // module-eval time, before hooks run), refuse the real HOME path loudly so
+  // the offending test FAILS in CI instead of silently polluting real memory.
+  // Review NIT — this also fires for a test that execSync-spawns a
+  // deepPairing CLI which constructs a default GlobalStore (e.g. `philosophy
+  // export/import` at cli/init.ts, which inherits VITEST from the parent).
+  // No such test exists today; if one is added, scrub VITEST/NODE_ENV from
+  // the spawned env (or pass an explicit ledger path) rather than relaxing
+  // this guard — the whole point is that the real HOME ledger is untouchable
+  // under any test context.
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    throw new Error(
+      "GlobalStore refused to open the real ~/.deeppairing ledger under test " +
+        `(${realHomeLedgerPath()}). A test constructed the global store without ` +
+        "redirecting it. Call setGlobalStoreForTests(<tmpPath>) — the server " +
+        "vitest setup (src/__tests__/global-store-guard.setup.ts) does this in a " +
+        "beforeEach for every test, so this usually means the global store was " +
+        "constructed at module-eval time before hooks ran.",
+    );
+  }
+  return realHomeLedgerPath();
 }
 
 // D7 — delegates to the shared single source (5 copies existed; one drifted).

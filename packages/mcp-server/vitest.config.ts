@@ -31,6 +31,12 @@ export default defineConfig({
           environment: "node",
           include: ["src/**/*.test.ts"],
           exclude: STD_EXCLUDE,
+          // J1 — redirect the user-global philosophy ledger to an isolated tmp
+          // for EVERY server test. Field incident: an un-redirected suite wrote
+          // 222 rejections into the developer's real ~/.deeppairing ledger. The
+          // guard runs before each test; harnesses that also redirect win by
+          // last-registration. See global-store-guard.setup.ts.
+          setupFiles: ["./src/__tests__/global-store-guard.setup.ts"],
           isolate: false,
           // Review-caught: vi.restoreAllMocks() does NOT undo vi.stubGlobal —
           // with a shared worker context a leaked fetch stub persists into
