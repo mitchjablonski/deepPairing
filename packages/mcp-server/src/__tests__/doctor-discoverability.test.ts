@@ -116,3 +116,14 @@ describe("Companion UI surfaces mention doctor (U6)", () => {
     expect(api).toMatch(/network_error[\s\S]+?npx deeppairing doctor/);
   });
 });
+
+describe("doctor port sweep wraps like the daemon binds (review catch)", () => {
+  it("the sweep expression wraps candidates back into [BASE_PORT, BASE_PORT+PORT_SPAN)", () => {
+    // Source-shape pin (matches this suite's style): the candidate must use
+    // the daemon's modulo wrap, not a linear preferred+attempt walk that
+    // exits the reserved range for projects hashing into the last slots.
+    const src = read("cli/init.ts");
+    expect(src).toMatch(/BASE_PORT \+ \(\(preferred - BASE_PORT \+ attempt\) % PORT_SPAN\)/);
+    expect(src).not.toMatch(/const candidate = preferred \+ attempt/);
+  });
+});

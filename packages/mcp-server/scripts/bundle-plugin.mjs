@@ -82,6 +82,13 @@ await build({
 // The companion web UI, served by the bundled daemon via its web/ fallback.
 cpSync(resolve(serverDist, "web"), resolve(pluginDir, "web"), { recursive: true });
 
+// The bundles are ESM (format: "esm"). Without a package.json declaring the
+// module type, Node reparses each .js as an ES module and prints a
+// MODULE_TYPELESS_PACKAGE_JSON warning on every `node server/daemon.js` (or
+// standalone.js) launch. A tiny type:module manifest beside them silences it.
+// Static content — safe for the byte-reproducible staleness gate.
+writeFileSync(resolve(pluginDir, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+
 // No timestamp: the bundle is COMMITTED (the marketplace ships the git repo),
 // so output must be byte-reproducible for the CI staleness gate.
 writeFileSync(

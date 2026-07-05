@@ -551,8 +551,16 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   //    sweep the candidate range to find a daemon that belongs to us.
   let port = info?.port;
   if (!port) {
+    // Sweep from THIS project's deterministic preferred port with the SAME
+    // wrap-around the daemon uses when binding (daemon/index.ts:
+    // BASE_PORT + ((preferred - BASE_PORT + attempt) % PORT_SPAN)). The old
+    // `DEFAULT_PORT + attempt` only probed 3847-3856; and a linear
+    // `preferred + attempt` (review catch) walked OFF the reserved range for
+    // projects hashing into the last ~10 slots, missing a daemon that had
+    // wrapped to 3847+.
+    const preferred = preferredPortFor(cwd);
     for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-      const candidate = DEFAULT_PORT + attempt;
+      const candidate = BASE_PORT + ((preferred - BASE_PORT + attempt) % PORT_SPAN);
       const identity = await probeDaemonIdentity(candidate);
       if (identity && identity.projectRoot === cwd) {
         port = candidate;
@@ -560,7 +568,7 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         break;
       }
     }
-    if (!port) port = DEFAULT_PORT; // fall through and report the failed probe
+    if (!port) port = preferred; // fall through and report the failed probe
   }
 
   // Z5b / AA3 — project-mismatch remediation. When the wrapper hits

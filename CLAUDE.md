@@ -28,7 +28,7 @@ packages/
 - **MCP server running inside Claude Code** — not a separate agent harness. Claude Code IS the agent.
 - **Non-blocking MCP tools** — `present_options` and `present_plan` record and return immediately. Human responds via companion UI or terminal. Agent calls `check_feedback` to get responses.
 - **File-based persistence** — `.deeppairing/sessions/{id}/` stores artifacts, comments, decisions as JSON.
-- **Dual transport** — stdio for MCP protocol; HTTP on a deterministic per-project port (`3847-3974`, first project gets `3847`) for the companion web UI + WebSocket.
+- **Dual transport** — stdio for MCP protocol; HTTP on a deterministic per-project port in `3847-3974`, derived from a hash of the project path (not first-come — check `.deeppairing/daemon.json` for the actual bound port), for the companion web UI + WebSocket.
 - **Fakes not mocks** for testing.
 
 ### Data Flow
@@ -77,7 +77,7 @@ pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 ```
 Make sure you've run `pnpm install && pnpm build` in the deepPairing repo first.
 
-Open the companion UI at the daemon's port — `http://localhost:3847` for the first project, otherwise the deterministic per-project port recorded in `.deeppairing/daemon.json`.
+Open the companion UI at the daemon's port — a deterministic per-project port in `3847-3974`, derived from the project path and recorded in `.deeppairing/daemon.json`.
 
 ## Code Conventions
 

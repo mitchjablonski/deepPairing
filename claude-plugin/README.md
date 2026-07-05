@@ -3,10 +3,30 @@
 Turn Claude Code from a black box into a pairing partner. Structured
 artifacts (findings, specs, decisions, plans), cross-session rejection
 memory, a cross-project philosophy ledger, and a companion web UI (on a
-deterministic per-project port, `3847` for the first project) for inline
-review and commenting.
+deterministic per-project port in `3847-3974`, derived from the project path —
+check `.deeppairing/daemon.json` for the actual one) for inline review and
+commenting.
 
 ## Install
+
+### From the marketplace (recommended)
+
+The plugin ships a self-contained, zero-dependency server bundle in
+`server/`, so a marketplace install needs no `pnpm install` or build step:
+
+```bash
+# Inside Claude Code:
+/plugin marketplace add https://github.com/mitchjablonski/deepPairing
+/plugin install deeppairing@deeppairing
+```
+
+<!-- Marketplace structure validated against the Claude Code plugin-marketplace
+     docs; live end-to-end verification in a real Claude Code client still
+     pending. If the marketplace path fails, --plugin-dir below always works. -->
+
+The first command registers this repo's `.claude-plugin/marketplace.json`
+catalog; the second installs the `deeppairing` plugin from it. `deeppairing@deeppairing`
+is `plugin-name@marketplace-name` — both happen to be `deeppairing`.
 
 ### From a local checkout (development / self-host)
 
@@ -20,14 +40,6 @@ claude --plugin-dir ./claude-plugin
 
 # Or install it for every session in this workspace
 claude plugin install ./claude-plugin --scope project
-```
-
-### From the marketplace
-
-*(Planned. Once published:)*
-
-```bash
-claude plugin install deeppairing
 ```
 
 ### How the plugin finds the MCP server
@@ -81,10 +93,10 @@ opaque "module not found" errors.
   `deeppairing://session/{id}`.
 - MCP elicitation for quick approvals in-terminal.
 
-**Companion web UI** — a deterministic per-project port in `3847-3974`
-(the first project gets `3847`; check `.deeppairing/daemon.json` for this
-project's actual port). Auto-opens on first daemon start (unless
-`DEEPPAIRING_OPEN_BROWSER=0`).
+**Companion web UI** — a deterministic per-project port in `3847-3974`,
+derived from a hash of the project path (check `.deeppairing/daemon.json`
+for this project's actual bound port). Auto-opens on first daemon start
+(unless `DEEPPAIRING_OPEN_BROWSER=0`).
 
 ## What the plugin sets up automatically
 
