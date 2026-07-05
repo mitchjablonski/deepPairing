@@ -214,6 +214,68 @@ function getClientCount(): number {
   return count;
 }
 
+// --- Graceful shutdown / prompt port release (I5) ---
+//
+// `server` (the @hono/node-server accept socket) and `wss` (the WebSocket
+// server riding the same HTTP upgrade path) are created inside main(), but
+// THREE exit paths need to close them: the SIGINT/SIGTERM handlers, the idle
+// auto-shutdown timer, and the AA3 evict route. The latter two live at module
+// scope and can't see main()'s locals, so we mirror the handles here.
+//
+// Root cause (I5): every exit path did `cleanup(); process.exit(0)` and NEVER
+// called server.close(). The LISTEN socket therefore stayed bound through
+// cleanup()'s synchronous per-session forceFlush loop, only releasing when the
+// process actually exited. A fast-follow binder — the multi-project port
+// window, a restart, a `doctor` probe, or the e2e teardown barrier — hit
+// EADDRINUSE during that window and rescanned/degraded. Closing the accept
+// socket FIRST frees the port immediately; the flush + exit then run while the
+// next daemon is already free to bind.
+let httpServer: ReturnType<typeof serve> | null = null;
+let wsServer: WebSocketServer | null = null;
+let shuttingDown = false;
+
+/**
+ * I5 — release the accept socket ASAP. `httpServer.close()` stops *accepting*
+ * new connections immediately (in-flight requests drain on their own, and
+ * already-upgraded WS connections stay alive), which frees the LISTEN port for
+ * the next binder even while cleanup() is still flushing. httpServer is the
+ * ONLY thing holding the port: wss is noServer:true, so it owns no LISTEN
+ * socket — the upgrade path is wired onto httpServer's "upgrade" event, which
+ * close() also tears down.
+ *
+ * Fire-and-forget: we deliberately do NOT await the close callback — the point
+ * is prompt port release, then a synchronous flush + exit. Safe to call more
+ * than once (a second SIGTERM, or exit-after-evict): close() on an already-
+ * closed server just invokes its callback with an error we ignore.
+ *
+ * `closeWs` defaults true (proactively drop lingering WS client sockets before
+ * we exit). The AA3 evict path passes false: it just broadcast
+ * `daemon_evicting` and holds a 250ms grace so those frames reach the wire —
+ * closing wss would cut them off. Freeing the HTTP port doesn't disturb the
+ * still-open WS connections, so evict gets prompt port release AND its grace.
+ */
+function releaseListenSocket({ closeWs = true }: { closeWs?: boolean } = {}): void {
+  try { httpServer?.close?.(); } catch {}
+  if (closeWs) {
+    try { wsServer?.close?.(); } catch {}
+  }
+}
+
+/**
+ * I5 — unified signal handler. Release the LISTEN socket FIRST (so the next
+ * binder isn't blocked by our flush), then run the existing cleanup + exit.
+ * The `shuttingDown` guard makes a second signal a no-op instead of double-
+ * closing / double-flushing.
+ */
+function gracefulShutdown(signal: string): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`Shutting down (${signal})`);
+  releaseListenSocket();
+  cleanup();
+  process.exit(0);
+}
+
 // --- Auto-shutdown ---
 
 let shutdownTimer: ReturnType<typeof setInterval> | null = null;
@@ -225,6 +287,9 @@ function checkAutoShutdown(): void {
       shutdownTimer = setTimeout(() => {
         if (activeSessions.size === 0 && getClientCount() === 0) {
           log("Auto-shutting down (idle)");
+          // I5 — same close gap as the signal handlers: free the port before
+          // the flush so an incoming daemon can rebind immediately.
+          releaseListenSocket();
           cleanup();
           process.exit(0);
         }
@@ -445,6 +510,12 @@ app.post("/api/evict", async (c) => {
   for (const sid of sessions.keys()) {
     broadcast(sid, { type: "daemon_evicting", reason: "evicted_by_doctor", projectRoot, pid: process.pid });
   }
+  // I5 — release the HTTP LISTEN port NOW so THIS project's incoming daemon
+  // (the doctor's project-mismatch remediation is racing to bind) doesn't hit
+  // EADDRINUSE while we flush + hold the 250ms broadcast grace. closeWs:false —
+  // the daemon_evicting frames above still need the WS clients open; freeing
+  // the HTTP accept socket leaves already-upgraded connections untouched.
+  releaseListenSocket({ closeWs: false });
   // Cleanup persists everything (forceFlush per session, including the
   // AA3 reviewLatencies → metrics.json round-trip).
   cleanup();
@@ -782,6 +853,7 @@ async function main() {
 
       if (result.ok) {
         server = candidateServer;
+        httpServer = candidateServer; // I5 — expose the accept socket to the module-scope shutdown paths
         port = candidate;
         boundPort = candidate; // MP1 — expose to route handlers
         if (attempt > 0) log(`Preferred port ${preferredPort} busy — bound to ${candidate} instead (recorded in daemon.json).`);
@@ -811,6 +883,7 @@ async function main() {
 
     // WebSocket server
     const wss = new WebSocketServer({ noServer: true });
+    wsServer = wss; // I5 — expose to the module-scope shutdown paths (releaseListenSocket)
 
     // GG2 — auth the WebSocket upgrade. Pre-GG2 the upgrade handler did
     // ZERO checks: no Origin, no X-Project-Hash, accepted any sessionId
@@ -1057,8 +1130,11 @@ async function main() {
 
   // Graceful shutdown
   process.on("exit", cleanup);
-  process.on("SIGINT", () => { log("Shutting down (SIGINT)"); cleanup(); process.exit(0); });
-  process.on("SIGTERM", () => { log("Shutting down (SIGTERM)"); cleanup(); process.exit(0); });
+  // I5 — gracefulShutdown closes the LISTEN socket BEFORE the flush (prompt
+  // port release for the next binder), guards against a double signal, and
+  // preserves the existing "Shutting down (SIG…)" log + exit-0.
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 }
 
 main().catch((err) => {
