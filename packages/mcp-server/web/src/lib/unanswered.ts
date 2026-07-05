@@ -31,23 +31,28 @@ export function isUnansweredQuestion(comment: Comment, replies: Comment[]): bool
       !x.humanResolvedAt
     );
   };
-  const root = comment as { intent?: string };
-  // Root must be a human question (see doc: a non-question root never re-opens).
-  if (comment.author !== "human" || root.intent !== "question") return false;
-  // Review (tail-walk) — a trailing human NON-question ("btw also consider X")
-  // must not flip an unanswered thread to answered: walk backward past human
-  // non-question comments; the first substantive message governs. Hitting an
-  // agent reply or a closed question = answered; hitting an open human
-  // question = unanswered; exhausting the replies falls through to the root
-  // (which the guard above ensured is a question — open-ness decides).
-  for (let i = replies.length - 1; i >= 0; i--) {
-    const r = replies[i]!;
-    if (r.author !== "human") return false; // agent replied after the last question
-    const rx = r as { intent?: string };
-    if (rx.intent === "question") return isOpenHumanQuestion(r);
-    // human non-question — keep walking
+  // I4 — walk the thread from its chronological TAIL back to the root; the
+  // first SUBSTANTIVE message decides who is waiting:
+  //   - an AGENT message      → the agent has responded; nothing awaited
+  //   - an OPEN human question → awaiting the agent's answer
+  //   - a CLOSED human question (answered out-of-band or human-resolved) → done
+  //   - a human NON-question ("btw also consider X") → context; keep walking
+  // A thread with no open human question anywhere is not waiting.
+  //
+  // Pre-I4 this ALSO required the ROOT to be a human question — which made a
+  // question ASKED AS A REPLY (the common case: human comments on the agent's
+  // artifact, agent replies, human flips the composer to Ask and asks a
+  // follow-up) silently never count. The tail-walk alone already stops
+  // plain-comment threads from flagging (no question anywhere → false), so the
+  // root gate was over-conservative and made the reply Ask-toggle cosmetic.
+  const chain = [comment, ...replies];
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const m = chain[i]!;
+    if (m.author !== "human") return false; // agent had the last substantive word
+    if ((m as { intent?: string }).intent === "question") return isOpenHumanQuestion(m);
+    // human non-question — context; keep walking back
   }
-  return isOpenHumanQuestion(comment);
+  return false;
 }
 
 /**

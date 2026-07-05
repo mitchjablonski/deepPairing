@@ -61,10 +61,24 @@ describe("isUnansweredQuestion", () => {
       expect(isUnansweredQuestion(root, [agentAns, followup])).toBe(false);
     });
 
-    it("root requirement stays: a non-question root does not re-open on a follow-up question", () => {
+    it("I4 — a human question ASKED AS A REPLY re-flags a human-comment-rooted thread", () => {
+      // The common case: human comments on the agent's artifact, then flips the
+      // reply composer to Ask. Pre-I4 this was silently inert (root not a
+      // question); the pure tail-walk now counts it (an open human question is
+      // awaiting the agent regardless of what the thread started as).
       const plainRoot = mk({ id: "root", intent: "comment" });
       const followup = mk({ id: "fu", intent: "question", parentCommentId: "root" });
-      expect(isUnansweredQuestion(plainRoot, [followup])).toBe(false);
+      expect(isUnansweredQuestion(plainRoot, [followup])).toBe(true);
+    });
+    it("a plain-comment thread with no question anywhere is still not waiting", () => {
+      const plainRoot = mk({ id: "root", intent: "comment" });
+      const plainReply = mk({ id: "r", intent: "comment", parentCommentId: "root" });
+      expect(isUnansweredQuestion(plainRoot, [plainReply])).toBe(false);
+    });
+    it("I4 — a human question on an AGENT-rooted thread counts (human awaits the agent)", () => {
+      const agentRoot = mk({ id: "root", author: "agent" });
+      const humanQ = mk({ id: "q", intent: "question", parentCommentId: "root" });
+      expect(isUnansweredQuestion(agentRoot, [humanQ])).toBe(true);
     });
   });
 });
