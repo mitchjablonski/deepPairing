@@ -77,11 +77,11 @@ export default defineConfig({
           // re-transforms/re-renders heavy module graphs while the whole project
           // contends on the shared transform pipeline (cumulative import ~5min
           // across the suite). Under that load a single re-import/render
-          // occasionally exceeds the 5s default. A higher default absorbs the
+          // occasionally exceeds the 5s default. A 10s default absorbs the
           // contention spike (the same spec completes well inside it), making
           // the full run deterministic. Not a mask: assertions are unchanged and
           // a genuinely stuck test still fails, just at 20s.
-          testTimeout: 20_000,
+          testTimeout: 10_000,
         },
       },
     ],

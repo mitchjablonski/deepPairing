@@ -143,7 +143,9 @@ test("capture README screenshots", async ({ page }) => {
     // CompoundingBadge stat and this dedicated button), so match the dedicated
     // one EXACTLY, then WAIT for the drawer to actually render before capturing
     // — no silent .catch() fallthrough.
-    await page.getByRole("button", { name: "Open the Ledger", exact: true }).click();
+    // Scope to the header (review NIT) — a daemon-mismatch toast can carry the
+    // same "Open the Ledger" action label; unscoped + exact would strict-throw.
+    await page.locator("header").getByRole("button", { name: "Open the Ledger", exact: true }).click();
     await page.getByText("Cross-project Philosophy Ledger").waitFor({ state: "visible", timeout: 10_000 });
     await page.waitForTimeout(1000); // let the drawer's slide-in + digest settle
     await page.screenshot({ path: path.join(ASSETS, "ledger.png") });
