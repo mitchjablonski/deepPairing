@@ -248,11 +248,14 @@ let shuttingDown = false;
  * than once (a second SIGTERM, or exit-after-evict): close() on an already-
  * closed server just invokes its callback with an error we ignore.
  *
- * `closeWs` defaults true (proactively drop lingering WS client sockets before
- * we exit). The AA3 evict path passes false: it just broadcast
- * `daemon_evicting` and holds a 250ms grace so those frames reach the wire —
- * closing wss would cut them off. Freeing the HTTP port doesn't disturb the
- * still-open WS connections, so evict gets prompt port release AND its grace.
+ * `closeWs` defaults true: stop the WS server ACCEPTING new upgrades before we
+ * exit. Note wss is noServer:true, so close() does NOT terminate connected
+ * clients — the synchronous process.exit(0) that follows drops their sockets.
+ * The AA3 evict path passes false: it just broadcast `daemon_evicting` and
+ * holds a 250ms grace so those frames reach the wire — stopping the WS server
+ * would still let the grace run, but leaving it fully alone keeps the intent
+ * obvious. Either way, freeing the HTTP port is what releases the LISTEN
+ * socket for the next binder; the WS server owns no listen socket of its own.
  */
 function releaseListenSocket({ closeWs = true }: { closeWs?: boolean } = {}): void {
   try { httpServer?.close?.(); } catch {}
