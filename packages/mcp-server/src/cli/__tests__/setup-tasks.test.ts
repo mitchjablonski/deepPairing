@@ -29,6 +29,11 @@ beforeEach(() => {
   // never write into the real user's home from a test.
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-fake-home-"));
   vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+  // I6 review NIT — an AMBIENT CLAUDE_PLUGIN_ROOT (a dev running the suite
+  // inside a plugin-managed Claude Code) would flip runDaemonStartupSetup
+  // into plugin mode and fail the default-mode assertions. Clear it; the
+  // plugin-mode describe sets it explicitly in its own beforeEach.
+  delete process.env.CLAUDE_PLUGIN_ROOT;
 });
 
 afterEach(() => {
