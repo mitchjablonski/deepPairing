@@ -80,6 +80,17 @@ describe("isUnansweredQuestion", () => {
       const humanQ = mk({ id: "q", intent: "question", parentCommentId: "root" });
       expect(isUnansweredQuestion(agentRoot, [humanQ])).toBe(true);
     });
+    it("a CLOSED human-question reply on a comment root does not flag", () => {
+      const plainRoot = mk({ id: "root", intent: "comment" });
+      const closedQ = mk({ id: "q", intent: "question", parentCommentId: "root", answeredByCommentId: "x" } as any);
+      expect(isUnansweredQuestion(plainRoot, [closedQ])).toBe(false);
+    });
+    it("multi-hop: comment root → agent reply → open human question re-flags", () => {
+      const plainRoot = mk({ id: "root", intent: "comment" });
+      const agentAns = mk({ id: "a", author: "agent", parentCommentId: "root", createdAt: "2026-06-26T00:01:00.000Z" });
+      const humanQ = mk({ id: "q", intent: "question", parentCommentId: "root", createdAt: "2026-06-26T00:02:00.000Z" });
+      expect(isUnansweredQuestion(plainRoot, [agentAns, humanQ])).toBe(true);
+    });
   });
 });
 
