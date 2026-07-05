@@ -14,9 +14,7 @@ proposes a concept you've turned down, a gate stops it before the edit lands.
 
 **Who it's for:** engineers who don't trust an autonomous agent with the
 architecture, and want to stay in the loop at the *decision* level — not the
-keystroke level, and not a 500-line diff after the fact. (Still building your
-taste? The named concepts and visible reasoning make it a craft-learning
-surface too — that's a bonus, not the pitch.)
+keystroke level, and not a 500-line diff after the fact.
 
 ### See it in ~90 seconds
 
