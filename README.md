@@ -114,13 +114,15 @@ the collaboration, not the headline:
   ledger); writes are **opt-in** per project (one prompt at `init`, default
   off), so a dependency in one project can't poison the others. Portable via
   `deeppairing philosophy export | import --merge`.
-- **You're not silently re-proposed past.** When the agent re-proposes a concept
-  you rejected, the `present_*` tool refuses (`REJECTED_APPROACH_BLOCKED`) and a
-  **PreToolUse hook** catches a *direct* edit that tries to skip the protocol —
-  surfacing it to you to decide. The match is on the concept's *words*: reject
-  *"global mutable state for config"* and any later proposal that reuses those
-  words is stopped — *"add a global mutable state singleton to hold config"*
-  gets caught, in this repo or the next. It's literal, not semantic — a true
+- **You're not silently re-proposed past.** In the project where you rejected a
+  concept, re-proposing it is **stopped**: the `present_*` tool refuses
+  (`REJECTED_APPROACH_BLOCKED`) and a **PreToolUse hook** catches a *direct*
+  edit that tries to skip the protocol. The match is on the concept's *words*:
+  reject *"global mutable state for config"* and *"add a global mutable state
+  singleton to hold config"* gets caught. Reach for that same concept **in
+  another project** and it's **flagged, not stopped** — an advisory nudge ("you
+  avoided this in `<project>` — still want it here?") that you can promote to a
+  hard block by rejecting it locally. It's literal, not semantic — a true
   synonym that shares no words won't trip it — so name the concept for what it
   is and it generalizes across the instances that reuse it. **False positives
   are one click away:** "Not my taste" in the UI scopes the stance down and
@@ -142,8 +144,12 @@ the collaboration, not the headline:
 - **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal —
   and even Minimal stops at the architectural decisions.
 - **Not another cross-session memory feature.** Copilot/Cursor memory *recalls*
-  your preferences as context the model may consult; deepPairing turns a past
-  decision into a **gate** the agent is stopped by, on every project.
+  your preferences as passive context the model may or may not consult;
+  deepPairing turns a past decision into **a gate here, a flag on the next
+  project** — a hard block in the repo where you rejected it, and an active
+  cross-project nudge everywhere else (which you can promote to a hard block by
+  rejecting it locally). Still stronger than passive recall: we *surface* it
+  every time, you don't hope the model remembers.
 
 ## Install in Claude Code
 
