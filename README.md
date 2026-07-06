@@ -114,17 +114,18 @@ the collaboration, not the headline:
   ledger); writes are **opt-in** per project (one prompt at `init`, default
   off), so a dependency in one project can't poison the others. Portable via
   `deeppairing philosophy export | import --merge`.
-- **You're not silently paraphrased past.** When the agent re-proposes a concept
+- **You're not silently re-proposed past.** When the agent re-proposes a concept
   you rejected, the `present_*` tool refuses (`REJECTED_APPROACH_BLOCKED`) and a
   **PreToolUse hook** catches a *direct* edit that tries to skip the protocol —
-  surfacing it to you to decide. The match works on the concept's *words*, so
-  the win is to reject the **concept**, not the instance: turn down
-  *"pay-per-request hosting"* and the agent gets stopped whether it names
-  Railway today or Fly.io next month — anything that reuses those words. (A
-  true synonym it's never seen won't trip it — name the concept well and it
-  generalizes.) **False positives are one click away:** "Not my taste" in the
-  UI scopes the stance down and records the correction. (Blocks from a committed
-  **team rule** point you to `.deeppairing/team.json` instead.)
+  surfacing it to you to decide. The match is on the concept's *words*: reject
+  *"global mutable state for config"* and any later proposal that reuses those
+  words is stopped — *"add a global mutable state singleton to hold config"*
+  gets caught, in this repo or the next. It's literal, not semantic — a true
+  synonym that shares no words won't trip it — so name the concept for what it
+  is and it generalizes across the instances that reuse it. **False positives
+  are one click away:** "Not my taste" in the UI scopes the stance down and
+  records the correction. (Blocks from a committed **team rule** point you to
+  `.deeppairing/team.json` instead.)
 - **Three-layer memory, never merged.** Filesystem-sensed guardrails
   (migrations, CI), committable team conventions, and personal philosophy are
   surfaced to the agent separately.

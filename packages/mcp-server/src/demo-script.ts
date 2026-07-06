@@ -15,11 +15,20 @@ export interface DemoScriptDeps {
   makeArtifactId?: () => string;
 }
 
-const DEFAULT_REJECTION_CONCEPT = "global mutable state for config";
-const DEFAULT_REJECTION_REASON =
+// Exported so a test can prove the demo depicts a match the REAL token-matcher
+// (conceptMatchesProposal) would actually make — the demo scripts its own
+// broadcast, so without that guard it could dramatize a semantic match the
+// substring matcher can't do (which would make the honest README a liar).
+export const DEFAULT_REJECTION_CONCEPT = "global mutable state for config";
+export const DEFAULT_REJECTION_REASON =
   "we tried global state for config last project — broke testability in 3 places";
-const DEFAULT_REJECTION_DESCRIPTION =
+export const DEFAULT_REJECTION_DESCRIPTION =
   "Config loader: global mutable ConfigStore singleton";
+// The re-proposal MUST reuse every ≥4-char token of the concept (global,
+// mutable, state, config) — that's exactly what conceptMatchesProposal keys
+// on, so this is a block the real gate would also produce.
+export const DEFAULT_REPROPOSAL =
+  "Add a global mutable state singleton to hold config";
 
 /** Run the demo script against the given store + broadcast. Fires broadcasts
  *  on a timeline; callers can observe them as they land. */
@@ -73,16 +82,18 @@ export function runDemoScript({
     });
   });
 
-  // t=5000ms — the agent tries again with a paraphrased variant; pre-flight
-  // catches it by concept match and the hero toast fires. This is the
-  // money shot — what the demo exists to show.
+  // t=5000ms — the agent tries again with a variant that REUSES the concept's
+  // words; the token-matcher catches it and the hero toast fires. This is the
+  // money shot — what the demo exists to show. The proposal is chosen so the
+  // REAL conceptMatchesProposal would block it too (see demo-script.test.ts) —
+  // the demo doesn't dramatize a match the substring matcher can't make.
   schedule(5000, () => {
     broadcast(sessionId, {
       type: "preflight_blocked",
       toolName: "present_findings",
       source: "session",
       match: {
-        proposal: "Add a global config cache for hot lookups",
+        proposal: DEFAULT_REPROPOSAL,
         description: DEFAULT_REJECTION_DESCRIPTION,
         reason: DEFAULT_REJECTION_REASON,
         concept: DEFAULT_REJECTION_CONCEPT,
