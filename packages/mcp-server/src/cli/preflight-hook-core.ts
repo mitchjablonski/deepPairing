@@ -21,27 +21,61 @@ import type { TeamPreference } from "@deeppairing/shared";
  */
 
 /** Read session rejected approaches from .deeppairing/preferences.json. Mirrors
- *  FileStore.normalizeRejectedApproaches (legacy bare-string entries → {description}). */
+ *  FileStore.normalizeRejectedApproaches (legacy bare-string entries → {description}).
+ *  Phase-1 (C) — ALSO unions the cross-project 'avoid' concepts the daemon
+ *  materializes into .deeppairing/hooks/ledger-digest.json, so a stance
+ *  rejected in a PRIOR PROJECT hard-blocks a direct Edit/Write here too. Reading
+ *  a plain file keeps the hook synchronous, dependency-free, and fail-open — it
+ *  never touches the global store or @deeppairing/shared at runtime. */
 export function readRejectedApproaches(projectRoot: string): RejectedApproach[] {
   const p = path.join(projectRoot, ".deeppairing", "preferences.json");
+  const session: RejectedApproach[] = [];
+  try {
+    if (fs.existsSync(p)) {
+      const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
+      const list = raw?.rejectedApproaches;
+      if (Array.isArray(list)) {
+        for (const e of list) {
+          const r: RejectedApproach =
+            typeof e === "string"
+              ? { description: e }
+              : {
+                  description: String(e?.description ?? ""),
+                  reason: e?.reason,
+                  rejectedAt: e?.rejectedAt,
+                  sourceArtifactId: e?.sourceArtifactId,
+                  concept: e?.concept,
+                };
+          if (r.description) session.push(r);
+        }
+      }
+    }
+  } catch {
+    // Malformed preferences.json — fall through with whatever we have.
+  }
+  return [...session, ...readGlobalAvoidDigest(projectRoot)];
+}
+
+/** Phase-1 (C) — read the daemon-materialized global 'avoid' digest and shape
+ *  each concept as a synthetic RejectedApproach (concept === description) so the
+ *  SAME runPreflight matcher enforces it. Absent/corrupt file → [] (fail-open). */
+export function readGlobalAvoidDigest(projectRoot: string): RejectedApproach[] {
+  const p = path.join(projectRoot, ".deeppairing", "hooks", "ledger-digest.json");
   try {
     if (!fs.existsSync(p)) return [];
     const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-    const list = raw?.rejectedApproaches;
-    if (!Array.isArray(list)) return [];
-    return list
-      .map((e: any): RejectedApproach =>
-        typeof e === "string"
-          ? { description: e }
-          : {
-              description: String(e?.description ?? ""),
-              reason: e?.reason,
-              rejectedAt: e?.rejectedAt,
-              sourceArtifactId: e?.sourceArtifactId,
-              concept: e?.concept,
-            },
-      )
-      .filter((r) => r.description);
+    if (!raw || raw.version !== 1 || !Array.isArray(raw.avoidConcepts)) return [];
+    const out: RejectedApproach[] = [];
+    for (const c of raw.avoidConcepts) {
+      const concept = typeof c === "string" ? c.trim() : "";
+      if (!concept) continue;
+      out.push({
+        description: concept,
+        concept,
+        reason: "Cross-project 'avoid' stance from your philosophy ledger.",
+      });
+    }
+    return out;
   } catch {
     return [];
   }

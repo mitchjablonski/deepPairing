@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   buildProposals,
   readRejectedApproaches,
+  readGlobalAvoidDigest,
   readTeamPreferences,
   evaluatePreflightHook,
 } from "../preflight-hook-core.js";
@@ -18,6 +19,13 @@ const writePrefs = (obj: unknown) => {
 const writeTeam = (raw: string) => {
   fs.mkdirSync(dp(), { recursive: true });
   fs.writeFileSync(path.join(dp(), "team.json"), raw);
+};
+const writeHookDigest = (avoidConcepts: string[]) => {
+  fs.mkdirSync(path.join(dp(), "hooks"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dp(), "hooks", "ledger-digest.json"),
+    JSON.stringify({ version: 1, avoidConcepts }),
+  );
 };
 
 beforeEach(() => {
@@ -125,5 +133,47 @@ describe("evaluatePreflightHook — the platform-level gate", () => {
     writePrefs({ rejectedApproaches: [{ description: "x", concept: "global mutable state" }] });
     const d = evaluatePreflightHook({ toolName: "Edit", toolInput: {}, projectRoot: dir });
     expect(d.deny).toBe(false);
+  });
+});
+
+// Phase-1 (C) — cross-project global-avoid overlay in the hot hook.
+describe("readGlobalAvoidDigest — daemon-materialized cross-project overlay", () => {
+  it("returns [] when the digest file is absent", () => {
+    expect(readGlobalAvoidDigest(dir)).toEqual([]);
+  });
+
+  it("shapes each avoid concept as a synthetic RejectedApproach (concept === description)", () => {
+    writeHookDigest(["pay-per-request hosting", "global mutable state"]);
+    const r = readGlobalAvoidDigest(dir);
+    expect(r.map((x) => x.concept)).toEqual(["pay-per-request hosting", "global mutable state"]);
+    expect(r[0].description).toBe(r[0].concept);
+  });
+
+  it("returns [] on wrong version / malformed shape (fail-open)", () => {
+    fs.mkdirSync(path.join(dp(), "hooks"), { recursive: true });
+    fs.writeFileSync(path.join(dp(), "hooks", "ledger-digest.json"), JSON.stringify({ version: 99, avoidConcepts: ["x"] }));
+    expect(readGlobalAvoidDigest(dir)).toEqual([]);
+    fs.writeFileSync(path.join(dp(), "hooks", "ledger-digest.json"), "{ not json");
+    expect(readGlobalAvoidDigest(dir)).toEqual([]);
+  });
+});
+
+describe("readRejectedApproaches — unions session + global-avoid digest (C)", () => {
+  it("appends the digest's cross-project concepts to the session list", () => {
+    writePrefs({ rejectedApproaches: [{ description: "local reject", concept: "local concept" }] });
+    writeHookDigest(["cross-project hosting"]);
+    const r = readRejectedApproaches(dir);
+    expect(r.map((x) => x.concept)).toEqual(["local concept", "cross-project hosting"]);
+  });
+
+  it("global-only (no local ledgers) still hard-DENIES a matching direct edit", () => {
+    writeHookDigest(["global mutable state"]);
+    const d = evaluatePreflightHook({
+      toolName: "Edit",
+      toolInput: { file_path: "/src/x.ts", new_string: "introduce global mutable state here" },
+      projectRoot: dir,
+    });
+    expect(d.deny).toBe(true);
+    expect(d.reason).toMatch(/REJECTED_APPROACH_BLOCKED/);
   });
 });

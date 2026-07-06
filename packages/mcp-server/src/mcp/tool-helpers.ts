@@ -1,6 +1,8 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { IStore } from "../store/store-interface.js";
+import type { IStore, RejectedApproach } from "../store/store-interface.js";
 import type { TeamPreference } from "@deeppairing/shared";
+import { normalizeConceptKey } from "@deeppairing/shared";
+import { getGlobalStore } from "../store/global-store.js";
 import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
@@ -100,20 +102,63 @@ export async function preflightRejectedApproaches(
   toolName: string,
   proposalStrings: string[],
   proposalPaths: string[] = [],
+  proposalConcepts: string[] = [],
 ): Promise<PreflightHelperResult> {
   const memory = await store.getSessionMemory();
   // AA7b — typed optional method on IStore.
   const teamPrefs: TeamPreference[] = (await store.getTeamPreferences?.()) ?? [];
 
+  // Phase-1 (C) — wire the GLOBAL philosophy ledger into the HARD gate. Pre-C a
+  // stance rejected in project A only reached project B as advisory
+  // first-call-hint preamble + recall — it never hard-blocked. Here (the
+  // present_* path, which is async/occasional) it's safe to read the global
+  // store live. We fold every derived-'avoid' concept in as a synthetic
+  // rejected approach so it flows through the SAME deterministic matcher, is
+  // counted in the trace's "considered" set, and hard-blocks a re-proposal
+  // cross-project. Reads are unfiltered by the publish opt-in (III8 gates
+  // WRITES only). Fail-open: a ledger read error must never break the tool.
+  const sessionKeys = new Set(
+    memory.rejectedApproaches.map((r) => normalizeConceptKey(r.concept ?? r.description)),
+  );
+  const globalAvoid: RejectedApproach[] = [];
+  try {
+    for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
+      const concept = entry.concept?.trim();
+      if (!concept) continue;
+      // Dedupe against this project's own memory so a concept present in both
+      // isn't double-counted in the "considered" breadcrumb.
+      if (sessionKeys.has(normalizeConceptKey(concept))) continue;
+      const latestReason = [...entry.instances].reverse().find((i) => i.reason)?.reason;
+      globalAvoid.push({
+        description: concept,
+        concept,
+        reason: latestReason
+          ? `${latestReason} (cross-project 'avoid' stance from your philosophy ledger)`
+          : "Cross-project 'avoid' stance from your philosophy ledger.",
+      });
+    }
+  } catch {
+    // Non-fatal — without the global overlay the gate still enforces session + team.
+  }
+
   const result = runPreflight({
     toolName,
     proposalStrings,
     proposalPaths,
-    rejectedApproaches: memory.rejectedApproaches,
+    proposalConcepts,
+    rejectedApproaches: [...memory.rejectedApproaches, ...globalAvoid],
     teamPreferences: teamPrefs,
   });
 
   if (!result.blocked) {
+    // Phase-1 (D) — instrument the residual. A near-miss that was ADMITTED
+    // (token coverage in [threshold,1)) is exactly the fuzzy signal Phase 2
+    // (embeddings) would target. Count each one so the embeddings decision is
+    // data-driven. Fire-and-forget; recordMetric is a no-op on stores that
+    // don't implement it (FileStore in-process tap already sees these).
+    for (const nm of result.trace.nearMisses) {
+      void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
+    }
     return { ok: true, trace: result.trace };
   }
 

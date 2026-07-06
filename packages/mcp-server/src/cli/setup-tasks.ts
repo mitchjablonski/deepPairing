@@ -676,6 +676,12 @@ function ledgersPresent(projectRoot) {
   try {
     if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
   } catch {}
+  // Phase-1 (C) — a project with NO local rejections/team rules can still have
+  // cross-project 'avoid' stances materialized by the daemon; don't skip the
+  // matcher import when that digest exists.
+  try {
+    if (fs.existsSync(path.join(projectRoot, ".deeppairing", "hooks", "ledger-digest.json"))) return true;
+  } catch {}
   return false;
 }
 

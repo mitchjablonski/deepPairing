@@ -27,6 +27,17 @@ import { writeJsonAtomic } from "./atomic-write.js";
 
 export interface MetricsCounts {
   preflightBlocks: { total: number; bySource: { session: number; team: number } };
+  /**
+   * Phase-1 (D) — instrumentation for the residual (feeds the Phase-2
+   * embeddings decision). `preflightNearMisses`: proposals ADMITTED with token
+   * coverage in [threshold,1) — the fuzzy signal a semantic matcher would
+   * target. `gateEscapes`: approaches the human MANUALLY re-flagged (rejected)
+   * that the gate had ADMITTED with ZERO lexical overlap against everything it
+   * considered — the strongest justification for embeddings (no lexical signal
+   * existed to catch it). Optional on-disk (older files default to 0).
+   */
+  preflightNearMisses: number;
+  gateEscapes: number;
   ledgerWrites: { total: number; rejected: number; approved: number };
   retrospectives: { total: number; right: number; wrong: number; mixed: number };
   horizonChecksRequested: number;
@@ -48,6 +59,8 @@ export interface MetricsFile {
 
 export type MetricsEvent =
   | { kind: "preflight_block"; source: "session" | "team" }
+  | { kind: "preflight_near_miss"; source: "session" | "team" }
+  | { kind: "gate_escape" }
   | { kind: "ledger_write"; verdict: "rejected" | "approved" }
   | { kind: "retrospective"; verdict: "right" | "wrong" | "mixed" }
   | { kind: "horizon_check_requested" }
@@ -63,6 +76,8 @@ const VERSION = 1 as const;
 function emptyCounts(): MetricsCounts {
   return {
     preflightBlocks: { total: 0, bySource: { session: 0, team: 0 } },
+    preflightNearMisses: 0,
+    gateEscapes: 0,
     ledgerWrites: { total: 0, rejected: 0, approved: 0 },
     retrospectives: { total: 0, right: 0, wrong: 0, mixed: 0 },
     horizonChecksRequested: 0,
@@ -209,6 +224,12 @@ export function recordMetricEvent(projectRoot: string, event: MetricsEvent): voi
     case "preflight_block":
       data.counts.preflightBlocks.total += 1;
       data.counts.preflightBlocks.bySource[event.source] += 1;
+      break;
+    case "preflight_near_miss":
+      data.counts.preflightNearMisses += 1;
+      break;
+    case "gate_escape":
+      data.counts.gateEscapes += 1;
       break;
     case "ledger_write":
       data.counts.ledgerWrites.total += 1;
