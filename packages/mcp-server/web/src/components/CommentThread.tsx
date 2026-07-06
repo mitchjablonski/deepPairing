@@ -4,7 +4,7 @@ import { formatClockTime as formatTime } from "../lib/time";
 import { useDraft } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
-import { useArtifactStore } from "../stores/artifact";
+import { useArtifactStore, rootArtifactId } from "../stores/artifact";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { isSessionLive } from "../stores/connection";
@@ -105,7 +105,13 @@ function CommentBubble({ comment }: { comment: Comment }) {
 
 export function CommentThread({ artifactId, comments, target }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
-  const [input, setInput] = useDraft(`comment:${artifactId}:${JSON.stringify(target ?? {})}`);
+  // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
+  // supersede advances the selection to v2's new id and remounts this thread,
+  // so a draft keyed on v1's id would be orphaned. rootArtifactId(v1)===
+  // rootArtifactId(v2), so the in-progress draft survives the auto-advance.
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const rootId = rootArtifactId(artifacts, artifactId);
+  const [input, setInput] = useDraft(`comment:${rootId}:${JSON.stringify(target ?? {})}`);
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
   

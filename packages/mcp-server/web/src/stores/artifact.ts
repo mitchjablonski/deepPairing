@@ -203,7 +203,7 @@ function lsSetSelection(id: string | null): void {
  * (addArtifact/updateArtifact already avoid/advance on the hydration + live
  * paths; this closes the explicit-select path).
  */
-function resolveToLiveId(artifacts: Artifact[], id: string): string {
+export function resolveToLiveId(artifacts: Artifact[], id: string): string {
   let current = artifacts.find((a) => a.id === id);
   const seen = new Set<string>();
   while (current && current.status === "superseded" && !seen.has(current.id)) {
@@ -211,6 +211,27 @@ function resolveToLiveId(artifacts: Artifact[], id: string): string {
     const successor = artifacts.find((a) => a.parentId === current!.id);
     if (!successor) break;
     current = successor;
+  }
+  return current?.id ?? id;
+}
+
+/**
+ * Walk `parentId` from `id` back to the CHAIN ROOT (the v1 artifact) — the
+ * mirror of resolveToLiveId in the opposite direction. Callers that must
+ * survive a supersede auto-advance key off the root: the composer-draft key
+ * (D9/H5) is per-artifact, but a supersede advances selectedArtifactId to v2's
+ * NEW id, orphaning the draft flushed under v1's id. Keying by the STABLE root
+ * makes v1's in-progress draft load on v2. Falls back to `id` when the artifact
+ * isn't found so it degrades to per-id keying.
+ */
+export function rootArtifactId(artifacts: Artifact[], id: string): string {
+  let current = artifacts.find((a) => a.id === id);
+  const seen = new Set<string>();
+  while (current?.parentId && !seen.has(current.id)) {
+    seen.add(current.id);
+    const parent = artifacts.find((a) => a.id === current!.parentId);
+    if (!parent) break;
+    current = parent;
   }
   return current?.id ?? id;
 }
