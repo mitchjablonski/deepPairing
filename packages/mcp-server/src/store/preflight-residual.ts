@@ -100,6 +100,10 @@ export function detectAndRecordGateEscape(args: {
   }
 
   try {
+    // recordMetricEvent runs IN-PROCESS wherever FileStore.recordRejectedApproach
+    // runs — i.e. the daemon AND the standalone (non-daemon) FileStore path. So
+    // gate_escape is counted in both deployments, unlike the wire-routed
+    // preflight_block / preflight_near_miss (which FileStore omits).
     recordMetricEvent(projectRoot, { kind: "gate_escape" });
   } catch {
     // Non-fatal telemetry.

@@ -37,9 +37,17 @@ export const PreflightConsideredConceptSchema = z.object({
 });
 
 export const PreflightNearMissSchema = z.object({
-  source: z.enum(["session", "team"]),
+  /**
+   * "session"/"team" — a LOCAL near-miss (partial token overlap with a stance
+   * that CAN hard-block here). "global" — a cross-project ADVISORY match: the
+   * user avoided this concept in another project, surfaced as a nudge that
+   * NEVER hard-blocks (advisory-first). The `project` field names where.
+   */
+  source: z.enum(["session", "team", "global"]),
   concept: z.string().min(1),
   reason: z.string().optional(),
+  /** For source==="global": the project basename where the stance was avoided. */
+  project: z.string().optional(),
   /**
    * Why this counts as "almost flagged" — short human-readable note. The
    * UI surfaces it as: "Your past stance on `${concept}` is adjacent."

@@ -27,7 +27,6 @@ import { mountStaticUi } from "../http/static-ui.js";
 import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./routes.js";
 import { applyTopLevelGuards } from "../http/guards.js";
 import { runDaemonStartupSetup } from "../cli/setup-tasks.js";
-import { materializeHookLedgerDigest } from "../store/ledger-digest.js";
 import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent, flushAllMetrics } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
@@ -812,11 +811,6 @@ async function main() {
       log(`Setup task: ${result.message}`);
     }
   }
-
-  // Phase-1 (C) — materialize the cross-project 'avoid' digest for the hot hook
-  // on every daemon boot, so a stance rejected in another project hard-blocks a
-  // direct Edit/Write here from the first tool call. Fail-open internally.
-  materializeHookLedgerDigest(projectRoot);
 
     // N2.1: probe sequential ports on EADDRINUSE so multiple projects can run
     // concurrent daemons (project A on 3847, project B on 3848, …). The bound

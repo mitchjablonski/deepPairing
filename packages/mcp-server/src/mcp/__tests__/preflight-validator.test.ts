@@ -18,6 +18,7 @@ import {
   findRejectedApproachMatch,
   findTeamPreferenceViolation,
   findConceptToConceptMatch,
+  isCrossProjectAdvisoryHit,
   stemToken,
   meaningfulTokens,
   normalizeConceptKey,
@@ -513,25 +514,69 @@ describe("runPreflight — concept↔concept lane (A)", () => {
 });
 
 // =====================================================================
-// Phase-1 (C) — global-avoid overlay is enforced through the SAME matcher.
-// (tool-helpers merges global stances into rejectedApproaches; here we prove
-//  the validator hard-blocks a synthetic global 'avoid' fed in that way.)
+// Phase-1 (C, advisory-first) — cross-project 'avoid' stances are ADVISORY:
+// they surface as source:"global" near-misses and NEVER hard-block. Local
+// session/team rejections keep hard-blocking (proven elsewhere in this file).
 // =====================================================================
 
-describe("runPreflight — global-avoid overlay behaves like a session rejection (C)", () => {
-  it("hard-blocks a cross-project 'avoid' concept present in the proposal prose", () => {
-    const globalAvoid: RejectedApproach = {
-      description: "pay-per-request hosting",
-      concept: "pay-per-request hosting",
-      reason: "Cross-project 'avoid' stance from your philosophy ledger.",
-    } as any;
+describe("isCrossProjectAdvisoryHit — high-signal gate for cross-project nudges (finding 3)", () => {
+  it("exact normalizeConceptKey equality against a NAMED proposal concept hits", () => {
+    expect(isCrossProjectAdvisoryHit("Pay-Per-Request Hosting", [], ["pay-per-request hosting"])).toBe(true);
+  });
+
+  it("full stemmed containment hits when the stored concept has ≥2 tokens", () => {
+    expect(isCrossProjectAdvisoryHit("global mutable state", ["add global mutable state cache"], [])).toBe(true);
+  });
+
+  it("a SINGLE-token concept does NOT hit on mere prose mention (no nudge spray)", () => {
+    // "orm"/"api"/"hooks" must not fire an advisory nudge on prose that just
+    // mentions the word — only an exact NAMED-concept match would.
+    expect(isCrossProjectAdvisoryHit("orm", ["introduce an ORM layer"], [])).toBe(false);
+    expect(isCrossProjectAdvisoryHit("hooks", ["use react hooks here"], [])).toBe(false);
+    // …but an exact named-concept match still hits.
+    expect(isCrossProjectAdvisoryHit("orm", [], ["orm"])).toBe(true);
+  });
+});
+
+describe("runPreflight — cross-project advisory overlay (C)", () => {
+  it("surfaces a matching cross-project stance as a source:'global' near-miss, NOT a block", () => {
     const r = runPreflight({
       toolName: "present_code_change",
-      proposalStrings: ["switch to pay-per-request hosting for the API"],
-      rejectedApproaches: [globalAvoid],
+      proposalStrings: ["switch to pay-per-request hosting for the service"],
+      rejectedApproaches: [],
       teamPreferences: [],
+      globalAdvisoryConcepts: [{ concept: "pay-per-request hosting", project: "project-a", reason: "expensive" }],
     });
-    expect(r.blocked).toBe(true);
-    if (r.blocked) expect(r.block.source).toBe("session");
+    expect(r.blocked).toBe(false);
+    const global = r.trace.nearMisses.find((n) => n.source === "global");
+    expect(global).toBeTruthy();
+    expect(global?.concept).toBe("pay-per-request hosting");
+    expect(global?.project).toBe("project-a");
+    expect(global?.why).toMatch(/project-a/);
+  });
+
+  it("does NOT surface a cross-project nudge for a single-token stance on prose", () => {
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["we should introduce an ORM layer"],
+      rejectedApproaches: [],
+      teamPreferences: [],
+      globalAdvisoryConcepts: [{ concept: "orm", project: "project-a" }],
+    });
+    expect(r.blocked).toBe(false);
+    expect(r.trace.nearMisses.some((n) => n.source === "global")).toBe(false);
+  });
+
+  it("a cross-project stance NEVER blocks even on a full prose match", () => {
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["add global mutable state for config"],
+      proposalConcepts: ["global mutable state"],
+      rejectedApproaches: [],
+      teamPreferences: [],
+      globalAdvisoryConcepts: [{ concept: "global mutable state", project: "other" }],
+    });
+    expect(r.blocked).toBe(false);
+    expect(r.trace.nearMisses.some((n) => n.source === "global" && n.concept === "global mutable state")).toBe(true);
   });
 });

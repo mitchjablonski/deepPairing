@@ -9,7 +9,7 @@ import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.j
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
 import { listSessions, searchAll, findPastPredictions, addRetrospective } from "./session-scan.js";
-import { ledgerDigest, invalidateLedgerDigestCache, materializeHookLedgerDigest } from "./ledger-digest.js";
+import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
@@ -897,10 +897,6 @@ export class FileStore implements IStore {
       } catch {
         // Non-fatal — losing a ledger append doesn't break the session.
       }
-      // Phase-1 (C) — this global write may add a new derived-'avoid' concept;
-      // re-materialize the hot-hook digest so a direct Edit/Write is gated
-      // without waiting for the next daemon boot. Fail-open internally.
-      materializeHookLedgerDigest(this.projectRoot);
     }
 
     const prefs = this.readPreferences();
@@ -971,9 +967,6 @@ export class FileStore implements IStore {
       } catch {
         // Non-fatal
       }
-      // Phase-1 (C) — an approval can shift a concept's derived stance OFF
-      // 'avoid'; refresh the hot-hook digest so it stops gating here too.
-      materializeHookLedgerDigest(this.projectRoot);
     }
 
     const prefs = this.readPreferences();
@@ -1025,9 +1018,6 @@ export class FileStore implements IStore {
         // Non-fatal — losing a ledger append doesn't break the override; the
         // local retire below is what clears the block in this project.
       }
-      // Phase-1 (C) — the counter-approval may swing the derived stance off
-      // 'avoid'; refresh the hot-hook digest so the override clears there too.
-      materializeHookLedgerDigest(this.projectRoot);
     }
 
     const prefs = this.readPreferences();

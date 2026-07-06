@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { salvageRecord } from "./salvage.js";
-import { writeJsonAtomic } from "./atomic-write.js";
-import { getGlobalStore } from "./global-store.js";
 
 /**
  * AA5 — ledger digest. Aggregates every preflight-traces.json across
@@ -140,57 +138,4 @@ export function ledgerDigest(projectRoot: string): {
   };
   ledgerDigestCache.set(projectRoot, { computedAt: Date.now(), result });
   return result;
-}
-
-/**
- * Phase-1 (C) — materialize a plain-text digest of the GLOBAL philosophy
- * ledger's derived-'avoid' concepts to `.deeppairing/hooks/ledger-digest.json`.
- *
- * WHY a materialized file instead of a live read: the hot PreToolUse hook
- * (cli/preflight-hook-core.ts, run via plain `node` from .deeppairing/hooks/)
- * MUST stay fast, synchronous, and free of `@deeppairing/shared` / the global
- * store at runtime. It can't call getGlobalStore(). So the DAEMON (which has
- * full deps and reads the global store anyway) writes this small sidecar, and
- * the hook's readRejectedApproaches() unions the strings in. That keeps the
- * hook deterministic (it reads a plain file) while still hard-blocking a
- * stance the user rejected in a PRIOR PROJECT — the whole point of (C).
- *
- * Shape: `{ version: 1, avoidConcepts: string[] }`. Reads of the global ledger
- * are unfiltered by the per-project publish opt-in (III8 gates WRITES only), so
- * every project gets the cross-project avoid overlay in its hook.
- *
- * Fail-open + idempotent: any error is swallowed (the hook still enforces
- * session + team from the on-disk ledgers), and an unchanged concept set skips
- * the write so we don't churn the file on every daemon tick.
- */
-export function hookLedgerDigestPath(projectRoot: string): string {
-  return path.join(projectRoot, ".deeppairing", "hooks", "ledger-digest.json");
-}
-
-export function materializeHookLedgerDigest(projectRoot: string): void {
-  try {
-    const avoidConcepts = getGlobalStore()
-      .query({ stance: "avoid", limit: 200 })
-      .map((e) => e.concept?.trim())
-      .filter((c): c is string => Boolean(c));
-    const target = hookLedgerDigestPath(projectRoot);
-    // Skip the write when the set is unchanged (avoid file churn / needless
-    // fs pressure on a busy daemon).
-    try {
-      const prev = JSON.parse(fs.readFileSync(target, "utf-8"));
-      const prevList = Array.isArray(prev?.avoidConcepts) ? prev.avoidConcepts : [];
-      if (
-        prevList.length === avoidConcepts.length &&
-        prevList.every((c: unknown, i: number) => c === avoidConcepts[i])
-      ) {
-        return;
-      }
-    } catch {
-      // No prior digest (or unreadable) — fall through and write.
-    }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    writeJsonAtomic(target, { version: 1, avoidConcepts });
-  } catch {
-    // Non-fatal — the hook still enforces session + team ledgers.
-  }
 }

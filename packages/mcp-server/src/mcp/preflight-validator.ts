@@ -181,6 +181,38 @@ export function findConceptToConceptMatch(
 }
 
 /**
+ * (C, advisory-first) High-SIGNAL gate for a cross-project ADVISORY nudge.
+ * Cross-project matches never hard-block, so the bar for even NUDGING is set
+ * higher than the local hard-block bar to avoid spraying low-signal noise:
+ *
+ *   - EXACT normalizeConceptKey equality against one of the proposal's NAMED
+ *     concepts (short-vs-short, unambiguous), OR
+ *   - full stemmed token containment where the stored concept has ≥2 meaningful
+ *     tokens (so single-token concepts like "api"/"orm"/"hooks" can't fire a
+ *     nudge on any prose that merely mentions the word).
+ *
+ * Local hard-block behavior is intentionally UNCHANGED by this — single-token
+ * LOCAL rejections still hard-block exactly as before. This stricter rule
+ * applies ONLY to the cross-project advisory path.
+ */
+export function isCrossProjectAdvisoryHit(
+  storedConcept: string,
+  proposalStrings: string[],
+  proposalConcepts: string[],
+): boolean {
+  if (!storedConcept?.trim()) return false;
+  const key = normalizeConceptKey(storedConcept);
+  // Exact key equality against a NAMED proposal concept — always high-signal.
+  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey(pc) === key)) return true;
+  // Full stemmed token containment, but only for multi-token concepts.
+  if (meaningfulTokens(storedConcept).length >= 2) {
+    const texts = [...proposalStrings, ...proposalConcepts];
+    if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
+  }
+  return false;
+}
+
+/**
  * Minimal glob matcher for team-preference scope paths. Supports:
  *   - `**` matches any sequence (including path separators)
  *   - `*`  matches any run of non-separator chars
@@ -353,6 +385,15 @@ export interface PreflightInput {
   proposalConcepts?: string[];
   rejectedApproaches: RejectedApproach[];
   teamPreferences: TeamPreference[];
+  /**
+   * (C, advisory-first) Cross-project 'avoid' stances from the global
+   * philosophy ledger. These are ADVISORY ONLY — a match surfaces as a
+   * `source:"global"` near-miss ("you avoided this in <project> — still want it
+   * here?") and NEVER hard-blocks. Local session/team rejections are the only
+   * hard-block authority. Caller (tool-helpers) dedups this against the
+   * project's own rejections AND approvals/overrides before passing it in.
+   */
+  globalAdvisoryConcepts?: Array<{ concept: string; project?: string; reason?: string }>;
 }
 
 export interface PreflightBlock {
@@ -405,7 +446,7 @@ export type PreflightResult =
  * recent stance and is what their brain expects to be enforced.
  */
 export function runPreflight(input: PreflightInput): PreflightResult {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input;
 
   // (A) Near-miss + concept↔concept both benefit from also weighing the
   // agent's NAMED concept(s), not just the prose. The named concept is short
@@ -482,6 +523,27 @@ export function runPreflight(input: PreflightInput): PreflightResult {
         concept: pref.concept,
         reason: pref.rationale,
         why: `Partial token overlap (${Math.round(cov * 100)}%) with a team policy.`,
+      });
+    }
+  }
+
+  // (C, advisory-first) Cross-project 'avoid' stances → ADVISORY near-misses
+  // only. Never blocks. Uses the high-signal isCrossProjectAdvisoryHit gate
+  // (exact named-concept key OR ≥2-token full containment) so single-token
+  // concepts don't spray low-signal nudges. Deduped by the caller against local
+  // rejections + approvals, so a concept this project has hard-blocked or
+  // approved won't also nudge here.
+  for (const g of globalAdvisoryConcepts) {
+    if (!g.concept?.trim()) continue;
+    if (isCrossProjectAdvisoryHit(g.concept, proposalStrings, proposalConcepts)) {
+      nearMisses.push({
+        source: "global",
+        concept: g.concept,
+        reason: g.reason,
+        project: g.project,
+        why: g.project
+          ? `You avoided this in "${g.project}" — still want it here? (cross-project, advisory)`
+          : `You avoided this in another project — still want it here? (cross-project, advisory)`,
       });
     }
   }
