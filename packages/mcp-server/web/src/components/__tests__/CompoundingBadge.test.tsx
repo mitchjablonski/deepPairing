@@ -21,7 +21,7 @@ describe("CompoundingBadge", () => {
   it("E3 (L6) — shows a muted zero-state at 0/0 (was: self-hiding, so new users never learned the meter existed)", async () => {
     vi.stubGlobal("fetch", mockMetrics(0, 0));
     render(<CompoundingBadge onOpen={() => {}} />);
-    expect(await screen.findByText(/taste ledger/)).toBeInTheDocument();
+    expect(await screen.findByText(/🛡 Ledger/)).toBeInTheDocument();
     // The counts only render once there's real signal.
     expect(screen.queryByText("🛡 0")).toBeNull();
   });

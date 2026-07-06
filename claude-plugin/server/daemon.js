@@ -27007,6 +27007,7 @@ function runDaemonStartupSetup(projectRoot2) {
 var DEFAULT_REJECTION_CONCEPT = "global mutable state for config";
 var DEFAULT_REJECTION_REASON = "we tried global state for config last project \u2014 broke testability in 3 places";
 var DEFAULT_REJECTION_DESCRIPTION = "Config loader: global mutable ConfigStore singleton";
+var DEFAULT_REPROPOSAL = "Add a global mutable state singleton to hold config";
 function runDemoScript({
   sessionId,
   store,
@@ -27058,7 +27059,7 @@ function runDemoScript({
       toolName: "present_findings",
       source: "session",
       match: {
-        proposal: "Add a global config cache for hot lookups",
+        proposal: DEFAULT_REPROPOSAL,
         description: DEFAULT_REJECTION_DESCRIPTION,
         reason: DEFAULT_REJECTION_REASON,
         concept: DEFAULT_REJECTION_CONCEPT,

@@ -1,6 +1,6 @@
 # deepPairing — Claude Code plugin
 
-Turn Claude Code from a black box into a pairing partner. Structured
+Pair with Claude Code instead of reviewing its output after the fact. Structured
 artifacts (findings, specs, decisions, plans), cross-session rejection
 memory, a cross-project philosophy ledger, and a companion web UI (on a
 deterministic per-project port in `3847-3974`, derived from the project path —

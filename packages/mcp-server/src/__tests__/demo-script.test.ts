@@ -9,7 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { FileStore } from "../store/file-store.js";
 import { setGlobalStoreForTests } from "../store/global-store.js";
-import { runDemoScript } from "../demo-script.js";
+import { runDemoScript, DEFAULT_REJECTION_CONCEPT, DEFAULT_REPROPOSAL } from "../demo-script.js";
+import { conceptMatchesProposal } from "../mcp/preflight-validator.js";
 
 type BroadcastEvent = { sessionId: string; event: any };
 
@@ -39,6 +40,15 @@ async function runUntil(ms: number) {
 }
 
 describe("runDemoScript", () => {
+  it("HONESTY GUARD — the demo's scripted block is one the REAL matcher would make", () => {
+    // The demo hardcodes its own preflight_blocked broadcast. This pins that
+    // the depicted block is not a dramatization: conceptMatchesProposal (the
+    // real token-substring gate) must actually fire for this concept+proposal,
+    // or the honest README (which says the match is on the concept's *words*)
+    // would be contradicted by our own hero demo/screenshot.
+    expect(conceptMatchesProposal(DEFAULT_REJECTION_CONCEPT, DEFAULT_REPROPOSAL)).toBe(true);
+  });
+
   it("registers three scheduled steps on the canonical timeline", () => {
     runDemoScript({
       sessionId: "demo_x",
@@ -115,8 +125,10 @@ describe("runDemoScript", () => {
     expect(block).toBeDefined();
     expect(block!.event.source).toBe("session");
     expect(block!.event.match.via).toBe("concept");
-    expect(block!.event.match.concept).toBe("global mutable state for config");
-    expect(block!.event.match.proposal).toMatch(/global config cache/i);
+    expect(block!.event.match.concept).toBe(DEFAULT_REJECTION_CONCEPT);
+    expect(block!.event.match.proposal).toBe(DEFAULT_REPROPOSAL);
+    // and the depicted block is one the real matcher would actually make
+    expect(conceptMatchesProposal(block!.event.match.concept, block!.event.match.proposal)).toBe(true);
   });
 
   it("returns the artifactId synchronously so the caller can reference it", () => {
