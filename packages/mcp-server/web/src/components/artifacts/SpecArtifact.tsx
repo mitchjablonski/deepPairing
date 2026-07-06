@@ -4,7 +4,7 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
-import { useArtifactStore } from "../../stores/artifact";
+import { useChainComments } from "../../hooks/useChainComments";
 
 interface Props {
   artifact: Artifact;
@@ -140,7 +140,7 @@ function OpenQuestionRow({
   question: string;
   index: number;
 }) {
-  const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  const comments = useChainComments(artifactId); // Bug2 — chain aggregation
   // D8 review — the human's own UNANSWERED AskTrigger question must not
   // stamp the row "answered"; only plain comments / answered questions do.
   const answers = comments.filter(
@@ -178,7 +178,7 @@ function RequirementRow({
   index: number;
   artifact: Artifact;
 }) {
-  const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  const comments = useChainComments(artifact.id); // Bug2 — chain aggregation
   // D8 (M6) — match by stable requirementId first; keep the legacy
   // stepIndex+sectionId shape so existing comments still count. The old
   // filter ALSO demanded sectionId, which CommentTrigger never sent — so

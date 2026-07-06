@@ -5,6 +5,7 @@ import { useDraft } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
 import { useArtifactStore, rootArtifactId } from "../stores/artifact";
+import { useChainComments } from "../hooks/useChainComments";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { isSessionLive } from "../stores/connection";
@@ -33,7 +34,7 @@ function Avatar({ author }: { author: string }) {
 }
 
 
-function CommentBubble({ comment }: { comment: Comment }) {
+function CommentBubble({ comment, fromVersion }: { comment: Comment; fromVersion?: number }) {
   const isHuman = comment.author === "human";
   const refs = (comment as any).codeReferences as Array<{
     filePath: string;
@@ -55,6 +56,17 @@ function CommentBubble({ comment }: { comment: Comment }) {
               {comment.target.filePath}:{comment.target.lineStart}
               {comment.target.lineEnd && comment.target.lineEnd !== comment.target.lineStart
                 ? `-${comment.target.lineEnd}` : ""}
+            </span>
+          )}
+          {/* Bug2 — this comment was posted on an EARLIER version of the
+              artifact (aggregated onto the current version via the chain). Tag
+              it subtly so the merged thread stays legible. */}
+          {fromVersion != null && (
+            <span
+              className="text-2xs text-text-muted/80 italic"
+              title="Posted on an earlier version of this artifact"
+            >
+              from v{fromVersion}
             </span>
           )}
           <span className="text-2xs text-text-muted ml-auto">{formatTime(comment.createdAt)}</span>
@@ -137,16 +149,25 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
   // Reply button's own output!) invisible. Shared with the rail.
   const threads = buildThreads(comments);
 
+  // Bug2 — a comment whose target artifact differs from the one being viewed
+  // was posted on an earlier version (aggregated via the chain). Surface its
+  // version number so the merged thread reads honestly.
+  const fromVersion = (c: Comment): number | undefined => {
+    if (c.target.artifactId === artifactId) return undefined;
+    const a = artifacts.find((x) => x.id === c.target.artifactId);
+    return a && a.version > 1 ? a.version : a?.version;
+  };
+
   return (
     <div className="space-y-3">
       {threads.map(({ root: comment, replies }) => {
         return (
           <div key={comment.id} className="space-y-2">
-            <CommentBubble comment={comment} />
+            <CommentBubble comment={comment} fromVersion={fromVersion(comment)} />
             {replies.length > 0 && (
               <div className="ml-7 space-y-2 border-l border-border-subtle pl-3">
                 {replies.map((reply) => (
-                  <CommentBubble key={reply.id} comment={reply} />
+                  <CommentBubble key={reply.id} comment={reply} fromVersion={fromVersion(reply)} />
                 ))}
               </div>
             )}
@@ -225,11 +246,11 @@ export function AskTrigger({
   const [sending, setSending] = useState(false);
   const { sent, flash } = useSentFlash();
   const submitComment = useArtifactStore((s) => s.submitComment);
-  const comments = useArtifactStore((s) => s.comments);
   const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
 
-  // Look up existing question(s) + their answers for this target
-  const artifactComments = comments[artifactId] ?? [];
+  // Look up existing question(s) + their answers for this target — Bug2:
+  // aggregate the version chain so a question asked on v1 still shows on v2.
+  const artifactComments = useChainComments(artifactId);
   const matching = artifactComments.filter((c) => {
     if (c.intent !== "question") return false;
     if (target.findingIndex != null && c.target.findingIndex !== target.findingIndex) return false;
@@ -407,7 +428,9 @@ export function CommentTrigger({
   fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  // Bug2 — aggregate the version chain so a line/finding comment posted on v1
+  // still surfaces (count + popover thread) on v2.
+  const allComments = useChainComments(artifactId);
   const comments = allComments.filter((c) => {
     if (target.lineNumber != null) return c.target.lineNumber === target.lineNumber;
     if (target.evidenceIndex != null) {

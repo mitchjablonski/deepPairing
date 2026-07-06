@@ -236,6 +236,56 @@ export function rootArtifactId(artifacts: Artifact[], id: string): string {
   return current?.id ?? id;
 }
 
+/**
+ * The ids in `id`'s version chain, from the displayed artifact back to the
+ * root (id, parent, grandparent, … root). Comments are bucketed per-version by
+ * `comment.target.artifactId` (a FileStore.targetKey invariant we must not
+ * disturb), so after a supersede advances to v2, comments posted on v1 live
+ * under v1's id and vanish. Walking the chain lets the READ side re-collect
+ * them. Returns `[id]` when the artifact is unknown.
+ */
+export function chainArtifactIds(artifacts: Artifact[], id: string): string[] {
+  const ids: string[] = [];
+  let current = artifacts.find((a) => a.id === id);
+  if (!current) return [id];
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    ids.push(current.id);
+    if (!current.parentId) break;
+    const parent = artifacts.find((a) => a.id === current!.parentId);
+    if (!parent) break;
+    current = parent;
+  }
+  return ids;
+}
+
+/**
+ * READ-side aggregation of a version chain's comments — the shared selector
+ * every renderer uses so v1's comments render on v2. We do NOT re-parent
+ * comments server-side or mutate `target.artifactId` (that breaks
+ * FileStore.targetKey dedupe + thread-depth invariants and the agent's
+ * check_feedback drain); we only gather them for display. Sorted by createdAt
+ * so the merged thread stays chronological across versions.
+ */
+export function collectChainComments(
+  artifacts: Artifact[],
+  comments: Record<string, Comment[]>,
+  id: string,
+): Comment[] {
+  const ids = chainArtifactIds(artifacts, id);
+  // Fast path: a v1 (or unknown) artifact — no ancestors, return the bucket
+  // as-is so the array identity stays stable for downstream memos.
+  if (ids.length <= 1) return comments[id] ?? [];
+  const out: Comment[] = [];
+  for (const cid of ids) {
+    const list = comments[cid];
+    if (list) out.push(...list);
+  }
+  out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return out;
+}
+
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
   artifacts: [],
   comments: {},

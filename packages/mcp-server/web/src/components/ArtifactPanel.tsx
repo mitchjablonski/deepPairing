@@ -22,6 +22,7 @@ const CodeChangeArtifact = lazy(() => import("./artifacts/CodeChangeArtifact").t
 const ReasoningCard = lazy(() => import("./artifacts/ReasoningCard").then((m) => ({ default: m.ReasoningCard })));
 const SpecArtifact = lazy(() => import("./artifacts/SpecArtifact").then((m) => ({ default: m.SpecArtifact })));
 import { CommentThread } from "./CommentThread";
+import { useChainComments } from "../hooks/useChainComments";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
@@ -164,7 +165,9 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
 
 function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
-  const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  // Bug2 — aggregate comments across the version chain so v1's general
+  // comments render on v2 after a supersede auto-advance.
+  const comments = useChainComments(artifact.id);
   const generalComments = comments.filter(
     (c) =>
       c.target.lineNumber == null &&

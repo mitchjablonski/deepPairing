@@ -1,6 +1,7 @@
 import type { Artifact, Evidence, Comment } from "@deeppairing/shared";
 import { coerceResearchContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
+import { useChainComments } from "../../hooks/useChainComments";
 import { scrollToAnchor } from "../../lib/comment-anchor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
@@ -561,7 +562,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
       },
     [artifact.content],
   );
-  const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  const comments = useChainComments(artifact.id); // Bug2 — chain aggregation
   const [focusMode, setFocusMode] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("significance");
@@ -839,7 +840,7 @@ function ResearchOpenQuestion({
   question: string;
   index: number;
 }) {
-  const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  const comments = useChainComments(artifactId); // Bug2 — chain aggregation
   // D8 review — the human's own UNANSWERED AskTrigger question must not
   // stamp the row "answered"; only plain comments / answered questions do.
   const answers = comments.filter(
