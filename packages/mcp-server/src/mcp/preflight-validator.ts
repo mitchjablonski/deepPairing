@@ -23,17 +23,97 @@ import type {
 } from "@deeppairing/shared";
 import type { RejectedApproach } from "../store/store-interface.js";
 
+// ---------------------------------------------------------------------
+// Phase-1 (B) — normalization + light stemming.
+//
+// This module is imported by BOTH the MCP-side preflight AND the hot
+// PreToolUse hook (cli/preflight-hook-core.ts → runPreflight), and the hook
+// runs via plain `node` from .deeppairing/hooks/ and MUST stay free of
+// `@deeppairing/shared` at runtime. So everything here is dependency-free
+// pure logic — no import of normalizeConceptKey/zod from shared.
+// ---------------------------------------------------------------------
+
+/**
+ * D7-equivalent concept-key normalizer, INLINED here (not imported from
+ * `@deeppairing/shared`) to keep the hook's runtime import graph free of the
+ * shared package. Same contract as shared/normalize.ts: trim → lowercase →
+ * collapse internal whitespace. Used for concept↔concept exact-key equality.
+ */
+export function normalizeConceptKey(name: string): string {
+  return String(name).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Grammatical function words that never help (and shouldn't gate) a concept
+ * match. Kept deliberately tiny — the "every meaningful token must appear"
+ * semantics already make common words harmless; this only guards the case of
+ * a concept whose ONLY tokens are function words. Checked pre-stem.
+ */
+const SHORT_STOPWORDS = new Set([
+  "the", "and", "for", "but", "not", "use", "with", "from", "into", "onto",
+  "that", "this", "than", "then", "via", "per", "our", "your", "its",
+]);
+
+/**
+ * (B) Minimal, conservative, dependency-free suffix stemmer. Collapses obvious
+ * inflectional morphology so "host" / "hosts" / "hosting" / "hosted" all map to
+ * the stem "host". Deliberately UNDER-stems rather than over-stems: an
+ * over-aggressive stemmer that collapses two unrelated words to the same stem
+ * would manufacture a false-positive HARD BLOCK, whereas an under-stem just
+ * misses and the residual is routed to the advisory near-miss channel.
+ *
+ * Guarantees relied on by the FP-guard tests:
+ *   - "rail" (≤4 chars) is returned untouched, so it never equals "guardrail"
+ *     (no suffix rule fires on "guardrail" → it stays "guardrail"). The
+ *     rail∈guardrail false positive that was specifically patched stays dead.
+ *   - Short acronyms (sql/orm/jwt/api/css, ≤4 chars) pass through verbatim, so
+ *     they remain decisive tokens instead of being canonicalized away.
+ */
+export function stemToken(raw: string): string {
+  const t = raw.toLowerCase();
+  // Short words & acronyms: leave alone (precision guard; "rail" stays "rail").
+  if (t.length <= 4) return t;
+  if (t.endsWith("ing") && t.length >= 6) return t.slice(0, -3); // hosting → host
+  if (t.endsWith("ed") && t.length >= 5) return t.slice(0, -2);  // hosted → host
+  // Plural / 3rd-person "s", but NOT a doubled "ss" (class, address stay put).
+  if (t.endsWith("s") && !t.endsWith("ss") && t.length >= 5) return t.slice(0, -1); // hosts → host
+  return t;
+}
+
+/**
+ * Tokenize a string into meaningful, STEMMED tokens. Splits on any
+ * non-alphanumeric run (so "console.log" → ["console","log"], "pay-per-request"
+ * → ["pay","per","request"], and "argon2id" stays one token). Drops
+ * function-word stopwords and ≤2-char noise, keeps 3-char decisive acronyms
+ * (sql/orm/jwt), then stems each survivor.
+ *
+ * (B) — threshold lowered from the legacy ≥4 to ≥3 so short acronyms count;
+ * combined with the stopword guard this raises recall on acronym-driven
+ * concepts without re-opening the short-fragment false positives (the surface
+ * matcher's word-boundary guard is unchanged).
+ */
+export function meaningfulTokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t))
+    .map(stemToken);
+}
+
 /**
  * Y1' — fraction of meaningful concept tokens that appear in the proposal.
  * Returns 0..1. Used for near-miss detection: a stance is "almost flagged"
  * when the partial coverage is high enough to be relevant but below the
  * full-match threshold the blocking matchers use.
+ *
+ * (B) — now compares STEMMED token sets (was substring `.includes`), so a
+ * near-miss survives morphology the same way a full match does.
  */
 function tokenCoverage(concept: string, proposal: string): number {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  const tokens = meaningfulTokens(concept);
   if (tokens.length === 0) return 0;
-  const p = proposal.toLowerCase();
-  const hits = tokens.filter((t) => p.includes(t)).length;
+  const pset = new Set(meaningfulTokens(proposal));
+  const hits = tokens.filter((t) => pset.has(t)).length;
   return hits / tokens.length;
 }
 
@@ -48,15 +128,56 @@ const CONSIDERED_CAP = 20;
 
 /**
  * Concept-token check used by both rejected-approach matching and team-pref
- * matching. Returns true when every meaningful (≥4 char) token from `concept`
- * appears in `proposal`. Substring-based and case-insensitive — good enough
- * to catch paraphrases without false positives on common words.
+ * matching. Returns true when every meaningful token from `concept` (stemmed)
+ * is PRESENT AS A WHOLE STEMMED TOKEN in `proposal`.
+ *
+ * (B) — this is the unified normalized token-EQUALITY basis that both the
+ * session lane and the team lane now share. Pre-Phase-1 the team lane used raw
+ * `.includes()` (caught morphology but re-opened rail∈guardrail) and the
+ * session lane used a word-bounded regex (no false positive but missed
+ * morphology). Stemmed set-membership gets BOTH right: "host" matches
+ * "hosting" (same stem) yet "rail" does NOT match "guardrail" (distinct stems,
+ * and equality — not substring — is the test).
  */
 export function conceptMatchesProposal(concept: string, proposal: string): boolean {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  const tokens = meaningfulTokens(concept);
   if (tokens.length === 0) return false;
-  const p = proposal.toLowerCase();
-  return tokens.every((t) => p.includes(t));
+  const pset = new Set(meaningfulTokens(proposal));
+  return tokens.every((t) => pset.has(t));
+}
+
+/**
+ * (A) Concept↔concept matcher — the biggest free precision win. When the
+ * agent's proposal carries its OWN named concept(s) (present_options'
+ * `option.concept.name`, present_code_change's `concept`), compare those SHORT
+ * strings directly against each stored SHORT concept, instead of matching the
+ * stored concept's tokens against the raw proposal PROSE (concept-vs-prose,
+ * lower precision — the whole reasoning blob is a big haystack).
+ *
+ * Two tiers, both high-precision because BOTH sides are short:
+ *   1. Exact normalized-key equality (normalizeConceptKey) — a clear match.
+ *   2. Full stemmed token-set containment (every stored-concept token present
+ *      as a whole stemmed token in the proposal concept) — short-vs-short, so
+ *      this is far tighter than concept-vs-prose and safe to hard-block.
+ *
+ * Partial overlap is NOT returned here (the caller routes it to the advisory
+ * near-miss channel via tokenCoverage), honoring the behavior invariant:
+ * only a CLEAR normalized-concept match becomes a new hard block.
+ */
+export function findConceptToConceptMatch(
+  proposalConcepts: string[],
+  storedConcepts: string[],
+): { proposalConcept: string; storedConcept: string } | null {
+  for (const stored of storedConcepts) {
+    if (!stored?.trim()) continue;
+    const storedKey = normalizeConceptKey(stored);
+    for (const pc of proposalConcepts) {
+      if (!pc?.trim()) continue;
+      if (normalizeConceptKey(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
+      if (conceptMatchesProposal(stored, pc)) return { proposalConcept: pc, storedConcept: stored };
+    }
+  }
+  return null;
 }
 
 /**
@@ -188,9 +309,6 @@ export function findRejectedApproachMatch(
     const specificNoun = rejNormalized.includes(":")
       ? rejNormalized.split(":").slice(1).join(":").trim()
       : rejNormalized;
-    const conceptTokens = rej.concept
-      ? clean(rej.concept).split(/\s+/).filter((t) => t.length >= 4)
-      : [];
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
@@ -203,8 +321,12 @@ export function findRejectedApproachMatch(
       if (containsAsPhrase(p, specificNoun)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      // Concept match: every non-stopword concept token present as a whole word.
-      if (conceptTokens.length > 0 && conceptTokens.every((t) => containsAsPhrase(p, t))) {
+      // (B) Concept match: every meaningful STEMMED concept token present as a
+      // whole stemmed token in the proposal. Unified with the team lane on the
+      // same token-equality basis so this lane now catches morphology
+      // ("hosting" ← concept "host") that the old word-bounded per-token regex
+      // missed, WITHOUT re-opening rail∈guardrail (equality, not substring).
+      if (rej.concept && conceptMatchesProposal(rej.concept, proposal)) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }
@@ -220,6 +342,15 @@ export interface PreflightInput {
   toolName: string;
   proposalStrings: string[];
   proposalPaths?: string[];
+  /**
+   * (A) The proposal's OWN named concept(s) — e.g. present_options'
+   * `option.concept.name` or present_code_change's `concept`. When present,
+   * the validator runs a high-precision concept↔concept comparison (short vs
+   * short) in addition to the legacy concept-vs-prose path. Optional and
+   * defaults to [] so callers that don't name a concept (the hot hook against a
+   * raw edit) are unaffected.
+   */
+  proposalConcepts?: string[];
   rejectedApproaches: RejectedApproach[];
   teamPreferences: TeamPreference[];
 }
@@ -274,7 +405,13 @@ export type PreflightResult =
  * recent stance and is what their brain expects to be enforced.
  */
 export function runPreflight(input: PreflightInput): PreflightResult {
-  const { toolName, proposalStrings, proposalPaths = [], rejectedApproaches, teamPreferences } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences } = input;
+
+  // (A) Near-miss + concept↔concept both benefit from also weighing the
+  // agent's NAMED concept(s), not just the prose. The named concept is short
+  // and precise, so a partial token overlap here is a strong "adjacent stance"
+  // signal. Union it into the texts the coverage pass scans.
+  const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
 
   // Y1' — build the trace's "considered" list FIRST. Includes every
   // session-rejected approach + every team pref whose scope (if any) the
@@ -315,7 +452,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   for (const rej of rejectedApproaches) {
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
-      ...proposalStrings.map((p) => tokenCoverage(conceptText, p)),
+      ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
       0,
     );
     if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
@@ -336,7 +473,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
       if (!hit) continue;
     }
     const cov = Math.max(
-      ...proposalStrings.map((p) => tokenCoverage(pref.concept, p)),
+      ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
       0,
     );
     if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
@@ -351,7 +488,22 @@ export function runPreflight(input: PreflightInput): PreflightResult {
 
   // Lane 1 — session-scoped rejected approaches.
   if (rejectedApproaches.length > 0) {
-    const match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    // (A) concept↔concept fallback: if the prose path didn't catch it but the
+    // agent NAMED a concept, compare that short string against each stored
+    // rejected concept (exact normalized key OR full stemmed token
+    // containment). Higher precision than concept-vs-prose, so blocking here is
+    // consistent with the behavior invariant (clear normalized-concept match).
+    if (!match && proposalConcepts.length > 0) {
+      for (const rej of rejectedApproaches) {
+        if (!rej.concept) continue;
+        const cc = findConceptToConceptMatch(proposalConcepts, [rej.concept]);
+        if (cc) {
+          match = { proposal: cc.proposalConcept, rejected: rej, via: "concept" };
+          break;
+        }
+      }
+    }
     if (match) {
       const reasonLine = match.rejected.reason
         ? `\nPrior rejection reason: "${match.rejected.reason}"`
@@ -405,7 +557,26 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   // memory: a team pref is committed to a file in the repo, so the block
   // message attributes to "team policy" not "the user".
   if (teamPreferences.length > 0) {
-    const teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    // (A) concept↔concept fallback for team 'avoid' prefs (require stays
+    // domain-gated in findTeamPreferenceViolation). Same scope discipline: a
+    // scoped pref only fires when the proposal's paths intersect the scope, and
+    // an unscoped-vs-no-path proposal is skipped to bias away from false blocks.
+    if (!teamMatch && proposalConcepts.length > 0) {
+      for (const pref of teamPreferences) {
+        if (pref.kind !== "avoid") continue;
+        if (pref.scope?.paths?.length) {
+          if (proposalPaths.length === 0) continue;
+          const hit = proposalPaths.some((p) => pref.scope!.paths!.some((g) => matchesGlob(p, g)));
+          if (!hit) continue;
+        }
+        const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
+        if (cc) {
+          teamMatch = { proposal: cc.proposalConcept, pref, via: "avoid" };
+          break;
+        }
+      }
+    }
     if (teamMatch) {
       const { pref, proposal, via } = teamMatch;
       const attribution = pref.addedBy ? ` (added by ${pref.addedBy})` : "";

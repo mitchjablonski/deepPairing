@@ -41,7 +41,11 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
 
   const proposals: string[] = [filePath, reasoning].filter(Boolean);
   const proposalPaths: string[] = [filePath];
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
+  // (A) — the agent's named concept (e.g. { name: "in-process LRU" }) goes into
+  // the concept↔concept lane, compared short-vs-short against stored concepts
+  // instead of only fuzzy-matching the reasoning prose.
+  const proposalConcepts: string[] = [concept?.name].filter((n): n is string => Boolean(n && n.trim()));
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;

@@ -836,7 +836,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       toolName: string,
       proposalStrings: string[],
       proposalPaths: string[] = [],
-    ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths);
+      proposalConcepts: string[] = [],
+    ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts);
     const autoNameSession = (title: string) => sessionNameLatch.maybeName(title);
 
     // X4 — ToolContext for handlers extracted to tools/. Cases that still
