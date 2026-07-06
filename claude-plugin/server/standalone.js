@@ -26497,20 +26497,67 @@ function decideElicitResponse(result) {
 }
 
 // src/mcp/preflight-validator.ts
+function normalizeConceptKey2(name) {
+  return String(name).trim().toLowerCase().replace(/\s+/g, " ");
+}
+var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "but",
+  "not",
+  "use",
+  "with",
+  "from",
+  "into",
+  "onto",
+  "that",
+  "this",
+  "than",
+  "then",
+  "via",
+  "per",
+  "our",
+  "your",
+  "its"
+]);
+function stemToken(raw) {
+  const t = raw.toLowerCase();
+  if (t.length <= 4) return t;
+  if (t.endsWith("ing") && t.length >= 6) return t.slice(0, -3);
+  if (t.endsWith("ed") && t.length >= 5) return t.slice(0, -2);
+  if (t.endsWith("s") && !t.endsWith("ss") && t.length >= 5) return t.slice(0, -1);
+  return t;
+}
+function meaningfulTokens(s) {
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken);
+}
 function tokenCoverage(concept, proposal) {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  const tokens = meaningfulTokens(concept);
   if (tokens.length === 0) return 0;
-  const p = proposal.toLowerCase();
-  const hits = tokens.filter((t) => p.includes(t)).length;
+  const pset = new Set(meaningfulTokens(proposal));
+  const hits = tokens.filter((t) => pset.has(t)).length;
   return hits / tokens.length;
 }
 var NEAR_MISS_THRESHOLD = 0.5;
 var CONSIDERED_CAP = 20;
 function conceptMatchesProposal(concept, proposal) {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  const tokens = meaningfulTokens(concept);
   if (tokens.length === 0) return false;
-  const p = proposal.toLowerCase();
-  return tokens.every((t) => p.includes(t));
+  const pset = new Set(meaningfulTokens(proposal));
+  return tokens.every((t) => pset.has(t));
+}
+function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
+  for (const stored of storedConcepts) {
+    if (!stored?.trim()) continue;
+    const storedKey = normalizeConceptKey2(stored);
+    for (const pc of proposalConcepts) {
+      if (!pc?.trim()) continue;
+      if (normalizeConceptKey2(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
+      if (conceptMatchesProposal(stored, pc)) return { proposalConcept: pc, storedConcept: stored };
+    }
+  }
+  return null;
 }
 function matchesGlob(pathStr, glob) {
   const escape2 = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
@@ -26574,7 +26621,6 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
-    const conceptTokens = rej.concept ? clean(rej.concept).split(/\s+/).filter((t) => t.length >= 4) : [];
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
@@ -26584,7 +26630,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
       if (containsAsPhrase(p, specificNoun)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (conceptTokens.length > 0 && conceptTokens.every((t) => containsAsPhrase(p, t))) {
+      if (rej.concept && conceptMatchesProposal(rej.concept, proposal)) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }
@@ -26592,7 +26638,8 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], rejectedApproaches, teamPreferences } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences } = input;
+  const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
   for (const rej of rejectedApproaches) {
     if (considered.length >= CONSIDERED_CAP) break;
@@ -26621,7 +26668,7 @@ function runPreflight(input) {
   for (const rej of rejectedApproaches) {
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
-      ...proposalStrings.map((p) => tokenCoverage(conceptText, p)),
+      ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
       0
     );
     if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
@@ -26642,7 +26689,7 @@ function runPreflight(input) {
       if (!hit) continue;
     }
     const cov = Math.max(
-      ...proposalStrings.map((p) => tokenCoverage(pref.concept, p)),
+      ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
       0
     );
     if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
@@ -26655,7 +26702,17 @@ function runPreflight(input) {
     }
   }
   if (rejectedApproaches.length > 0) {
-    const match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    if (!match && proposalConcepts.length > 0) {
+      for (const rej of rejectedApproaches) {
+        if (!rej.concept) continue;
+        const cc = findConceptToConceptMatch(proposalConcepts, [rej.concept]);
+        if (cc) {
+          match = { proposal: cc.proposalConcept, rejected: rej, via: "concept" };
+          break;
+        }
+      }
+    }
     if (match) {
       const reasonLine = match.rejected.reason ? `
 Prior rejection reason: "${match.rejected.reason}"` : "";
@@ -26698,7 +26755,22 @@ Do NOT retry with this approach. Revise your proposal to exclude it, or \u2014 i
     }
   }
   if (teamPreferences.length > 0) {
-    const teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    if (!teamMatch && proposalConcepts.length > 0) {
+      for (const pref of teamPreferences) {
+        if (pref.kind !== "avoid") continue;
+        if (pref.scope?.paths?.length) {
+          if (proposalPaths.length === 0) continue;
+          const hit = proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g)));
+          if (!hit) continue;
+        }
+        const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
+        if (cc) {
+          teamMatch = { proposal: cc.proposalConcept, pref, via: "avoid" };
+          break;
+        }
+      }
+    }
     if (teamMatch) {
       const { pref, proposal, via } = teamMatch;
       const attribution = pref.addedBy ? ` (added by ${pref.addedBy})` : "";
@@ -26773,17 +26845,39 @@ function terminalApproveEnabled(env) {
   const v = (env.DEEPPAIRING_TERMINAL_APPROVE ?? "").toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 }
-async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = []) {
+async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) {
   const memory = await store.getSessionMemory();
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
+  const sessionKeys = new Set(
+    memory.rejectedApproaches.map((r) => normalizeConceptKey(r.concept ?? r.description))
+  );
+  const globalAvoid = [];
+  try {
+    for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
+      const concept = entry.concept?.trim();
+      if (!concept) continue;
+      if (sessionKeys.has(normalizeConceptKey(concept))) continue;
+      const latestReason = [...entry.instances].reverse().find((i) => i.reason)?.reason;
+      globalAvoid.push({
+        description: concept,
+        concept,
+        reason: latestReason ? `${latestReason} (cross-project 'avoid' stance from your philosophy ledger)` : "Cross-project 'avoid' stance from your philosophy ledger."
+      });
+    }
+  } catch {
+  }
   const result = runPreflight({
     toolName,
     proposalStrings,
     proposalPaths,
-    rejectedApproaches: memory.rejectedApproaches,
+    proposalConcepts,
+    rejectedApproaches: [...memory.rejectedApproaches, ...globalAvoid],
     teamPreferences: teamPrefs
   });
   if (!result.blocked) {
+    for (const nm of result.trace.nearMisses) {
+      void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
+    }
     return { ok: true, trace: result.trace };
   }
   broadcast(result.block.broadcastEvent);
@@ -28020,7 +28114,8 @@ async function handlePresentOptions(ctx, args) {
     ...proposedOptions.map((o) => o.title),
     ...proposedOptions.map((o) => o.description)
   ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals);
+  const proposalConcepts = proposedOptions.map((o) => o.concept?.name).filter((n) => Boolean(n && n.trim()));
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
@@ -28978,7 +29073,8 @@ async function handlePresentCodeChange(ctx, args) {
   }
   const proposals = [filePath, reasoning].filter(Boolean);
   const proposalPaths = [filePath];
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths);
+  const proposalConcepts = [concept?.name].filter((n) => Boolean(n && n.trim()));
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
   const artifact = await ctx.store.createArtifact({
@@ -29773,7 +29869,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       firstCallHint = await buildFirstCallHint(store, port);
     }
     const tryElicit2 = (message) => tryElicit(server, message);
-    const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = []) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths);
+    const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts);
     const autoNameSession = (title) => sessionNameLatch.maybeName(title);
     const ctx = {
       server,
