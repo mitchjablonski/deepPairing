@@ -25878,9 +25878,17 @@ var PreflightConsideredConceptSchema = external_exports.object({
   reason: external_exports.string().optional()
 });
 var PreflightNearMissSchema = external_exports.object({
-  source: external_exports.enum(["session", "team"]),
+  /**
+   * "session"/"team" — a LOCAL near-miss (partial token overlap with a stance
+   * that CAN hard-block here). "global" — a cross-project ADVISORY match: the
+   * user avoided this concept in another project, surfaced as a nudge that
+   * NEVER hard-blocks (advisory-first). The `project` field names where.
+   */
+  source: external_exports.enum(["session", "team", "global"]),
   concept: external_exports.string().min(1),
   reason: external_exports.string().optional(),
+  /** For source==="global": the project basename where the stance was avoided. */
+  project: external_exports.string().optional(),
   /**
    * Why this counts as "almost flagged" — short human-readable note. The
    * UI surfaces it as: "Your past stance on `${concept}` is adjacent."
@@ -26559,6 +26567,16 @@ function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
   }
   return null;
 }
+function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConcepts) {
+  if (!storedConcept?.trim()) return false;
+  const key = normalizeConceptKey2(storedConcept);
+  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey2(pc) === key)) return true;
+  if (meaningfulTokens(storedConcept).length >= 2) {
+    const texts = [...proposalStrings, ...proposalConcepts];
+    if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
+  }
+  return false;
+}
 function matchesGlob(pathStr, glob) {
   const escape2 = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   let re = "";
@@ -26638,7 +26656,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input;
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
   for (const rej of rejectedApproaches) {
@@ -26698,6 +26716,18 @@ function runPreflight(input) {
         concept: pref.concept,
         reason: pref.rationale,
         why: `Partial token overlap (${Math.round(cov * 100)}%) with a team policy.`
+      });
+    }
+  }
+  for (const g of globalAdvisoryConcepts) {
+    if (!g.concept?.trim()) continue;
+    if (isCrossProjectAdvisoryHit(g.concept, proposalStrings, proposalConcepts)) {
+      nearMisses.push({
+        source: "global",
+        concept: g.concept,
+        reason: g.reason,
+        project: g.project,
+        why: g.project ? `You avoided this in "${g.project}" \u2014 still want it here? (cross-project, advisory)` : `You avoided this in another project \u2014 still want it here? (cross-project, advisory)`
       });
     }
   }
@@ -26848,20 +26878,20 @@ function terminalApproveEnabled(env) {
 async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) {
   const memory = await store.getSessionMemory();
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
-  const sessionKeys = new Set(
-    memory.rejectedApproaches.map((r) => normalizeConceptKey(r.concept ?? r.description))
-  );
-  const globalAvoid = [];
+  const localKeys = /* @__PURE__ */ new Set();
+  for (const r of memory.rejectedApproaches) localKeys.add(normalizeConceptKey(r.concept ?? r.description));
+  for (const a of memory.approvedPatterns) localKeys.add(normalizeConceptKey(a));
+  const globalAdvisoryConcepts = [];
   try {
     for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
       const concept = entry.concept?.trim();
       if (!concept) continue;
-      if (sessionKeys.has(normalizeConceptKey(concept))) continue;
-      const latestReason = [...entry.instances].reverse().find((i) => i.reason)?.reason;
-      globalAvoid.push({
-        description: concept,
+      if (localKeys.has(normalizeConceptKey(concept))) continue;
+      const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
+      globalAdvisoryConcepts.push({
         concept,
-        reason: latestReason ? `${latestReason} (cross-project 'avoid' stance from your philosophy ledger)` : "Cross-project 'avoid' stance from your philosophy ledger."
+        project: nonManual?.project,
+        reason: nonManual?.reason
       });
     }
   } catch {
@@ -26871,12 +26901,15 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     proposalStrings,
     proposalPaths,
     proposalConcepts,
-    rejectedApproaches: [...memory.rejectedApproaches, ...globalAvoid],
-    teamPreferences: teamPrefs
+    rejectedApproaches: memory.rejectedApproaches,
+    teamPreferences: teamPrefs,
+    globalAdvisoryConcepts
   });
   if (!result.blocked) {
     for (const nm of result.trace.nearMisses) {
-      void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
+      if (nm.source === "session" || nm.source === "team") {
+        void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
+      }
     }
     return { ok: true, trace: result.trace };
   }

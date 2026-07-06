@@ -67,6 +67,16 @@ function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
   }
   return null;
 }
+function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConcepts) {
+  if (!storedConcept?.trim()) return false;
+  const key = normalizeConceptKey(storedConcept);
+  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey(pc) === key)) return true;
+  if (meaningfulTokens(storedConcept).length >= 2) {
+    const texts = [...proposalStrings, ...proposalConcepts];
+    if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
+  }
+  return false;
+}
 function matchesGlob(pathStr, glob) {
   const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
   let re = "";
@@ -146,7 +156,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
   return null;
 }
 function runPreflight(input) {
-  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences } = input;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input;
   const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
   for (const rej of rejectedApproaches) {
@@ -206,6 +216,18 @@ function runPreflight(input) {
         concept: pref.concept,
         reason: pref.rationale,
         why: `Partial token overlap (${Math.round(cov * 100)}%) with a team policy.`
+      });
+    }
+  }
+  for (const g of globalAdvisoryConcepts) {
+    if (!g.concept?.trim()) continue;
+    if (isCrossProjectAdvisoryHit(g.concept, proposalStrings, proposalConcepts)) {
+      nearMisses.push({
+        source: "global",
+        concept: g.concept,
+        reason: g.reason,
+        project: g.project,
+        why: g.project ? `You avoided this in "${g.project}" \u2014 still want it here? (cross-project, advisory)` : `You avoided this in another project \u2014 still want it here? (cross-project, advisory)`
       });
     }
   }
@@ -339,45 +361,20 @@ Team rationale: "${pref.rationale}"${attribution}.${scope}
 // src/cli/preflight-hook-core.ts
 function readRejectedApproaches(projectRoot) {
   const p = path.join(projectRoot, ".deeppairing", "preferences.json");
-  const session = [];
-  try {
-    if (fs.existsSync(p)) {
-      const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-      const list = raw?.rejectedApproaches;
-      if (Array.isArray(list)) {
-        for (const e of list) {
-          const r = typeof e === "string" ? { description: e } : {
-            description: String(e?.description ?? ""),
-            reason: e?.reason,
-            rejectedAt: e?.rejectedAt,
-            sourceArtifactId: e?.sourceArtifactId,
-            concept: e?.concept
-          };
-          if (r.description) session.push(r);
-        }
-      }
-    }
-  } catch {
-  }
-  return [...session, ...readGlobalAvoidDigest(projectRoot)];
-}
-function readGlobalAvoidDigest(projectRoot) {
-  const p = path.join(projectRoot, ".deeppairing", "hooks", "ledger-digest.json");
   try {
     if (!fs.existsSync(p)) return [];
     const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-    if (!raw || raw.version !== 1 || !Array.isArray(raw.avoidConcepts)) return [];
-    const out = [];
-    for (const c of raw.avoidConcepts) {
-      const concept = typeof c === "string" ? c.trim() : "";
-      if (!concept) continue;
-      out.push({
-        description: concept,
-        concept,
-        reason: "Cross-project 'avoid' stance from your philosophy ledger."
-      });
-    }
-    return out;
+    const list = raw?.rejectedApproaches;
+    if (!Array.isArray(list)) return [];
+    return list.map(
+      (e) => typeof e === "string" ? { description: e } : {
+        description: String(e?.description ?? ""),
+        reason: e?.reason,
+        rejectedAt: e?.rejectedAt,
+        sourceArtifactId: e?.sourceArtifactId,
+        concept: e?.concept
+      }
+    ).filter((r) => r.description);
   } catch {
     return [];
   }
@@ -432,7 +429,6 @@ function evaluatePreflightHook(args) {
 export {
   buildProposals,
   evaluatePreflightHook,
-  readGlobalAvoidDigest,
   readRejectedApproaches,
   readTeamPreferences
 };

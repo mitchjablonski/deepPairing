@@ -22430,9 +22430,17 @@ var PreflightConsideredConceptSchema = external_exports.object({
   reason: external_exports.string().optional()
 });
 var PreflightNearMissSchema = external_exports.object({
-  source: external_exports.enum(["session", "team"]),
+  /**
+   * "session"/"team" — a LOCAL near-miss (partial token overlap with a stance
+   * that CAN hard-block here). "global" — a cross-project ADVISORY match: the
+   * user avoided this concept in another project, surfaced as a nudge that
+   * NEVER hard-blocks (advisory-first). The `project` field names where.
+   */
+  source: external_exports.enum(["session", "team", "global"]),
   concept: external_exports.string().min(1),
   reason: external_exports.string().optional(),
+  /** For source==="global": the project basename where the stance was avoided. */
+  project: external_exports.string().optional(),
   /**
    * Why this counts as "almost flagged" — short human-readable note. The
    * UI surfaces it as: "Your past stance on `${concept}` is adjacent."
@@ -23131,26 +23139,6 @@ function ledgerDigest(projectRoot2) {
   };
   ledgerDigestCache.set(projectRoot2, { computedAt: Date.now(), result });
   return result;
-}
-function hookLedgerDigestPath(projectRoot2) {
-  return path4.join(projectRoot2, ".deeppairing", "hooks", "ledger-digest.json");
-}
-function materializeHookLedgerDigest(projectRoot2) {
-  try {
-    const avoidConcepts = getGlobalStore().query({ stance: "avoid", limit: 200 }).map((e) => e.concept?.trim()).filter((c) => Boolean(c));
-    const target = hookLedgerDigestPath(projectRoot2);
-    try {
-      const prev = JSON.parse(fs5.readFileSync(target, "utf-8"));
-      const prevList = Array.isArray(prev?.avoidConcepts) ? prev.avoidConcepts : [];
-      if (prevList.length === avoidConcepts.length && prevList.every((c, i) => c === avoidConcepts[i])) {
-        return;
-      }
-    } catch {
-    }
-    fs5.mkdirSync(path4.dirname(target), { recursive: true });
-    writeJsonAtomic(target, { version: 1, avoidConcepts });
-  } catch {
-  }
 }
 
 // src/store/preflight-residual.ts
@@ -24056,7 +24044,6 @@ var FileStore = class _FileStore {
         });
       } catch {
       }
-      materializeHookLedgerDigest(this.projectRoot);
     }
     const prefs = this.readPreferences();
     const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
@@ -24122,7 +24109,6 @@ var FileStore = class _FileStore {
         });
       } catch {
       }
-      materializeHookLedgerDigest(this.projectRoot);
     }
     const prefs = this.readPreferences();
     const approved = prefs.approvedPatterns ?? [];
@@ -24170,7 +24156,6 @@ var FileStore = class _FileStore {
         });
       } catch {
       }
-      materializeHookLedgerDigest(this.projectRoot);
     }
     const prefs = this.readPreferences();
     const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
@@ -27034,12 +27019,6 @@ function ledgersPresent(projectRoot) {
   try {
     if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
   } catch {}
-  // Phase-1 (C) \u2014 a project with NO local rejections/team rules can still have
-  // cross-project 'avoid' stances materialized by the daemon; don't skip the
-  // matcher import when that digest exists.
-  try {
-    if (fs.existsSync(path.join(projectRoot, ".deeppairing", "hooks", "ledger-digest.json"))) return true;
-  } catch {}
   return false;
 }
 
@@ -27754,7 +27733,6 @@ async function main() {
       log(`Setup task: ${result.message}`);
     }
   }
-  materializeHookLedgerDigest(projectRoot);
   const preferredPort = preferredPortFor(projectRoot);
   let port = preferredPort;
   let server = null;
