@@ -135,7 +135,13 @@ export interface IStore {
    * (in a non-daemon deployment the broadcast tap already runs in-process).
    * Fire-and-forget — must never throw into the caller.
    */
-  recordMetric?(event: { kind: "preflight_block"; source: "session" | "team" }): MaybePromise<void>;
+  recordMetric?(event:
+    | { kind: "preflight_block"; source: "session" | "team" }
+    // Phase-1 (D) — near-misses that were ADMITTED (fuzzy signal for the
+    // Phase-2 embeddings decision). Same daemon-side truth-point routing as
+    // preflight_block: the MCP-server broadcast is a no-op in standalone.
+    | { kind: "preflight_near_miss"; source: "session" | "team" }
+  ): MaybePromise<void>;
   listPastSessions?(): MaybePromise<Array<{
     id: string;
     createdAt: string;

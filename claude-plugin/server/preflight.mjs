@@ -9,20 +9,82 @@ import fs from "node:fs";
 import path from "node:path";
 
 // src/mcp/preflight-validator.ts
+function normalizeConceptKey(name) {
+  return String(name).trim().toLowerCase().replace(/\s+/g, " ");
+}
+var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "but",
+  "not",
+  "use",
+  "with",
+  "from",
+  "into",
+  "onto",
+  "that",
+  "this",
+  "than",
+  "then",
+  "via",
+  "per",
+  "our",
+  "your",
+  "its"
+]);
+function stemToken(raw) {
+  const t = raw.toLowerCase();
+  if (t.length <= 4) return t;
+  if (t.endsWith("ing") && t.length >= 6) return t.slice(0, -3);
+  if (t.endsWith("ed") && t.length >= 5) return t.slice(0, -2);
+  if (t.endsWith("s") && !t.endsWith("ss") && t.length >= 5) return t.slice(0, -1);
+  return t;
+}
+function meaningfulTokens(s) {
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken);
+}
 function tokenCoverage(concept, proposal) {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  const tokens = meaningfulTokens(concept);
   if (tokens.length === 0) return 0;
-  const p = proposal.toLowerCase();
-  const hits = tokens.filter((t) => p.includes(t)).length;
+  const pset = new Set(meaningfulTokens(proposal));
+  const hits = tokens.filter((t) => pset.has(t)).length;
   return hits / tokens.length;
 }
 var NEAR_MISS_THRESHOLD = 0.5;
 var CONSIDERED_CAP = 20;
 function conceptMatchesProposal(concept, proposal) {
-  const tokens = concept.toLowerCase().split(/\s+/).filter((t) => t.length >= 4);
+  const tokens = meaningfulTokens(concept);
   if (tokens.length === 0) return false;
-  const p = proposal.toLowerCase();
-  return tokens.every((t) => p.includes(t));
+  const pset = new Set(meaningfulTokens(proposal));
+  return tokens.every((t) => pset.has(t));
+}
+function containmentBlockAllowed(storedConcept) {
+  return meaningfulTokens(storedConcept).length >= 2;
+}
+function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
+  for (const stored of storedConcepts) {
+    if (!stored?.trim()) continue;
+    const storedKey = normalizeConceptKey(stored);
+    for (const pc of proposalConcepts) {
+      if (!pc?.trim()) continue;
+      if (normalizeConceptKey(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
+      if (containmentBlockAllowed(stored) && conceptMatchesProposal(stored, pc)) {
+        return { proposalConcept: pc, storedConcept: stored };
+      }
+    }
+  }
+  return null;
+}
+function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConcepts) {
+  if (!storedConcept?.trim()) return false;
+  const key = normalizeConceptKey(storedConcept);
+  if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey(pc) === key)) return true;
+  if (containmentBlockAllowed(storedConcept)) {
+    const texts = [...proposalStrings, ...proposalConcepts];
+    if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
+  }
+  return false;
 }
 function matchesGlob(pathStr, glob) {
   const escape = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
@@ -48,6 +110,7 @@ function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [])
       if (!hit) continue;
     }
     if (pref.kind === "avoid") {
+      if (!containmentBlockAllowed(pref.concept)) continue;
       for (const proposal of proposalStrings) {
         if (!proposal.trim()) continue;
         if (conceptMatchesProposal(pref.concept, proposal)) {
@@ -86,7 +149,6 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
     const rejNormalized = clean(rej.description);
     if (!rejNormalized) continue;
     const specificNoun = rejNormalized.includes(":") ? rejNormalized.split(":").slice(1).join(":").trim() : rejNormalized;
-    const conceptTokens = rej.concept ? clean(rej.concept).split(/\s+/).filter((t) => t.length >= 4) : [];
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
@@ -96,7 +158,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
       if (containsAsPhrase(p, specificNoun)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (conceptTokens.length > 0 && conceptTokens.every((t) => containsAsPhrase(p, t))) {
+      if (rej.concept && containmentBlockAllowed(rej.concept) && conceptMatchesProposal(rej.concept, proposal)) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }
@@ -104,7 +166,8 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
   return null;
 }
 function runPreflight(input2) {
-  const { toolName, proposalStrings, proposalPaths = [], rejectedApproaches, teamPreferences } = input2;
+  const { toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], rejectedApproaches, teamPreferences, globalAdvisoryConcepts = [] } = input2;
+  const coverageTexts = proposalConcepts.length ? [...proposalStrings, ...proposalConcepts] : proposalStrings;
   const considered = [];
   for (const rej of rejectedApproaches) {
     if (considered.length >= CONSIDERED_CAP) break;
@@ -133,7 +196,7 @@ function runPreflight(input2) {
   for (const rej of rejectedApproaches) {
     const conceptText = rej.concept ?? rej.description;
     const cov = Math.max(
-      ...proposalStrings.map((p) => tokenCoverage(conceptText, p)),
+      ...coverageTexts.map((p) => tokenCoverage(conceptText, p)),
       0
     );
     if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
@@ -154,7 +217,7 @@ function runPreflight(input2) {
       if (!hit) continue;
     }
     const cov = Math.max(
-      ...proposalStrings.map((p) => tokenCoverage(pref.concept, p)),
+      ...coverageTexts.map((p) => tokenCoverage(pref.concept, p)),
       0
     );
     if (cov >= NEAR_MISS_THRESHOLD && cov < 1) {
@@ -166,8 +229,30 @@ function runPreflight(input2) {
       });
     }
   }
+  for (const g of globalAdvisoryConcepts) {
+    if (!g.concept?.trim()) continue;
+    if (isCrossProjectAdvisoryHit(g.concept, proposalStrings, proposalConcepts)) {
+      nearMisses.push({
+        source: "global",
+        concept: g.concept,
+        reason: g.reason,
+        project: g.project,
+        why: g.project ? `You avoided this in "${g.project}" \u2014 still want it here? (cross-project, advisory)` : `You avoided this in another project \u2014 still want it here? (cross-project, advisory)`
+      });
+    }
+  }
   if (rejectedApproaches.length > 0) {
-    const match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    let match = findRejectedApproachMatch(proposalStrings, rejectedApproaches);
+    if (!match && proposalConcepts.length > 0) {
+      for (const rej of rejectedApproaches) {
+        if (!rej.concept) continue;
+        const cc = findConceptToConceptMatch(proposalConcepts, [rej.concept]);
+        if (cc) {
+          match = { proposal: cc.proposalConcept, rejected: rej, via: "concept" };
+          break;
+        }
+      }
+    }
     if (match) {
       const reasonLine = match.rejected.reason ? `
 Prior rejection reason: "${match.rejected.reason}"` : "";
@@ -210,7 +295,22 @@ Do NOT retry with this approach. Revise your proposal to exclude it, or \u2014 i
     }
   }
   if (teamPreferences.length > 0) {
-    const teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    let teamMatch = findTeamPreferenceViolation(proposalStrings, teamPreferences, proposalPaths);
+    if (!teamMatch && proposalConcepts.length > 0) {
+      for (const pref of teamPreferences) {
+        if (pref.kind !== "avoid") continue;
+        if (pref.scope?.paths?.length) {
+          if (proposalPaths.length === 0) continue;
+          const hit = proposalPaths.some((p) => pref.scope.paths.some((g) => matchesGlob(p, g)));
+          if (!hit) continue;
+        }
+        const cc = findConceptToConceptMatch(proposalConcepts, [pref.concept]);
+        if (cc) {
+          teamMatch = { proposal: cc.proposalConcept, pref, via: "avoid" };
+          break;
+        }
+      }
+    }
     if (teamMatch) {
       const { pref, proposal, via } = teamMatch;
       const attribution = pref.addedBy ? ` (added by ${pref.addedBy})` : "";

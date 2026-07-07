@@ -21,7 +21,13 @@ import type { TeamPreference } from "@deeppairing/shared";
  */
 
 /** Read session rejected approaches from .deeppairing/preferences.json. Mirrors
- *  FileStore.normalizeRejectedApproaches (legacy bare-string entries → {description}). */
+ *  FileStore.normalizeRejectedApproaches (legacy bare-string entries → {description}).
+ *
+ *  LOCAL-ONLY by design. The hook is a HARD gate (permissionDecision: "ask"),
+ *  and cross-project stances are ADVISORY-first — they must never hard-block a
+ *  direct Edit/Write. Cross-project awareness reaches the agent advisorily via
+ *  the first-call-hint preamble + the present_* preflight trace's cross-project
+ *  near-misses, NOT here. So this reads ONLY this project's ledger. */
 export function readRejectedApproaches(projectRoot: string): RejectedApproach[] {
   const p = path.join(projectRoot, ".deeppairing", "preferences.json");
   try {

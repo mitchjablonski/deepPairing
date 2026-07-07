@@ -414,7 +414,10 @@ export class DaemonClient implements IStore {
 
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
    *  (the wrapper's broadcast is a no-op in standalone). Never throws. */
-  async recordMetric(event: { kind: "preflight_block"; source: "session" | "team" }): Promise<void> {
+  async recordMetric(event:
+    | { kind: "preflight_block"; source: "session" | "team" }
+    | { kind: "preflight_near_miss"; source: "session" | "team" }
+  ): Promise<void> {
     try { await this.post(`/metrics`, event); } catch { /* telemetry — never break a tool call */ }
   }
 

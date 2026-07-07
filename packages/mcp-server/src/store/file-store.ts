@@ -10,6 +10,7 @@ import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
 import { listSessions, searchAll, findPastPredictions, addRetrospective } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
+import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -853,6 +854,24 @@ export class FileStore implements IStore {
     concept?: string;
   }): void {
     const { description, reason, sourceArtifactId, concept } = params;
+    // Phase-1 (D) — before recording, check whether this rejection is a "gate
+    // escape": the human is re-flagging an artifact the gate ADMITTED, with
+    // ZERO lexical overlap against everything the gate weighed. That's the
+    // embeddings-justifying signal. Best-effort telemetry; never blocks the
+    // write. Only meaningful when the rejection points at a source artifact.
+    if (sourceArtifactId) {
+      try {
+        const trace = this.getPreflightTrace(sourceArtifactId);
+        detectAndRecordGateEscape({
+          projectRoot: this.projectRoot,
+          rejectedConcept: concept?.trim() || description.trim(),
+          reason,
+          trace,
+        });
+      } catch {
+        // Telemetry only — never let it interfere with the rejection.
+      }
+    }
     // Mirror into the user-global philosophy ledger. The session-scoped
     // preferences.json remains the source of truth for THIS project's
     // pre-flight; the global ledger is additive context for future sessions

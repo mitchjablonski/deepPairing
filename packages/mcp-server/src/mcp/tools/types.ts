@@ -50,6 +50,8 @@ export interface ToolHelpers {
     toolName: string,
     proposalStrings: string[],
     proposalPaths?: string[],
+    /** (A) The proposal's own named concept(s) for the concept↔concept lane. */
+    proposalConcepts?: string[],
   ) => Promise<PreflightHelperResult>;
   /** Idempotently rename the session from the first meaningful artifact title. */
   autoNameSession: (title: string) => Promise<void>;

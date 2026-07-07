@@ -502,6 +502,17 @@ export function createDaemonRoutes(
         });
       } catch {}
     }
+    // Phase-1 (D) — admitted near-misses, routed here from the MCP-server
+    // process (whose broadcast is a no-op in standalone). Whitelisted by kind
+    // so the sink can't be abused to forge arbitrary counters.
+    if (daemonProjectRoot && body?.kind === "preflight_near_miss") {
+      try {
+        recordMetricEvent(daemonProjectRoot, {
+          kind: "preflight_near_miss",
+          source: body.source === "team" ? "team" : "session",
+        });
+      } catch {}
+    }
     return c.json({ ok: true });
   });
 

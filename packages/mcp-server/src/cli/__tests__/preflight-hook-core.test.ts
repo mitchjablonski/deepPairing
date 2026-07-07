@@ -127,3 +127,30 @@ describe("evaluatePreflightHook — the platform-level gate", () => {
     expect(d.deny).toBe(false);
   });
 });
+
+// The hot hook is LOCAL-ONLY: cross-project stances are advisory-first and must
+// NEVER hard-block a direct Edit/Write. readRejectedApproaches reads ONLY this
+// project's ledger; a stale materialized cross-project digest (if any exists on
+// disk from an older build) must be ignored.
+describe("readRejectedApproaches — local-only (no cross-project reach)", () => {
+  it("returns only this project's rejections (no global overlay)", () => {
+    writePrefs({ rejectedApproaches: [{ description: "local reject", concept: "local concept" }] });
+    const r = readRejectedApproaches(dir);
+    expect(r.map((x) => x.concept)).toEqual(["local concept"]);
+  });
+
+  it("does NOT hard-deny an edit that only matches a cross-project stance (advisory belongs to the present_* path)", () => {
+    // Simulate a leftover cross-project digest on disk — the hook must ignore it.
+    fs.mkdirSync(path.join(dp(), "hooks"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dp(), "hooks", "ledger-digest.json"),
+      JSON.stringify({ version: 1, avoidConcepts: ["global mutable state"] }),
+    );
+    const d = evaluatePreflightHook({
+      toolName: "Edit",
+      toolInput: { file_path: "/src/x.ts", new_string: "introduce global mutable state here" },
+      projectRoot: dir,
+    });
+    expect(d.deny).toBe(false);
+  });
+});

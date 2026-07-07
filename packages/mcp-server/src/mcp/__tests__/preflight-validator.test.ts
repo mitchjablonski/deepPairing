@@ -17,6 +17,11 @@ import {
   matchesGlob,
   findRejectedApproachMatch,
   findTeamPreferenceViolation,
+  findConceptToConceptMatch,
+  isCrossProjectAdvisoryHit,
+  stemToken,
+  meaningfulTokens,
+  normalizeConceptKey,
   runPreflight,
 } from "../preflight-validator.js";
 
@@ -343,5 +348,322 @@ describe("runPreflight orchestrator", () => {
       expect(r.trace.consideredConcepts.length).toBe(20);
       expect(r.trace.consideredCount).toBe(20);
     });
+  });
+});
+
+// =====================================================================
+// Phase-1 (B) — normalization / stemming.
+// =====================================================================
+
+describe("stemToken — conservative inflectional stemmer", () => {
+  it("collapses -ing / -ed / -s to one stem (host family)", () => {
+    expect(stemToken("host")).toBe("host");
+    expect(stemToken("hosts")).toBe("host");
+    expect(stemToken("hosting")).toBe("host");
+    expect(stemToken("hosted")).toBe("host");
+  });
+
+  it("does NOT stem 'guardrail' toward 'rail' (distinct stems keep the FP dead)", () => {
+    expect(stemToken("guardrail")).toBe("guardrail");
+    expect(stemToken("rail")).toBe("rail");
+    expect(stemToken("guardrail")).not.toBe(stemToken("rail"));
+  });
+
+  it("leaves short words & acronyms (≤4 chars) untouched", () => {
+    for (const a of ["sql", "orm", "jwt", "api", "css", "rail"]) {
+      expect(stemToken(a)).toBe(a);
+    }
+  });
+
+  it("does NOT strip a doubled 'ss' plural (class/address stay put)", () => {
+    expect(stemToken("class")).toBe("class");
+    expect(stemToken("address")).toBe("address");
+  });
+});
+
+describe("meaningfulTokens", () => {
+  it("keeps 3-char acronyms and drops function-word stopwords", () => {
+    // NB: the stemmer strips only a trailing "s" (not "-es"), so
+    // "queries" → "querie" — a deliberate under-stem (misses route to
+    // near-miss; an over-stem would risk a false-positive hard block).
+    expect(meaningfulTokens("use the orm for queries").sort()).toEqual(["orm", "querie"].sort());
+  });
+
+  it("splits on punctuation and stems (console.log debug → console, log, debug)", () => {
+    expect(meaningfulTokens("console.log debug").sort()).toEqual(["console", "debug", "log"].sort());
+  });
+});
+
+describe("conceptMatchesProposal — unified stemmed token-EQUALITY (B)", () => {
+  it("MORPHOLOGY: concept 'host' now matches proposal 'hosting' (was missed)", () => {
+    expect(conceptMatchesProposal("host", "we are hosting the service")).toBe(true);
+    expect(conceptMatchesProposal("hosted", "self host the runtime")).toBe(true);
+  });
+
+  it("FP-GUARD stays green: concept 'rail' does NOT match 'guardrail' (equality, not substring)", () => {
+    expect(conceptMatchesProposal("rail", "add a guardrail before deploy")).toBe(false);
+  });
+
+  it("ACRONYM: the raw matcher token-includes a 3-char concept 'orm' (the ≥3 threshold) — the single-token HARD-BLOCK floor lives at the block level, not here", () => {
+    // conceptMatchesProposal is the low-level matcher and still returns true for
+    // a single-token concept; the single-token floor (containmentBlockAllowed)
+    // is applied at the BLOCK-decision sites (see the floor describe below), so
+    // this raw match no longer implies a hard block.
+    expect(conceptMatchesProposal("orm", "introduce an ORM layer")).toBe(true);
+    expect(conceptMatchesProposal("orm", "introduce a query builder")).toBe(false);
+  });
+
+  it("still requires EVERY meaningful token (partial concept does not match)", () => {
+    expect(conceptMatchesProposal("global mutable state", "add a global cache")).toBe(false);
+  });
+});
+
+// =====================================================================
+// Single-token LOCAL hard-block floor (SHOULD-FIX). The 4→3 threshold made a
+// single-token stored concept token-contain into any prose using that word.
+// Floor: single-token concepts hard-block ONLY via exact concept-key equality
+// against a NAMED proposal concept, never via prose token-containment.
+// =====================================================================
+
+describe("runPreflight — single-token LOCAL hard-block floor", () => {
+  // A realistic rejection: the CONCEPT is the short form; the DESCRIPTION is a
+  // normal title that won't phrase-match the prose (isolating the concept path,
+  // which is what the 4→3 threshold changed — the surface/description phrase
+  // path is unaffected by this floor).
+  const single = (concept: string): RejectedApproach =>
+    ({ id: "s", description: "a past architectural preference we set aside", concept, reason: "x", rejectedAt: "2026-04-01T00:00:00Z" } as any);
+
+  it("a single-token rejected concept 'orm' does NOT hard-block ordinary prose that mentions it", () => {
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["introduce a data-access layer for the reporting queries"],
+      rejectedApproaches: [single("orm")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(false);
+  });
+
+  it("a common 3-char word ('get'/'add'/'set'/'key') as a rejected concept does NOT hard-block prose", () => {
+    for (const word of ["get", "add", "set", "key"]) {
+      const r = runPreflight({
+        toolName: "present_code_change",
+        proposalStrings: [`introduce a helper to fetch the config value and apply defaults ${word}`],
+        rejectedApproaches: [single(word)],
+        teamPreferences: [],
+      });
+      expect(r.blocked, `word "${word}" must not hard-block prose`).toBe(false);
+    }
+  });
+
+  it("a single-token concept STILL hard-blocks via EXACT concept↔concept key (named proposal concept)", () => {
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["some unrelated prose"],
+      proposalConcepts: ["orm"], // the agent NAMED exactly the rejected concept
+      rejectedApproaches: [single("orm")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
+    if (r.blocked) expect(r.block.source).toBe("session");
+  });
+
+  it("a single-token TEAM avoid does NOT hard-block prose, but DOES via exact named-concept key", () => {
+    const teamAvoid: TeamPreference = { id: "p", kind: "avoid", concept: "orm", rationale: "no ORMs" } as any;
+    const prose = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["add an ORM layer"],
+      rejectedApproaches: [],
+      teamPreferences: [teamAvoid],
+    });
+    expect(prose.blocked).toBe(false);
+    const named = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["unrelated"],
+      proposalConcepts: ["orm"],
+      rejectedApproaches: [],
+      teamPreferences: [teamAvoid],
+    });
+    expect(named.blocked).toBe(true);
+    if (named.blocked) expect(named.block.source).toBe("team");
+  });
+
+  it("REGRESSION: a MULTI-token concept (incl. an acronym) still hard-blocks on prose via the concept path", () => {
+    // description is a non-matching title, so the block MUST come from the
+    // multi-token concept containment, not the surface phrase path.
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["build an orm layer for reporting on the dashboard"],
+      rejectedApproaches: [single("orm reporting layer")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
+    if (r.blocked) expect(r.block.broadcastEvent.match.via).toBe("concept");
+  });
+});
+
+// =====================================================================
+// Phase-1 (A) — concept↔concept matching.
+// =====================================================================
+
+describe("normalizeConceptKey (inlined, hook-safe)", () => {
+  it("trims, lowercases, collapses internal whitespace", () => {
+    expect(normalizeConceptKey("  Global   Mutable  State ")).toBe("global mutable state");
+  });
+});
+
+describe("findConceptToConceptMatch (A)", () => {
+  it("exact normalized-key equality is a clear match", () => {
+    const m = findConceptToConceptMatch(["Pay-Per-Request Hosting"], ["pay-per-request hosting"]);
+    // key equality: normalizeConceptKey lowercases; hyphens differ but this is
+    // a full stemmed-token containment either way.
+    expect(m).not.toBeNull();
+  });
+
+  it("full stemmed token containment (short-vs-short) matches a paraphrase concept", () => {
+    const m = findConceptToConceptMatch(
+      ["serverless pay-per-request hosting"],
+      ["pay-per-request hosting"],
+    );
+    expect(m?.storedConcept).toBe("pay-per-request hosting");
+  });
+
+  it("MORPHOLOGY across named concepts: 'container hosting' ↔ stored 'container host'", () => {
+    const m = findConceptToConceptMatch(["container hosting on fly"], ["container host"]);
+    expect(m).not.toBeNull();
+  });
+
+  it("returns null when the named concept only PARTIALLY overlaps the stored concept", () => {
+    // "hosting" present but "request"/"pay" absent → not a full containment →
+    // routed to near-miss by the caller, not a hard concept↔concept block.
+    expect(findConceptToConceptMatch(["static site hosting"], ["pay-per-request hosting"])).toBeNull();
+  });
+
+  it("ignores blank concepts on either side", () => {
+    expect(findConceptToConceptMatch([""], ["x concept"])).toBeNull();
+    expect(findConceptToConceptMatch(["x concept"], [""])).toBeNull();
+  });
+});
+
+describe("runPreflight — concept↔concept lane (A)", () => {
+  const railwayConceptRejected: RejectedApproach = {
+    id: "r1", description: "Deploy: Railway", concept: "pay-per-request hosting",
+    reason: "expensive at scale", rejectedAt: "2026-04-01T00:00:00Z",
+  } as any;
+
+  it("BLOCKS on the agent's NAMED concept even when the prose would NOT match", () => {
+    // Prose ("Deploy on Fly.io") carries none of the concept tokens; only the
+    // agent's named concept does. Pre-Phase-1 this admitted.
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["Deploy on Fly.io"],
+      proposalConcepts: ["pay-per-request hosting"],
+      rejectedApproaches: [railwayConceptRejected],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
+    if (r.blocked) {
+      expect(r.block.source).toBe("session");
+      expect((r.block.broadcastEvent.match as any).via).toBe("concept");
+    }
+  });
+
+  it("admits (no hard block) when the named concept only PARTIALLY overlaps — surfaces a near-miss instead", () => {
+    const rej: RejectedApproach = {
+      id: "r2", description: "x", concept: "pay-per-request hosting on railway",
+      reason: "y", rejectedAt: "2026-04-01T00:00:00Z",
+    } as any;
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["unrelated prose"],
+      proposalConcepts: ["static site hosting"], // shares only "hosting"
+      rejectedApproaches: [rej],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(false);
+    // The partial overlap is visible as an advisory near-miss (coverage ≥ 0.5).
+    expect(r.trace.nearMisses.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it("team 'avoid' concept↔concept: blocks the named concept against a team avoid", () => {
+    const teamAvoid: TeamPreference = {
+      id: "p1", kind: "avoid", concept: "global mutable state", rationale: "testability",
+    } as any;
+    const r = runPreflight({
+      toolName: "present_code_change",
+      proposalStrings: ["refactor the config loader"], // prose doesn't carry the concept
+      proposalConcepts: ["global mutable state"],
+      rejectedApproaches: [],
+      teamPreferences: [teamAvoid],
+    });
+    expect(r.blocked).toBe(true);
+    if (r.blocked) expect(r.block.source).toBe("team");
+  });
+});
+
+// =====================================================================
+// Phase-1 (C, advisory-first) — cross-project 'avoid' stances are ADVISORY:
+// they surface as source:"global" near-misses and NEVER hard-block. Local
+// session/team rejections keep hard-blocking (proven elsewhere in this file).
+// =====================================================================
+
+describe("isCrossProjectAdvisoryHit — high-signal gate for cross-project nudges (finding 3)", () => {
+  it("exact normalizeConceptKey equality against a NAMED proposal concept hits", () => {
+    expect(isCrossProjectAdvisoryHit("Pay-Per-Request Hosting", [], ["pay-per-request hosting"])).toBe(true);
+  });
+
+  it("full stemmed containment hits when the stored concept has ≥2 tokens", () => {
+    expect(isCrossProjectAdvisoryHit("global mutable state", ["add global mutable state cache"], [])).toBe(true);
+  });
+
+  it("a SINGLE-token concept does NOT hit on mere prose mention (no nudge spray)", () => {
+    // "orm"/"api"/"hooks" must not fire an advisory nudge on prose that just
+    // mentions the word — only an exact NAMED-concept match would.
+    expect(isCrossProjectAdvisoryHit("orm", ["introduce an ORM layer"], [])).toBe(false);
+    expect(isCrossProjectAdvisoryHit("hooks", ["use react hooks here"], [])).toBe(false);
+    // …but an exact named-concept match still hits.
+    expect(isCrossProjectAdvisoryHit("orm", [], ["orm"])).toBe(true);
+  });
+});
+
+describe("runPreflight — cross-project advisory overlay (C)", () => {
+  it("surfaces a matching cross-project stance as a source:'global' near-miss, NOT a block", () => {
+    const r = runPreflight({
+      toolName: "present_code_change",
+      proposalStrings: ["switch to pay-per-request hosting for the service"],
+      rejectedApproaches: [],
+      teamPreferences: [],
+      globalAdvisoryConcepts: [{ concept: "pay-per-request hosting", project: "project-a", reason: "expensive" }],
+    });
+    expect(r.blocked).toBe(false);
+    const global = r.trace.nearMisses.find((n) => n.source === "global");
+    expect(global).toBeTruthy();
+    expect(global?.concept).toBe("pay-per-request hosting");
+    expect(global?.project).toBe("project-a");
+    expect(global?.why).toMatch(/project-a/);
+  });
+
+  it("does NOT surface a cross-project nudge for a single-token stance on prose", () => {
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["we should introduce an ORM layer"],
+      rejectedApproaches: [],
+      teamPreferences: [],
+      globalAdvisoryConcepts: [{ concept: "orm", project: "project-a" }],
+    });
+    expect(r.blocked).toBe(false);
+    expect(r.trace.nearMisses.some((n) => n.source === "global")).toBe(false);
+  });
+
+  it("a cross-project stance NEVER blocks even on a full prose match", () => {
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["add global mutable state for config"],
+      proposalConcepts: ["global mutable state"],
+      rejectedApproaches: [],
+      teamPreferences: [],
+      globalAdvisoryConcepts: [{ concept: "global mutable state", project: "other" }],
+    });
+    expect(r.blocked).toBe(false);
+    expect(r.trace.nearMisses.some((n) => n.source === "global" && n.concept === "global mutable state")).toBe(true);
   });
 });

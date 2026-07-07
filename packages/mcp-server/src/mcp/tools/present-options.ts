@@ -22,7 +22,15 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     ...proposedOptions.map((o) => o.title),
     ...proposedOptions.map((o) => o.description),
   ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals);
+  // (A) — feed the agent's OWN named concepts into the concept↔concept lane.
+  // Pre-Phase-1 `o.concept.name` was thrown away: preflight only saw the raw
+  // prose (context/title/description), so a concept the agent itself named
+  // ("pay-per-request hosting") was never compared short-vs-short against a
+  // stored rejected/team concept.
+  const proposalConcepts: string[] = proposedOptions
+    .map((o) => o.concept?.name)
+    .filter((n): n is string => Boolean(n && n.trim()));
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
   if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
