@@ -5,6 +5,7 @@ import { ArtifactVisuals } from "../ArtifactVisuals";
 import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
+import { useChainComments } from "../../hooks/useChainComments";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
 import { useShallow } from "zustand/react/shallow";
@@ -155,7 +156,8 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   const content = coercePlanContent(artifact.content);
   // Local PlanStep adds the UI-only condition/branches the coercer preserves.
   const steps = content.steps as unknown as PlanStep[];
-  const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  // Bug2 — aggregate the version chain so v1 comments render on v2.
+  const comments = useChainComments(artifact.id);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
 
   // Step acceptance state (only editable when draft)

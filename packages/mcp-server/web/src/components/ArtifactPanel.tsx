@@ -5,7 +5,7 @@ import { useMemo, useState, useEffect, useRef, lazy, Suspense } from "react";
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore } from "../stores/artifact";
+import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
@@ -22,6 +22,7 @@ const CodeChangeArtifact = lazy(() => import("./artifacts/CodeChangeArtifact").t
 const ReasoningCard = lazy(() => import("./artifacts/ReasoningCard").then((m) => ({ default: m.ReasoningCard })));
 const SpecArtifact = lazy(() => import("./artifacts/SpecArtifact").then((m) => ({ default: m.SpecArtifact })));
 import { CommentThread } from "./CommentThread";
+import { useChainComments } from "../hooks/useChainComments";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
@@ -164,7 +165,9 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
 
 function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
-  const comments = useArtifactStore((s) => s.comments[artifact.id]) ?? [];
+  // Bug2 — aggregate comments across the version chain so v1's general
+  // comments render on v2 after a supersede auto-advance.
+  const comments = useChainComments(artifact.id);
   const generalComments = comments.filter(
     (c) =>
       c.target.lineNumber == null &&
@@ -269,57 +272,95 @@ function writeGrouping(g: SidebarGrouping): void {
   try { localStorage.setItem(GROUPING_KEY, g); } catch { /* best-effort */ }
 }
 
-/** Build causal-chain groups from relatedArtifactIds */
-function buildFlowGroups(artifacts: Artifact[]): Map<string, Artifact[]> {
+/**
+ * Build causal-chain groups from relatedArtifactIds + parentId.
+ *
+ * Bug4 — the old version keyed groups by a 28-char TITLE prefix (two roots
+ * sharing a prefix silently OVERWROTE each other, dropping a whole flow),
+ * ordered groups by the chain SINK, ordered items newest→oldest, and ignored
+ * parentId — so a superseded v1 (filtered out of `visible`) dangled every ref
+ * that pointed at it and v2 fell out as an orphan root at the bottom.
+ *
+ * Now: key each group by its ROOT ARTIFACT ID (kills the silent overwrite;
+ * titles stay display-only, derived from the first item by the consumer);
+ * treat parentId as a graph edge and resolve related ids that point at a
+ * superseded artifact to its live successor (via resolveToLiveId over the FULL
+ * artifact list) so v1→v2 stay one flow; sort items within a chain by
+ * createdAt ascending; and order groups by each group's min(createdAt) so
+ * flows read start-first, orphans interleaved by their own createdAt (no
+ * forced-last "Other").
+ *
+ * `allArtifacts` includes superseded versions (filtered out of `visible`) so
+ * the resolve can cross the filtered node; defaults to `visible` for callers
+ * that don't filter.
+ */
+export function buildFlowGroups(
+  visible: Artifact[],
+  allArtifacts: Artifact[] = visible,
+): Map<string, Artifact[]> {
+  const visibleById = new Map(visible.map((a) => [a.id, a] as const));
+  // Resolve an id (possibly pointing at a superseded, filtered-out version) to
+  // the visible artifact that stands in for it.
+  const resolveVisibleId = (id: string): string | undefined => {
+    const live = resolveToLiveId(allArtifacts, id);
+    return visibleById.has(live) ? live : undefined;
+  };
+
+  // Undirected adjacency over the visible set: relatedArtifactIds (resolved)
+  // and parentId (resolved) are both graph edges.
+  const adj = new Map<string, Set<string>>();
+  for (const a of visible) adj.set(a.id, new Set());
+  const link = (x: string, y: string) => {
+    if (x === y) return;
+    adj.get(x)?.add(y);
+    adj.get(y)?.add(x);
+  };
+  for (const a of visible) {
+    for (const rid of a.relatedArtifactIds ?? []) {
+      const v = resolveVisibleId(rid);
+      if (v) link(a.id, v);
+    }
+    if (a.parentId) {
+      const v = resolveVisibleId(a.parentId);
+      if (v) link(a.id, v);
+    }
+  }
+
+  // Connected components via BFS — an orphan is just a singleton component.
+  const seen = new Set<string>();
+  const components: Artifact[][] = [];
+  for (const a of visible) {
+    if (seen.has(a.id)) continue;
+    seen.add(a.id);
+    const stack = [a.id];
+    const comp: Artifact[] = [];
+    while (stack.length) {
+      const id = stack.pop()!;
+      const art = visibleById.get(id);
+      if (art) comp.push(art);
+      for (const n of adj.get(id) ?? []) {
+        if (!seen.has(n)) { seen.add(n); stack.push(n); }
+      }
+    }
+    // Oldest → newest within the flow.
+    comp.sort((x, y) => x.createdAt.localeCompare(y.createdAt));
+    components.push(comp);
+  }
+
+  // Order flows by their START time (min createdAt); key by the root (oldest)
+  // id so two roots that share a title prefix stay distinct groups.
+  components.sort((x, y) => x[0]!.createdAt.localeCompare(y[0]!.createdAt));
   const groups = new Map<string, Artifact[]>();
-  const assigned = new Set<string>();
-
-  // Find root artifacts (not referenced by anyone else's relatedArtifactIds)
-  const referenced = new Set<string>();
-  for (const a of artifacts) {
-    for (const rid of a.relatedArtifactIds ?? []) referenced.add(rid);
-  }
-
-  // Build chains starting from roots
-  for (const a of artifacts) {
-    if (assigned.has(a.id)) continue;
-    if (referenced.has(a.id)) continue; // Not a root — will be picked up by its parent
-
-    const chain: Artifact[] = [a];
-    assigned.add(a.id);
-
-    // Follow forward references
-    const queue = [...(a.relatedArtifactIds ?? [])];
-    // Also find artifacts that reference this one
-    for (const other of artifacts) {
-      if (other.relatedArtifactIds?.includes(a.id) && !assigned.has(other.id)) {
-        queue.push(other.id);
-      }
-    }
-
-    for (const rid of queue) {
-      const related = artifacts.find((x) => x.id === rid);
-      if (related && !assigned.has(related.id)) {
-        chain.push(related);
-        assigned.add(related.id);
-        // Continue following references
-        for (const nextId of related.relatedArtifactIds ?? []) {
-          if (!assigned.has(nextId)) queue.push(nextId);
-        }
-      }
-    }
-
-    const label = a.title.length > 30 ? a.title.slice(0, 28) + "..." : a.title;
-    groups.set(label, chain);
-  }
-
-  // Add any orphans
-  const orphans = artifacts.filter((a) => !assigned.has(a.id));
-  if (orphans.length > 0) {
-    groups.set("Other", orphans);
-  }
-
+  for (const comp of components) groups.set(comp[0]!.id, comp);
   return groups;
+}
+
+/** Flow-mode section header: the root (first, oldest) item's title, truncated.
+ *  Keeps the title DISPLAY-only now that groups are keyed by root id. */
+function flowGroupLabel(items: Artifact[], fallback: string): string {
+  const title = items[0]?.title;
+  if (!title) return fallback;
+  return title.length > 30 ? title.slice(0, 28) + "..." : title;
 }
 
 /** How many most-recent artifacts the sidebar shows before collapsing the
@@ -345,6 +386,10 @@ function ArtifactSidebar({
   onToggle: () => void;
 }) {
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  // Bug4 — the FULL artifact list (incl. superseded, filtered out of the
+  // visible `artifacts` prop) so flow grouping can resolve a ref pointing at a
+  // superseded v1 to its live v2 successor and keep the chain together.
+  const allArtifacts = useArtifactStore((s) => s.artifacts);
   // Flow (causal chain) is the fresh-tab default — once a project is deep,
   // grouping by type scatters a finding → plan → change thread across buckets.
   // The user's pick persists across reloads.
@@ -358,8 +403,8 @@ function ArtifactSidebar({
       const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       return new Map([["All Artifacts", sorted]]);
     }
-    return buildFlowGroups(artifacts);
-  }, [grouping, typeGroups, artifacts]);
+    return buildFlowGroups(artifacts, allArtifacts);
+  }, [grouping, typeGroups, artifacts, allArtifacts]);
 
   // Keep the sidebar from becoming a wall of scroll on a deep session: show
   // only the most-recent N artifacts by default, collapse the rest behind a
@@ -449,7 +494,13 @@ function ArtifactSidebar({
           {!collapsed && (
             <div className="flex items-center gap-1.5 px-3 py-1 text-2xs font-semibold text-text-muted uppercase tracking-wide">
               {grouping === "type" && <ArtifactIcon type={label} className="w-3 h-3" />}
-              {grouping === "type" ? (typeLabels[label] ?? label) : label}
+              {/* Bug4 — flow groups are keyed by root id; the header shows the
+                  root artifact's (display-only) title, not the raw id. */}
+              {grouping === "type"
+                ? (typeLabels[label] ?? label)
+                : grouping === "flow"
+                  ? flowGroupLabel(items, label)
+                  : label}
               <span className="opacity-50">{items.length}</span>
             </div>
           )}
@@ -638,6 +689,11 @@ export function ArtifactPanel() {
       const list = groups.get(a.type) ?? [];
       list.push(a);
       groups.set(a.type, list);
+    }
+    // Bug4 — explicit createdAt (oldest→newest) sort within each bucket so the
+    // order is deterministic instead of leaning on store insertion order.
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     }
     return groups;
   }, [visibleArtifacts]);
