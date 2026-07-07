@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Artifact, Comment } from "@deeppairing/shared";
-import { chainArtifactIds, collectChainComments } from "../artifact";
+import { chainArtifactIds, collectChainComments, commentPriorVersion } from "../artifact";
 
 /**
  * Bug2 (v0.1.1 field bug) — comments are bucketed per-version by
@@ -58,5 +58,24 @@ describe("Bug2 — chain comment aggregation", () => {
     const comments = { v1: [comment("c1", "v1", "2026-04-16T10:00:00.000Z")] };
     const merged = collectChainComments(chain, comments, "v3");
     expect(merged[0]!.target.artifactId).toBe("v1"); // still tagged to v1
+  });
+
+  describe("commentPriorVersion — the shared 'from vN' provenance tag", () => {
+    it("returns the source version for a comment aggregated from an earlier version", () => {
+      const c = comment("c1", "v1", "2026-04-16T10:00:00.000Z"); // v1 has version 1
+      expect(commentPriorVersion(chain, c, "v3")).toBe(1);
+      const c2 = comment("c2", "v2", "2026-04-16T10:05:00.000Z"); // v2 has version 2
+      expect(commentPriorVersion(chain, c2, "v3")).toBe(2);
+    });
+
+    it("returns undefined for a comment that belongs to the current artifact (no mislabel)", () => {
+      const c = comment("c3", "v3", "2026-04-16T10:10:00.000Z");
+      expect(commentPriorVersion(chain, c, "v3")).toBeUndefined();
+    });
+
+    it("returns undefined when the source artifact is unknown", () => {
+      const c = comment("c4", "ghost", "2026-04-16T10:00:00.000Z");
+      expect(commentPriorVersion(chain, c, "v3")).toBeUndefined();
+    });
   });
 });

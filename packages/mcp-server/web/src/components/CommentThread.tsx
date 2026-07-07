@@ -4,7 +4,7 @@ import { formatClockTime as formatTime } from "../lib/time";
 import { useDraft } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
-import { useArtifactStore, rootArtifactId } from "../stores/artifact";
+import { useArtifactStore, rootArtifactId, commentPriorVersion } from "../stores/artifact";
 import { useChainComments } from "../hooks/useChainComments";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
@@ -152,11 +152,8 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
   // Bug2 — a comment whose target artifact differs from the one being viewed
   // was posted on an earlier version (aggregated via the chain). Surface its
   // version number so the merged thread reads honestly.
-  const fromVersion = (c: Comment): number | undefined => {
-    if (c.target.artifactId === artifactId) return undefined;
-    const a = artifacts.find((x) => x.id === c.target.artifactId);
-    return a && a.version > 1 ? a.version : a?.version;
-  };
+  const fromVersion = (c: Comment): number | undefined =>
+    commentPriorVersion(artifacts, c, artifactId);
 
   return (
     <div className="space-y-3">

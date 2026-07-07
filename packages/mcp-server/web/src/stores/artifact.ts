@@ -304,6 +304,26 @@ export function collectChainComments(
   return out;
 }
 
+/**
+ * Bug2 — provenance for a chain-aggregated comment: if `comment` was posted on
+ * a DIFFERENT artifact than the one currently being viewed (i.e. an earlier
+ * version, surfaced via collectChainComments), return that artifact's version
+ * number so the UI can tag it "from vN". Returns undefined when the comment
+ * belongs to the current artifact (same-version comments are never tagged) or
+ * when the source artifact is unknown. Shared by every surface that shows
+ * aggregated comments (general thread + inline line chips) so the treatment
+ * stays consistent.
+ */
+export function commentPriorVersion(
+  artifacts: Artifact[],
+  comment: Comment,
+  currentArtifactId: string,
+): number | undefined {
+  const target = comment.target.artifactId;
+  if (!target || target === currentArtifactId) return undefined;
+  return artifacts.find((a) => a.id === target)?.version;
+}
+
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
   artifacts: [],
   comments: {},
