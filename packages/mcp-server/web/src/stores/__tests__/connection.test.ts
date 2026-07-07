@@ -256,10 +256,46 @@ describe("connection store — handleMessage dispatch", () => {
     });
 
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "decision_resolved", artifactId: "a1", optionId: "opt_x" });
+    activeAdapter.emit({ type: "decision_resolved", artifactId: "a1", decisionId: "dec_1", optionId: "opt_x", reasoning: "why" });
     await flush();
 
     expect(useArtifactStore.getState().artifacts[0]!.status).toBe("approved");
+    // Bug3 — a cross-tab resolve records the choice so a remount opens resolved.
+    expect(useArtifactStore.getState().resolvedDecisions["dec_1"]).toMatchObject({ optionId: "opt_x", reasoning: "why" });
+  });
+
+  it("Bug3 — hydrate seeds resolvedDecisions from data.state.decisions so a resolved decision survives a cold reload", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({
+      type: "connected",
+      projectRoot: "/p",
+      state: {
+        sessionId: "sess_r",
+        artifacts: [
+          { id: "art_dec", sessionId: "sess_r", type: "decision", version: 1, parentId: null,
+            title: "Which cache?", status: "approved", content: { decisionId: "dec_r", context: "c", options: [] },
+            agentReasoning: null, createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z" },
+        ],
+        comments: [],
+        // The persisted DecisionRecord carries the human's response + resolvedAt
+        // even before the agent has drained (acknowledged) it.
+        decisions: [
+          { decisionId: "dec_r", artifactId: "art_dec", acknowledged: false,
+            response: { optionId: "o2", reasoning: "cheapest", confidence: "high", predictedOutcome: "no p99 regressions" },
+            resolvedAt: "2026-04-16T10:05:00.000Z" },
+        ],
+      },
+    });
+    await flush();
+
+    const resolved = useArtifactStore.getState().resolvedDecisions["dec_r"];
+    expect(resolved).toMatchObject({
+      optionId: "o2",
+      reasoning: "cheapest",
+      resolvedAt: "2026-04-16T10:05:00.000Z",
+      confidence: "high",
+      predictedOutcome: "no p99 regressions",
+    });
   });
 
   describe("pair-tempo events (O7)", () => {

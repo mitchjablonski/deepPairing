@@ -115,6 +115,20 @@ async function optimisticArtifactPatch<K extends keyof Artifact>(
   }
 }
 
+/**
+ * Bug3 — the human's recorded choice on a decision, held LIVE in the store so a
+ * resolved decision shows its chosen option after a cold (non-replay) reload.
+ * Seeded from `data.state.decisions` on hydrate, updated on optimistic resolve
+ * and on the cross-tab `decision_resolved` broadcast.
+ */
+export interface ResolvedDecisionInfo {
+  optionId: string;
+  reasoning?: string;
+  resolvedAt?: string;
+  confidence?: "low" | "medium" | "high";
+  predictedOutcome?: string;
+}
+
 export interface ArtifactState {
   artifacts: Artifact[];
   comments: Record<string, Comment[]>;
@@ -125,6 +139,10 @@ export interface ArtifactState {
    *  Set, per the no-Map/Set store convention. */
   acknowledgedDecisions: Record<string, true>;
   markDecisionsAcknowledged: (decisionIds: string[]) => void;
+  /** Bug3 — resolved decisions keyed by decisionId. Record, not Map, per the
+   *  no-Map/Set store convention. Cleared in reset(). */
+  resolvedDecisions: Record<string, ResolvedDecisionInfo>;
+  recordResolvedDecision: (decisionId: string, info: ResolvedDecisionInfo) => void;
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
@@ -203,7 +221,7 @@ function lsSetSelection(id: string | null): void {
  * (addArtifact/updateArtifact already avoid/advance on the hydration + live
  * paths; this closes the explicit-select path).
  */
-function resolveToLiveId(artifacts: Artifact[], id: string): string {
+export function resolveToLiveId(artifacts: Artifact[], id: string): string {
   let current = artifacts.find((a) => a.id === id);
   const seen = new Set<string>();
   while (current && current.status === "superseded" && !seen.has(current.id)) {
@@ -215,12 +233,104 @@ function resolveToLiveId(artifacts: Artifact[], id: string): string {
   return current?.id ?? id;
 }
 
+/**
+ * Walk `parentId` from `id` back to the CHAIN ROOT (the v1 artifact) — the
+ * mirror of resolveToLiveId in the opposite direction. Callers that must
+ * survive a supersede auto-advance key off the root: the composer-draft key
+ * (D9/H5) is per-artifact, but a supersede advances selectedArtifactId to v2's
+ * NEW id, orphaning the draft flushed under v1's id. Keying by the STABLE root
+ * makes v1's in-progress draft load on v2. Falls back to `id` when the artifact
+ * isn't found so it degrades to per-id keying.
+ */
+export function rootArtifactId(artifacts: Artifact[], id: string): string {
+  let current = artifacts.find((a) => a.id === id);
+  const seen = new Set<string>();
+  while (current?.parentId && !seen.has(current.id)) {
+    seen.add(current.id);
+    const parent = artifacts.find((a) => a.id === current!.parentId);
+    if (!parent) break;
+    current = parent;
+  }
+  return current?.id ?? id;
+}
+
+/**
+ * The ids in `id`'s version chain, from the displayed artifact back to the
+ * root (id, parent, grandparent, … root). Comments are bucketed per-version by
+ * `comment.target.artifactId` (a FileStore.targetKey invariant we must not
+ * disturb), so after a supersede advances to v2, comments posted on v1 live
+ * under v1's id and vanish. Walking the chain lets the READ side re-collect
+ * them. Returns `[id]` when the artifact is unknown.
+ */
+export function chainArtifactIds(artifacts: Artifact[], id: string): string[] {
+  const ids: string[] = [];
+  let current = artifacts.find((a) => a.id === id);
+  if (!current) return [id];
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    ids.push(current.id);
+    if (!current.parentId) break;
+    const parent = artifacts.find((a) => a.id === current!.parentId);
+    if (!parent) break;
+    current = parent;
+  }
+  return ids;
+}
+
+/**
+ * READ-side aggregation of a version chain's comments — the shared selector
+ * every renderer uses so v1's comments render on v2. We do NOT re-parent
+ * comments server-side or mutate `target.artifactId` (that breaks
+ * FileStore.targetKey dedupe + thread-depth invariants and the agent's
+ * check_feedback drain); we only gather them for display. Sorted by createdAt
+ * so the merged thread stays chronological across versions.
+ */
+export function collectChainComments(
+  artifacts: Artifact[],
+  comments: Record<string, Comment[]>,
+  id: string,
+): Comment[] {
+  const ids = chainArtifactIds(artifacts, id);
+  // Fast path: a v1 (or unknown) artifact — no ancestors, return the bucket
+  // as-is so the array identity stays stable for downstream memos.
+  if (ids.length <= 1) return comments[id] ?? [];
+  const out: Comment[] = [];
+  for (const cid of ids) {
+    const list = comments[cid];
+    if (list) out.push(...list);
+  }
+  out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return out;
+}
+
+/**
+ * Bug2 — provenance for a chain-aggregated comment: if `comment` was posted on
+ * a DIFFERENT artifact than the one currently being viewed (i.e. an earlier
+ * version, surfaced via collectChainComments), return that artifact's version
+ * number so the UI can tag it "from vN". Returns undefined when the comment
+ * belongs to the current artifact (same-version comments are never tagged) or
+ * when the source artifact is unknown. Shared by every surface that shows
+ * aggregated comments (general thread + inline line chips) so the treatment
+ * stays consistent.
+ */
+export function commentPriorVersion(
+  artifacts: Artifact[],
+  comment: Comment,
+  currentArtifactId: string,
+): number | undefined {
+  const target = comment.target.artifactId;
+  if (!target || target === currentArtifactId) return undefined;
+  return artifacts.find((a) => a.id === target)?.version;
+}
+
 export const useArtifactStore = create<ArtifactState>((set, get) => ({
   artifacts: [],
   comments: {},
   selectedArtifactId: null,
   unreadIds: [],
   acknowledgedDecisions: {},
+  resolvedDecisions: {},
 
   // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
   // visibly increased its count over time while the user just sat on the
@@ -476,6 +586,19 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
     assertNotReplay("Resolving a decision");
+    // Bug3 — record the resolution LIVE so a cold reload (or a cross-tab open)
+    // opens the DecisionCard in its resolved state. Snapshot for rollback if
+    // the POST fails (optimisticArtifactPatch reverts the status; keep the
+    // resolved-record in lockstep so a failed resolve doesn't strand a card in
+    // a false "resolved" on the next remount).
+    const priorResolved = get().resolvedDecisions[decisionId];
+    get().recordResolvedDecision(decisionId, {
+      optionId,
+      reasoning: reasoning?.trim() || undefined,
+      resolvedAt: new Date().toISOString(),
+      confidence: prediction?.confidence,
+      predictedOutcome: prediction?.predictedOutcome,
+    });
     // Optimistic: flip the decision artifact to "approved" locally so it leaves
     // the "waiting for you" set the instant you choose — don't wait on the
     // session-scoped `decision_resolved` WS broadcast (which never reaches a
@@ -483,6 +606,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // artifact approved, so this just closes the local-state gap.
     // ArtifactPanel resolves decisions by content.decisionId, falling back to
     // the artifact id (effectiveDecisionId), so match both.
+    try {
     await optimisticArtifactPatch(
       (a) =>
         (a.content as any)?.decisionId === decisionId ||
@@ -502,6 +626,17 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         }),
       "Resolve decision",
     );
+    } catch (err) {
+      // Roll the optimistic resolved-record back in lockstep with the status
+      // rollback optimisticArtifactPatch already performed.
+      set((s) => {
+        const next = { ...s.resolvedDecisions };
+        if (priorResolved) next[decisionId] = priorResolved;
+        else delete next[decisionId];
+        return { resolvedDecisions: next };
+      });
+      throw err;
+    }
   },
 
   renameArtifact: async (artifactId, title) => {
@@ -566,7 +701,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     }
   },
 
-  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {} }),
+  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {} }),
 
   markDecisionsAcknowledged: (decisionIds) =>
     set((s) => {
@@ -574,4 +709,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       for (const id of decisionIds) next[id] = true;
       return { acknowledgedDecisions: next };
     }),
+
+  recordResolvedDecision: (decisionId, info) =>
+    set((s) => ({
+      resolvedDecisions: { ...s.resolvedDecisions, [decisionId]: info },
+    })),
 }));

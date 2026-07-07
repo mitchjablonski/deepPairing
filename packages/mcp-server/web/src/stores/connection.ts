@@ -171,6 +171,22 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               .filter((d: any) => d?.acknowledged && d?.decisionId)
               .map((d: any) => d.decisionId as string);
             if (ackedIds.length > 0) store.markDecisionsAcknowledged(ackedIds);
+            // Bug3 — seed the LIVE resolved-decision map from the persisted
+            // records so a resolved decision shows its chosen option after a
+            // cold reload (DecisionCard opens in the resolved state). Separate
+            // from the C2 acked-ids seeding above — a resolution can be
+            // recorded but not yet drained by the agent.
+            for (const d of (data.state.decisions ?? [])) {
+              if (d?.decisionId && d?.response?.optionId) {
+                store.recordResolvedDecision(d.decisionId, {
+                  optionId: d.response.optionId,
+                  reasoning: d.response.reasoning,
+                  resolvedAt: d.resolvedAt,
+                  confidence: d.response.confidence,
+                  predictedOutcome: d.response.predictedOutcome,
+                });
+              }
+            }
             // QOL — return to the artifact you were last on, now that the
             // session has hydrated (overrides addArtifact's first-artifact pick).
             store.restoreSelection();
@@ -285,6 +301,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         case "decision_resolved":
           if (data.artifactId) {
             store.updateArtifact(data.artifactId, "approved");
+          }
+          // Bug3 — a cross-tab resolve must reflect without a reload. The
+          // broadcast carries decisionId + optionId (+ reasoning); record it
+          // so a remounting DecisionCard opens resolved. (confidence/
+          // predictedOutcome aren't broadcast — they survive via hydrate.)
+          if (data.decisionId && data.optionId) {
+            store.recordResolvedDecision(data.decisionId, {
+              optionId: data.optionId,
+              reasoning: data.reasoning,
+              resolvedAt: new Date().toISOString(),
+            });
           }
           break;
 
@@ -413,6 +440,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               store.reset();
               for (const artifact of fresh.artifacts ?? []) store.addArtifact(artifact);
               for (const comment of fresh.comments ?? []) store.addComment(comment);
+              // Bug3 — re-seed resolved decisions after the reset so a resolved
+              // card doesn't revert to its options grid on daemon-resume refetch.
+              for (const d of fresh.decisions ?? []) {
+                if (d?.decisionId && d?.response?.optionId) {
+                  store.recordResolvedDecision(d.decisionId, {
+                    optionId: d.response.optionId,
+                    reasoning: d.response.reasoning,
+                    resolvedAt: d.resolvedAt,
+                    confidence: d.response.confidence,
+                    predictedOutcome: d.response.predictedOutcome,
+                  });
+                }
+              }
             })
             .catch(() => {});
           import("./toast").then(({ useToastStore }) => {

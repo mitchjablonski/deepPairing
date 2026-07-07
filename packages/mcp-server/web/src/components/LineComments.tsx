@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
-import { useArtifactStore } from "../stores/artifact";
+import { useArtifactStore, commentPriorVersion } from "../stores/artifact";
 import { isSessionLive } from "../stores/connection";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 
@@ -105,6 +105,11 @@ export function LineCommentChips({
 }: LineCommentChipsProps) {
   const submitComment = useArtifactStore((s) => s.submitComment);
   const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
+  // Bug2 — inline chips aggregate across the version chain (via the caller's
+  // useChainComments), so a v1 line comment renders on v2's line N. Surface the
+  // version provenance inline the same way CommentBubble does — hiding it would
+  // reintroduce the exact data-loss the aggregation fixed.
+  const artifacts = useArtifactStore((s) => s.artifacts);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [replySubmitting, setReplySubmitting] = useState(false);
@@ -201,6 +206,7 @@ export function LineCommentChips({
     const isQuestion = c.intent === "question";
     const answered = !!c.answeredByCommentId;
     const humanResolved = !!c.humanResolvedAt;
+    const priorVersion = commentPriorVersion(artifacts, c, artifactId);
     return (
       <div key={c.id} className="mb-0.5">
         <div className="flex items-start gap-2 px-3 py-1.5 bg-accent-blue-dim/60 rounded text-xs">
@@ -213,6 +219,17 @@ export function LineCommentChips({
             {isHuman ? "You" : "Agent"}
             {spanLabel}:
           </span>
+          {/* Bug2 — this line comment predates the version being viewed
+              (aggregated across the chain); tag it so its provenance is honest
+              inline, since line N may hold different content on v2. */}
+          {priorVersion != null && (
+            <span
+              className="shrink-0 self-center text-2xs text-text-muted/80 italic"
+              title="Posted on an earlier version of this artifact"
+            >
+              from v{priorVersion}
+            </span>
+          )}
           <span className="text-text-secondary flex-1">{c.content}</span>
           {(c.author === "agent" || isReply) && (
             <button

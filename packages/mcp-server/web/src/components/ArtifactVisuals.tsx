@@ -3,7 +3,7 @@ import { MermaidDiagram } from "./MermaidDiagram";
 import { PrototypeFrame } from "./PrototypeFrame";
 import { CommentableCode } from "./CommentableCode";
 import { CommentTrigger, AskTrigger } from "./CommentThread";
-import { useArtifactStore } from "../stores/artifact";
+import { useChainComments } from "../hooks/useChainComments";
 
 const kindLabel: Record<string, string> = {
   diagram: "Diagram",
@@ -34,7 +34,10 @@ const changeStyle: Record<string, { glyph: string; cls: string }> = {
  * iterates via revise_artifact — reusing the whole existing review loop.
  */
 export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; visuals: PlanVisual[] }) {
-  const comments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  // Bug2 — aggregate the version chain so a visual-anchored (visualId) comment
+  // posted on v1 still surfaces on v2 (same data-loss class as the other
+  // renderers). A visualId that only exists on one version simply won't match.
+  const comments = useChainComments(artifactId);
   if (!visuals || visuals.length === 0) return null;
 
   return (
@@ -116,7 +119,7 @@ export function VisualBody({ artifactId, visual, readOnly = false }: { artifactI
 
 // --- annotated_code: real code + line-anchored agent notes, per-line commentable
 function AnnotatedCode({ artifactId, visual, readOnly = false }: { artifactId: string; visual: PlanVisual; readOnly?: boolean }) {
-  const allComments = useArtifactStore((s) => s.comments[artifactId]) ?? [];
+  const allComments = useChainComments(artifactId); // Bug2 — chain aggregation
   const filePath = typeof visual.filePath === "string" ? visual.filePath : undefined;
   const lineStart = typeof visual.lineStart === "number" && Number.isFinite(visual.lineStart) ? visual.lineStart : 1;
 
