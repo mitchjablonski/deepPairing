@@ -1,13 +1,12 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
 import type { TeamPreference } from "@deeppairing/shared";
-import { normalizeConceptKey } from "@deeppairing/shared";
 import { getGlobalStore } from "../store/global-store.js";
 import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
 } from "./elicit.js";
-import { runPreflight, type PreflightTracePartial } from "./preflight-validator.js";
+import { runPreflight, meaningfulTokens, type PreflightTracePartial } from "./preflight-validator.js";
 
 type BroadcastFn = (event: any) => void;
 
@@ -117,11 +116,26 @@ export async function preflightRejectedApproaches(
   // only). Fail-open: a ledger read error must never break the tool.
   //
   // Finding 2/3 — dedupe against BOTH local rejections AND local
-  // approvals/overrides (an approved/retired concept must not even nudge), and
-  // the ≥2-token/exact-key signal gate lives in isCrossProjectAdvisoryHit.
+  // approvals/overrides (an approved/retired concept must not even nudge). The
+  // dedup key MUST be the SAME basis the matcher (isCrossProjectAdvisoryHit)
+  // uses — a sorted STEMMED meaningful-token set — not normalizeConceptKey.
+  // normalizeConceptKey is hyphen/punct-sensitive, so approved
+  // "pay-per-request hosting" would NOT dedup against global-avoid
+  // "pay per request hosting" and the concept would still nudge. Token-set
+  // equality collapses that variance the same way the matcher does.
+  const tokenSetKey = (s: string): string => {
+    const toks = meaningfulTokens(s);
+    return toks.length ? [...toks].sort().join(" ") : "";
+  };
   const localKeys = new Set<string>();
-  for (const r of memory.rejectedApproaches) localKeys.add(normalizeConceptKey(r.concept ?? r.description));
-  for (const a of memory.approvedPatterns) localKeys.add(normalizeConceptKey(a));
+  for (const r of memory.rejectedApproaches) {
+    const k = tokenSetKey(r.concept ?? r.description);
+    if (k) localKeys.add(k);
+  }
+  for (const a of memory.approvedPatterns) {
+    const k = tokenSetKey(a);
+    if (k) localKeys.add(k);
+  }
   const globalAdvisoryConcepts: Array<{ concept: string; project?: string; reason?: string }> = [];
   try {
     for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
@@ -129,7 +143,8 @@ export async function preflightRejectedApproaches(
       if (!concept) continue;
       // Skip anything this project has already rejected (hard-blocks locally) or
       // approved/overridden (deliberately allowed here) — no redundant nudge.
-      if (localKeys.has(normalizeConceptKey(concept))) continue;
+      const k = tokenSetKey(concept);
+      if (k && localKeys.has(k)) continue;
       const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
       globalAdvisoryConcepts.push({
         concept,

@@ -147,6 +147,27 @@ export function conceptMatchesProposal(concept: string, proposal: string): boole
 }
 
 /**
+ * SINGLE-TOKEN LOCAL HARD-BLOCK FLOOR.
+ *
+ * The 4→3 meaningful-token threshold (kept, because it lets multi-token
+ * concepts that include a decisive acronym — "orm reporting layer" — match)
+ * has a sharp edge on its own: a stored concept that reduces to ONE meaningful
+ * token ("get"/"set"/"add"/"key"/"orm") would token-contain into ANY prose that
+ * merely uses that word, hard-blocking unrelated proposals. Pre-PR the ≥4
+ * filter dropped those tokens entirely, so they matched nothing.
+ *
+ * Fix: a stored concept may hard-block via PROSE token-containment only when it
+ * carries ≥2 meaningful tokens. A single-token concept can still hard-block, but
+ * ONLY via exact concept-key equality against a NAMED proposal concept
+ * (concept↔concept) — the same floor the cross-project advisory path uses in
+ * isCrossProjectAdvisoryHit. Multi-token behavior is unchanged; rail∉guardrail
+ * stays dead (equality, not substring).
+ */
+export function containmentBlockAllowed(storedConcept: string): boolean {
+  return meaningfulTokens(storedConcept).length >= 2;
+}
+
+/**
  * (A) Concept↔concept matcher — the biggest free precision win. When the
  * agent's proposal carries its OWN named concept(s) (present_options'
  * `option.concept.name`, present_code_change's `concept`), compare those SHORT
@@ -173,8 +194,14 @@ export function findConceptToConceptMatch(
     const storedKey = normalizeConceptKey(stored);
     for (const pc of proposalConcepts) {
       if (!pc?.trim()) continue;
+      // Exact concept-key equality — always allowed, even for a single-token
+      // concept (a named proposal concept that IS the stored concept).
       if (normalizeConceptKey(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
-      if (conceptMatchesProposal(stored, pc)) return { proposalConcept: pc, storedConcept: stored };
+      // Token-containment — floored to ≥2 meaningful tokens (single-token
+      // concepts can't hard-block by containment; see containmentBlockAllowed).
+      if (containmentBlockAllowed(stored) && conceptMatchesProposal(stored, pc)) {
+        return { proposalConcept: pc, storedConcept: stored };
+      }
     }
   }
   return null;
@@ -191,9 +218,9 @@ export function findConceptToConceptMatch(
  *     tokens (so single-token concepts like "api"/"orm"/"hooks" can't fire a
  *     nudge on any prose that merely mentions the word).
  *
- * Local hard-block behavior is intentionally UNCHANGED by this — single-token
- * LOCAL rejections still hard-block exactly as before. This stricter rule
- * applies ONLY to the cross-project advisory path.
+ * The LOCAL hard-block path now shares the SAME single-token floor (see
+ * containmentBlockAllowed) — a single-token concept, local or cross-project,
+ * only fires via exact concept-key equality, never bare prose containment.
  */
 export function isCrossProjectAdvisoryHit(
   storedConcept: string,
@@ -205,7 +232,7 @@ export function isCrossProjectAdvisoryHit(
   // Exact key equality against a NAMED proposal concept — always high-signal.
   if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey(pc) === key)) return true;
   // Full stemmed token containment, but only for multi-token concepts.
-  if (meaningfulTokens(storedConcept).length >= 2) {
+  if (containmentBlockAllowed(storedConcept)) {
     const texts = [...proposalStrings, ...proposalConcepts];
     if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
   }
@@ -269,6 +296,10 @@ export function findTeamPreferenceViolation(
     }
 
     if (pref.kind === "avoid") {
+      // Floored to ≥2 meaningful tokens (containmentBlockAllowed): a single-token
+      // team-avoid ("orm"/"any") can't hard-block ordinary prose; it still blocks
+      // via exact concept↔concept key (runPreflight Lane-2 fallback).
+      if (!containmentBlockAllowed(pref.concept)) continue;
       for (const proposal of proposalStrings) {
         if (!proposal.trim()) continue;
         if (conceptMatchesProposal(pref.concept, proposal)) {
@@ -358,7 +389,10 @@ export function findRejectedApproachMatch(
       // same token-equality basis so this lane now catches morphology
       // ("hosting" ← concept "host") that the old word-bounded per-token regex
       // missed, WITHOUT re-opening rail∈guardrail (equality, not substring).
-      if (rej.concept && conceptMatchesProposal(rej.concept, proposal)) {
+      // Floored to ≥2 meaningful tokens so a single-token rejected concept
+      // ("get"/"orm") can't hard-block ordinary prose (containmentBlockAllowed);
+      // single-token concepts still block via exact concept↔concept key.
+      if (rej.concept && containmentBlockAllowed(rej.concept) && conceptMatchesProposal(rej.concept, proposal)) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }

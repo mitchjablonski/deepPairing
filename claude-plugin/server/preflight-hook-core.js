@@ -55,6 +55,9 @@ function conceptMatchesProposal(concept, proposal) {
   const pset = new Set(meaningfulTokens(proposal));
   return tokens.every((t) => pset.has(t));
 }
+function containmentBlockAllowed(storedConcept) {
+  return meaningfulTokens(storedConcept).length >= 2;
+}
 function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
   for (const stored of storedConcepts) {
     if (!stored?.trim()) continue;
@@ -62,7 +65,9 @@ function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
     for (const pc of proposalConcepts) {
       if (!pc?.trim()) continue;
       if (normalizeConceptKey(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
-      if (conceptMatchesProposal(stored, pc)) return { proposalConcept: pc, storedConcept: stored };
+      if (containmentBlockAllowed(stored) && conceptMatchesProposal(stored, pc)) {
+        return { proposalConcept: pc, storedConcept: stored };
+      }
     }
   }
   return null;
@@ -71,7 +76,7 @@ function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConce
   if (!storedConcept?.trim()) return false;
   const key = normalizeConceptKey(storedConcept);
   if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey(pc) === key)) return true;
-  if (meaningfulTokens(storedConcept).length >= 2) {
+  if (containmentBlockAllowed(storedConcept)) {
     const texts = [...proposalStrings, ...proposalConcepts];
     if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
   }
@@ -101,6 +106,7 @@ function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [])
       if (!hit) continue;
     }
     if (pref.kind === "avoid") {
+      if (!containmentBlockAllowed(pref.concept)) continue;
       for (const proposal of proposalStrings) {
         if (!proposal.trim()) continue;
         if (conceptMatchesProposal(pref.concept, proposal)) {
@@ -148,7 +154,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
       if (containsAsPhrase(p, specificNoun)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (rej.concept && conceptMatchesProposal(rej.concept, proposal)) {
+      if (rej.concept && containmentBlockAllowed(rej.concept) && conceptMatchesProposal(rej.concept, proposal)) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }

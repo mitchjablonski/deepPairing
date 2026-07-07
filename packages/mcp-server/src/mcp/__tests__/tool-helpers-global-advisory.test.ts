@@ -74,4 +74,16 @@ describe("preflightRejectedApproaches — finding-2 dedup (locally-approved conc
       expect(globalHit?.project).toBe("project-a");
     }
   });
+
+  it("finding-2 basis fix: dedup is HYPHEN-INSENSITIVE — approved 'pay per request hosting' suppresses global-avoid 'pay-per-request hosting'", async () => {
+    seedGlobalAvoid(); // seeds the HYPHENATED concept into the global ledger
+    // Local approval uses the SPACED variant — different normalizeConceptKey,
+    // SAME stemmed token set. Pre-fix this failed to dedup and still nudged.
+    const store = fakeStore(["pay per request hosting"]);
+    const res = await preflightRejectedApproaches(store, noopBroadcast, "present_code_change", [MATCHING_PROSE]);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.trace.nearMisses.filter((n) => n.source === "global")).toEqual([]);
+    }
+  });
 });

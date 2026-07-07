@@ -404,13 +404,100 @@ describe("conceptMatchesProposal — unified stemmed token-EQUALITY (B)", () => 
     expect(conceptMatchesProposal("rail", "add a guardrail before deploy")).toBe(false);
   });
 
-  it("ACRONYM: single 3-char concept 'orm' now matches (was dropped by the ≥4 filter)", () => {
+  it("ACRONYM: the raw matcher token-includes a 3-char concept 'orm' (the ≥3 threshold) — the single-token HARD-BLOCK floor lives at the block level, not here", () => {
+    // conceptMatchesProposal is the low-level matcher and still returns true for
+    // a single-token concept; the single-token floor (containmentBlockAllowed)
+    // is applied at the BLOCK-decision sites (see the floor describe below), so
+    // this raw match no longer implies a hard block.
     expect(conceptMatchesProposal("orm", "introduce an ORM layer")).toBe(true);
     expect(conceptMatchesProposal("orm", "introduce a query builder")).toBe(false);
   });
 
   it("still requires EVERY meaningful token (partial concept does not match)", () => {
     expect(conceptMatchesProposal("global mutable state", "add a global cache")).toBe(false);
+  });
+});
+
+// =====================================================================
+// Single-token LOCAL hard-block floor (SHOULD-FIX). The 4→3 threshold made a
+// single-token stored concept token-contain into any prose using that word.
+// Floor: single-token concepts hard-block ONLY via exact concept-key equality
+// against a NAMED proposal concept, never via prose token-containment.
+// =====================================================================
+
+describe("runPreflight — single-token LOCAL hard-block floor", () => {
+  // A realistic rejection: the CONCEPT is the short form; the DESCRIPTION is a
+  // normal title that won't phrase-match the prose (isolating the concept path,
+  // which is what the 4→3 threshold changed — the surface/description phrase
+  // path is unaffected by this floor).
+  const single = (concept: string): RejectedApproach =>
+    ({ id: "s", description: "a past architectural preference we set aside", concept, reason: "x", rejectedAt: "2026-04-01T00:00:00Z" } as any);
+
+  it("a single-token rejected concept 'orm' does NOT hard-block ordinary prose that mentions it", () => {
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["introduce a data-access layer for the reporting queries"],
+      rejectedApproaches: [single("orm")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(false);
+  });
+
+  it("a common 3-char word ('get'/'add'/'set'/'key') as a rejected concept does NOT hard-block prose", () => {
+    for (const word of ["get", "add", "set", "key"]) {
+      const r = runPreflight({
+        toolName: "present_code_change",
+        proposalStrings: [`introduce a helper to fetch the config value and apply defaults ${word}`],
+        rejectedApproaches: [single(word)],
+        teamPreferences: [],
+      });
+      expect(r.blocked, `word "${word}" must not hard-block prose`).toBe(false);
+    }
+  });
+
+  it("a single-token concept STILL hard-blocks via EXACT concept↔concept key (named proposal concept)", () => {
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["some unrelated prose"],
+      proposalConcepts: ["orm"], // the agent NAMED exactly the rejected concept
+      rejectedApproaches: [single("orm")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
+    if (r.blocked) expect(r.block.source).toBe("session");
+  });
+
+  it("a single-token TEAM avoid does NOT hard-block prose, but DOES via exact named-concept key", () => {
+    const teamAvoid: TeamPreference = { id: "p", kind: "avoid", concept: "orm", rationale: "no ORMs" } as any;
+    const prose = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["add an ORM layer"],
+      rejectedApproaches: [],
+      teamPreferences: [teamAvoid],
+    });
+    expect(prose.blocked).toBe(false);
+    const named = runPreflight({
+      toolName: "present_options",
+      proposalStrings: ["unrelated"],
+      proposalConcepts: ["orm"],
+      rejectedApproaches: [],
+      teamPreferences: [teamAvoid],
+    });
+    expect(named.blocked).toBe(true);
+    if (named.blocked) expect(named.block.source).toBe("team");
+  });
+
+  it("REGRESSION: a MULTI-token concept (incl. an acronym) still hard-blocks on prose via the concept path", () => {
+    // description is a non-matching title, so the block MUST come from the
+    // multi-token concept containment, not the surface phrase path.
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["build an orm layer for reporting on the dashboard"],
+      rejectedApproaches: [single("orm reporting layer")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
+    if (r.blocked) expect(r.block.broadcastEvent.match.via).toBe("concept");
   });
 });
 

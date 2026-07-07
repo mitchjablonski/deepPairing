@@ -26555,6 +26555,9 @@ function conceptMatchesProposal(concept, proposal) {
   const pset = new Set(meaningfulTokens(proposal));
   return tokens.every((t) => pset.has(t));
 }
+function containmentBlockAllowed(storedConcept) {
+  return meaningfulTokens(storedConcept).length >= 2;
+}
 function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
   for (const stored of storedConcepts) {
     if (!stored?.trim()) continue;
@@ -26562,7 +26565,9 @@ function findConceptToConceptMatch(proposalConcepts, storedConcepts) {
     for (const pc of proposalConcepts) {
       if (!pc?.trim()) continue;
       if (normalizeConceptKey2(pc) === storedKey) return { proposalConcept: pc, storedConcept: stored };
-      if (conceptMatchesProposal(stored, pc)) return { proposalConcept: pc, storedConcept: stored };
+      if (containmentBlockAllowed(stored) && conceptMatchesProposal(stored, pc)) {
+        return { proposalConcept: pc, storedConcept: stored };
+      }
     }
   }
   return null;
@@ -26571,7 +26576,7 @@ function isCrossProjectAdvisoryHit(storedConcept, proposalStrings, proposalConce
   if (!storedConcept?.trim()) return false;
   const key = normalizeConceptKey2(storedConcept);
   if (proposalConcepts.some((pc) => pc?.trim() && normalizeConceptKey2(pc) === key)) return true;
-  if (meaningfulTokens(storedConcept).length >= 2) {
+  if (containmentBlockAllowed(storedConcept)) {
     const texts = [...proposalStrings, ...proposalConcepts];
     if (texts.some((t) => conceptMatchesProposal(storedConcept, t))) return true;
   }
@@ -26601,6 +26606,7 @@ function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [])
       if (!hit) continue;
     }
     if (pref.kind === "avoid") {
+      if (!containmentBlockAllowed(pref.concept)) continue;
       for (const proposal of proposalStrings) {
         if (!proposal.trim()) continue;
         if (conceptMatchesProposal(pref.concept, proposal)) {
@@ -26648,7 +26654,7 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
       if (containsAsPhrase(p, specificNoun)) {
         return { proposal, rejected: rej, via: "surface" };
       }
-      if (rej.concept && conceptMatchesProposal(rej.concept, proposal)) {
+      if (rej.concept && containmentBlockAllowed(rej.concept) && conceptMatchesProposal(rej.concept, proposal)) {
         return { proposal, rejected: rej, via: "concept" };
       }
     }
@@ -26878,15 +26884,26 @@ function terminalApproveEnabled(env) {
 async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) {
   const memory = await store.getSessionMemory();
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
+  const tokenSetKey = (s) => {
+    const toks = meaningfulTokens(s);
+    return toks.length ? [...toks].sort().join(" ") : "";
+  };
   const localKeys = /* @__PURE__ */ new Set();
-  for (const r of memory.rejectedApproaches) localKeys.add(normalizeConceptKey(r.concept ?? r.description));
-  for (const a of memory.approvedPatterns) localKeys.add(normalizeConceptKey(a));
+  for (const r of memory.rejectedApproaches) {
+    const k = tokenSetKey(r.concept ?? r.description);
+    if (k) localKeys.add(k);
+  }
+  for (const a of memory.approvedPatterns) {
+    const k = tokenSetKey(a);
+    if (k) localKeys.add(k);
+  }
   const globalAdvisoryConcepts = [];
   try {
     for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
       const concept = entry.concept?.trim();
       if (!concept) continue;
-      if (localKeys.has(normalizeConceptKey(concept))) continue;
+      const k = tokenSetKey(concept);
+      if (k && localKeys.has(k)) continue;
       const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
       globalAdvisoryConcepts.push({
         concept,
