@@ -109,6 +109,11 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
+      // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
+      // reference graph doesn't dangle at the SOURCE when v1 is superseded
+      // (belt-and-suspenders with the client-side resolveToLiveId in the flow
+      // sidebar). Optional field; only set when the old artifact had refs.
+      ...(old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {}),
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
