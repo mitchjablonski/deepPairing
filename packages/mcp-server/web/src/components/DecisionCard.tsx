@@ -680,27 +680,47 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
  */
 export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
   // Coercion boundary: options always an array, context/decisionId always
-  // strings. An options-less decision has nothing to render, so bail.
+  // strings. (The empty-options bail is AFTER the hooks below — rules-of-hooks.)
   const dc = coerceDecisionContent(artifact.content);
-  if (dc.options.length === 0) return null;
-
-  // When viewing a past resolved decision via replay, pull the record so
-  // DecisionCard can open in the resolved state with the Re-pair button.
-  const replay = useReplayStore.getState();
   // decisionId defaults to "" — fall back to the artifact id, not "".
   const effectiveDecisionId = dc.decisionId || artifact.id;
-  const record = replay.decisions.find(
-    (d) => d.decisionId === effectiveDecisionId || d.artifactId === artifact.id,
-  );
-  const initialResolved = record?.response
-    ? {
-        optionId: record.response.optionId,
-        reasoning: record.response.reasoning,
-        resolvedAt: record.resolvedAt,
-        confidence: (record.response as any).confidence,
-        predictedOutcome: (record.response as any).predictedOutcome,
-      }
-    : undefined;
+
+  // Bug3 — a resolved decision must show its chosen option after a COLD reload.
+  // On a normal (non-replay) load the resolved record lives in the artifact
+  // store (seeded from data.state.decisions on hydrate); in replay it lives in
+  // the replay store. Subscribe to both so a cross-tab resolve reflects live.
+  const replayActive = useReplayStore((s) => s.active);
+  const replayDecisions = useReplayStore((s) => s.decisions);
+  const liveResolved = useArtifactStore((s) => s.resolvedDecisions[effectiveDecisionId]);
+
+  // An options-less decision has nothing to render, so bail (after the hooks).
+  if (dc.options.length === 0) return null;
+
+  let initialResolved: InitialResolved | undefined;
+  if (replayActive) {
+    // When viewing a past resolved decision via replay, pull the record so
+    // DecisionCard can open in the resolved state with the Re-pair button.
+    const record = replayDecisions.find(
+      (d) => d.decisionId === effectiveDecisionId || d.artifactId === artifact.id,
+    );
+    initialResolved = record?.response
+      ? {
+          optionId: record.response.optionId,
+          reasoning: record.response.reasoning,
+          resolvedAt: record.resolvedAt,
+          confidence: (record.response as any).confidence,
+          predictedOutcome: (record.response as any).predictedOutcome,
+        }
+      : undefined;
+  } else if (liveResolved) {
+    initialResolved = {
+      optionId: liveResolved.optionId,
+      reasoning: liveResolved.reasoning,
+      resolvedAt: liveResolved.resolvedAt,
+      confidence: liveResolved.confidence,
+      predictedOutcome: liveResolved.predictedOutcome,
+    };
+  }
 
   return (
     <>

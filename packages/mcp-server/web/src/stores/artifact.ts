@@ -115,6 +115,20 @@ async function optimisticArtifactPatch<K extends keyof Artifact>(
   }
 }
 
+/**
+ * Bug3 — the human's recorded choice on a decision, held LIVE in the store so a
+ * resolved decision shows its chosen option after a cold (non-replay) reload.
+ * Seeded from `data.state.decisions` on hydrate, updated on optimistic resolve
+ * and on the cross-tab `decision_resolved` broadcast.
+ */
+export interface ResolvedDecisionInfo {
+  optionId: string;
+  reasoning?: string;
+  resolvedAt?: string;
+  confidence?: "low" | "medium" | "high";
+  predictedOutcome?: string;
+}
+
 export interface ArtifactState {
   artifacts: Artifact[];
   comments: Record<string, Comment[]>;
@@ -125,6 +139,10 @@ export interface ArtifactState {
    *  Set, per the no-Map/Set store convention. */
   acknowledgedDecisions: Record<string, true>;
   markDecisionsAcknowledged: (decisionIds: string[]) => void;
+  /** Bug3 — resolved decisions keyed by decisionId. Record, not Map, per the
+   *  no-Map/Set store convention. Cleared in reset(). */
+  resolvedDecisions: Record<string, ResolvedDecisionInfo>;
+  recordResolvedDecision: (decisionId: string, info: ResolvedDecisionInfo) => void;
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
@@ -292,6 +310,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   selectedArtifactId: null,
   unreadIds: [],
   acknowledgedDecisions: {},
+  resolvedDecisions: {},
 
   // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
   // visibly increased its count over time while the user just sat on the
@@ -547,6 +566,19 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
     assertNotReplay("Resolving a decision");
+    // Bug3 — record the resolution LIVE so a cold reload (or a cross-tab open)
+    // opens the DecisionCard in its resolved state. Snapshot for rollback if
+    // the POST fails (optimisticArtifactPatch reverts the status; keep the
+    // resolved-record in lockstep so a failed resolve doesn't strand a card in
+    // a false "resolved" on the next remount).
+    const priorResolved = get().resolvedDecisions[decisionId];
+    get().recordResolvedDecision(decisionId, {
+      optionId,
+      reasoning: reasoning?.trim() || undefined,
+      resolvedAt: new Date().toISOString(),
+      confidence: prediction?.confidence,
+      predictedOutcome: prediction?.predictedOutcome,
+    });
     // Optimistic: flip the decision artifact to "approved" locally so it leaves
     // the "waiting for you" set the instant you choose — don't wait on the
     // session-scoped `decision_resolved` WS broadcast (which never reaches a
@@ -554,6 +586,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // artifact approved, so this just closes the local-state gap.
     // ArtifactPanel resolves decisions by content.decisionId, falling back to
     // the artifact id (effectiveDecisionId), so match both.
+    try {
     await optimisticArtifactPatch(
       (a) =>
         (a.content as any)?.decisionId === decisionId ||
@@ -573,6 +606,17 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         }),
       "Resolve decision",
     );
+    } catch (err) {
+      // Roll the optimistic resolved-record back in lockstep with the status
+      // rollback optimisticArtifactPatch already performed.
+      set((s) => {
+        const next = { ...s.resolvedDecisions };
+        if (priorResolved) next[decisionId] = priorResolved;
+        else delete next[decisionId];
+        return { resolvedDecisions: next };
+      });
+      throw err;
+    }
   },
 
   renameArtifact: async (artifactId, title) => {
@@ -637,7 +681,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     }
   },
 
-  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {} }),
+  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {} }),
 
   markDecisionsAcknowledged: (decisionIds) =>
     set((s) => {
@@ -645,4 +689,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       for (const id of decisionIds) next[id] = true;
       return { acknowledgedDecisions: next };
     }),
+
+  recordResolvedDecision: (decisionId, info) =>
+    set((s) => ({
+      resolvedDecisions: { ...s.resolvedDecisions, [decisionId]: info },
+    })),
 }));
