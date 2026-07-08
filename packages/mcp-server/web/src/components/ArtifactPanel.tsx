@@ -574,10 +574,9 @@ function ArtifactSidebar({
  * Multi-agent bar: loads artifacts from other active sessions and merges
  * them into the local store so everything appears in one UI.
  */
-function MultiAgentSync() {
+export function MultiAgentSync() {
   const addArtifact = useArtifactStore((s) => s.addArtifact);
   const addComment = useArtifactStore((s) => s.addComment);
-  const artifacts = useArtifactStore((s) => s.artifacts);
   // C1 — reuse the session list App already polls into the connection store
   // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
@@ -585,13 +584,23 @@ function MultiAgentSync() {
   // when unchanged; depending on the array tore down + recreated the 5s
   // interval each time. Key the effect on the id list's VALUE instead.
   const sessionKey = activeSessions.map((s) => s.sessionId).join(",");
-  const knownSessionIds = useMemo(() => new Set(artifacts.map((a) => a.sessionId)), [artifacts]);
-  // C1 — a session with ZERO artifacts is never "known" (knownSessionIds
-  // derives from artifact sessionIds), so pre-C1 it was refetched every 5s
-  // forever — each hit running getFullState() server-side. The refetch is
-  // still needed (it's how another session's FIRST artifact gets discovered:
-  // session-scoped tabs don't receive other sessions' WS events), so back it
-  // off to 30s per empty session instead of dropping it.
+  // Bug B — track which sessions we've actually BACKFILLED (a successful
+  // /api/live-session/:id that returned artifacts), NOT "which sessions do we
+  // hold ≥1 artifact from". Pre-fix the gate was `knownSessionIds` — derived
+  // from artifact sessionIds — so a single STRAY artifact for session B (e.g. a
+  // global-client tab receiving B's `artifact_created` broadcast) marked B
+  // "known" and its full-state fetch was skipped forever: only that one newest
+  // artifact showed, B's older artifacts never loaded. Gating on this ref
+  // decouples "seen one artifact" from "loaded all artifacts", so a stray
+  // artifact no longer suppresses the backfill. A ref (not state) so adding an
+  // id doesn't re-render / churn the interval.
+  const fullyLoadedSessions = useRef<Set<string>>(new Set());
+  // C1 — a session with ZERO artifacts is never fully-loaded (the fetch
+  // returned nothing to mark), so it stays out of fullyLoadedSessions and the
+  // 30s backoff keeps polling it. The refetch is still needed (it's how another
+  // session's FIRST artifact gets discovered: session-scoped tabs don't receive
+  // other sessions' WS events), so back it off to 30s per empty session instead
+  // of dropping it.
   const lastAttemptRef = useRef<Map<string, number>>(new Map());
   const EMPTY_SESSION_RETRY_MS = 30_000;
 
@@ -610,7 +619,10 @@ function MultiAgentSync() {
         // instantly rejected on the dead signal AFTER the stamp), delaying
         // another agent's session discovery by up to 30s post-churn.
         if (ac.signal.aborted) return;
-        if (knownSessionIds.has(session.sessionId)) continue; // Already loaded
+        // Bug B — gate on "have we backfilled this session", not "do we hold
+        // any artifact from it". A stray WS-delivered artifact no longer skips
+        // the full fetch.
+        if (fullyLoadedSessions.current.has(session.sessionId)) continue; // Already backfilled
         const last = lastAttemptRef.current.get(session.sessionId) ?? 0;
         if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
         lastAttemptRef.current.set(session.sessionId, Date.now());
@@ -622,12 +634,20 @@ function MultiAgentSync() {
           const state = await sRes.json();
           if (ac.signal.aborted) return;
 
-          for (const artifact of state.artifacts ?? []) {
+          const loaded = state.artifacts ?? [];
+          for (const artifact of loaded) {
             addArtifact(artifact);
           }
           for (const comment of state.comments ?? []) {
             addComment(comment);
           }
+          // Bug B — mark fully-loaded ONLY once we've actually pulled the
+          // session's artifacts. Empty sessions stay UNmarked so the 30s
+          // backoff keeps polling for their first artifact (a session-scoped
+          // tab never receives other sessions' WS events, so polling is the
+          // only discovery path). A session a stray broadcast seeded with one
+          // artifact reaches here and gets its complete backfill.
+          if (loaded.length > 0) fullyLoadedSessions.current.add(session.sessionId);
         } catch {}
       }
     };
@@ -641,7 +661,7 @@ function MultiAgentSync() {
     // interval; activeSessions is read via a ref-stable closure re-created
     // only when membership actually changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: sessionKey (not the array) so a same-content refresh doesn't churn the 5s interval — see comment above
-  }, [sessionKey, knownSessionIds.size]); // Re-run on new sessions / merges
+  }, [sessionKey]); // Re-run when the session MEMBERSHIP changes (a new session to backfill)
 
   return null; // No visual output — just syncs data
 }
