@@ -90,7 +90,21 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
   );
 }
 
-export function VisualBody({ artifactId, visual, readOnly = false }: { artifactId: string; visual: PlanVisual; readOnly?: boolean }) {
+export function VisualBody({
+  artifactId,
+  visual,
+  readOnly = false,
+  staticPreview = false,
+}: {
+  artifactId: string;
+  visual: PlanVisual;
+  // `readOnly` governs ONLY per-line/per-visual comment-anchoring (turned off in
+  // decision options and revision diffs). `staticPreview` governs ONLY whether a
+  // prototype renders the static placeholder instead of the runnable sandbox —
+  // these were once one flag, which wrongly froze live per-option prototypes.
+  readOnly?: boolean;
+  staticPreview?: boolean;
+}) {
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
@@ -114,7 +128,7 @@ export function VisualBody({ artifactId, visual, readOnly = false }: { artifactI
   }
 
   // prototype — agent-authored HTML, run in a hardened sandbox (see PrototypeFrame).
-  return <PrototypeFrame html={typeof visual.html === "string" ? visual.html : ""} readOnly={readOnly} />;
+  return <PrototypeFrame html={typeof visual.html === "string" ? visual.html : ""} staticPreview={staticPreview} />;
 }
 
 // --- annotated_code: real code + line-anchored agent notes, per-line commentable

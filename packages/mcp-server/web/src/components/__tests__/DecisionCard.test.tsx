@@ -751,6 +751,25 @@ describe("DV1 — decision-level 'Compare diagrams' bar", () => {
     expect(screen.getByTestId("mermaid")).toBeInTheDocument();
     expect(resolveCalls(fetchSpy)).toHaveLength(0);
   });
+
+  it("a per-option PROTOTYPE is runnable in the live decision view (Run affordance, not the static placeholder)", () => {
+    // Field bug: a per-option prototype passed readOnly (to turn off
+    // comment-anchoring) and that wrongly forced the static "open the live
+    // version to run it" placeholder even in a LIVE session. It must RUN.
+    const eventWithPrototype = {
+      ...event,
+      options: [
+        {
+          ...event.options[0]!,
+          visuals: [{ id: "o1_proto", kind: "prototype" as const, title: "Redis mock", html: "<button>ping</button>" }],
+        },
+        event.options[1]!,
+      ],
+    };
+    render(<DecisionCard event={eventWithPrototype} decisionId="dec_abc" />);
+    expect(screen.getByRole("button", { name: /run prototype/i })).toBeInTheDocument();
+    expect(screen.queryByText(/open the live version to run it/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("B4 review — Enter on a nested concept badge must not resolve the decision", () => {

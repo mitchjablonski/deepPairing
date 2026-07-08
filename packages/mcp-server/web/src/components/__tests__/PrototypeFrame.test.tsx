@@ -28,6 +28,20 @@ describe("PrototypeFrame", () => {
     expect(screen.queryByText("hello prototype")).not.toBeInTheDocument();
   });
 
+  it("staticPreview renders the static placeholder, NOT a Run affordance", () => {
+    // staticPreview is used inside a revision diff, where running a live frame
+    // side-by-side would be pointless. It is SEPARATE from comment-anchoring.
+    render(<PrototypeFrame html="<button>go</button>" staticPreview />);
+    expect(screen.getByText(/open the live version to run it/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /run prototype/i })).not.toBeInTheDocument();
+  });
+
+  it("WITHOUT staticPreview it is runnable — the Run affordance, not the placeholder", () => {
+    render(<PrototypeFrame html="<button>go</button>" />);
+    expect(screen.getByRole("button", { name: /run prototype/i })).toBeInTheDocument();
+    expect(screen.queryByText(/open the live version to run it/i)).not.toBeInTheDocument();
+  });
+
   it("refuses to render a prototype over the size cap", () => {
     const huge = "<div>" + "x".repeat(520 * 1024) + "</div>";
     render(<PrototypeFrame html={huge} />);
