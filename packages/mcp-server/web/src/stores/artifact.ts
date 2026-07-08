@@ -62,9 +62,51 @@ function assertNotReplay(action: string): void {
  * the user switches to it. Transparent cross-daemon routing (a per-session
  * {host,hash,token} resolver) is deliberately DEFERRED — it would mean a tab
  * holding multiple daemons' bearer tokens, a security regression.
+ *
+ * AUTHORITATIVE confirm (review SHOULD-FIX): the cheap `isForeignSession`
+ * check can't tell a genuinely-foreign session from a same-daemon session that
+ * just LAGS the 10s `activeSessions` poll — in a global/aggregator tab
+ * (sessionId === null) a valid same-daemon session's first artifact arrives via
+ * the WS `artifact_created` broadcast immediately, while activeSessions only
+ * refreshes every 10s. So on the SUSPECTED-foreign path only (the error path —
+ * the common same-daemon path short-circuits below with zero extra cost) do ONE
+ * awaited fresh `refreshSessions()` and re-check. Block only if the owner is
+ * STILL absent afterwards. If the fresh fetch fails (network), PROCEED — never
+ * false-block on a transient blip; the POST 409s only in the rare
+ * genuine-foreign + refresh-failure case, no worse than pre-guard.
  */
-function guardForeignOwner(action: string, owner: string | undefined): void {
+type ConnStoreLike = { refreshSessions?: () => Promise<boolean> | void };
+function getConnStore(): ConnStoreLike | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    return (window as unknown as { __dpConnectionStore?: { getState?: () => ConnStoreLike } })
+      .__dpConnectionStore?.getState?.();
+  } catch {
+    return undefined;
+  }
+}
+
+async function guardForeignOwner(action: string, owner: string | undefined): Promise<void> {
+  // Common same-daemon path (owner === the tab's session OR owner already in
+  // activeSessions): short-circuit with NO extra fetch.
   if (!isForeignSession(owner)) return;
+  // Suspected foreign — could just be a poll-lagging same-daemon session in a
+  // global tab. Confirm with a fresh, AWAITED sessions fetch before blocking.
+  try {
+    const conn = getConnStore();
+    if (conn?.refreshSessions) {
+      const ok = await conn.refreshSessions();
+      // Fetch failed → staleness isn't authoritative → don't false-block.
+      if (ok === false) return;
+    }
+  } catch {
+    // Refresh threw (network) → proceed rather than false-block.
+    return;
+  }
+  // Re-check against the freshly-updated activeSessions. If the owner is now
+  // present, it was just poll-lag — proceed with the mutation.
+  if (!isForeignSession(owner)) return;
+  // Still absent after an authoritative refresh → GENUINELY foreign.
   void import("./toast").then(({ useToastStore }) =>
     useToastStore.getState().push({
       kind: "error",
@@ -509,10 +551,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     assertNotReplay("Commenting");
     // Bug A — session-level (__session__) comments keep the tab binding and are
     // never foreign; artifact comments route to the owner, so guard on it.
-    guardForeignOwner(
-      "Commenting",
-      artifactId === "__session__" ? undefined : get().owningSession(artifactId),
-    );
+    // Await only on the suspected-foreign path (keeps the provisional insert
+    // synchronous — the U3 optimistic-comment contract).
+    {
+      const owner = artifactId === "__session__" ? undefined : get().owningSession(artifactId);
+      if (isForeignSession(owner)) await guardForeignOwner("Commenting", owner);
+    }
     // Optimistic: render the comment immediately instead of waiting on the
     // session-scoped `comment_added` WS broadcast. Pre-this, submitComment was
     // the last broadcast-only mutation — the user hit send and nothing appeared
@@ -610,8 +654,14 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     assertNotReplay("Review");
     // Bug A — refuse (with an honest toast) before the optimistic flip if this
     // artifact is owned by a session another daemon serves; the POST would 409
-    // and silently lose the approval.
-    guardForeignOwner("Review", get().owningSession(artifactId));
+    // and silently lose the approval. Gate the AWAIT on the synchronous
+    // suspicion check so the common same-daemon path introduces NO microtask
+    // before the optimistic flip (the synchronous-flip contract the U3 tests
+    // pin — see assertNotReplay's note).
+    {
+      const owner = get().owningSession(artifactId);
+      if (isForeignSession(owner)) await guardForeignOwner("Review", owner);
+    }
     // Optimistic: flip the local status immediately so the item leaves the
     // "waiting for you" set (PendingBanner/TurnIndicator/cross-project badge)
     // the instant you act on it — don't wait on the WS `artifact_updated`
@@ -636,8 +686,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
     assertNotReplay("Resolving a decision");
-    // Bug A — guard BEFORE recording the local resolution / optimistic flip.
-    guardForeignOwner("Resolving a decision", get().findDecisionArtifact(decisionId)?.sessionId || undefined);
+    // Bug A — guard BEFORE recording the local resolution / optimistic flip;
+    // await only on the suspected-foreign path (keeps the flip synchronous).
+    {
+      const owner = get().findDecisionArtifact(decisionId)?.sessionId || undefined;
+      if (isForeignSession(owner)) await guardForeignOwner("Resolving a decision", owner);
+    }
     // Bug3 — record the resolution LIVE so a cold reload (or a cross-tab open)
     // opens the DecisionCard in its resolved state. Snapshot for rollback if
     // the POST fails (optimisticArtifactPatch reverts the status; keep the
@@ -693,7 +747,10 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   renameArtifact: async (artifactId, title) => {
     assertNotReplay("Renaming");
-    guardForeignOwner("Renaming", get().owningSession(artifactId));
+    {
+      const owner = get().owningSession(artifactId);
+      if (isForeignSession(owner)) await guardForeignOwner("Renaming", owner);
+    }
     await optimisticArtifactPatch(
       (a) => a.id === artifactId,
       "title",
@@ -710,11 +767,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   markQuestionResolved: async (commentId) => {
     assertNotReplay("Resolving a question");
-    // Bug A — guard on the comment's owning session before the optimistic stamp.
-    guardForeignOwner(
-      "Resolving a question",
-      Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined,
-    );
+    // Bug A — guard on the comment's owning session before the optimistic
+    // stamp; await only on the suspected-foreign path.
+    {
+      const owner = Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined;
+      if (isForeignSession(owner)) await guardForeignOwner("Resolving a question", owner);
+    }
     const resolvedAt = new Date().toISOString();
     // Optimistic: stamp humanResolvedAt locally so the waiting signal clears
     // immediately. SURGICAL rollback: remember only this comment's prior

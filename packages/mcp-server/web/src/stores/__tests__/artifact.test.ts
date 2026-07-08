@@ -434,13 +434,15 @@ describe("Bug A — cross-daemon mutation is refused (no silent approval loss)",
       createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z",
     }) as any;
 
-  it("a mutation whose owner is NOT served by the current daemon does NOT POST and surfaces the guard", async () => {
+  it("a mutation whose owner is STILL absent after a fresh refresh does NOT POST and surfaces the guard", async () => {
     // Tab bound to sess_tab; the daemon serves sess_tab only. art_foreign is
     // owned by sess_other (a different daemon) — a stray broadcast put it in
-    // the store. Approving it must NOT fire the doomed POST.
+    // the store. An authoritative refresh confirms sess_other still isn't here,
+    // so approving it must NOT fire the doomed POST.
+    const refreshSessions = vi.fn(async () => true); // succeeds, but sess_other never appears
     vi.stubGlobal("window", {
       __dpConnectionStore: {
-        getState: () => ({ sessionId: "sess_tab", activeSessions: [{ sessionId: "sess_tab" }], projectHash: "hX" }),
+        getState: () => ({ sessionId: "sess_tab", activeSessions: [{ sessionId: "sess_tab" }], projectHash: "hX", refreshSessions }),
       },
     });
     const fetchSpy = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
@@ -466,17 +468,79 @@ describe("Bug A — cross-daemon mutation is refused (no silent approval loss)",
     expect(toasts[0]!.title).toMatch(/another project/i);
     expect(toasts[0]!.ttl).toBe(0);
     expect(toasts[0]!.action?.label).toBe("Reload");
+    // The block was authoritative — it confirmed with a fresh fetch first.
+    expect(refreshSessions).toHaveBeenCalledTimes(1);
   });
 
-  it("a SAME-daemon multi-session mutation still POSTs normally (F6 common case, no regression)", async () => {
+  it("a same-daemon session that only LAGS the activeSessions poll is NOT guarded once a fresh refresh includes it (global-tab repro)", async () => {
+    // Global/aggregator tab (sessionId === null): sess_B's first artifact
+    // arrived via the WS broadcast, but the 10s activeSessions poll hasn't
+    // caught up yet, so sess_B is momentarily absent. The guard must confirm
+    // with a fresh refresh — which now includes sess_B — and PROCEED, not
+    // false-block a valid same-daemon approval.
+    const conn: any = {
+      sessionId: null,
+      // Stale but HYDRATED (a sibling session already polled) — sess_B missing.
+      activeSessions: [{ sessionId: "sess_A" }] as Array<{ sessionId: string }>,
+      refreshSessions: vi.fn(async () => {
+        conn.activeSessions = [{ sessionId: "sess_A" }, { sessionId: "sess_B" }]; // poll catches up
+        return true;
+      }),
+    };
+    vi.stubGlobal("window", { __dpConnectionStore: { getState: () => conn } });
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+
+    useArtifactStore.setState({ artifacts: [art("art_b", "sess_B")] });
+    await useArtifactStore.getState().updateArtifactStatus("art_b", "approved");
+
+    // Proceeded: the POST fired with F6 owner routing and no false-block toast.
+    expect(conn.refreshSessions).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect((fetchSpy.mock.calls[0]![1].headers as Record<string, string>)["X-Session-Id"]).toBe("sess_B");
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("a failed refresh (network blip) PROCEEDS rather than false-blocking", async () => {
+    // Suspected foreign, but the confirming refresh fails — staleness isn't
+    // authoritative, so proceed (the POST 409s only in the rare genuine-foreign
+    // + refresh-failure case, no worse than pre-guard).
+    const refreshSessions = vi.fn(async () => false); // fetch failed
+    vi.stubGlobal("window", {
+      __dpConnectionStore: {
+        getState: () => ({ sessionId: "sess_tab", activeSessions: [{ sessionId: "sess_tab" }], projectHash: "hX", refreshSessions }),
+      },
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+
+    useArtifactStore.setState({ artifacts: [art("art_x", "sess_other")] });
+    await useArtifactStore.getState().updateArtifactStatus("art_x", "approved");
+
+    expect(refreshSessions).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // proceeded
+    expect(useToastStore.getState().toasts).toHaveLength(0); // no false-block toast
+  });
+
+  it("a SAME-daemon multi-session mutation still POSTs normally with ZERO extra fetch (F6 common case, no regression)", async () => {
     // Both the tab session AND the owning session are served by THIS daemon
     // (the owner is in activeSessions — a MultiAgentSync-merged sibling).
+    const refreshSessions = vi.fn(async () => true);
     vi.stubGlobal("window", {
       __dpConnectionStore: {
         getState: () => ({
           sessionId: "sess_tab",
           activeSessions: [{ sessionId: "sess_tab" }, { sessionId: "sess_sibling" }],
           projectHash: "hX",
+          refreshSessions,
         }),
       },
     });
@@ -494,6 +558,8 @@ describe("Bug A — cross-daemon mutation is refused (no silent approval loss)",
     expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_sibling");
     // Same-daemon → hash/token still attached.
     expect((init.headers as Record<string, string>)["X-Project-Hash"]).toBe("hX");
+    // Zero extra cost: the common path short-circuits before any confirm fetch.
+    expect(refreshSessions).not.toHaveBeenCalled();
   });
 
   it("sessionHeaders drops the current daemon's hash/token for an explicit FOREIGN owner", async () => {

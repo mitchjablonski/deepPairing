@@ -64,7 +64,12 @@ interface ConnectionState {
   connect: (sessionId?: string) => void;
   disconnect: () => void;
   switchSession: (sessionId: string) => void;
-  refreshSessions: () => void;
+  /** Poll the current daemon's session list. Returns whether the fetch
+   *  SUCCEEDED (Bug A — the foreign-owner guard awaits this to confirm a
+   *  suspected-foreign session isn't just lagging the 10s poll; a `false`
+   *  means the fetch failed and the caller must NOT treat staleness as
+   *  authoritative). Fire-and-forget callers (the 10s poll) ignore it. */
+  refreshSessions: () => Promise<boolean>;
   /** MP1 — repoint the whole SPA at another project's daemon (host:port). */
   switchProject: (host: string) => Promise<void>;
 }
@@ -637,7 +642,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
     refreshSessions: () => {
       // MP1 — use the switchable base so this reflects the SELECTED project.
-      apiGet(`${apiBase()}/api/active-sessions`)
+      // Bug A — return the promise (resolving true/false) so the foreign-owner
+      // guard can AWAIT a fresh fetch before blocking. The internal catch keeps
+      // fire-and-forget callers (the 10s poll) free of unhandled rejections.
+      return apiGet(`${apiBase()}/api/active-sessions`)
         .then((r) => r.json())
         .then((data) => {
           const next: ActiveSession[] = data.sessions ?? [];
@@ -662,8 +670,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               );
             });
           if (!same) set({ activeSessions: next });
+          return true;
         })
-        .catch(() => {});
+        .catch(() => false);
     },
 
     // MP1 (multi-project spike) — repoint the entire SPA at another project's
