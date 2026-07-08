@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.1.3 — 2026-07-07
+
+Multi-session/multi-port field fixes and a decision-prototype rendering fix.
+No breaking changes.
+
+### Fixed
+- **Older artifacts no longer go missing from another session on the same
+  daemon.** The companion UI treated "seen one artifact from a session" as
+  "fully loaded" and skipped the full backfill; it now fetches a session's
+  complete artifact set even when a stray artifact arrived first.
+- **A cross-daemon approval is no longer silently lost.** Acting on an artifact
+  owned by a different project's daemon used to POST to the wrong daemon and
+  silently roll back. It now fails loudly and guides you to the right project —
+  and a same-daemon session that's merely lagging the session poll is confirmed
+  against a fresh fetch before any block, so valid approvals aren't held up.
+- **Decision-option prototypes run in the live view.** Per-option prototypes
+  were stuck on the static "open the live version to run it" placeholder (a
+  flag that also disabled option comment-anchoring); the two concerns are now
+  separate, so option prototypes render their runnable sandbox while the
+  revision-diff view keeps its static preview.
+
+
 ## v0.1.2 — 2026-07-07
 
 Data-loss fixes from real pairing sessions, a more durable rejection gate, and

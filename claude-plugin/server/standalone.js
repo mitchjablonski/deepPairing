@@ -29362,7 +29362,7 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 // src/mcp/server.ts
 function createMcpServer(store, broadcast, port = 3847) {
   const server = new Server(
-    { name: "deeppairing", version: "0.1.2" },
+    { name: "deeppairing", version: "0.1.3" },
     {
       // HH10 — declare listChanged so MCP clients know to listen for
       // notifications/resources/list_changed and re-call resources/list
