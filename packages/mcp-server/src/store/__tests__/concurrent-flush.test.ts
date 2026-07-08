@@ -213,7 +213,13 @@ describe("FileStore debounced-flush teardown race (flake #134)", () => {
     try {
       const s = newStore("dispose-cancels");
       s.createArtifact({ id: "y", type: "research", title: "t", content: {} });
+      expect(vi.getTimerCount()).toBe(1); // the mutation scheduled one flush
       s.dispose(); // cancels the pending flush timer without writing
+      // KEY assertion — dispose() actually cleared the timer. This FAILS if
+      // dispose() were a no-op (review: the ENOENT-silence alone would
+      // otherwise mask that), distinguishing "cancelled" from "fired then
+      // swallowed".
+      expect(vi.getTimerCount()).toBe(0);
       fs.rmSync(tmpDir, { recursive: true, force: true });
       vi.advanceTimersByTime(100); // nothing scheduled → no-op, no ENOENT
       expect(errSpy).not.toHaveBeenCalled();
