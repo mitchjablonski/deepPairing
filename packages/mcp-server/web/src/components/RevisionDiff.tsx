@@ -224,7 +224,7 @@ function VisualRow({ tag, visual, artifactId }: { tag: "added" | "removed"; visu
       </div>
       {/* Show the body of a removed-or-added visual so the change is concrete. */}
       <div className={tag === "removed" ? "opacity-60" : ""}>
-        <VisualBody artifactId={artifactId} visual={visual} readOnly />
+        <VisualBody artifactId={artifactId} visual={visual} readOnly staticPreview />
       </div>
     </div>
   );
@@ -250,7 +250,7 @@ function ChangedVisual({ old, next, artifactId }: { old: PlanVisual; next: PlanV
   }
 
   // A prototype can't be meaningfully previewed in the diff (both panes would
-  // show the same static "preview" placeholder — see PrototypeFrame readOnly),
+  // show the same static "preview" placeholder — see PrototypeFrame staticPreview),
   // so just NOTIFY that it changed and point the human at the live version to
   // compare, instead of a pointless side-by-side of identical placeholders.
   if (next.kind === "prototype") {
@@ -278,11 +278,11 @@ function ChangedVisual({ old, next, artifactId }: { old: PlanVisual; next: PlanV
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <div className="text-[9px] uppercase tracking-wide text-text-muted">Before</div>
-          <div className="opacity-70"><VisualBody artifactId={artifactId} visual={old} readOnly /></div>
+          <div className="opacity-70"><VisualBody artifactId={artifactId} visual={old} readOnly staticPreview /></div>
         </div>
         <div className="space-y-1">
           <div className="text-[9px] uppercase tracking-wide text-accent-amber">After</div>
-          <VisualBody artifactId={artifactId} visual={next} readOnly />
+          <VisualBody artifactId={artifactId} visual={next} readOnly staticPreview />
         </div>
       </div>
     </div>

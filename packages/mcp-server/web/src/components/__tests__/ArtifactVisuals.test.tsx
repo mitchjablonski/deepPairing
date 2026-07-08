@@ -181,16 +181,25 @@ describe("ArtifactVisuals", () => {
   });
 });
 
-describe("VisualBody readOnly (revision-diff preview)", () => {
+describe("VisualBody readOnly / staticPreview (the split flag)", () => {
   beforeEach(() => {
     useArtifactStore.getState().reset();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
   });
 
-  it("a readOnly prototype shows a static preview, NOT a Run button", () => {
+  it("a readOnly (comment-anchoring off) prototype WITHOUT staticPreview is RUNNABLE, not the placeholder", () => {
+    // Regression: readOnly used to double as the prototype freeze, so a live
+    // per-option decision prototype (readOnly to disable anchoring) was wrongly
+    // frozen. readOnly now governs ONLY comment-anchoring — the prototype runs.
     render(<VisualBody artifactId="a" visual={{ id: "p", kind: "prototype", html: "<button>x</button>" }} readOnly />);
+    expect(screen.getByRole("button", { name: /run prototype/i })).toBeInTheDocument();
+    expect(screen.queryByText(/open the live version to run it/i)).not.toBeInTheDocument();
+  });
+
+  it("a staticPreview prototype shows the static placeholder, NOT a Run button", () => {
+    render(<VisualBody artifactId="a" visual={{ id: "p", kind: "prototype", html: "<button>x</button>" }} readOnly staticPreview />);
     expect(screen.queryByRole("button", { name: /run prototype/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/preview/i)).toBeInTheDocument();
+    expect(screen.getByText(/open the live version to run it/i)).toBeInTheDocument();
   });
 
   it("a readOnly annotated_code renders the code but no interactive comment gutter", () => {
