@@ -24,7 +24,7 @@
  * latest actions); records the other writer added survive instead of being
  * dropped.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -183,5 +183,43 @@ describe("FileStore concurrent-flush merge (U1)", () => {
       fs.readFileSync(path.join(tmpDir, ".deeppairing/sessions/self-flush/artifacts.json"), "utf-8"),
     );
     expect(onDisk.map((x: any) => x.id).sort()).toEqual(["art_1", "art_2"]);
+  });
+});
+
+describe("FileStore debounced-flush teardown race (flake #134)", () => {
+  it("a debounced flush racing dir removal is swallowed SILENTLY — no console.error", () => {
+    vi.useFakeTimers();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = newStore("teardown-race");
+      // Mutating schedules a 100ms debounced flush.
+      s.createArtifact({ id: "x", type: "research", title: "t", content: {} });
+      // The session dir is removed out from under the pending flush (demo
+      // eviction / test tmpdir cleanup) BEFORE the timer fires.
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      vi.advanceTimersByTime(100); // fire the debounced flush → ENOENT
+      // ENOENT is the expected benign race and must NOT log — a stray
+      // console.error during teardown trips vitest's rpc-teardown error.
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("dispose() cancels a pending flush so no timer fires against a removed dir", () => {
+    vi.useFakeTimers();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = newStore("dispose-cancels");
+      s.createArtifact({ id: "y", type: "research", title: "t", content: {} });
+      s.dispose(); // cancels the pending flush timer without writing
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      vi.advanceTimersByTime(100); // nothing scheduled → no-op, no ENOENT
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

@@ -23563,7 +23563,8 @@ var FileStore = class _FileStore {
         this.flush();
         this.flushFailureLogged = false;
       } catch (err) {
-        if (!this.flushFailureLogged) {
+        const code = err?.code;
+        if (code !== "ENOENT" && !this.flushFailureLogged) {
           this.flushFailureLogged = true;
           console.error(`[deepPairing] debounced flush failed for session ${this.sessionId}:`, err);
         }
@@ -23658,6 +23659,16 @@ var FileStore = class _FileStore {
       this.flushTimer = null;
     }
     this.flush();
+  }
+  /** Cancel any pending debounced flush WITHOUT writing — for teardown or
+   *  session eviction, so a timer can't fire against a dir that's about to be
+   *  (or has been) removed. Unlike forceFlush(), this deliberately discards the
+   *  pending write; the caller is disposing the store. Idempotent. */
+  dispose() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
   }
   getSessionId() {
     return this.sessionId;
