@@ -72,7 +72,7 @@ type BroadcastFn = (event: any) => void;
 
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
-    { name: "deeppairing", version: "0.1.1" },
+    { name: "deeppairing", version: "0.1.2" },
     {
       // HH10 — declare listChanged so MCP clients know to listen for
       // notifications/resources/list_changed and re-call resources/list

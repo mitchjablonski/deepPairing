@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.1.2 — 2026-07-07
+
+Data-loss fixes from real pairing sessions, a more durable rejection gate, and
+an honest positioning pass. No breaking changes.
+
+### Fixed (field bugs — data-loss)
+- **In-progress comments no longer lost when the agent revises an artifact.**
+  The draft composer is now keyed to the stable version-chain root, so a v2
+  supersede doesn't strand your unsaved comment.
+- **Posted comments no longer vanish when a spec/artifact is updated.** Comments
+  now render across the whole version chain (tagged "from v1"), instead of only
+  the version they were posted on. Read-side only — no comment is re-parented.
+- **A resolved decision now shows as selected on reload.** Resolved state is
+  hydrated for live sessions, not only during replay.
+- **Flows/artifacts now sort predictably** and a flow can no longer silently
+  disappear when two share a title prefix (grouping is keyed by root id, follows
+  version chains, and orders by creation time).
+
+### Changed (rejection gate — more durable)
+- The gate now matches on the **concept the agent named** (concept↔concept), with
+  light stemming so wording variants ("hosting"/"hosted") match — while the
+  "rail" ∈ "guardrail" false-positive stays suppressed.
+- **Cross-project stances are advisory, not a hard block.** A stance you rejected
+  in another project surfaces as a "you avoided this elsewhere — still want it
+  here?" nudge you can promote to a hard block by rejecting it locally; only a
+  rejection in *this* project hard-blocks. A single-word concept can't hard-block
+  ordinary prose (it needs an exact concept match).
+- Added instrumentation of near-misses / gate-escapes so any future semantic
+  matching is data-driven.
+
+### Docs
+- Front-page honesty pass: the moat is described accurately (the match is on the
+  concept's words, not arbitrary synonyms), demo-first quickstart with install
+  detail moved to INSTALL.md, refreshed screenshots incl. the enforcement moment,
+  and a committed capture flow that keeps the screenshots from rotting.
+
+
 ## v0.1.1 — 2026-07-05
 
 Field-driven patch release: fixes and one small feature from the first real
