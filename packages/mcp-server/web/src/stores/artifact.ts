@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
-import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
+import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
 
 // Monotonic counter for provisional (optimistic) comment ids until the server
@@ -40,6 +40,46 @@ function assertNotReplay(action: string): void {
     }),
   );
   throw new Error(`${action} is disabled during replay`);
+}
+
+/**
+ * Bug A — refuse a mutation whose owning session is served by a DIFFERENT
+ * daemon than the one this tab is bound to (a stale tab after a port rebind, or
+ * a foreign-project artifact that slipped into the store). F6 routes the owning
+ * session via the X-Session-Id HEADER only — not the URL/port or creds — so the
+ * POST would hit the CURRENT daemon, which has no such session (AA4 getStore →
+ * null) → 409 no_active_session / 404, the optimistic patch rolls back, and the
+ * approval is SILENTLY LOST while the UI briefly showed it landing.
+ *
+ * We detect the foreign owner up front and surface an HONEST affordance instead
+ * of firing the doomed POST. Consistent with assertNotReplay: toast-then-throw,
+ * called BEFORE any optimistic flip so there's no flicker/rollback and callers'
+ * catch blocks preserve their drafts. NOT a security regression — we never hold
+ * or send the foreign daemon's token; we just decline to act here.
+ *
+ * The action mirrors the BB10 "reload to re-bind" precedent: when the owning
+ * daemon moved ports, a reload re-binds; when it's a genuinely other project,
+ * the user switches to it. Transparent cross-daemon routing (a per-session
+ * {host,hash,token} resolver) is deliberately DEFERRED — it would mean a tab
+ * holding multiple daemons' bearer tokens, a security regression.
+ */
+function guardForeignOwner(action: string, owner: string | undefined): void {
+  if (!isForeignSession(owner)) return;
+  void import("./toast").then(({ useToastStore }) =>
+    useToastStore.getState().push({
+      kind: "error",
+      title: "This artifact lives in another project",
+      body: "It belongs to a different project's daemon — your change was NOT saved here. Switch to that project (or reload if its daemon moved ports) to act on it.",
+      ttl: 0,
+      action: {
+        label: "Reload",
+        onClick: () => {
+          if (typeof window !== "undefined") window.location.reload();
+        },
+      },
+    }),
+  );
+  throw new Error(`${action} blocked: artifact is owned by a session this daemon doesn't serve`);
 }
 
 async function toastApiError(action: string, err: unknown): Promise<void> {
@@ -467,6 +507,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   submitComment: async (artifactId, content, target, options) => {
     assertNotReplay("Commenting");
+    // Bug A — session-level (__session__) comments keep the tab binding and are
+    // never foreign; artifact comments route to the owner, so guard on it.
+    guardForeignOwner(
+      "Commenting",
+      artifactId === "__session__" ? undefined : get().owningSession(artifactId),
+    );
     // Optimistic: render the comment immediately instead of waiting on the
     // session-scoped `comment_added` WS broadcast. Pre-this, submitComment was
     // the last broadcast-only mutation — the user hit send and nothing appeared
@@ -562,6 +608,10 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   updateArtifactStatus: async (artifactId, status, feedback, concept) => {
     assertNotReplay("Review");
+    // Bug A — refuse (with an honest toast) before the optimistic flip if this
+    // artifact is owned by a session another daemon serves; the POST would 409
+    // and silently lose the approval.
+    guardForeignOwner("Review", get().owningSession(artifactId));
     // Optimistic: flip the local status immediately so the item leaves the
     // "waiting for you" set (PendingBanner/TurnIndicator/cross-project badge)
     // the instant you act on it — don't wait on the WS `artifact_updated`
@@ -586,6 +636,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
     assertNotReplay("Resolving a decision");
+    // Bug A — guard BEFORE recording the local resolution / optimistic flip.
+    guardForeignOwner("Resolving a decision", get().findDecisionArtifact(decisionId)?.sessionId || undefined);
     // Bug3 — record the resolution LIVE so a cold reload (or a cross-tab open)
     // opens the DecisionCard in its resolved state. Snapshot for rollback if
     // the POST fails (optimisticArtifactPatch reverts the status; keep the
@@ -641,6 +693,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   renameArtifact: async (artifactId, title) => {
     assertNotReplay("Renaming");
+    guardForeignOwner("Renaming", get().owningSession(artifactId));
     await optimisticArtifactPatch(
       (a) => a.id === artifactId,
       "title",
@@ -657,6 +710,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   markQuestionResolved: async (commentId) => {
     assertNotReplay("Resolving a question");
+    // Bug A — guard on the comment's owning session before the optimistic stamp.
+    guardForeignOwner(
+      "Resolving a question",
+      Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined,
+    );
     const resolvedAt = new Date().toISOString();
     // Optimistic: stamp humanResolvedAt locally so the waiting signal clears
     // immediately. SURGICAL rollback: remember only this comment's prior

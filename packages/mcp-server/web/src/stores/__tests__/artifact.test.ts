@@ -426,6 +426,93 @@ describe("F6 — mutations route by the OWNING session", () => {
   });
 });
 
+describe("Bug A — cross-daemon mutation is refused (no silent approval loss)", () => {
+  const art = (id: string, sessionId: string) =>
+    ({
+      id, sessionId, type: "research", version: 1, parentId: null,
+      title: id, status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z",
+    }) as any;
+
+  it("a mutation whose owner is NOT served by the current daemon does NOT POST and surfaces the guard", async () => {
+    // Tab bound to sess_tab; the daemon serves sess_tab only. art_foreign is
+    // owned by sess_other (a different daemon) — a stray broadcast put it in
+    // the store. Approving it must NOT fire the doomed POST.
+    vi.stubGlobal("window", {
+      __dpConnectionStore: {
+        getState: () => ({ sessionId: "sess_tab", activeSessions: [{ sessionId: "sess_tab" }], projectHash: "hX" }),
+      },
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+
+    useArtifactStore.setState({ artifacts: [art("art_foreign", "sess_other")] });
+
+    await expect(
+      useArtifactStore.getState().updateArtifactStatus("art_foreign", "approved"),
+    ).rejects.toThrow(/another|foreign|doesn't serve/i);
+
+    // No POST fired — nothing to silently lose.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // And no optimistic flip left behind (guard runs BEFORE the patch).
+    expect(useArtifactStore.getState().artifacts[0]!.status).toBe("draft");
+    // Honest, sticky affordance with a re-bind action. The toast is pushed via
+    // a lazy import (same pattern as assertNotReplay), so flush microtasks.
+    await vi.waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1));
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts[0]!.kind).toBe("error");
+    expect(toasts[0]!.title).toMatch(/another project/i);
+    expect(toasts[0]!.ttl).toBe(0);
+    expect(toasts[0]!.action?.label).toBe("Reload");
+  });
+
+  it("a SAME-daemon multi-session mutation still POSTs normally (F6 common case, no regression)", async () => {
+    // Both the tab session AND the owning session are served by THIS daemon
+    // (the owner is in activeSessions — a MultiAgentSync-merged sibling).
+    vi.stubGlobal("window", {
+      __dpConnectionStore: {
+        getState: () => ({
+          sessionId: "sess_tab",
+          activeSessions: [{ sessionId: "sess_tab" }, { sessionId: "sess_sibling" }],
+          projectHash: "hX",
+        }),
+      },
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    useArtifactStore.setState({ artifacts: [art("art_sibling", "sess_sibling")] });
+    await useArtifactStore.getState().updateArtifactStatus("art_sibling", "approved");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [, init] = fetchSpy.mock.calls[0]!;
+    // F6 owner routing intact.
+    expect((init.headers as Record<string, string>)["X-Session-Id"]).toBe("sess_sibling");
+    // Same-daemon → hash/token still attached.
+    expect((init.headers as Record<string, string>)["X-Project-Hash"]).toBe("hX");
+  });
+
+  it("sessionHeaders drops the current daemon's hash/token for an explicit FOREIGN owner", async () => {
+    const { sessionHeaders } = await import("../../lib/api");
+    vi.stubGlobal("window", {
+      __dpConnectionStore: {
+        getState: () => ({ sessionId: "sess_tab", activeSessions: [{ sessionId: "sess_tab" }], projectHash: "hX" }),
+      },
+      __deepPairingToken: "tok_current",
+    });
+    const h = sessionHeaders("sess_other");
+    // The owning session id is still routed…
+    expect(h["X-Session-Id"]).toBe("sess_other");
+    // …but the CURRENT daemon's hash/token are withheld (they'd guarantee a 409).
+    expect(h["X-Project-Hash"]).toBeUndefined();
+    expect(h["Authorization"]).toBeUndefined();
+  });
+});
+
 describe("F12 — the store refuses ALL mutations during replay (the mouse path)", () => {
   const art = (id: string) =>
     ({

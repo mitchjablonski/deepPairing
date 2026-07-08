@@ -41,6 +41,42 @@ export function wsBase(): string {
 // apiBase() instead. Kept so the spike doesn't have to touch every call site.
 export const API_BASE = defaultHost ? `http://${defaultHost}` : "";
 
+/**
+ * Bug A — is `sessionId` owned by a daemon OTHER than the one this tab is
+ * bound to? A mutation's owning session is routed by the X-Session-Id header
+ * only (F6) — NOT the port or credentials — so a write for a session served by
+ * a different daemon (e.g. a stale tab after a port rebind, or an artifact that
+ * belongs to another project) POSTs to the CURRENT daemon, which returns
+ * null from getStore(sid) (AA4) → 409/404 → the optimistic patch rolls back and
+ * the approval is silently lost.
+ *
+ * Conservative on purpose: returns false when the owner is unknown, is the
+ * tab's own session, or the active-session set hasn't hydrated yet (empty).
+ * That keeps SAME-daemon multi-session writes (the F6 common case) working
+ * exactly as before — we only ever declare "foreign" when we positively KNOW
+ * this daemon's session set and the owner isn't in it.
+ */
+export function isForeignSession(sessionId: string | undefined): boolean {
+  if (!sessionId || typeof window === "undefined") return false;
+  try {
+    type ConnLike = { sessionId?: string | null; activeSessions?: Array<{ sessionId: string }> };
+    const store = (window as unknown as {
+      __dpConnectionStore?: { getState?: () => ConnLike };
+    }).__dpConnectionStore;
+    const conn = store?.getState?.();
+    if (!conn) return false;
+    // The tab's own bound session is never foreign, even before the active list
+    // arrives (registration is async).
+    if (sessionId === conn.sessionId) return false;
+    const active: Array<{ sessionId: string }> = conn.activeSessions ?? [];
+    // Not hydrated yet → we can't say it's foreign; don't block.
+    if (active.length === 0) return false;
+    return !active.some((s) => s.sessionId === sessionId);
+  } catch {
+    return false;
+  }
+}
+
 /** Get headers with session ID for daemon routing */
 export function sessionHeaders(forSessionId?: string): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -58,6 +94,15 @@ export function sessionHeaders(forSessionId?: string): Record<string, string> {
     const sid = forSessionId ?? connState?.sessionId;
     if (sid) {
       headers["X-Session-Id"] = sid;
+    }
+    // Bug A — when the caller passes an EXPLICIT owner this daemon does NOT
+    // serve, do NOT stamp the current daemon's projectHash/bearer token: they'd
+    // guarantee a project_hash_mismatch / unknown-session 409 and mislead the
+    // user into thinking the write could land. The store-level guard already
+    // refuses the POST; this is defense in depth (and keeps us from ever
+    // sending one daemon's creds paired with another daemon's session id).
+    if (forSessionId && isForeignSession(forSessionId)) {
+      return headers;
     }
     // AA4 — pair the sessionId with the daemon's projectHash so a
     // stale-tab race after daemon restart on the same port is caught
