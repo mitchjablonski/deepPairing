@@ -75,6 +75,9 @@ function assertNotReplay(action: string): void {
  * false-block on a transient blip; the POST 409s only in the rare
  * genuine-foreign + refresh-failure case, no worse than pre-guard.
  */
+/** Bug A (review NIT) — cap the confirming refresh so a hung daemon fails open
+ *  fast instead of stalling the mutation on the suspected-foreign path. */
+const FOREIGN_REFRESH_TIMEOUT_MS = 4000;
 type ConnStoreLike = { refreshSessions?: () => Promise<boolean> | void };
 function getConnStore(): ConnStoreLike | undefined {
   if (typeof window === "undefined") return undefined;
@@ -95,8 +98,20 @@ async function guardForeignOwner(action: string, owner: string | undefined): Pro
   try {
     const conn = getConnStore();
     if (conn?.refreshSessions) {
-      const ok = await conn.refreshSessions();
-      // Fetch failed → staleness isn't authoritative → don't false-block.
+      // Bound the confirming refresh with a timeout so a HUNG daemon can't
+      // stall the user's mutation until the browser's default fetch timeout.
+      // On timeout we resolve `false` (fail-open) — identical to the
+      // fetch-failed / threw paths below: proceed rather than block on a hang.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const ok = await Promise.race([
+        Promise.resolve(conn.refreshSessions()),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), FOREIGN_REFRESH_TIMEOUT_MS);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      // Fetch failed / timed out → staleness isn't authoritative → don't
+      // false-block. (undefined from a void refresh still re-checks below.)
       if (ok === false) return;
     }
   } catch {
