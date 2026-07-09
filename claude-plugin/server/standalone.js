@@ -28218,7 +28218,7 @@ var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change"
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"];
 
 // src/version.ts
-var SERVER_VERSION = "0.1.3";
+var SERVER_VERSION = "0.1.4";
 
 // src/mcp/tools/check-feedback.ts
 function deriveTransition(a) {
