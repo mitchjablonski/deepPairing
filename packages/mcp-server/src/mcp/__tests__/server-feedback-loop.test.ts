@@ -146,13 +146,13 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(text).toContain("Service");
     });
 
-    it("BB3 — waitFor='decision' ignores stale unack comments and waits for the decision", async () => {
-      // The agent just called present_options. There's an unrelated old
-      // comment sitting in the unack queue (e.g. on a previous artifact).
-      // Pre-BB3, check_feedback returned IMMEDIATELY because comments
-      // existed — so the agent never got the chance to wait for the user
-      // to actually pick an option. With waitFor='decision', the early-
-      // return guard is scoped to resolved decisions only.
+    it("GH#152 — waitFor='decision' with a stale unack comment SURFACES it immediately (never swallows human input)", async () => {
+      // Supersedes the pre-GH#152 BB3 behavior. Design principle: a scoped
+      // wait says what the agent is HOPING for, but human COMMENTS are always
+      // actionable and must never be swallowed. A stale unack comment (even on
+      // an unrelated artifact) therefore satisfies waitFor='decision'
+      // immediately — the agent reads/triages it, acks it, then polls again
+      // with a clean queue and properly waits for the option pick.
       await callTool("present_options", {
         context: "Which pattern?",
         options: [
@@ -160,27 +160,26 @@ describe("MCP Tool Handlers — feedback loop", () => {
           { id: "b", title: "B", description: "B", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
         ],
       });
-      const decisionArtId = store.getArtifacts()[0].id;
-      // Stash a stale comment on a different artifact.
+      // Stash a stale comment on a different artifact — this is human input.
       store.addComment({ id: "cmt_stale", artifactId: "art_other", content: "old chatter", author: "human" });
 
-      // Schedule the decision resolution after 50ms so the long-poll wakes.
-      const dec = store.getPendingDecisions()[0];
-      setTimeout(() => store.resolveDecision(dec.decisionId, "a", "go with A"), 50);
-
-      const { text } = await callTool("check_feedback", { waitFor: "decision" });
-      // The stale comment is still in the queue (we didn't ack it for this
-      // poll's purpose), but the wake condition was the resolved decision.
-      expect(text).toContain("A");
-      // Sanity: the artifact we presented was the one that got resolved.
-      expect(decisionArtId).toBeTruthy();
+      const t0 = Date.now();
+      const res = await callTool("check_feedback", { waitFor: "decision" });
+      const elapsed = Date.now() - t0;
+      expect(elapsed).toBeLessThan(1000); // immediate — not the 30s long-poll
+      expect(res.text).toContain("old chatter"); // the comment is surfaced, not swallowed
+      // The decision it presented is still flagged pending in the same response.
+      expect(res.text).toContain("decision(s) pending");
+      // Next poll: the comment is acked/drained, so an empty queue would long-poll.
+      expect(store.getUnacknowledgedComments()).toHaveLength(0);
     });
 
-    it("CC5 — waitFor='decision' wakes on an unrelated comment but returns 'still waiting' instead of dumping it", async () => {
-      // Pre-CC5: long-poll wakes on ANY signal, then post-wake assembly
-      // dumps all comments + decisions regardless of waitFor scope. The
-      // agent that asked for a decision-only wake gets a comment-flavored
-      // response — surprising, conflicts with the scoped contract.
+    it("GH#152 — waitFor='decision' wakes on an unrelated comment and RETURNS it (does not swallow it as chatter)", async () => {
+      // Supersedes the pre-GH#152 CC5 behavior. Pre-fix, a comment that woke
+      // the long-poll under waitFor='decision' was discarded with a "Still
+      // waiting… unrelated chatter" message and comments:[] — stranding human
+      // input. Now the comment is reported (and acked), the decision is still
+      // flagged pending, and the misleading "unrelated chatter" copy is gone.
       await callTool("present_options", {
         context: "Pick a deploy",
         options: [
@@ -188,16 +187,19 @@ describe("MCP Tool Handlers — feedback loop", () => {
           { id: "b", title: "B", description: "B", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
         ],
       });
-      // Schedule an unrelated comment (not the decision the agent is
-      // waiting for) after 50ms so the long-poll wakes mid-flight.
+      // Schedule the comment after 50ms so the long-poll wakes mid-flight.
       setTimeout(() => {
         store.addComment({ id: "cmt_noise", artifactId: "art_other", content: "stray remark", author: "human" });
       }, 50);
       const res = await callTool("check_feedback", { waitFor: "decision" });
-      expect(res.text).toContain("Still waiting on 'decision'");
-      expect(res.text).not.toContain("stray remark");
-      // B3 — the scoped still-waiting path carries the structured mirror too.
-      expect(res.structuredContent).toMatchObject({ status: "waiting", waitFor: "decision" });
+      expect(res.text).toContain("stray remark");
+      expect(res.text).not.toContain("Still waiting on 'decision'");
+      expect(res.text).not.toContain("unrelated chatter");
+      const sc = res.structuredContent as any;
+      expect(sc.status).toBe("feedback");
+      expect(sc.comments.some((c: any) => c.id === "cmt_noise")).toBe(true);
+      // Decision still flagged pending so the agent knows to keep waiting for it.
+      expect(res.text).toContain("decision(s) pending");
     });
 
     it("BB3 — waitFor='comments' returns immediately when there's an unack comment, even with a draft decision", async () => {
@@ -234,6 +236,117 @@ describe("MCP Tool Handlers — feedback loop", () => {
       const { text } = await callTool("check_feedback");
       expect(text).not.toContain("previous sessions");
       expect(text).not.toContain("Rejected approaches");
+    });
+
+    // GH#152 — THE FIELD BUG. Agent presents a decision and polls
+    // waitFor='decision'. The human COMMENTS on the decision instead of
+    // picking an option. Pre-fix, hasImmediateFor/scopeSatisfied only counted
+    // resolved decisions, so the comment was invisible, framed as "unrelated
+    // chatter", shipped with comments:[], and the agent polled forever while
+    // the human waited for a reply. Now the comment is always actionable.
+    describe("GH#152 — a human comment on a pending decision is never swallowed", () => {
+      async function presentDecision() {
+        await callTool("present_options", {
+          context: "Which datastore?",
+          options: [
+            { id: "pg", title: "Postgres", description: "relational", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+            { id: "mongo", title: "Mongo", description: "document", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+          ],
+        });
+        return store.getArtifacts().find((a) => a.type === "decision")!;
+      }
+
+      it("THE FIELD BUG: waitFor='decision' + a comment ON the decision → returns it, acks it, no 'unrelated chatter'", async () => {
+        await client.listTools(); // activate SDK outputSchema validation on every return path
+        const decision = await presentDecision();
+        // Human comments on the decision artifact rather than selecting.
+        store.addComment({
+          id: "cmt_on_dec",
+          artifactId: decision.id,
+          content: "Can we afford the ops overhead of Postgres?",
+          author: "human",
+          target: { artifactId: decision.id },
+        } as any);
+
+        const res = await callTool("check_feedback", { waitFor: "decision" });
+        // The comment reaches the agent — in text AND structuredContent.
+        expect(res.text).toContain("Can we afford the ops overhead of Postgres?");
+        const sc = res.structuredContent as any;
+        expect(sc.comments.some((c: any) => c.id === "cmt_on_dec")).toBe(true);
+        expect(sc.status).toBe("feedback");
+        // It must NOT claim nothing arrived, and must NOT use the removed copy.
+        expect(res.text).not.toContain("Still waiting on 'decision'");
+        expect(res.text).not.toContain("unrelated chatter");
+        expect(res.text).not.toContain("Nothing arrived");
+        // BOTH signals present: act on the comment AND the decision is still pending.
+        expect(res.text).toContain("decision(s) pending");
+        expect(sc.suggestedAction).toContain("Wait for decision selection");
+        expect(sc.suggestedAction).toContain("also left a comment");
+        // Acknowledged → not re-reported on the next poll.
+        expect(store.getUnacknowledgedComments()).toHaveLength(0);
+        // Full structuredContent shape preserved (V-fix fields on every path).
+        expect(Array.isArray(sc.statusChanges)).toBe(true);
+        expect(typeof sc.serverVersion).toBe("string");
+      });
+
+      it("waitFor='decision' still works when the human RESOLVES the decision (existing behavior intact)", async () => {
+        await client.listTools();
+        const decision = await presentDecision();
+        const dec = store.getPendingDecisions().find((d) => d.artifactId === decision.id)!;
+        store.resolveDecision(dec.decisionId, "pg", "cheapest to operate");
+
+        const res = await callTool("check_feedback", { waitFor: "decision" });
+        expect(res.text).toContain("Postgres");
+        const sc = res.structuredContent as any;
+        expect(sc.decisions.some((d: any) => d.selectedOptionId === "pg")).toBe(true);
+        expect(sc.status).toBe("feedback");
+      });
+
+      it("a human QUESTION on the pending decision surfaces with an answer_question hint", async () => {
+        await client.listTools();
+        const decision = await presentDecision();
+        store.addComment({
+          id: "q_on_dec",
+          artifactId: decision.id,
+          content: "What's the migration cost of Mongo?",
+          author: "human",
+          intent: "question",
+          target: { artifactId: decision.id },
+        } as any);
+
+        const res = await callTool("check_feedback", { waitFor: "decision" });
+        expect(res.text).toContain("What's the migration cost of Mongo?");
+        expect(res.text).toContain("answer_question");
+        const sc = res.structuredContent as any;
+        expect(sc.questions.some((q: any) => q.commentId === "q_on_dec")).toBe(true);
+        expect(res.text).not.toContain("unrelated chatter");
+        // Decision still pending alongside the question.
+        expect(res.text).toContain("decision(s) pending");
+      });
+
+      it("the genuine nothing-arrived path stays scoped and validates (no comments, no matching signal)", async () => {
+        await client.listTools();
+        await presentDecision();
+        // Nothing added → the 50ms schedule adds a NON-comment, NON-decision
+        // signal (a plan approval) that must NOT satisfy waitFor='decision'.
+        await callTool("present_plan", {
+          title: "Rollout", objective: "ship", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1,
+        });
+        const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+        setTimeout(() => store.updateArtifactStatus(plan.id, "approved", "ui_approve_button"), 50);
+
+        const res = await callTool("check_feedback", { waitFor: "decision" });
+        // Plan approval is a status-only transition — correctly ignored by the
+        // decision scope, so we get the honest still-waiting response.
+        expect(res.text).toContain("Still waiting on 'decision'");
+        expect(res.text).not.toContain("unrelated chatter");
+        const sc = res.structuredContent as any;
+        expect(sc).toMatchObject({ status: "waiting", waitFor: "decision" });
+        // Full shape preserved even on the early-return path.
+        expect(sc.comments).toEqual([]);
+        expect(sc.statusChanges).toEqual([]);
+        expect(typeof sc.serverVersion).toBe("string");
+      });
     });
   });
 
