@@ -69,12 +69,22 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
   );
 
+  // GH#152 — a scoped wait says what the agent is HOPING for, but it must
+  // NEVER swallow human input. A human COMMENT (or a question, which is a
+  // comment with intent='question') is unambiguously actionable feedback, so
+  // it satisfies EVERY scope — even one targeting an unrelated artifact (any
+  // human comment is triageable; the agent can read it and decide). Without
+  // this, an agent that presented a decision and polled waitFor='decision'
+  // would loop forever while the human, who COMMENTED instead of picking an
+  // option, waited for a reply that never came. Status-only transitions
+  // (plan/spec approvals) remain scoped — that's the useful part of scoping we
+  // keep: the wake still ignores non-comment artifact-status changes.
   const hasImmediateFor = (scope: typeof waitForScope): boolean => {
     switch (scope) {
       case "comments": return unackComments.length > 0;
-      case "decision": return resolvedDecs.length > 0;
-      case "plan_review": return decidedPlans.length > 0;
-      case "artifact_status": return decidedAny.length > 0 || resolvedDecs.length > 0;
+      case "decision": return resolvedDecs.length > 0 || unackComments.length > 0;
+      case "plan_review": return decidedPlans.length > 0 || unackComments.length > 0;
+      case "artifact_status": return decidedAny.length > 0 || resolvedDecs.length > 0 || unackComments.length > 0;
       case "any":
       default:
         return unackComments.length > 0 || resolvedDecs.length > 0;
@@ -139,25 +149,34 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const decidedAnyPostWake = allArtsPostWake.filter(
       (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
     );
+    // GH#152 — mirror hasImmediateFor: any new unacknowledged comment (incl.
+    // questions) satisfies every scope. Once we fall through, the main
+    // assembly below REPORTS and acknowledges the comment (never a comments:[]
+    // dump) AND still surfaces the "decision/plan still pending" WAITING line +
+    // suggestedAction — so the agent sees BOTH "the human commented, act on it"
+    // and "your artifact is still awaiting a verdict."
     const scopeSatisfied = (() => {
       switch (waitForScope) {
         case "comments": return newComments.length > 0;
-        case "decision": return newResolved.length > 0;
-        case "plan_review": return decidedPlansPostWake.length > 0;
-        case "artifact_status": return decidedAnyPostWake.length > 0 || newResolved.length > 0;
+        case "decision": return newResolved.length > 0 || newComments.length > 0;
+        case "plan_review": return decidedPlansPostWake.length > 0 || newComments.length > 0;
+        case "artifact_status": return decidedAnyPostWake.length > 0 || newResolved.length > 0 || newComments.length > 0;
         default: return true;
       }
     })();
-    if (!scopeSatisfied) {
+    // Belt-and-suspenders: even if some future scope logic forgets comments,
+    // NEVER early-return (and strand human input with a comments:[] payload)
+    // while unacknowledged comments exist. Fall through to the reporting path.
+    if (!scopeSatisfied && newComments.length === 0) {
       return {
         content: [{
           type: "text",
-          text: `Still waiting on '${waitForScope}'. Nothing matching that scope arrived during the 30s poll. Call check_feedback again with the same waitFor (or with waitFor='any' to drain unrelated chatter).`,
+          text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll — no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).`,
         }],
         structuredContent: {
           status: "waiting",
           waitFor: waitForScope,
-          suggestedAction: `Call check_feedback again with waitFor='${waitForScope}' (or 'any' to drain unrelated chatter).`,
+          suggestedAction: `Nothing arrived yet. Call check_feedback again with waitFor='${waitForScope}' (or 'any' to also wake on other artifact-status changes).`,
           companionUrl,
           serverVersion: SERVER_VERSION,
           pendingArtifacts: [],
@@ -219,6 +238,17 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     suggestedAction = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     suggestedAction = "Wait for findings review before proposing solutions.";
+  }
+
+  // GH#152 — when the human COMMENTED while an artifact is still awaiting its
+  // verdict (e.g. commented on a decision instead of picking an option), the
+  // suggestedAction must carry BOTH signals: act on the comment AND keep
+  // waiting for the pending verdict. Append rather than replace so the pending
+  // guidance above ("Wait for decision selection…") survives verbatim — the
+  // human's comment itself is reported in the "Human comments"/"Human
+  // questions" block below.
+  if (newComments.length > 0 && pendingArts.length > 0) {
+    suggestedAction = `${suggestedAction} The human also left a comment — read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
   }
 
   parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);

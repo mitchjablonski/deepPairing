@@ -28251,11 +28251,11 @@ async function handleCheckFeedback(ctx, args) {
       case "comments":
         return unackComments.length > 0;
       case "decision":
-        return resolvedDecs.length > 0;
+        return resolvedDecs.length > 0 || unackComments.length > 0;
       case "plan_review":
-        return decidedPlans.length > 0;
+        return decidedPlans.length > 0 || unackComments.length > 0;
       case "artifact_status":
-        return decidedAny.length > 0 || resolvedDecs.length > 0;
+        return decidedAny.length > 0 || resolvedDecs.length > 0 || unackComments.length > 0;
       case "any":
       default:
         return unackComments.length > 0 || resolvedDecs.length > 0;
@@ -28306,25 +28306,25 @@ async function handleCheckFeedback(ctx, args) {
         case "comments":
           return newComments.length > 0;
         case "decision":
-          return newResolved.length > 0;
+          return newResolved.length > 0 || newComments.length > 0;
         case "plan_review":
-          return decidedPlansPostWake.length > 0;
+          return decidedPlansPostWake.length > 0 || newComments.length > 0;
         case "artifact_status":
-          return decidedAnyPostWake.length > 0 || newResolved.length > 0;
+          return decidedAnyPostWake.length > 0 || newResolved.length > 0 || newComments.length > 0;
         default:
           return true;
       }
     })();
-    if (!scopeSatisfied) {
+    if (!scopeSatisfied && newComments.length === 0) {
       return {
         content: [{
           type: "text",
-          text: `Still waiting on '${waitForScope}'. Nothing matching that scope arrived during the 30s poll. Call check_feedback again with the same waitFor (or with waitFor='any' to drain unrelated chatter).`
+          text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll \u2014 no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).`
         }],
         structuredContent: {
           status: "waiting",
           waitFor: waitForScope,
-          suggestedAction: `Call check_feedback again with waitFor='${waitForScope}' (or 'any' to drain unrelated chatter).`,
+          suggestedAction: `Nothing arrived yet. Call check_feedback again with waitFor='${waitForScope}' (or 'any' to also wake on other artifact-status changes).`,
           companionUrl,
           serverVersion: SERVER_VERSION,
           pendingArtifacts: [],
@@ -28370,6 +28370,9 @@ async function handleCheckFeedback(ctx, args) {
     suggestedAction = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     suggestedAction = "Wait for findings review before proposing solutions.";
+  }
+  if (newComments.length > 0 && pendingArts.length > 0) {
+    suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
   }
   parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
 Oldest pending: ${oldestPendingAge}` : ""}
@@ -29471,7 +29474,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "check_feedback",
         annotations: { title: "Check feedback", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes the long-poll wake condition: 'comments' wakes only on new comments, 'decision' only on a resolved present_options, 'plan_review' only on a plan status transition, 'artifact_status' on any artifact status change, 'any' (default) on any feedback. Use a narrow scope when you've just presented a specific artifact and want to ignore unrelated chatter.",
+        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.",
         inputSchema: {
           type: "object",
           properties: {

@@ -156,7 +156,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
         annotations: { title: "Check feedback", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         description:
           "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts." +
-          "\n\n`waitFor` scopes the long-poll wake condition: 'comments' wakes only on new comments, 'decision' only on a resolved present_options, 'plan_review' only on a plan status transition, 'artifact_status' on any artifact status change, 'any' (default) on any feedback. Use a narrow scope when you've just presented a specific artifact and want to ignore unrelated chatter.",
+          "\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented — but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.",
         inputSchema: {
           type: "object" as const,
           properties: {
