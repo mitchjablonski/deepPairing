@@ -234,11 +234,16 @@ export class FileStore implements IStore {
         this.flush();
         this.flushFailureLogged = false;
       } catch (err) {
-        // Swallow — the next mutation reschedules. But log once per failure
-        // STREAK (review-caught: a bare swallow turns persistent EACCES/ENOSPC
-        // into silent permanent data loss; only teardown-race ENOENT is truly
-        // expected here).
-        if (!this.flushFailureLogged) {
+        // Swallow — the next mutation reschedules. ENOENT is the EXPECTED
+        // teardown/eviction race (the session dir was rm'd out from under a
+        // pending flush — demo-session eviction, test tmpdir cleanup); it's
+        // benign and NOT logged: a stray console.error firing after a test's
+        // env is torn down trips vitest's rpc-teardown error (flake #134), and
+        // there is nothing actionable. But log GENUINE failures (EACCES,
+        // ENOSPC, …) once per streak — a bare swallow of those turns a real
+        // write failure into silent permanent data loss.
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (code !== "ENOENT" && !this.flushFailureLogged) {
           this.flushFailureLogged = true;
           console.error(`[deepPairing] debounced flush failed for session ${this.sessionId}:`, err);
         }
@@ -367,6 +372,17 @@ export class FileStore implements IStore {
       this.flushTimer = null;
     }
     this.flush();
+  }
+
+  /** Cancel any pending debounced flush WITHOUT writing — for teardown or
+   *  session eviction, so a timer can't fire against a dir that's about to be
+   *  (or has been) removed. Unlike forceFlush(), this deliberately discards the
+   *  pending write; the caller is disposing the store. Idempotent. */
+  dispose(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
   }
 
   getSessionId(): string {
