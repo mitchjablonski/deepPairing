@@ -207,6 +207,17 @@ export interface IStore {
   ): MaybePromise<Artifact | null>;
   getArtifacts(): MaybePromise<Artifact[]>;
 
+  /**
+   * V-fix — artifacts whose HUMAN-driven draft→terminal transition
+   * (approved / rejected / changes_requested) check_feedback has not yet
+   * reported to the agent. Mirrors getUnacknowledgedComments /
+   * getResolvedDecisions: read them, report once, then drain via
+   * acknowledgeStatusChanges. Agent-driven transitions never appear here.
+   */
+  getUnacknowledgedStatusChanges(): MaybePromise<Artifact[]>;
+  /** V-fix — drain the un-reported flag after check_feedback surfaced them. */
+  acknowledgeStatusChanges(ids: string[]): MaybePromise<void>;
+
   // Comments
   addComment(params: AddCommentParams): MaybePromise<Comment>;
   getCommentsForArtifact(artifactId: string): MaybePromise<Comment[]>;

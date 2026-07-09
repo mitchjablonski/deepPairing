@@ -31,6 +31,7 @@ import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent, flushAllMetrics } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
 import { buildPingPayload, decidePing, sendPing } from "../ping.js";
+import { SERVER_VERSION } from "../version.js";
 import {
   fsHonorsPosixMode,
   tokenPlacement,
@@ -1118,7 +1119,10 @@ async function main() {
           if (recentArtifactActivity) break;
         }
         const payload = buildPingPayload({
-          version: "0.1.0",
+          // V-fix — was a stale hardcoded "0.1.0" (never bumped); the
+          // install-health ping now reports the real running app version
+          // from the single SERVER_VERSION constant.
+          version: SERVER_VERSION,
           skillLikelyLoaded: claudeMdHasMarker || recentArtifactActivity,
           recentArtifactActivity,
         });

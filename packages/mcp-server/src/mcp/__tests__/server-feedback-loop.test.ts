@@ -417,4 +417,122 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(outOfRange.isError).toBe(true);
     });
   });
+
+  // V-fix — a HUMAN approval/rejection of a specific artifact must be
+  // OBSERVABLE to the agent by id via check_feedback.statusChanges, not just
+  // inferable from an aggregate count. The field bug: a superseding v2 draft
+  // gets approved and the agent can't see "art_X is now approved".
+  describe("check_feedback — statusChanges (V-fix)", () => {
+    it("reports a HUMAN draft→approved spec by id, ONCE, in structured + text", async () => {
+      await client.listTools(); // activate SDK outputSchema validation
+      await callTool("present_spec", {
+        title: "Auth spec",
+        objective: "Throttle logins",
+        requirements: [{ id: "REQ-1", statement: "limit failures", rationale: "brute force", acceptanceCriteria: ["5/10min"], priority: "must" }],
+      });
+      const spec = store.getArtifacts().find((a) => a.type === "spec")!;
+
+      // Human approves in the companion UI (ui_approve_button is human-driven).
+      store.updateArtifactStatus(spec.id, "approved", "ui_approve_button");
+
+      const first = await callTool("check_feedback");
+      const sc = first.structuredContent as any;
+      expect(sc.statusChanges).toEqual([
+        expect.objectContaining({ id: spec.id, type: "spec", status: "approved", previousStatus: "draft" }),
+      ]);
+      expect(typeof sc.statusChanges[0].at).toBe("string");
+      // Loud, unmissable, names the id + new status.
+      expect(first.text).toContain("RESOLVED");
+      expect(first.text).toContain(spec.id);
+      expect(first.text).toContain("approved");
+      // A human approval IS actionable — status flips off "waiting".
+      expect(sc.status).toBe("feedback");
+
+      // Second poll must NOT repeat it (acknowledged / drained).
+      const second = await callTool("check_feedback");
+      expect((second.structuredContent as any).statusChanges).toEqual([]);
+      expect(second.text).not.toContain("RESOLVED");
+    });
+
+    it("THE FIELD BUG: a superseding v2 draft, once HUMAN-approved, is reported by id", async () => {
+      await client.listTools();
+      await callTool("present_spec", {
+        title: "Spec v1",
+        objective: "first cut",
+        requirements: [{ id: "REQ-1", statement: "s", rationale: "r", acceptanceCriteria: ["a"], priority: "must" }],
+      });
+      const v1 = store.getArtifacts().find((a) => a.type === "spec")!;
+
+      await callTool("revise_artifact", {
+        artifactId: v1.id,
+        mode: "supersede",
+        title: "Spec v2",
+        content: {
+          objective: "revised cut",
+          requirements: [{ id: "REQ-1", statement: "s2", rationale: "r2", acceptanceCriteria: ["a2"], priority: "must" }],
+        },
+        reason: "reworked the approach",
+      });
+      const v2 = store.getArtifacts().find((a) => a.id !== v1.id && a.type === "spec")!;
+      expect(v2.status).toBe("draft");
+      expect(v2.version).toBe(2);
+
+      // Proves the EXISTING surfacing works: the v2 draft appears by id in
+      // pendingArtifacts before any verdict. (An immediate comment makes
+      // check_feedback return fast instead of long-polling the pending draft.)
+      store.addComment({ id: "c_imm", artifactId: v2.id, content: "reviewing", author: "human" });
+      const pending = await callTool("check_feedback");
+      const pendIds = (pending.structuredContent as any).pendingArtifacts.map((a: any) => a.id);
+      expect(pendIds).toContain(v2.id);
+      // The agent-driven v1→superseded transition must NOT be reported.
+      expect((pending.structuredContent as any).statusChanges).toEqual([]);
+
+      // Human approves the v2 draft.
+      store.updateArtifactStatus(v2.id, "approved", "ui_approve_button");
+
+      const after = await callTool("check_feedback");
+      const changes = (after.structuredContent as any).statusChanges;
+      expect(changes).toEqual([
+        expect.objectContaining({ id: v2.id, type: "spec", status: "approved", previousStatus: "draft" }),
+      ]);
+      // The v1 superseded (agent_supersede) is never in statusChanges.
+      expect(changes.map((c: any) => c.id)).not.toContain(v1.id);
+      expect(after.text).toContain(v2.id);
+    });
+
+    it("does NOT report an AGENT-driven supersede transition (agent_supersede) in statusChanges", async () => {
+      await client.listTools();
+      await callTool("present_findings", {
+        summary: "first pass",
+        findings: [{ category: "Security", detail: "weak hash", significance: "high" }],
+      });
+      const old = store.getArtifacts()[0];
+
+      await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
+        title: "Second pass",
+        content: { summary: "revised", findings: [{ category: "Security", detail: "argon2id", significance: "low" }] },
+        reason: "misread the library",
+      });
+      // v1 went draft→superseded via agent_supersede; the human did nothing.
+      // The v2 successor is a pending draft, so add an immediate comment to
+      // make check_feedback return fast instead of long-polling it.
+      const successor = store.getArtifacts().find((a) => a.id !== old.id)!;
+      store.addComment({ id: "c_imm2", artifactId: successor.id, content: "reviewing", author: "human" });
+      const res = await callTool("check_feedback");
+      expect((res.structuredContent as any).statusChanges).toEqual([]);
+      expect(res.text).not.toContain("RESOLVED");
+    });
+
+    it("carries serverVersion matching the MCP serverInfo version", async () => {
+      const info = ctx.client.getServerVersion();
+      const res = await callTool("check_feedback");
+      const version = (res.structuredContent as any).serverVersion;
+      expect(typeof version).toBe("string");
+      expect(version.length).toBeGreaterThan(0);
+      expect(version).toBe(info?.version);
+      expect(res.text).toContain(`v${version}`);
+    });
+  });
 });
