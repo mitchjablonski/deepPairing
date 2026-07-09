@@ -1,6 +1,6 @@
 {
   "name": "@deeppairing/mcp-server",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Human-AI collaborative development framework — MCP server for Claude Code with companion web UI",
   "type": "module",
   "license": "MIT",
