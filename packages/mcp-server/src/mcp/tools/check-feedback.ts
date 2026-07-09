@@ -1,5 +1,25 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
+import type { Artifact } from "@deeppairing/shared";
+import { SERVER_VERSION } from "../../version.js";
+
+/**
+ * V-fix — derive the {previousStatus, at} of the LATEST transition from the
+ * artifact's statusHistory. The store appends [..., {prev, at}, {current, at}]
+ * on each transition, so the last entry is the current status and the
+ * second-to-last is what it came from. Defensive: old artifacts may lack
+ * statusHistory entirely — fall back to updatedAt with no previousStatus
+ * rather than throwing.
+ */
+function deriveTransition(a: Artifact): { previousStatus?: string; at?: string } {
+  const history = (a as { statusHistory?: Array<{ status?: string; at?: string }> }).statusHistory;
+  if (!Array.isArray(history) || history.length === 0) {
+    return { at: a.updatedAt };
+  }
+  const last = history[history.length - 1];
+  const prev = history.length >= 2 ? history[history.length - 2] : undefined;
+  return { previousStatus: prev?.status, at: last?.at ?? a.updatedAt };
+}
 
 /**
  * B3 — check_feedback, extracted from the server.ts switch (it was the last
@@ -139,11 +159,13 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           waitFor: waitForScope,
           suggestedAction: `Call check_feedback again with waitFor='${waitForScope}' (or 'any' to drain unrelated chatter).`,
           companionUrl,
+          serverVersion: SERVER_VERSION,
           pendingArtifacts: [],
           questions: [],
           comments: [],
           decisions: [],
           rejected: [],
+          statusChanges: [],
         },
       };
     }
@@ -199,7 +221,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     suggestedAction = "Wait for findings review before proposing solutions.";
   }
 
-  parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
+  parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
 
   // B3 — structured mirrors of the blocks below, populated as we format.
   const structuredQuestions: Array<Record<string, unknown>> = [];
@@ -442,6 +464,30 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     parts.push(`Plan reviews:\n${reviewedPlans.join("\n")}`);
   }
 
+  // V-fix — the observable per-artifact resolution signal. Drain the
+  // HUMAN-driven draft→terminal transitions (approved / rejected /
+  // changes_requested), report each ONCE by id, then acknowledge. This is
+  // the signal the agent was missing: after revise_artifact(supersede) mints
+  // a v2 draft and the human approves it, the agent could previously only
+  // INFER the approval from an aggregate count moving — now it sees
+  // "art_X is now approved". Read-then-ack (same ordering as comments /
+  // decisions above) so it reports exactly once. Agent-driven transitions
+  // (supersede/retract/obsolete) never set the flag, so they never appear.
+  const changed = await store.getUnacknowledgedStatusChanges();
+  const structuredStatusChanges = changed.map((a) => {
+    const { previousStatus, at } = deriveTransition(a);
+    return { id: a.id, type: a.type, title: a.title, status: a.status, previousStatus, at };
+  });
+  if (changed.length > 0) {
+    await store.acknowledgeStatusChanges(changed.map((a) => a.id));
+    const lines = structuredStatusChanges.map((s) => {
+      const marker = s.status === "approved" ? "✅ RESOLVED" : s.status === "rejected" ? "❌ RESOLVED" : "🔔 RESOLVED";
+      const from = s.previousStatus ? ` (was ${s.previousStatus})` : "";
+      return `${marker}: ${s.id} (${s.type}) "${s.title}" — ${s.status}${from}`;
+    });
+    parts.push(`Human review verdicts (${changed.length}) — resolved BY ID:\n${lines.join("\n")}`);
+  }
+
   // Check for draft artifacts still awaiting human review
   const draftArtifacts = (await store.getArtifacts()).filter(
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
@@ -496,12 +542,17 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
   // B3 — the machine-readable mirror. status: feedback (something to act on),
   // waiting (drafts/decisions/plans pending), or proceed.
+  // V-fix — a HUMAN status change (e.g. approving a v2 draft) IS actionable:
+  // the agent can now build against the approved artifact, so it should flip
+  // status to 'feedback'/proceed rather than stay 'waiting'. Fold
+  // changed.length into the signal alongside comments/rejected/plan verdicts.
   const hasActionableFeedback =
-    hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0;
+    hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0;
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
     companionUrl,
+    serverVersion: SERVER_VERSION,
     summary: {
       totalArtifacts,
       approved: approvedCount,
@@ -514,6 +565,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     comments: structuredComments,
     decisions: structuredDecisions,
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
+    statusChanges: structuredStatusChanges,
   };
 
   // If only the preamble exists (no feedback, no waits), give a clean proceed signal

@@ -382,6 +382,18 @@ export class DaemonClient implements IStore {
     return data.artifacts;
   }
 
+  // V-fix — proxy the HUMAN-driven status-change drain to the daemon's
+  // FileStore. In daemon mode check_feedback runs against THIS client, so
+  // without these two the fix would never reach production.
+  async getUnacknowledgedStatusChanges(): Promise<Artifact[]> {
+    const data = await this.get<{ artifacts: Artifact[] }>("/artifacts/status-changes");
+    return data.artifacts;
+  }
+
+  async acknowledgeStatusChanges(ids: string[]): Promise<void> {
+    await this.post("/artifacts/status-changes/acknowledge", { ids });
+  }
+
   // --- Comments ---
 
   async addComment(params: AddCommentParams): Promise<Comment> {

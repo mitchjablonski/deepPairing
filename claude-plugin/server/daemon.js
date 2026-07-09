@@ -21812,6 +21812,16 @@ var ArtifactSchema = external_exports.object({
    * createdAt/updatedAt when absent.
    */
   statusHistory: external_exports.array(ArtifactStatusHistoryEntrySchema).optional(),
+  /**
+   * V-fix — set true when a HUMAN drove this artifact OUT of draft
+   * (draft → approved / rejected / changes_requested) and check_feedback
+   * has not yet reported that transition to the agent. Cleared once
+   * reported (mirrors the comments/decisions `acknowledged` drain).
+   * Agent-driven transitions (supersede/retract/obsolete) never set it —
+   * the agent caused those, so they'd be noise. Optional for backward
+   * compatibility (project rule: all new fields optional).
+   */
+  statusChangeUnreported: external_exports.boolean().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -23738,6 +23748,7 @@ var FileStore = class _FileStore {
       }
       const agentDriven = reason.startsWith("agent_") || reason === "demo_script";
       if (wasDraft && status !== "draft" && !agentDriven) {
+        art.statusChangeUnreported = true;
         try {
           this.recordArtifactReviewed(artifactId);
         } catch (err) {
@@ -23866,6 +23877,33 @@ var FileStore = class _FileStore {
   }
   getComment(commentId) {
     return this.comments.find((c) => c.id === commentId);
+  }
+  // --- Status changes (V-fix) ---
+  /**
+   * V-fix — artifacts whose HUMAN-driven draft→terminal transition
+   * (approved / rejected / changes_requested) check_feedback has not yet
+   * reported. Mirrors getUnacknowledgedComments / getResolvedDecisions:
+   * the caller reports them once, then acknowledgeStatusChanges drains the
+   * flag. Agent-driven transitions never set the flag, so they never
+   * appear here. Old artifacts lacking the field simply don't match.
+   */
+  getUnacknowledgedStatusChanges() {
+    return this.artifacts.filter(
+      (a) => a.statusChangeUnreported === true
+    );
+  }
+  /**
+   * V-fix — clear the un-reported flag for the given artifact ids after
+   * check_feedback has surfaced them once. Mirrors acknowledgeComments /
+   * acknowledgeDecisions exactly (same loop + same debounced flush).
+   */
+  acknowledgeStatusChanges(ids) {
+    for (const a of this.artifacts) {
+      if (ids.includes(a.id)) {
+        a.statusChangeUnreported = false;
+      }
+    }
+    this.scheduleFlush();
   }
   markCommentAnswered(commentId, answerCommentId) {
     const parent = this.comments.find((c) => c.id === commentId);
@@ -26258,6 +26296,18 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     if (!r.ok) return r.response;
     return c.json({ artifacts: r.store.getArtifacts() });
   });
+  app2.get("/api/internal/sessions/:sessionId/artifacts/status-changes", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ artifacts: r.store.getUnacknowledgedStatusChanges() });
+  });
+  app2.post("/api/internal/sessions/:sessionId/artifacts/status-changes/acknowledge", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const { ids } = await c.req.json();
+    r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+    return c.json({ status: "acknowledged" });
+  });
   app2.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");
@@ -27305,6 +27355,9 @@ async function sendPing(url2, payload) {
   }
 }
 
+// src/version.ts
+var SERVER_VERSION = "0.1.3";
+
 // src/daemon/index.ts
 init_token();
 init_project_root();
@@ -27950,7 +28003,10 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
         if (recentArtifactActivity) break;
       }
       const payload = buildPingPayload({
-        version: "0.1.0",
+        // V-fix — was a stale hardcoded "0.1.0" (never bumped); the
+        // install-health ping now reports the real running app version
+        // from the single SERVER_VERSION constant.
+        version: SERVER_VERSION,
         skillLikelyLoaded: claudeMdHasMarker || recentArtifactActivity,
         recentArtifactActivity
       });

@@ -771,4 +771,69 @@ describe("F11 (G6) — salvage-log suppression keys are session-scoped", () => {
       console.error = orig;
     }
   });
+
+  // V-fix — HUMAN-driven draft→terminal transitions become observable via the
+  // getUnacknowledgedStatusChanges / acknowledgeStatusChanges drain.
+  describe("status change observability (V-fix)", () => {
+    it("flags a HUMAN draft→approved transition and drains it once on acknowledge", () => {
+      const store = createStore("vfix_human");
+      store.createArtifact({ id: "s1", type: "spec", title: "Spec", content: {} });
+
+      // Nothing before a transition.
+      expect(store.getUnacknowledgedStatusChanges()).toEqual([]);
+
+      store.updateArtifactStatus("s1", "approved", "ui_approve_button");
+      const changed = store.getUnacknowledgedStatusChanges();
+      expect(changed.map((a) => a.id)).toEqual(["s1"]);
+      expect(changed[0].status).toBe("approved");
+      // previousStatus is derivable from statusHistory: [draft, approved].
+      const history = (changed[0] as any).statusHistory;
+      expect(history[history.length - 2].status).toBe("draft");
+
+      // Acknowledge drains it exactly once.
+      store.acknowledgeStatusChanges(["s1"]);
+      expect(store.getUnacknowledgedStatusChanges()).toEqual([]);
+    });
+
+    it("does NOT flag AGENT-driven transitions (agent_supersede/retract/obsolete)", () => {
+      const store = createStore("vfix_agent");
+      store.createArtifact({ id: "a1", type: "spec", title: "A", content: {} });
+      store.createArtifact({ id: "a2", type: "spec", title: "B", content: {} });
+      store.createArtifact({ id: "a3", type: "research", title: "C", content: {} });
+
+      store.updateArtifactStatus("a1", "superseded", "agent_supersede");
+      store.updateArtifactStatus("a2", "retracted", "agent_retract");
+      store.updateArtifactStatus("a3", "obsolete", "agent_obsolete");
+
+      expect(store.getUnacknowledgedStatusChanges()).toEqual([]);
+    });
+
+    it("does NOT flag the demo script's transitions", () => {
+      const store = createStore("vfix_demo");
+      store.createArtifact({ id: "d1", type: "spec", title: "D", content: {} });
+      store.updateArtifactStatus("d1", "approved", "demo_script");
+      expect(store.getUnacknowledgedStatusChanges()).toEqual([]);
+    });
+
+    it("back-compat: an artifact/session without the field reads + behaves fine", () => {
+      const store = createStore("vfix_backcompat");
+      // Simulate a legacy artifact persisted without statusChangeUnreported
+      // and without statusHistory.
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "vfix_legacy");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify([{
+        id: "legacy1", sessionId: "vfix_legacy", type: "spec", version: 1, parentId: null,
+        title: "Legacy", status: "draft", content: {}, agentReasoning: null,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      }]));
+      const legacy = createStore("vfix_legacy");
+      // No field → not reported.
+      expect(legacy.getUnacknowledgedStatusChanges()).toEqual([]);
+      // A human transition on the legacy artifact still works and reports.
+      legacy.updateArtifactStatus("legacy1", "approved", "ui_approve_button");
+      expect(legacy.getUnacknowledgedStatusChanges().map((a) => a.id)).toEqual(["legacy1"]);
+      // Acknowledging an unknown id is a harmless no-op.
+      store.acknowledgeStatusChanges(["does_not_exist"]);
+    });
+  });
 });

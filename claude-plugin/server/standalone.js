@@ -25273,6 +25273,16 @@ var ArtifactSchema = external_exports.object({
    * createdAt/updatedAt when absent.
    */
   statusHistory: external_exports.array(ArtifactStatusHistoryEntrySchema).optional(),
+  /**
+   * V-fix — set true when a HUMAN drove this artifact OUT of draft
+   * (draft → approved / rejected / changes_requested) and check_feedback
+   * has not yet reported that transition to the agent. Cleared once
+   * reported (mirrors the comments/decisions `acknowledged` drain).
+   * Agent-driven transitions (supersede/retract/obsolete) never set it —
+   * the agent caused those, so they'd be noise. Optional for backward
+   * compatibility (project rule: all new fields optional).
+   */
+  statusChangeUnreported: external_exports.boolean().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -28207,7 +28217,19 @@ async function handlePresentOptions(ctx, args) {
 var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change"];
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"];
 
+// src/version.ts
+var SERVER_VERSION = "0.1.3";
+
 // src/mcp/tools/check-feedback.ts
+function deriveTransition(a) {
+  const history = a.statusHistory;
+  if (!Array.isArray(history) || history.length === 0) {
+    return { at: a.updatedAt };
+  }
+  const last = history[history.length - 1];
+  const prev = history.length >= 2 ? history[history.length - 2] : void 0;
+  return { previousStatus: prev?.status, at: last?.at ?? a.updatedAt };
+}
 async function handleCheckFeedback(ctx, args) {
   const { store, server, broadcast, port } = ctx;
   const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
@@ -28304,11 +28326,13 @@ async function handleCheckFeedback(ctx, args) {
           waitFor: waitForScope,
           suggestedAction: `Call check_feedback again with waitFor='${waitForScope}' (or 'any' to drain unrelated chatter).`,
           companionUrl,
+          serverVersion: SERVER_VERSION,
           pendingArtifacts: [],
           questions: [],
           comments: [],
           decisions: [],
-          rejected: []
+          rejected: [],
+          statusChanges: []
         }
       };
     }
@@ -28347,7 +28371,7 @@ async function handleCheckFeedback(ctx, args) {
   } else if (pendingArts.some((a) => a.type === "research")) {
     suggestedAction = "Wait for findings review before proposing solutions.";
   }
-  parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode${oldestPendingAge ? `
+  parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
 Oldest pending: ${oldestPendingAge}` : ""}
 Suggested action: ${suggestedAction}`);
   const structuredQuestions = [];
@@ -28532,6 +28556,21 @@ ${formattedDecisions.join("\n")}`);
     parts.push(`Plan reviews:
 ${reviewedPlans.join("\n")}`);
   }
+  const changed = await store.getUnacknowledgedStatusChanges();
+  const structuredStatusChanges = changed.map((a) => {
+    const { previousStatus, at } = deriveTransition(a);
+    return { id: a.id, type: a.type, title: a.title, status: a.status, previousStatus, at };
+  });
+  if (changed.length > 0) {
+    await store.acknowledgeStatusChanges(changed.map((a) => a.id));
+    const lines = structuredStatusChanges.map((s) => {
+      const marker = s.status === "approved" ? "\u2705 RESOLVED" : s.status === "rejected" ? "\u274C RESOLVED" : "\u{1F514} RESOLVED";
+      const from = s.previousStatus ? ` (was ${s.previousStatus})` : "";
+      return `${marker}: ${s.id} (${s.type}) "${s.title}" \u2014 ${s.status}${from}`;
+    });
+    parts.push(`Human review verdicts (${changed.length}) \u2014 resolved BY ID:
+${lines.join("\n")}`);
+  }
   const draftArtifacts = (await store.getArtifacts()).filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
@@ -28563,11 +28602,12 @@ The human is reviewing in the companion UI. Call check_feedback again to pick up
     parts.push(`\u26A0\uFE0F No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.
 Mention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
   }
-  const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0;
+  const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0;
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
     companionUrl,
+    serverVersion: SERVER_VERSION,
     summary: {
       totalArtifacts,
       approved: approvedCount,
@@ -28579,7 +28619,8 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     questions: structuredQuestions,
     comments: structuredComments,
     decisions: structuredDecisions,
-    rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title }))
+    rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
+    statusChanges: structuredStatusChanges
   };
   const [preamble] = parts;
   if (parts.length === 1 && preamble !== void 0) {
@@ -29362,7 +29403,7 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 // src/mcp/server.ts
 function createMcpServer(store, broadcast, port = 3847) {
   const server = new Server(
-    { name: "deeppairing", version: "0.1.3" },
+    { name: "deeppairing", version: SERVER_VERSION },
     {
       // HH10 — declare listChanged so MCP clients know to listen for
       // notifications/resources/list_changed and re-call resources/list
@@ -29454,6 +29495,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             },
             suggestedAction: { type: "string" },
             companionUrl: { type: "string", description: "I7 \u2014 the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
+            serverVersion: { type: "string", description: "V-fix \u2014 the running deepPairing server version (same constant as MCP serverInfo). Read it to tell at a glance whether you're on stale code." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
             summary: {
               type: "object",
@@ -29516,6 +29558,21 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             rejected: {
               type: "array",
               items: { type: "object", properties: { id: { type: "string" }, type: { type: "string" }, title: { type: "string" } } }
+            },
+            statusChanges: {
+              type: "array",
+              description: "V-fix \u2014 HUMAN-driven draft\u2192terminal transitions (approved/rejected/changes_requested), reported ONCE by artifact id. The observable per-artifact resolution signal (e.g. a superseding v2 draft the human just approved).",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  type: { type: "string" },
+                  title: { type: "string" },
+                  status: { type: "string" },
+                  previousStatus: { type: "string" },
+                  at: { type: "string" }
+                }
+              }
             }
           },
           required: ["status", "suggestedAction"]
@@ -30251,6 +30308,16 @@ var DaemonClient = class {
   async getArtifacts() {
     const data = await this.get("/artifacts");
     return data.artifacts;
+  }
+  // V-fix — proxy the HUMAN-driven status-change drain to the daemon's
+  // FileStore. In daemon mode check_feedback runs against THIS client, so
+  // without these two the fix would never reach production.
+  async getUnacknowledgedStatusChanges() {
+    const data = await this.get("/artifacts/status-changes");
+    return data.artifacts;
+  }
+  async acknowledgeStatusChanges(ids) {
+    await this.post("/artifacts/status-changes/acknowledge", { ids });
   }
   // --- Comments ---
   async addComment(params) {

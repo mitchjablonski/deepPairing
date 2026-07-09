@@ -492,6 +492,14 @@ export class FileStore implements IStore {
       // with agent-paced, non-human samples.
       const agentDriven = reason.startsWith("agent_") || reason === "demo_script";
       if (wasDraft && status !== "draft" && !agentDriven) {
+        // V-fix — flag this HUMAN-driven draft→terminal transition as an
+        // UN-reported status change so the next check_feedback can surface
+        // it BY ID (the field bug: the agent could only infer a v2-draft
+        // approval from an aggregate count moving). Set in the exact same
+        // human-review branch as the metrics record; agent-driven
+        // (supersede/retract/obsolete) transitions deliberately skip it —
+        // the agent caused those, so reporting them back is noise.
+        (art as { statusChangeUnreported?: boolean }).statusChangeUnreported = true;
         // F10 (split-state) — the status/history mutation above already
         // happened; a metrics throw here used to 500 the route AFTER the
         // in-memory flip, so the UI rolled back + toasted failure while a
@@ -650,6 +658,36 @@ export class FileStore implements IStore {
 
   getComment(commentId: string): Comment | undefined {
     return this.comments.find((c) => c.id === commentId);
+  }
+
+  // --- Status changes (V-fix) ---
+
+  /**
+   * V-fix — artifacts whose HUMAN-driven draft→terminal transition
+   * (approved / rejected / changes_requested) check_feedback has not yet
+   * reported. Mirrors getUnacknowledgedComments / getResolvedDecisions:
+   * the caller reports them once, then acknowledgeStatusChanges drains the
+   * flag. Agent-driven transitions never set the flag, so they never
+   * appear here. Old artifacts lacking the field simply don't match.
+   */
+  getUnacknowledgedStatusChanges(): Artifact[] {
+    return this.artifacts.filter(
+      (a) => (a as { statusChangeUnreported?: boolean }).statusChangeUnreported === true,
+    );
+  }
+
+  /**
+   * V-fix — clear the un-reported flag for the given artifact ids after
+   * check_feedback has surfaced them once. Mirrors acknowledgeComments /
+   * acknowledgeDecisions exactly (same loop + same debounced flush).
+   */
+  acknowledgeStatusChanges(ids: string[]): void {
+    for (const a of this.artifacts) {
+      if (ids.includes(a.id)) {
+        (a as { statusChangeUnreported?: boolean }).statusChangeUnreported = false;
+      }
+    }
+    this.scheduleFlush();
   }
 
   markCommentAnswered(commentId: string, answerCommentId: string): void {

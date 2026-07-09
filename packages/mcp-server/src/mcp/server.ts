@@ -30,6 +30,7 @@ import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handleRecall } from "./tools/recall.js";
 import type { ToolContext } from "./tools/types.js";
+import { SERVER_VERSION } from "../version.js";
 
 /**
  * U0.2 — schema for the quick-approve elicitation form.
@@ -72,7 +73,7 @@ type BroadcastFn = (event: any) => void;
 
 export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
   const server = new Server(
-    { name: "deeppairing", version: "0.1.3" },
+    { name: "deeppairing", version: SERVER_VERSION },
     {
       // HH10 — declare listChanged so MCP clients know to listen for
       // notifications/resources/list_changed and re-call resources/list
@@ -179,6 +180,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             },
             suggestedAction: { type: "string" },
             companionUrl: { type: "string", description: "I7 — the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
+            serverVersion: { type: "string", description: "V-fix — the running deepPairing server version (same constant as MCP serverInfo). Read it to tell at a glance whether you're on stale code." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
             summary: {
               type: "object",
@@ -241,6 +243,21 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
             rejected: {
               type: "array",
               items: { type: "object", properties: { id: { type: "string" }, type: { type: "string" }, title: { type: "string" } } },
+            },
+            statusChanges: {
+              type: "array",
+              description: "V-fix — HUMAN-driven draft→terminal transitions (approved/rejected/changes_requested), reported ONCE by artifact id. The observable per-artifact resolution signal (e.g. a superseding v2 draft the human just approved).",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  type: { type: "string" },
+                  title: { type: "string" },
+                  status: { type: "string" },
+                  previousStatus: { type: "string" },
+                  at: { type: "string" },
+                },
+              },
             },
           },
           required: ["status", "suggestedAction"],

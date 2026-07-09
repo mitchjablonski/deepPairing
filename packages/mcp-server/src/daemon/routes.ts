@@ -363,6 +363,23 @@ export function createDaemonRoutes(
     return c.json({ artifacts: r.store.getArtifacts() });
   });
 
+  // V-fix — HUMAN-driven status-change drain (mirrors comments/unacknowledged
+  // + comments/acknowledge). check_feedback reads these once then acks so the
+  // agent gets an observable per-artifact "art_X is now approved" signal.
+  app.get("/api/internal/sessions/:sessionId/artifacts/status-changes", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ artifacts: r.store.getUnacknowledgedStatusChanges() });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/artifacts/status-changes/acknowledge", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const { ids } = await c.req.json();
+    r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+    return c.json({ status: "acknowledged" });
+  });
+
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");

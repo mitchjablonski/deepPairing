@@ -56,6 +56,16 @@ export const ArtifactSchema = z.object({
    * createdAt/updatedAt when absent.
    */
   statusHistory: z.array(ArtifactStatusHistoryEntrySchema).optional(),
+  /**
+   * V-fix — set true when a HUMAN drove this artifact OUT of draft
+   * (draft → approved / rejected / changes_requested) and check_feedback
+   * has not yet reported that transition to the agent. Cleared once
+   * reported (mirrors the comments/decisions `acknowledged` drain).
+   * Agent-driven transitions (supersede/retract/obsolete) never set it —
+   * the agent caused those, so they'd be noise. Optional for backward
+   * compatibility (project rule: all new fields optional).
+   */
+  statusChangeUnreported: z.boolean().optional(),
   content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),
