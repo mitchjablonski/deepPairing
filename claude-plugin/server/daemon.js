@@ -21812,16 +21812,6 @@ var ArtifactSchema = external_exports.object({
    * createdAt/updatedAt when absent.
    */
   statusHistory: external_exports.array(ArtifactStatusHistoryEntrySchema).optional(),
-  /**
-   * V-fix — set true when a HUMAN drove this artifact OUT of draft
-   * (draft → approved / rejected / changes_requested) and check_feedback
-   * has not yet reported that transition to the agent. Cleared once
-   * reported (mirrors the comments/decisions `acknowledged` drain).
-   * Agent-driven transitions (supersede/retract/obsolete) never set it —
-   * the agent caused those, so they'd be noise. Optional for backward
-   * compatibility (project rule: all new fields optional).
-   */
-  statusChangeUnreported: external_exports.boolean().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -27356,7 +27346,7 @@ async function sendPing(url2, payload) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.3";
+var SERVER_VERSION = "0.1.4";
 
 // src/daemon/index.ts
 init_token();

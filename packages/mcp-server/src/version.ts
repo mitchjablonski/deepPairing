@@ -11,4 +11,4 @@
  * every release bump. (A literal, not a package.json import, so the bundled
  * plugin build has no runtime JSON-resolution dependency.)
  */
-export const SERVER_VERSION = "0.1.3";
+export const SERVER_VERSION = "0.1.4";

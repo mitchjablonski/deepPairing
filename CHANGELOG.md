@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.1.4 — 2026-07-08
+
+Makes the agent's view of your review actions observable. No breaking changes.
+
+### Added
+- **`check_feedback` now reports human status changes by artifact id.** When you
+  approve or reject a draft, the agent sees it explicitly —
+  `✅ RESOLVED: art_… (spec) "…" — approved` — plus a machine-readable
+  `statusChanges` array, instead of having to infer it from an aggregate counter.
+  Reported once, then acknowledged. The agent's own supersede/retract/obsolete
+  transitions are deliberately excluded, so the signal stays high-value. This
+  makes a superseding v2 draft's approval directly observable, which it wasn't.
+- **`serverVersion` in the `check_feedback` payload**, sourced from a single
+  `SERVER_VERSION` constant that also feeds the MCP `serverInfo` handshake and
+  the install-health ping — so an agent can tell at a glance whether it's talking
+  to a stale daemon instead of diagnosing it from symptoms.
+
+### Fixed
+- A stale hardcoded `0.1.0` in the daemon's install-health ping now tracks the
+  real server version.
+- Test/CI hygiene: a debounced-flush-vs-teardown ENOENT race no longer fails the
+  suite with a spurious non-zero exit while every assertion passes; genuine write
+  failures (EACCES/ENOSPC) still log. Added `FileStore.dispose()` to cancel a
+  pending flush.
+
+> **Upgrading:** deepPairing runs a persistent per-project daemon. Updating the
+> plugin files does **not** restart it — a new MCP process adopts the running
+> daemon. To actually get onto a new version, restart the daemon (kill the pid in
+> `.deeppairing/daemon.json`) or fully restart Claude Code. The new `serverVersion`
+> readout makes it obvious when you're still on old code.
+
+
 ## v0.1.3 — 2026-07-07
 
 Multi-session/multi-port field fixes and a decision-prototype rendering fix.
