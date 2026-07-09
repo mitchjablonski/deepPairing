@@ -35,6 +35,21 @@ node packages/mcp-server/dist/cli/init.js demo
 
 Requires Node 22+ and pnpm 10+. Cold-clone wall time is ~60-90s on `pnpm install`, ~10s on the build, ~5s on the demo.
 
+### Regenerating the committed plugin bundle
+
+`claude-plugin/server/` is **generated but committed** — the marketplace ships the git repo, so `pnpm build` bundles the server + web UI into that directory and CI's "Plugin bundle staleness gate" fails if the committed copy drifts from a fresh build.
+
+A **warm** local build can produce a bundle CI cannot reproduce (turbo replaying a cache-hit `dist/` so the bundle step never re-runs; a stale vite dep-cache re-hashing `web/assets/*`). So:
+
+> **Any PR that touches bundled source (`packages/shared/src`, `packages/mcp-server/src`, or the web UI), and EVERY release version bump, must regenerate the bundle with `pnpm build:clean` and commit the result.**
+
+```bash
+pnpm build:clean   # wipes turbo/vite/tsc caches, then runs the FULL root build
+git add claude-plugin/server
+```
+
+Never regenerate the bundle with a warm `pnpm build`, and never with `pnpm --filter @deeppairing/mcp-server build` alone (that does **not** rebuild `@deeppairing/shared`; the root turbo build orders shared → mcp-server). `build:clean` is the only path guaranteed to match CI.
+
 ## Project structure
 
 ```
@@ -86,7 +101,7 @@ Recent commits in `git log` are good examples of the house style.
 
 1. Fork and create a feature branch.
 2. Make your changes with tests.
-3. Run `pnpm typecheck && pnpm test && pnpm build` to verify (this is what CI runs).
+3. Run `pnpm typecheck && pnpm test && pnpm build` to verify (this is what CI runs). If your change touches bundled source (`packages/*/src` or the web UI) or bumps a version, regenerate the committed bundle with `pnpm build:clean` and `git add claude-plugin/server` — see [Regenerating the committed plugin bundle](#regenerating-the-committed-plugin-bundle). A warm `pnpm build` can pass locally yet fail CI's staleness gate.
 4. Open a PR with a clear description: what changed, why, and what you tested.
 5. A maintainer aims to leave first-pass feedback within ~5 business days. If we miss that, ping the PR — we're a tiny team and stale PRs do slip occasionally.
 6. Squash-merge is the default for feature branches; merge commits are reserved for release branches.

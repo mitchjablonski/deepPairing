@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "build:clean": "node tools/clean-build-cache.mjs && turbo build --force",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
     "lint": "turbo lint"

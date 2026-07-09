@@ -46,9 +46,19 @@ packages/
 
 ```bash
 pnpm install
-pnpm --filter @deeppairing/mcp-server build        # Build server + companion UI (vite + plugin bundle)
+pnpm build                                          # Full turbo build (shared → mcp-server); iterating-only
 pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 ```
+
+> `pnpm --filter @deeppairing/mcp-server build` alone does **not** rebuild `@deeppairing/shared` — if `packages/shared/dist` is missing the server build fails module resolution. Use the root `pnpm build` (turbo orders shared → mcp-server).
+
+### Regenerating the committed plugin bundle — use `pnpm build:clean`
+
+`claude-plugin/server/` is generated-but-committed; CI's "Plugin bundle staleness gate" fails if the committed bundle drifts from a cold build. A **warm** `pnpm build` can produce a bundle CI can't reproduce (turbo replays a cache-hit `dist/` and skips the bundle step → stale version stamp; a stale vite dep-cache re-hashes `web/assets/*`). So:
+
+> **ANY PR touching bundled source (`packages/*/src`, web UI) and EVERY release version bump must run `pnpm build:clean` and commit `claude-plugin/server/`** — never a warm `pnpm build`, never `--filter @deeppairing/mcp-server build` alone.
+
+`pnpm build:clean` wipes the turbo/vite/tsc caches (`.turbo`, `node_modules/.vite`, `dist/`) then runs the full root build — the only path guaranteed to match CI.
 
 ## Testing with Claude Code
 
