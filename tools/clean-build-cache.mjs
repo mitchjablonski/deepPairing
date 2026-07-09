@@ -24,9 +24,30 @@
  * that dep-optimization cache DURING execution, so a stale one re-hashes assets
  * even when the task re-runs (the v0.1.4 trap).
  *
+ * Why not just declare the bundle as a turbo output? Turbo task `outputs` are
+ * PACKAGE-SCOPED, and `claude-plugin/server/` lives at the REPO ROOT, outside
+ * `packages/mcp-server`. Adding `"claude-plugin/server/**"` to
+ * `@deeppairing/mcp-server#build.outputs` captures NOTHING (turbo resolves it to
+ * `packages/mcp-server/claude-plugin/server`, which doesn't exist); the escape
+ * form `"../../claude-plugin/server/**"` is SILENTLY IGNORED (turbo drops outputs
+ * that leave the package). Both were VERIFIED empirically to capture 0 bundle
+ * entries — so a warm cache-hit build would restore nothing and the bundle stays
+ * stale. A real outputs-based fix would need a ROOT-LEVEL `//#bundle` task that
+ * owns `claude-plugin/server/**` and `dependsOn: ["@deeppairing/mcp-server#build"]`
+ * (non-trivial, separate PR). Until then, `--force` — not `outputs` — is the
+ * mechanism. Don't waste a PR re-trying the outputs route.
+ *
  * Cross-platform: pure Node `fs` (no `rm -rf`), so it runs the same on
  * Linux / WSL / macOS / Windows. No dependency added — matches the repo's
  * existing `node -e "...rmSync..."` prebuild convention.
+ *
+ * Worktree caveat: `repoRoot` below resolves to the INVOKING tree. Run from a
+ * git worktree, this wipes that worktree's `dist`/per-package `.turbo` but NOT
+ * turbo's shared local cache (`.turbo/cache/`), which lives in the MAIN checkout
+ * via the git common dir. Determinism still holds — `--force` bypasses that
+ * cache regardless — and the release path (run from the main checkout) is
+ * unaffected. So "wipe every cache artifact" is literal from the main checkout,
+ * best-effort-plus-`--force` from a worktree.
  */
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
