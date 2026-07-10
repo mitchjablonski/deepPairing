@@ -26,7 +26,8 @@ On your first tool call, the response includes:
   project guardrails (migrations, CI workflows, infra paths).
 - **Cross-project philosophy ledger** — the user's stances across every
   deepPairing project they've used. 'Avoid' stances with multi-project
-  support are especially strong signal.
+  support are especially strong signal. These are advisory — a match nudges
+  you; only THIS project's rejections hard-block.
 
 ## Voice — write to your pair, not about them
 

@@ -1,8 +1,9 @@
 # deepPairing — Claude Code plugin
 
 Pair with Claude Code instead of reviewing its output after the fact. Structured
-artifacts (findings, specs, decisions, plans), cross-session rejection
-memory, a cross-project philosophy ledger, and a companion web UI (on a
+artifacts (findings, specs, decisions, plans), a rejection gate that stops a
+concept you've turned down before the edit lands (hard in the project where you
+rejected it; an advisory flag cross-project), and a companion web UI (on a
 deterministic per-project port in `3847-3974`, derived from the project path —
 check `.deeppairing/daemon.json` for the actual one) for inline review and
 commenting.
@@ -156,8 +157,9 @@ deepPairing is pointed at *teaching you*, not replacing you. The agent
 names the pattern at play on every action (`log_reasoning.concept`), asks
 you to predict outcomes on high-stakes decisions, records every rejection
 with its reason, and refuses to re-propose things you've rejected — by
-name OR by underlying concept. Every session compounds into a
-cross-project philosophy ledger that makes the NEXT session smarter.
+name OR by underlying concept — in the project where you rejected them,
+flagging them (advisory) everywhere else. Every session compounds, so the
+NEXT session — on any project — is smarter.
 
 ## See also
 
