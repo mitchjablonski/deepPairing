@@ -12,7 +12,7 @@ import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
  *   artifact comments needing a mirror). Always included, top of hint,
  *   never truncated.
  * - CONTEXTUAL: accumulating signals (rejected approaches, approved
- *   patterns, project guardrails, team prefs, ledger stats, plugin tip).
+ *   patterns, team prefs, ledger stats, plugin tip).
  *   Capped at HINT_BUDGET_CHARS so the hint never grows into a wall of
  *   text the LLM tunes out. When capacity runs out, drop tail-first and
  *   emit a "more context: call recall" pointer so the agent knows what
@@ -72,7 +72,14 @@ const DETAIL_DENSITY_TERSE_GUIDANCE = [
   "\n✂️ Detail density: TERSE — the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
   "  - Keep each finding's `detail` and `recommendation` to 1–2 sentences. Lead with the evidence; skip preamble and restatement of the task.",
   "  - Trim option and plan descriptions to the decision-relevant essentials — pros/cons as short phrases, not paragraphs.",
-  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself.",
+  // S2 — the trailing parenthetical states the division of labor with the
+  // autonomy dial explicitly. Without it, this line's "do NOT skip
+  // present_options" sits two lines above the autonomous block's "Skip the
+  // opening findings/options ceremony" — adjacent absolutes pointing opposite
+  // ways on the same tool. Each self-scopes, but the model shouldn't have to
+  // infer the scoping: terse governs prose, the Autonomy dial governs whether
+  // an artifact posts at all.
+  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)",
 ].join("\n");
 
 // #148 — autonomy-level guidance. Same delivery pattern as #139's detail
@@ -136,8 +143,9 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   //      the agent must address these or feedback breaks.
   //   2. policyParts: user-policy declarations (seeds). Capped at
   //      POLICY_BUDGET_CHARS. High priority but not unlimited.
-  //   3. contextualParts: advisory signals (memory, guardrails, team
-  //      prefs, philosophy, R2). Capped against the remaining budget.
+  //   3. contextualParts: advisory signals (memory, team prefs,
+  //      philosophy, R2). Capped against the remaining budget.
+  //      (Guardrails rode here pre-S1; they now ride obligations — see J6.)
   // The pre-EE1 single `blockingParts` bucket let seeds crowd out
   // unanswered human questions — exactly the wrong priority order.
   const obligationsParts: string[] = [];
@@ -183,6 +191,19 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // paths are sensitive (migrations, CI workflows, infra). The agent gets
   // this list on first call so it knows to stay supervised for changes
   // in those paths even when autonomy is "autonomous".
+  // S1 — ride the UNCAPPED obligations tier, unconditionally. Pre-S1 this
+  // section was contextual, while #139's terse block and #148's autonomy
+  // blocks were uncapped AND charged against the contextual budget
+  // (baselineLen below includes obligations) — so under
+  // {balanced|autonomous} × terse the guardrails lost the truncation
+  // lottery exactly when the autonomous block says "escalate to supervised
+  // for changes in guardrail paths". Guardrails are small, safety-relevant,
+  // and unactionable-if-absent: no recall mode covers them and no preflight
+  // backstop re-surfaces them (unlike rejected approaches, which stay
+  // contextual by design — recall mode='philosophy' + the preflight
+  // hard-block make their eviction recoverable). Cost: when guardrails
+  // exist they now count in baselineLen, slightly tightening the
+  // contextual squeeze for advisory sections — the right trade.
   try {
     // AA7b — typed optional method (was a (store as any) cast pre-AA7).
     const guardrails = await store.getProjectGuardrails?.();
@@ -190,7 +211,7 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       const lines = guardrails.map((g: any) =>
         `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`,
       );
-      contextualParts.push(
+      obligationsParts.push(
         `\n🛡 Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):\n${lines.join("\n")}`,
       );
     }

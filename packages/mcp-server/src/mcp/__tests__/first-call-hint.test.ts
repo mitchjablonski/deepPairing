@@ -222,3 +222,91 @@ describe("first-call hint — #148 autonomy dial guidance", () => {
     expect(hint).not.toMatch(/Autonomy: (BALANCED|AUTONOMOUS)/);
   });
 });
+
+/**
+ * S1 — guardrails must survive EVERY dial combination. Pre-fix, the 🛡
+ * section rode the CAPPED contextual tier while #139's terse block and
+ * #148's autonomy blocks rode the uncapped obligations tier AND were
+ * charged against the contextual budget (baselineLen includes
+ * obligations). Under {balanced|autonomous} × terse only ~260 chars of
+ * contextual budget remained, so the guardrails section was evicted —
+ * exactly when the autonomous block says "escalate to supervised for
+ * changes in guardrail paths". Guardrails have NO recall mode and no
+ * preflight backstop: evicted means gone. This matrix pins the invariant:
+ * guardrails present in ALL 24 variants whenever guardrails exist.
+ */
+describe("first-call hint — S1: guardrails survive all 24 dial variants", () => {
+  const AUTONOMIES = ["supervised", "balanced", "autonomous"] as const;
+  const DENSITIES = ["rich", "terse"] as const;
+  const FLAGS = [false, true] as const;
+
+  it("🛡 section (header + path lines) present whenever guardrails exist, across the full matrix", async () => {
+    const failures: string[] = [];
+    for (const autonomy of AUTONOMIES) {
+      for (const density of DENSITIES) {
+        for (const withGuardrails of FLAGS) {
+          for (const withRejected of FLAGS) {
+            // Fresh project root per variant — guardrails are sensed from the
+            // filesystem at FileStore construction.
+            const variantRoot = fs.mkdtempSync(path.join(tmpDir, "variant-"));
+            if (withGuardrails) {
+              fs.mkdirSync(path.join(variantRoot, "migrations"), { recursive: true });
+              fs.mkdirSync(path.join(variantRoot, ".github", "workflows"), { recursive: true });
+            }
+            const variantStore = new FileStore(variantRoot, "matrix_session");
+            if (autonomy !== "supervised") variantStore.setAutonomyLevel(autonomy);
+            if (density !== "rich") variantStore.setDetailDensity(density);
+            if (withRejected) {
+              variantStore.recordRejectedApproach({
+                description: "Store session state in a module-level global singleton",
+                reason: "hides lifecycle and breaks multi-session isolation",
+              });
+            }
+            const hint = await buildFirstCallHint(variantStore, 4000);
+            variantStore.forceFlush();
+            const label = `${autonomy} × ${density} × guardrails=${withGuardrails} × rejected=${withRejected}`;
+            if (withGuardrails) {
+              // Header AND the actual path lines — a header without the list
+              // is unactionable ("escalate in guardrail paths"… which paths?).
+              if (!hint.includes("🛡 Project guardrails")) {
+                failures.push(`${label}: 🛡 guardrails section EVICTED`);
+              } else if (!hint.includes("migrations") || !hint.includes(".github/workflows")) {
+                failures.push(`${label}: 🛡 header present but path lines missing`);
+              }
+            } else if (hint.includes("🛡 Project guardrails")) {
+              failures.push(`${label}: phantom 🛡 section with no guardrails`);
+            }
+          }
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});
+
+/**
+ * S2 — the terse block's floor sentence ("do NOT skip present_options or
+ * present_code_change") sits two lines above the autonomous block's "Skip
+ * the opening findings/options ceremony". Adjacent absolutes pointing
+ * opposite ways on the same tool invite inconsistent behavior. The terse
+ * line now states the division of labor: terse governs TEXT only; whether
+ * an artifact posts at all is the Autonomy dial's call.
+ */
+describe("first-call hint — S2: terse/autonomy division of labor", () => {
+  it("terse block names the Autonomy dial as the authority on whether artifacts post", async () => {
+    store.setDetailDensity("terse");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toContain("Terse governs TEXT only");
+    expect(hint).toContain("Autonomy dial");
+    // The floor sentence itself is intact (also pinned by the #139 FLOOR test).
+    expect(hint).toMatch(/do NOT skip present_options or present_code_change/);
+  });
+
+  it("the clause coexists with the autonomous block without weakening either side", async () => {
+    store.setDetailDensity("terse");
+    store.setAutonomyLevel("autonomous");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toContain("Terse governs TEXT only");
+    expect(hint).toMatch(/Skip the opening findings\/options ceremony/);
+  });
+});
