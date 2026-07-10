@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.1.9 — 2026-07-10
+
+Fixes from a full release-verification pass — the v0.1.7→v0.1.8 update path was
+field-tested with real released bundles (7/7 pass), and the release was reviewed
+as a composed whole. Everything found is fixed here. No breaking changes.
+
+### Fixed
+- **Project guardrails can no longer be squeezed out of the agent's briefing.**
+  With Detail: Terse plus a non-default Autonomy level, the two guidance blocks
+  could crowd the guardrail-paths list out of the session preamble — while the
+  autonomy guidance simultaneously told the agent to "escalate for guardrail
+  paths." Guardrails now ride the uncapped tier unconditionally: present in all
+  24 dial combinations, exactly when a trust-raising dial makes them matter most.
+  Also clarified the division of labor in the guidance itself: Terse governs
+  text; whether an artifact posts at all is governed by the Autonomy dial.
+- **The decisions view shows a decision the moment you make it.** It read only
+  from disk, so a decision resolved seconds ago could be missing for a few
+  seconds until the debounced flush landed. Live sessions are now read from
+  memory and merged over the disk scan (live wins; no duplicates; sessions from
+  ended daemons still come from disk).
+- **The decisions view stays honest across a restart.** If a session's decisions
+  file was ever corrupted, the recovery sidecar is now surfaced in the partial
+  banner even after the daemon restarts and writes a fresh file — previously the
+  banner went quiet and the pre-corruption history had no surviving mention.
+  Also: a decision superseded while unresolved now reads "Superseded (never
+  resolved)" instead of wearing a permanent "Awaiting your decision" pill.
+- **`DEEPPAIRING_NO_OPEN=1` suppresses the browser auto-open** for scripted, CI,
+  and agent-driven daemon starts. (Documented in docs/troubleshooting.md.)
+
 ## v0.1.8 — 2026-07-10
 
 Polish and honesty. No breaking changes.
