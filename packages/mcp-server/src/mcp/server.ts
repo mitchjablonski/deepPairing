@@ -207,6 +207,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                   content: { type: "string" },
                   lineStart: { type: "number" },
                   findingIndex: { type: "number" },
+                  // #140 — region-anchored diagram comment: the node labels it
+                  // covers (textual; ids/rect are deliberately omitted).
+                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
                 },
               },
             },
@@ -223,6 +226,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
                   filePath: { type: "string" },
                   lineStart: { type: "number" },
                   findingIndex: { type: "number" },
+                  // #140 — see questions.items.region.
+                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
                 },
               },
             },

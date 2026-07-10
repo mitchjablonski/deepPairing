@@ -25540,7 +25540,22 @@ var CommentTargetSchema = external_exports.object({
   // D8 (H1) — open questions are now answerable; index into openQuestions[].
   questionIndex: external_exports.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: external_exports.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
-  suggestion: external_exports.string().optional().describe("Suggested code replacement for this line")
+  suggestion: external_exports.string().optional().describe("Suggested code replacement for this line"),
+  // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
+  // screenshot: the agent gets the hit-tested node ids + labels (which it can
+  // locate in the Mermaid source it authored) plus the normalized rect. Every
+  // sub-field optional; an old comment with no `region` loads unchanged. The
+  // rect is normalized to the SVG's own rendered box (0..1) so it survives
+  // responsive scaling. `labels` disambiguates when a node id is later removed
+  // by a diagram revision (the comment must NOT vanish — see check-feedback).
+  region: external_exports.object({
+    x: external_exports.number(),
+    y: external_exports.number(),
+    w: external_exports.number(),
+    h: external_exports.number(),
+    elementIds: external_exports.array(external_exports.string()).optional().describe('Hit-tested g.node ids, e.g. ["flowchart-AuthGate-1"]'),
+    labels: external_exports.array(external_exports.string()).optional().describe('Hit-tested node labels, e.g. ["AuthGate"]')
+  }).optional().describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -28685,6 +28700,12 @@ function ledgerHealthField() {
     return {};
   }
 }
+function describeRegionRef(region) {
+  if (!region) return "";
+  const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
+  if (labels.length > 0) return `[${labels.join(", ")}]`;
+  return "";
+}
 function deriveTransition(a) {
   const history = a.statusHistory;
   if (!Array.isArray(history) || history.length === 0) {
@@ -28881,6 +28902,8 @@ Adjust your approach based on this guidance.`);
         loc += qText ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")` : ` (answers open question #${c.target.questionIndex + 1})`;
       }
       if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
+      const regionRef = describeRegionRef(c.target.region);
+      if (regionRef) loc += ` \u2014 on region ${regionRef}`;
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
           `- \u2753 QUESTION [${loc}] ${c.content}
@@ -28893,7 +28916,13 @@ Adjust your approach based on this guidance.`);
           lineStart: c.target.lineStart,
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
-          requirementId: c.target.requirementId
+          requirementId: c.target.requirementId,
+          // #140 — carry ONLY the human-meaningful labels. The normalized rect
+          // and the render-unique `elementIds` (e.g. dp-mmd-7-8-flowchart-A-0)
+          // are unactionable to the model — the labels are the part it can find
+          // in the source it authored. Spread only when labels exist, so the
+          // healthy/no-region payload stays byte-for-byte as before.
+          ...c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}
         });
         continue;
       }
@@ -28922,7 +28951,10 @@ Adjust your approach based on this guidance.`);
         lineStart: c.target.lineStart,
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
-        requirementId: c.target.requirementId
+        requirementId: c.target.requirementId,
+        // #140 — labels only (see structuredQuestions); present only when the
+        // region actually named a node.
+        ...c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}
       });
     }
     if (questionLines.length > 0) {
@@ -29995,7 +30027,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   artifactId: { type: "string" },
                   content: { type: "string" },
                   lineStart: { type: "number" },
-                  findingIndex: { type: "number" }
+                  findingIndex: { type: "number" },
+                  // #140 — region-anchored diagram comment: the node labels it
+                  // covers (textual; ids/rect are deliberately omitted).
+                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } }
                 }
               }
             },
@@ -30011,7 +30046,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   suggestion: { type: "string" },
                   filePath: { type: "string" },
                   lineStart: { type: "number" },
-                  findingIndex: { type: "number" }
+                  findingIndex: { type: "number" },
+                  // #140 — see questions.items.region.
+                  region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } }
                 }
               }
             },

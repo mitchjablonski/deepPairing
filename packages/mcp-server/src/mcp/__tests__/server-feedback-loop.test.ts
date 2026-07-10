@@ -104,7 +104,7 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(sc.comments[0].region.labels).toEqual(["AuthGate", "Login"]);
     });
 
-    it("#140 — a region with only ids (no labels) falls back to the ids in text", async () => {
+    it("#140 — a region with only ids (no labels, e.g. an unlabeled-node drag) appends NO referent (ids are render-unique noise) and carries no structured region", async () => {
       await callTool("present_findings", {
         title: "Arch", summary: "s",
         findings: [{ category: "arch", title: "F", detail: "d", evidence: "e", significance: "low" }],
@@ -112,10 +112,14 @@ describe("MCP Tool Handlers — feedback loop", () => {
       const art = store.getArtifacts()[0];
       store.addComment({
         id: "rc_2", artifactId: art.id, content: "here", author: "human",
-        target: { artifactId: art.id, visualId: "v", region: { x: 0, y: 0, w: 0.5, h: 0.5, elementIds: ["flowchart-Store-3"] } },
+        target: { artifactId: art.id, visualId: "v", region: { x: 0, y: 0, w: 0.5, h: 0.5, elementIds: ["dp-mmd-3-4-flowchart-Store-0"] } },
       } as any);
       const res = await callTool("check_feedback");
-      expect(res.text).toContain("on region [flowchart-Store-3]");
+      // The comment still reaches the agent…
+      expect(res.text).toContain("here");
+      // …but with no meaningless render-unique id dumped into prose or structure.
+      expect(res.text).not.toContain("on region");
+      expect("region" in (res.structuredContent as any).comments[0]).toBe(false);
     });
 
     it("#140 — a non-region comment carries NO region key in structuredContent (byte-for-byte minimal)", async () => {

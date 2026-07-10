@@ -187,6 +187,22 @@ describe("FileStore", () => {
     expect(store.getCommentsForArtifact("art_X")).toHaveLength(8);
   });
 
+  it("#140 — does NOT dedupe same-content comments on DIFFERENT regions of one diagram visual", () => {
+    const store = createStore("dedupe-region");
+    // Same content/author/artifact/visual, but two DIFFERENT diagram regions —
+    // distinct human input; collapsing one would reintroduce the comment-loss
+    // class this feature must not repeat. Keyed off labels (ids are render-unique).
+    store.addComment({ id: "r1", artifactId: "art_X", content: "split this", author: "human", target: { visualId: "v", region: { x: 0, y: 0, w: 0.3, h: 0.2, labels: ["AuthGate"] } } });
+    store.addComment({ id: "r2", artifactId: "art_X", content: "split this", author: "human", target: { visualId: "v", region: { x: 0.5, y: 0, w: 0.3, h: 0.2, labels: ["Login"] } } });
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(2);
+
+    // A genuine duplicate on the SAME region (same label, new render-unique id)
+    // within the window still collapses — labels are the dedupe anchor.
+    const dupe = store.addComment({ id: "r3", artifactId: "art_X", content: "split this", author: "human", target: { visualId: "v", region: { x: 0.01, y: 0.01, w: 0.3, h: 0.2, elementIds: ["dp-mmd-9-9-flowchart-AuthGate-0"], labels: ["AuthGate"] } } });
+    expect(dupe.id).toBe("r1");
+    expect(store.getCommentsForArtifact("art_X")).toHaveLength(2);
+  });
+
   it("FN4 — agent self-supersede of a draft is NOT counted as a human review; a UI approve is", () => {
     const store = createStore("fn4-review");
     store.createArtifact({ id: "a1", type: "plan", title: "t", content: { steps: [], estimatedChanges: 0 } });

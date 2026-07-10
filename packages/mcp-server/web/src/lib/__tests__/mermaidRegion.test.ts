@@ -115,8 +115,15 @@ describe("regionFromDrag / regionFromNode", () => {
 });
 
 describe("sameRegion", () => {
-  it("threads two regions covering the same node ids together", () => {
-    expect(sameRegion(regionFromNode(nodeA), { x: 0, y: 0, w: 1, h: 1, elementIds: ["flowchart-AuthGate-1"] })).toBe(true);
+  it("threads two regions covering the same node LABELS together (ignores render-unique ids)", () => {
+    // Same label, DIFFERENT render-prefixed ids (as real mermaid emits across
+    // renders). They must still thread — matching keys off labels, not ids.
+    const stored = { x: 0, y: 0, w: 1, h: 1, elementIds: ["dp-mmd-1-2-flowchart-AuthGate-0"], labels: ["AuthGate"] };
+    const fresh = { x: 0.1, y: 0.1, w: 0.2, h: 0.2, elementIds: ["dp-mmd-9-9-flowchart-AuthGate-0"], labels: ["AuthGate"] };
+    expect(sameRegion(stored, fresh)).toBe(true);
+  });
+  it("matches labels case-insensitively / whitespace-normalized", () => {
+    expect(sameRegion({ x: 0, y: 0, w: 1, h: 1, labels: ["Auth Gate"] }, { x: 0, y: 0, w: 1, h: 1, labels: ["auth  gate"] })).toBe(true);
   });
   it("keeps regions over different nodes separate", () => {
     expect(sameRegion(regionFromNode(nodeA), regionFromNode(nodeB))).toBe(false);
@@ -124,13 +131,24 @@ describe("sameRegion", () => {
 });
 
 describe("regionNodesMissing", () => {
-  it("is false while at least one referenced node still exists", () => {
+  it("is false while at least one referenced LABEL still exists", () => {
     expect(regionNodesMissing(regionFromNode(nodeA), [nodeA, nodeB])).toBe(false);
   });
-  it("is true once every referenced node id is gone (diagram revised)", () => {
-    expect(regionNodesMissing(regionFromNode(nodeA), [nodeB])).toBe(true);
+  it("REGRESSION: a re-render that changed every node id but kept the label is NOT flagged missing", () => {
+    // The exact defect the review caught: mermaid ids are render-unique, so an
+    // id-based check would cry wolf here on every reload. Label-based must not.
+    const stored = { x: 0.1, y: 0.1, w: 0.2, h: 0.2, elementIds: ["dp-mmd-1-2-flowchart-A-0"], labels: ["AuthGate"] };
+    const afterRerender: DiagramNode[] = [
+      { id: "dp-mmd-3-4-flowchart-A-0", label: "AuthGate", rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } },
+    ];
+    expect(regionNodesMissing(stored, afterRerender)).toBe(false);
   });
-  it("is false for an id-less region (nothing to be missing)", () => {
+  it("is true once the referenced label genuinely disappears (node removed/renamed)", () => {
+    const stored = { x: 0.1, y: 0.1, w: 0.2, h: 0.2, elementIds: ["dp-mmd-1-2-flowchart-Ghost-0"], labels: ["Ghost"] };
+    const current: DiagramNode[] = [{ id: "dp-mmd-3-4-flowchart-A-0", label: "AuthGate", rect: { x: 0, y: 0, w: 0.2, h: 0.2 } }];
+    expect(regionNodesMissing(stored, current)).toBe(true);
+  });
+  it("is false for a label-less region (a blank-area drag claimed no node)", () => {
     expect(regionNodesMissing({ x: 0, y: 0, w: 0.5, h: 0.5 }, [])).toBe(false);
   });
 });

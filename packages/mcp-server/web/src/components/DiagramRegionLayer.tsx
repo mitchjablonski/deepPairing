@@ -104,6 +104,31 @@ export function DiagramRegionLayer({
     (c) => c.target.visualId === visualId && c.target.region,
   );
 
+  // Focus management: opening the composer moves focus INTO it; closing/cancel
+  // restores focus to whatever triggered it (the node button / list row), so a
+  // keyboard user is never dumped on <body>. axe can't catch this — it's manual.
+  const composerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const openRegion = useCallback((region: RegionTarget) => {
+    const el = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
+    // Don't capture the aria-hidden drag overlay as a restore target (a mouse
+    // drag has no meaningful focus origin — leave it null and let focus rest in
+    // the composer until the user tabs out).
+    triggerRef.current = el && el.getAttribute("data-testid") !== "dp-region-overlay" ? el : null;
+    setActive(region);
+  }, []);
+  const closeRegion = useCallback(() => {
+    setActive(null);
+    const t = triggerRef.current;
+    triggerRef.current = null;
+    if (t && t.isConnected) t.focus?.();
+  }, []);
+  useEffect(() => {
+    if (!active) return;
+    // Move focus to the composer's textarea once it mounts.
+    composerRef.current?.querySelector("textarea")?.focus();
+  }, [active]);
+
   // --- drag selection (mouse) ------------------------------------------------
   const localPoint = (e: { clientX: number; clientY: number }) => {
     const wrap = overlayRef.current?.getBoundingClientRect();
@@ -138,11 +163,11 @@ export function DiagramRegionLayer({
     const host: PxRect = s
       ? { left: s.left, top: s.top, right: s.right, bottom: s.bottom }
       : { left: 0, top: 0, right: 0, bottom: 0 };
-    setActive(regionFromDrag(sel, host, collectDiagramNodes(el)));
+    openRegion(regionFromDrag(sel, host, collectDiagramNodes(el)));
   };
 
   // --- keyboard path: pick a node directly -----------------------------------
-  const pickNode = (node: DiagramNode) => setActive(regionFromNode(node));
+  const pickNode = (node: DiagramNode) => openRegion(regionFromNode(node));
 
   // Highlights live INSIDE the capture overlay (which is already offset to the
   // SVG box), so they're placed relative to the overlay, not the wrapper.
@@ -227,7 +252,7 @@ export function DiagramRegionLayer({
                 onClick={() => pickNode(n)}
                 className="px-1.5 py-0.5 rounded text-[10px] bg-surface-elevated text-text-secondary hover:bg-surface-hover hover:text-accent-blue border border-white/[0.06] transition-colors"
               >
-                {n.label || n.id}
+                {n.label || "node"}
               </button>
             ))}
           </div>
@@ -238,12 +263,12 @@ export function DiagramRegionLayer({
           submitComment path as every other comment, so the human's note flows
           through check_feedback → revise_artifact unchanged. */}
       {active && (
-        <div className="relative z-[2] mt-2 p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2">
+        <div ref={composerRef} className="relative z-[2] mt-2 p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2">
           <div className="flex items-center gap-2">
             <span className="text-2xs font-medium text-text-secondary">Commenting on {activeLabel}</span>
             <button
               type="button"
-              onClick={() => setActive(null)}
+              onClick={closeRegion}
               aria-label="Cancel region comment"
               className="ml-auto text-text-muted hover:text-text-primary text-2xs"
             >
@@ -271,7 +296,7 @@ export function DiagramRegionLayer({
                 <span aria-hidden="true">▢</span>
                 <button
                   type="button"
-                  onClick={() => setActive(r)}
+                  onClick={() => openRegion(r)}
                   className="text-left hover:text-text-secondary"
                 >
                   on region {describeRegion(r)}
@@ -286,13 +311,12 @@ export function DiagramRegionLayer({
   );
 }
 
-/** Human-readable referent for a region: its labels, else its id count, else
- *  the bare rectangle. Shared by the composer header + the list rows. */
+/** Human-readable referent for a region: its labels, else the bare rectangle.
+ *  Never surfaces `elementIds` — they're render-unique and meaningless to a
+ *  human (see mermaidRegion.normLabel). Shared by the composer header + rows. */
 export function describeRegion(r: RegionTarget): string {
   const labels = (r.labels ?? []).filter(Boolean);
   if (labels.length > 0) return `[${labels.join(", ")}]`;
-  const ids = (r.elementIds ?? []).filter(Boolean);
-  if (ids.length > 0) return `[${ids.join(", ")}]`;
   return "a region";
 }
 

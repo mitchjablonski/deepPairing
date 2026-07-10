@@ -9,10 +9,12 @@ import { useArtifactStore } from "../../stores/artifact";
 const renderMock = vi.hoisted(() => vi.fn());
 vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), render: renderMock } }));
 
+// Real mermaid ids carry a per-render counter prefix (dp-mmd-N-M-…), so they
+// differ every render — the tests must reflect that, not use stable fake ids.
 const TWO_NODE_SVG =
   "<svg aria-label='diagram'>" +
-  "<g class='node' id='flowchart-AuthGate-1'><text>AuthGate</text></g>" +
-  "<g class='node' id='flowchart-Login-2'><text>Login</text></g>" +
+  "<g class='node' id='dp-mmd-5-6-flowchart-AuthGate-0'><text>AuthGate</text></g>" +
+  "<g class='node' id='dp-mmd-5-6-flowchart-Login-1'><text>Login</text></g>" +
   "</svg>";
 
 function addRegionComment(over: { id: string; content: string; region: Record<string, unknown> }) {
@@ -70,23 +72,44 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
     await user.type(box, "rename this box");
     await user.keyboard("{Meta>}{Enter}{/Meta}");
 
+    // Focus MOVED into the composer (keyboard user isn't stranded on <body>).
+    expect(screen.getByPlaceholderText(/add a comment/i)).toHaveFocus();
+
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body);
     expect(body.target.region.labels).toEqual(["AuthGate"]);
-    expect(body.target.region.elementIds).toEqual(["flowchart-AuthGate-1"]);
+    expect(body.target.region.elementIds).toEqual(["dp-mmd-5-6-flowchart-AuthGate-0"]);
     expect(body.target.visualId).toBe("vis_1");
   });
 
-  it("renders an EXISTING region comment back onto the diagram (highlight + text referent)", async () => {
+  it("Cancel restores focus to the node button that opened the composer (no focus dropped to body)", async () => {
+    const user = userEvent.setup();
+    render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    await user.click(screen.getByText(/comment on a node/i));
+    const authBtn = screen.getByRole("button", { name: "AuthGate" });
+    authBtn.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByPlaceholderText(/add a comment/i)).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: /cancel region comment/i }));
+    expect(authBtn).toHaveFocus();
+  });
+
+  it("renders an EXISTING region comment back onto the diagram (highlight + text referent), NOT flagged missing across a re-render", async () => {
+    // Stored under a DIFFERENT render prefix than the current SVG emits — the
+    // node is the same (label AuthGate), so it must NOT be flagged missing.
     addRegionComment({
       id: "rc1",
       content: "split this",
-      region: { x: 0.1, y: 0.1, w: 0.3, h: 0.2, elementIds: ["flowchart-AuthGate-1"], labels: ["AuthGate"] },
+      region: { x: 0.1, y: 0.1, w: 0.3, h: 0.2, elementIds: ["dp-mmd-1-2-flowchart-AuthGate-0"], labels: ["AuthGate"] },
     });
     render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
     await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
     expect(screen.getByTestId("dp-region-highlight")).toBeInTheDocument();
     expect(screen.getByText(/on region \[AuthGate\]/)).toBeInTheDocument();
+    // Crucially: the wolf-cry is NOT painted (label present despite new id).
+    expect(screen.queryByText(/node no longer in this diagram/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("dp-region-highlight")).toHaveAttribute("data-region-missing", "false");
   });
 
   it("DEGRADATION: a region comment whose node was removed by a revision still renders, flagged 'node gone' (no crash)", async () => {

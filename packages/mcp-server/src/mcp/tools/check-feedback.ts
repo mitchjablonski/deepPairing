@@ -38,19 +38,18 @@ function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: st
 }
 
 /**
- * #140 — a comment anchored to a region of a Mermaid diagram carries the nodes
- * it covers TEXTUALLY (labels + ids), never a screenshot. Render the referent
- * as `[AuthGate, Login]` (labels preferred; ids as fallback) so the agent can
- * find the node in the Mermaid source it authored. Returns "" when the comment
- * has no region or the region names nothing — nothing to append.
+ * #140 — a comment anchored to a region of a Mermaid diagram carries the node
+ * LABELS it covers TEXTUALLY, never a screenshot. Render the referent as
+ * `[AuthGate, Login]` so the agent can find the node in the Mermaid source it
+ * authored. Deliberately NOT `elementIds`: those are render-unique
+ * (`dp-mmd-7-8-flowchart-A-0`) and mean nothing to the model. Returns "" when
+ * the region names no node (a blank-area drag) — nothing useful to append.
  */
 type CommentRegion = { labels?: string[]; elementIds?: string[] } | undefined;
 function describeRegionRef(region: CommentRegion): string {
   if (!region) return "";
   const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
   if (labels.length > 0) return `[${labels.join(", ")}]`;
-  const ids = (region.elementIds ?? []).filter((s) => typeof s === "string" && s.length > 0);
-  if (ids.length > 0) return `[${ids.join(", ")}]`;
   return "";
 }
 
@@ -383,9 +382,12 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
           requirementId: c.target.requirementId,
-          // #140 — spread ONLY when the comment carries a region, so the
+          // #140 — carry ONLY the human-meaningful labels. The normalized rect
+          // and the render-unique `elementIds` (e.g. dp-mmd-7-8-flowchart-A-0)
+          // are unactionable to the model — the labels are the part it can find
+          // in the source it authored. Spread only when labels exist, so the
           // healthy/no-region payload stays byte-for-byte as before.
-          ...(c.target.region ? { region: c.target.region } : {}),
+          ...(c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}),
         });
         continue;
       }
@@ -414,8 +416,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
         requirementId: c.target.requirementId,
-        // #140 — see structuredQuestions: present only for region comments.
-        ...(c.target.region ? { region: c.target.region } : {}),
+        // #140 — labels only (see structuredQuestions); present only when the
+        // region actually named a node.
+        ...(c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}),
       });
     }
     if (questionLines.length > 0) {

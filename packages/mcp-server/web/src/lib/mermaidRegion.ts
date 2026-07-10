@@ -108,18 +108,31 @@ export function regionFromNode(node: DiagramNode): RegionTarget {
 }
 
 /**
+ * Normalize a node label for matching: collapse whitespace, drop case. Mermaid
+ * node *ids* are render-unique (they carry a per-render counter prefix, e.g.
+ * `dp-mmd-7-8-flowchart-A-0`), so identical source rendered twice yields
+ * different ids — ids CANNOT be used to recognize "the same node" across a
+ * re-render. Labels are the stable anchor, so all cross-render matching keys
+ * off labels, never `elementIds`.
+ */
+export function normLabel(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
  * Two regions are "the same" (for threading a new comment onto an existing
- * one) when they cover the same set of node ids. Falls back to a coarse rect
- * match for id-less regions so blank-area selections still thread sanely.
+ * one) when they cover the same set of node LABELS. Falls back to a coarse rect
+ * match only for label-less regions (a blank-area drag) so those still thread
+ * sanely. Never keys off `elementIds` (render-unique — see normLabel).
  */
 export function sameRegion(a: RegionTarget, b: RegionTarget): boolean {
-  const aIds = (a.elementIds ?? []).filter(Boolean);
-  const bIds = (b.elementIds ?? []).filter(Boolean);
-  if (aIds.length > 0 || bIds.length > 0) {
-    if (aIds.length !== bIds.length) return false;
-    const as = [...aIds].sort();
-    const bs = [...bIds].sort();
-    return as.every((id, i) => id === bs[i]);
+  const aLabels = (a.labels ?? []).filter(Boolean).map(normLabel);
+  const bLabels = (b.labels ?? []).filter(Boolean).map(normLabel);
+  if (aLabels.length > 0 || bLabels.length > 0) {
+    if (aLabels.length !== bLabels.length) return false;
+    const as = [...aLabels].sort();
+    const bs = [...bLabels].sort();
+    return as.every((l, i) => l === bs[i]);
   }
   const r = (n: number) => Math.round(n * 100);
   return r(a.x) === r(b.x) && r(a.y) === r(b.y) && r(a.w) === r(b.w) && r(a.h) === r(b.h);
@@ -152,12 +165,18 @@ export function collectDiagramNodes(svg: SVGSVGElement | null): DiagramNode[] {
   return out;
 }
 
-/** True when NONE of a region's referenced node ids still exist in the diagram
- *  (the diagram was revised and the node was removed). The comment must still
- *  render — this only drives the "node is gone" honesty note. */
+/**
+ * True when NONE of a region's referenced node LABELS still appears in the
+ * diagram (the diagram was revised and the node was removed/renamed). Matches
+ * on labels, NOT ids: ids are render-unique, so an id set would report "missing"
+ * after every re-render (page refresh included) even when the node is present
+ * and unchanged — crying wolf. A label-less region (blank-area drag) claimed no
+ * node, so it can never be "missing" → false. The comment always still renders;
+ * this only drives the honest "— node no longer in this diagram" note.
+ */
 export function regionNodesMissing(region: RegionTarget, nodes: DiagramNode[]): boolean {
-  const ids = (region.elementIds ?? []).filter(Boolean);
-  if (ids.length === 0) return false;
-  const present = new Set(nodes.map((n) => n.id));
-  return !ids.some((id) => present.has(id));
+  const labels = (region.labels ?? []).filter(Boolean).map(normLabel);
+  if (labels.length === 0) return false;
+  const present = new Set(nodes.map((n) => normLabel(n.label)));
+  return !labels.some((l) => present.has(l));
 }
