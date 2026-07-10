@@ -367,6 +367,8 @@ describe("GlobalStore — SEC1: reserved-name concepts don't crash or pollute", 
 });
 
 describe("H1-5 — corrupt/malformed ledger is preserved, not silently reset", () => {
+  const corruptFiles = () => fs.readdirSync(tmpDir).filter((f) => f.startsWith("philosophy.json.corrupt-"));
+
   it("backs a corrupt (unparseable) ledger up to .corrupt-<ts>, logs, and REFUSES to overwrite it with empty", () => {
     // A hand-corrupted or half-written ledger holding real history.
     fs.writeFileSync(ledgerPath, '{ "version": 1, "concepts": { broken JSON ]]]');
@@ -375,7 +377,7 @@ describe("H1-5 — corrupt/malformed ledger is preserved, not silently reset", (
     const s = new GlobalStore(ledgerPath);
     // Reading it returns empty (can't parse) but must FIRST back it up + log.
     expect(s.query()).toEqual([]);
-    const backups = fs.readdirSync(tmpDir).filter((f) => f.startsWith("philosophy.json.corrupt-"));
+    const backups = corruptFiles();
     expect(backups).toHaveLength(1);
     expect(fs.readFileSync(path.join(tmpDir, backups[0]!), "utf-8")).toContain("broken JSON");
     expect(errSpy).toHaveBeenCalled();
@@ -386,33 +388,143 @@ describe("H1-5 — corrupt/malformed ledger is preserved, not silently reset", (
     s.recordInstance("use redis", { project: "p", sessionId: "s", verdict: "rejected" });
     expect(fs.readFileSync(ledgerPath, "utf-8")).toContain("broken JSON ]]]");
     // And still exactly ONE backup (read-only re-reads don't spam snapshots).
-    expect(fs.readdirSync(tmpDir).filter((f) => f.startsWith("philosophy.json.corrupt-"))).toHaveLength(1);
+    expect(corruptFiles()).toHaveLength(1);
     errSpy.mockRestore();
   });
 
-  it("salvages a malformed entry on read: drops it, keeps the good ones, query() does not throw", () => {
+  // MUST-FIX 2 — null / arrays / non-object roots must degrade, not throw.
+  it.each([
+    ["a literal null (JSON.parse succeeds → null)", "null"],
+    ["a JSON array", "[]"],
+    ["a JSON scalar", '"hello"'],
+  ])("R2: %s is treated as corrupt — query() returns [] without throwing, writes refused", (_label, body) => {
+    fs.writeFileSync(ledgerPath, body);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const s = new GlobalStore(ledgerPath);
+    let out: unknown;
+    expect(() => { out = s.query(); }).not.toThrow();
+    expect(out).toEqual([]);
+    // The odd-but-maybe-recoverable file is preserved, not reset.
+    s.recordInstance("redis", { project: "p", sessionId: "s", verdict: "rejected" });
+    expect(fs.readFileSync(ledgerPath, "utf-8").trim()).toBe(body);
+    errSpy.mockRestore();
+  });
+
+  // MUST-FIX 3 — an empty/whitespace file is FIRST RUN, not a permanent freeze.
+  it.each([["0-byte", ""], ["whitespace-only", "  \n\t "]])(
+    "R3: a %s ledger records normally (no freeze, no backup) and logs once",
+    (_label, body) => {
+      fs.writeFileSync(ledgerPath, body);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const s = new GlobalStore(ledgerPath);
+      s.recordInstance("redis", { project: "p", sessionId: "s", verdict: "rejected" });
+      // Recorded (NOT frozen) — the file is now a real ledger.
+      expect(s.get("redis")?.instances).toHaveLength(1);
+      // No snapshot — there was no history to preserve.
+      expect(corruptFiles()).toHaveLength(0);
+      // Not silent — the fresh start is discoverable in the log.
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("was empty; starting fresh"));
+      errSpy.mockRestore();
+    },
+  );
+
+  // MUST-FIX 1 — reconstruct, don't drop, when real instances survive.
+  it("R1: an entry with real instances but a malformed scalar is RECONSTRUCTED and survives a later unrelated write", () => {
+    const good: PhilosophyEntry = {
+      key: "redis", concept: "redis",
+      instances: [{ project: "p", sessionId: "s", verdict: "rejected", at: "2026-03-01T00:00:00.000Z" }],
+      firstSeenAt: "2026-03-01T00:00:00.000Z", lastSeenAt: "2026-03-01T00:00:00.000Z",
+    };
+    // kafka carries TWO genuine cross-project rejections but a MISSING
+    // firstSeenAt. Pre-fix salvageEntry dropped the whole entry over one bad
+    // scalar; the next unrelated write then erased kafka from disk forever.
+    const kafka = {
+      key: "kafka", concept: "kafka",
+      instances: [
+        { project: "repo-a", sessionId: "s1", verdict: "rejected", at: "2026-01-10T00:00:00.000Z" },
+        { project: "repo-b", sessionId: "s2", verdict: "rejected", at: "2026-02-20T00:00:00.000Z" },
+      ],
+      lastSeenAt: "2026-02-20T00:00:00.000Z", // firstSeenAt intentionally MISSING
+    };
+    fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, concepts: { redis: good, kafka } }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const s = new GlobalStore(ledgerPath);
+    // Reconstructed on read: both instances survive; firstSeenAt rebuilt from
+    // the earliest instance timestamp.
+    const kafkaEntry = s.get("kafka");
+    expect(kafkaEntry?.instances).toHaveLength(2);
+    expect(kafkaEntry?.firstSeenAt).toBe("2026-01-10T00:00:00.000Z");
+
+    // An UNRELATED write must not cost kafka its history (the pre-fix failure).
+    s.recordInstance("redis", { project: "p2", sessionId: "s2", verdict: "rejected" });
+    const reloaded = new GlobalStore(ledgerPath);
+    expect(reloaded.get("kafka")?.instances).toHaveLength(2);
+    // Reconstruction is not a DROP → no data lost → no snapshot needed.
+    expect(corruptFiles()).toHaveLength(0);
+    errSpy.mockRestore();
+  });
+
+  // MUST-FIX 1 — drop ONLY when nothing is salvageable, and snapshot first.
+  it("R1: an entry with ZERO recoverable instances is dropped, but the pre-drop bytes are snapshotted before the shrinking write", () => {
     const good: PhilosophyEntry = {
       key: "redis", concept: "redis",
       instances: [{ project: "p", sessionId: "s", verdict: "rejected", at: "2026-01-02T00:00:00.000Z" }],
       firstSeenAt: "2026-01-01T00:00:00.000Z", lastSeenAt: "2026-01-02T00:00:00.000Z",
     };
-    // A hostile hand-edited entry whose `instances` is NOT an array — pre-fix
-    // this 500s deriveStance/query (.filter on a scalar) on every taste route.
-    const bad = { key: "kafka", concept: "kafka", instances: "not-an-array", firstSeenAt: "x", lastSeenAt: "y" };
-    fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, concepts: { redis: good, kafka: bad } }));
+    // instances is a scalar → nothing recoverable → genuinely worthless → drop.
+    const junk = { key: "kafka", concept: "kafka", instances: "not-an-array", firstSeenAt: "x", lastSeenAt: "y" };
+    fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, concepts: { redis: good, kafka: junk } }));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const s = new GlobalStore(ledgerPath);
-    // query() must NOT throw and must return the survivor, dropping the bad one.
-    let results: ReturnType<typeof s.query> = [];
-    expect(() => { results = s.query(); }).not.toThrow();
-    expect(results.map((e) => e.concept)).toEqual(["redis"]);
-    expect(results[0]!.stance).toBe("avoid"); // deriveStance works on the survivor
-    // This file parses with a valid top-level shape, so it is NOT "corrupt":
-    // no backup, and writes stay allowed (recording appends normally).
-    expect(fs.readdirSync(tmpDir).filter((f) => f.includes(".corrupt-"))).toHaveLength(0);
+    // query() must not throw; only the survivor is returned.
+    expect(s.query().map((e) => e.concept)).toEqual(["redis"]);
+    // A read alone never writes → no snapshot yet.
+    expect(corruptFiles()).toHaveLength(0);
+
+    // The shrinking write snapshots the pre-drop bytes FIRST (kafka present in
+    // the snapshot even though it's dropped from the live ledger).
     s.recordInstance("redis", { project: "p2", sessionId: "s2", verdict: "rejected" });
+    const snaps = corruptFiles();
+    expect(snaps).toHaveLength(1);
+    expect(fs.readFileSync(path.join(tmpDir, snaps[0]!), "utf-8")).toContain("kafka");
+    expect(s.get("kafka")).toBeNull();
     expect(s.get("redis")?.instances).toHaveLength(2);
+    errSpy.mockRestore();
+  });
+
+  // MUST-FIX 4 — the refusal message names the CURRENT snapshot, not a stale one.
+  it("R4: after a repair→re-corrupt cycle, the write-refusal names the fresh snapshot of the current corrupt bytes", () => {
+    const messages: string[] = [];
+    const errSpy = vi.spyOn(console, "error").mockImplementation((m?: unknown) => { messages.push(String(m)); });
+
+    // 1) First corruption → snapshot A (of FIRST-CORRUPT bytes).
+    fs.writeFileSync(ledgerPath, "FIRST-CORRUPT ]]]");
+    const s = new GlobalStore(ledgerPath);
+    s.query();
+    // 2) Repair: a valid ledger lands (external edit). A clean read forgets the
+    //    stale snapshot record.
+    fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, concepts: {} }));
+    expect(s.query()).toEqual([]);
+    // 3) Re-corrupt with DIFFERENT bytes → snapshot B (of SECOND-CORRUPT bytes).
+    fs.writeFileSync(ledgerPath, "SECOND-CORRUPT }}}");
+    messages.length = 0;
+    s.recordInstance("redis", { project: "p", sessionId: "s", verdict: "rejected" });
+
+    const snaps = corruptFiles();
+    const snapB = snaps.find((f) => fs.readFileSync(path.join(tmpDir, f), "utf-8").includes("SECOND-CORRUPT"));
+    const snapA = snaps.find((f) => fs.readFileSync(path.join(tmpDir, f), "utf-8").includes("FIRST-CORRUPT"));
+    expect(snapB).toBeDefined();
+    expect(snapA).toBeDefined();
+
+    const refusal = messages.find((m) => m.includes("refusing to write"));
+    expect(refusal).toBeDefined();
+    // Names the CURRENT snapshot (B), never the stale one (A).
+    expect(refusal!).toContain(snapB!);
+    expect(refusal!).not.toContain(snapA!);
     errSpy.mockRestore();
   });
 });
