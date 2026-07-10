@@ -27356,7 +27356,7 @@ async function sendPing(url2, payload) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.4";
+var SERVER_VERSION = "0.1.5";
 
 // src/daemon/index.ts
 init_token();

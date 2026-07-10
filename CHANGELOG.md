@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.1.5 — 2026-07-09
+
+Your comments are never ignored again. No breaking changes.
+
+### Fixed
+- **A comment on a pending decision is no longer swallowed.** When the agent was
+  waiting for you to pick an option, a comment you left on that decision was
+  invisible to it — dismissed internally as "unrelated chatter" — so it polled
+  forever while you waited for a reply. Now **any human comment (or question)
+  always reaches the agent**, on every kind of wait, and the response carries
+  both signals: what you said, *and* that the decision is still pending. Human
+  questions were affected identically and are fixed too.
+- Status-only scoping still works as intended: waiting on a decision is not
+  woken by an unrelated artifact approval.
+
+### Internal
+- `pnpm build:clean` — the committed plugin bundle is generated but must match a
+  cold build (CI enforces it). A warm `pnpm build` could serve a cached bundle CI
+  couldn't reproduce, which broke the last two releases. Regenerating the bundle
+  now has one correct command, documented and named in the CI failure message.
+
+
 ## v0.1.4 — 2026-07-08
 
 Makes the agent's view of your review actions observable. No breaking changes.
