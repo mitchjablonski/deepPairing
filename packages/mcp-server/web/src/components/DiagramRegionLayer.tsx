@@ -184,11 +184,12 @@ export function DiagramRegionLayer({
   // --- keyboard path: pick a node directly -----------------------------------
   const pickNode = (node: DiagramNode) => openRegion(regionFromNode(node));
 
-  // Highlights live INSIDE the capture overlay (which is already offset to the
-  // SVG box), so they're placed relative to the overlay, not the wrapper.
+  // Highlights live INSIDE the capture overlay. The overlay covers the whole
+  // well (inset-0), so normalized SVG-box coords are offset by the SVG's
+  // placement within the well (box.left/top).
   const highlightStyle = (r: RegionTarget): React.CSSProperties => ({
-    left: r.x * box.width,
-    top: r.y * box.height,
+    left: box.left + r.x * box.width,
+    top: box.top + r.y * box.height,
     width: r.w * box.width,
     height: r.h * box.height,
   });
@@ -209,7 +210,14 @@ export function DiagramRegionLayer({
       {/* Pointer drag-capture surface over the diagram. Presentational — the
           keyboard path below is the accessible equivalent, so this is hidden
           from the a11y tree and carries no role. cursor-crosshair = honest
-          cursor over the one surface where dragging does something. */}
+          cursor over the one surface where dragging does something.
+
+          Covers the ENTIRE well (inset-0), not just the SVG box: the well is
+          flex-centered, so a narrow diagram has wide gutters that LOOK like
+          capture zone (inside the visible border) but were dead — field
+          feedback: "I can't select left of the login form". A drag starting
+          in a gutter is clamped to the SVG box by normalizeRect, so it
+          behaves as if it began at the diagram's edge. */}
       <div
         ref={overlayRef}
         aria-hidden="true"
@@ -219,8 +227,7 @@ export function DiagramRegionLayer({
         // The browser reclaiming the pointer (touch-scroll takeover, OS
         // gesture) aborts the drag cleanly — never a half-finished region.
         onPointerCancel={() => setDrag(null)}
-        className="absolute z-[1] cursor-crosshair"
-        style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+        className="absolute inset-0 z-[1] cursor-crosshair"
         data-testid="dp-region-overlay"
       >
         {/* Existing region comments, redrawn on the diagram. */}
