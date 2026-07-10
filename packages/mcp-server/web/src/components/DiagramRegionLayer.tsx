@@ -34,6 +34,9 @@ import {
  *    does NOT vanish: its highlight still draws from the normalized rect and
  *    its list row says the node is gone.
  *  - Zero-area / one-pixel drag → treated as a click, no region posted.
+ *  - Drag strays outside the diagram → pointer capture keeps the marquee
+ *    alive; on release the rect clamps back into the box (normalizeRect), so
+ *    the selection completes instead of ending early at the boundary.
  */
 export function DiagramRegionLayer({
   artifactId,
@@ -129,23 +132,35 @@ export function DiagramRegionLayer({
     composerRef.current?.querySelector("textarea")?.focus();
   }, [active]);
 
-  // --- drag selection (mouse) ------------------------------------------------
+  // --- drag selection (pointer) ------------------------------------------------
   const localPoint = (e: { clientX: number; clientY: number }) => {
     const wrap = overlayRef.current?.getBoundingClientRect();
     return { x: e.clientX - (wrap?.left ?? 0), y: e.clientY - (wrap?.top ?? 0) };
   };
 
-  const onMouseDown = (e: React.MouseEvent) => {
+  const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // Capture the pointer for the drag's duration, so a marquee that strays
+    // past the diagram edge keeps receiving move/up HERE and completes — with
+    // normalizeRect clamping the rect back into the box — instead of ending
+    // early at the boundary (the old element-bound mouse listeners finished
+    // the selection the instant the pointer left the overlay). Guarded:
+    // jsdom implements neither pointer capture nor PointerEvent, and a real
+    // browser throws NotFoundError for an already-inactive pointerId.
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* capture is best-effort — an uncaptured drag just behaves as before */
+    }
     const p = localPoint(e);
     setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
   };
-  const onMouseMove = (e: React.MouseEvent) => {
+  const onPointerMove = (e: React.PointerEvent) => {
     if (!drag) return;
     const p = localPoint(e);
     setDrag((d) => (d ? { ...d, x1: p.x, y1: p.y } : d));
   };
-  const finishDrag = (e: React.MouseEvent) => {
+  const finishDrag = (e: React.PointerEvent) => {
     if (!drag) return;
     const p = localPoint(e);
     const wrap = overlayRef.current?.getBoundingClientRect();
@@ -191,16 +206,19 @@ export function DiagramRegionLayer({
 
   return (
     <>
-      {/* Mouse drag-capture surface over the diagram. Presentational — the
+      {/* Pointer drag-capture surface over the diagram. Presentational — the
           keyboard path below is the accessible equivalent, so this is hidden
-          from the a11y tree and carries no role. */}
+          from the a11y tree and carries no role. cursor-crosshair = honest
+          cursor over the one surface where dragging does something. */}
       <div
         ref={overlayRef}
         aria-hidden="true"
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={finishDrag}
-        onMouseLeave={(e) => drag && finishDrag(e)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finishDrag}
+        // The browser reclaiming the pointer (touch-scroll takeover, OS
+        // gesture) aborts the drag cleanly — never a half-finished region.
+        onPointerCancel={() => setDrag(null)}
         className="absolute z-[1] cursor-crosshair"
         style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
         data-testid="dp-region-overlay"

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { useArtifactStore } from "../../stores/artifact";
@@ -48,8 +48,74 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
   it("mounts the drag overlay + a per-node keyboard affordance on the interactive diagram", async () => {
     render(<MermaidDiagram source="graph TD; A-->B" region={{ artifactId: "a", visualId: "vis_1" }} />);
     await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
-    expect(screen.getByTestId("dp-region-overlay")).toBeInTheDocument();
+    const overlay = screen.getByTestId("dp-region-overlay");
+    expect(overlay).toBeInTheDocument();
+    // Honest cursor: the ONE surface where dragging does something announces it.
+    expect(overlay.className).toContain("cursor-crosshair");
+    // Presentational — the keyboard path below is the accessible equivalent.
+    expect(overlay).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText(/comment on a node/i)).toBeInTheDocument();
+  });
+
+  // --- drag path (pointer capture — a stray drag must not end early) ---------
+  //
+  // Seam honesty: happy-dom's setPointerCapture is a stub — it does NOT
+  // retarget subsequent events the way a real browser's capture does. So these
+  // tests assert the two halves of the contract at the seam we CAN exercise:
+  //  (1) pointerdown requests capture for its pointerId (spy), and
+  //  (2) move/up events DELIVERED to the overlay — which is exactly how a
+  //      captured pointer's events arrive in a real browser, wherever the
+  //      pointer actually is — complete the drag even when their coordinates
+  //      lie far outside the overlay's box, and pointerleave mid-drag no
+  //      longer terminates the selection (the old element-bound mouse
+  //      listeners finished the drag the moment the pointer crossed the edge).
+  describe("drag selection", () => {
+    async function mountInteractive() {
+      render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      return screen.getByTestId("dp-region-overlay");
+    }
+
+    it("captures the pointer on pointerdown, so the marquee survives leaving the diagram", async () => {
+      const overlay = await mountInteractive();
+      const capture = vi.spyOn(overlay, "setPointerCapture");
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 7, clientX: 10, clientY: 10 });
+      expect(capture).toHaveBeenCalledWith(7);
+    });
+
+    it("a drag whose move/up coordinates land OUTSIDE the overlay still completes a region (no early end)", async () => {
+      const overlay = await mountInteractive();
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+      // happy-dom rects are all-zero, so these coordinates are far outside the
+      // overlay's box — pre-capture, a real pointer out here had already
+      // stopped feeding the overlay events at all.
+      fireEvent.pointerMove(overlay, { pointerId: 1, clientX: 480, clientY: 260 });
+      // Crossing the boundary mid-drag must NOT finish the selection…
+      fireEvent.pointerLeave(overlay, { pointerId: 1, clientX: 480, clientY: 260 });
+      expect(screen.queryByText(/Commenting on/)).not.toBeInTheDocument();
+      // …the marquee is still live…
+      expect(document.querySelector(".border-dashed")).not.toBeNull();
+      // …and releasing OUTSIDE completes the region (rect clamps in-box).
+      fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 520, clientY: 300 });
+      expect(screen.getByText(/Commenting on/)).toBeInTheDocument();
+    });
+
+    it("a sub-4px pointer drag is still a click — no region composer", async () => {
+      const overlay = await mountInteractive();
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 12, clientY: 11 });
+      expect(screen.queryByText(/Commenting on/)).not.toBeInTheDocument();
+    });
+
+    it("pointercancel (browser reclaims the pointer) aborts the drag — no half-finished region", async () => {
+      const overlay = await mountInteractive();
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(overlay, { pointerId: 1, clientX: 200, clientY: 150 });
+      fireEvent.pointerCancel(overlay, { pointerId: 1 });
+      expect(document.querySelector(".border-dashed")).toBeNull();
+      fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 200, clientY: 150 });
+      expect(screen.queryByText(/Commenting on/)).not.toBeInTheDocument();
+    });
   });
 
   it("KEYBOARD PATH: activating a node's button (via Enter, no mouse) opens a composer targeting that node", async () => {
