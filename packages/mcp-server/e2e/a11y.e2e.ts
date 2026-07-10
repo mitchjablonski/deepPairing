@@ -79,6 +79,18 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed decision failed: ${r.status}`); });
+  // #138 — the project-wide decisions view reads decisions.json (the RECORD),
+  // not decision artifacts, so record one so the view has a row to render+scan.
+  await fetch(`${baseURL}/api/internal/sessions/a11y/decisions`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      decisionId: "d_a11y", artifactId: "dec_a11y", context: "Which cache fits?", stakes: "high",
+      options: [
+        { id: "a", title: "Redis", description: "d", pros: ["fast"], cons: ["ops"], effort: "low", risk: "low", recommendation: true },
+        { id: "b", title: "In-proc", description: "d", pros: ["simple"], cons: ["cold"], effort: "low", risk: "low", recommendation: false },
+      ],
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed decision record failed: ${r.status}`); });
   await fetch(`${baseURL}/api/internal/sessions/a11y/artifacts`, {
     method: "POST", headers: h,
     body: JSON.stringify({
@@ -130,6 +142,24 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
     //   with an explicit per-option Select button.
     // Do not add a disableRules() call without a tracking note + task.
     .analyze(); // F1 — color-contrast un-excluded: the token re-tint passes AA; ZERO exclusions remain
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {
+  // #138 — the decisions view is a modal (useModal: role=dialog, focus trap,
+  // Esc). Scan it with the same ZERO-disabled-rules axe net: real semantics
+  // (each row is a single button, no nested-interactive), keyboard-navigable.
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await page.click('[aria-label="Open project decisions"]');
+  await page.waitForSelector('[data-testid="decisions-view"]', { timeout: 15000 });
+  // Wait for the seeded decision row so axe scans the populated list, not a
+  // transient loading state (the marquee-surface rule from the session test).
+  await page.waitForSelector("[data-decision-row]", { timeout: 15000 });
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });

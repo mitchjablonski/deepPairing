@@ -64,6 +64,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       },
     });
     items.push({
+      id: "action_project_decisions",
+      label: "View project decisions (all sessions)",
+      type: "action",
+      action: () => {
+        window.dispatchEvent(new CustomEvent("dp:open-decisions"));
+        onClose(); // open the modal from under the still-mounted palette
+      },
+    });
+    items.push({
       id: "action_approve_all",
       label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : !boundSessionId && draftSessionCount > 1 ? ` across ${draftSessionCount} sessions` : ""} (except decisions)`,
       type: "action",

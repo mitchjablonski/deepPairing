@@ -324,6 +324,200 @@ export function findPastPredictions(
 }
 
 /**
+ * #138 — one flattened decision across the whole project, shaped for the
+ * project-wide decisions view. Carries everything the view needs to show
+ * "what did we decide, and why" without a second fetch: the question, the
+ * chosen option (or its absence), when, which session, and the artifact it
+ * belongs to (for jump-to navigation).
+ */
+export interface ProjectDecision {
+  decisionId: string;
+  sessionId: string;
+  /** First-artifact title of the owning session (mirrors listSessions.summary). */
+  sessionTitle: string;
+  /** The decision RECORD's artifactId — the nav target. The web selectArtifact
+   *  resolves this to its live successor, so a superseded v1 still lands on v2. */
+  artifactId: string;
+  /** Title of the backing artifact, resolved through the supersede chain to the
+   *  live version, or the decision context when no artifact is found. */
+  artifactTitle: string;
+  /** True when no artifact in the session matched the decision's artifactId
+   *  (the decision still renders from its own record; navigation is best-effort). */
+  artifactMissing: boolean;
+  context: string;
+  stakes?: "low" | "medium" | "high";
+  optionCount: number;
+  resolved: boolean;
+  chosenOptionId?: string;
+  chosenOptionTitle?: string;
+  reasoning?: string;
+  confidence?: "low" | "medium" | "high";
+  /** Optional: salvageArray only guarantees a string decisionId, so a
+   *  salvage-passing record can lack a timestamp. The view renders such a row
+   *  as "date unknown" and sorts it last rather than fabricating a position. */
+  createdAt?: string;
+  resolvedAt?: string;
+}
+
+export interface ProjectDecisionsResult {
+  /** Newest-first (by resolvedAt ?? createdAt). */
+  decisions: ProjectDecision[];
+  /**
+   * #138 — sessions whose decisions.json existed but could NOT be parsed at
+   * all (JSON.parse threw). Surfaced so the view can show an HONEST partial
+   * state — a decisions view that silently omits a session's decisions is
+   * worse than none. Individual malformed ELEMENTS inside a parseable array
+   * are salvaged+dropped by salvageArray (logged, not fatal); this list is
+   * the whole-file-unreadable case.
+   */
+  failedSessions: Array<{ sessionId: string; reason: string }>;
+}
+
+/**
+ * #138 — follow the supersede chain from `id` to the live (non-superseded)
+ * version within one session's artifact set. Server-side mirror of the web
+ * store's resolveToLiveId, so a decision whose artifact was revised to v2
+ * still resolves to a sensible (live) title + nav target rather than a dead
+ * v1. Falls back to the original id when the artifact isn't found.
+ */
+function resolveLiveArtifact(artifacts: Artifact[], id: string): Artifact | undefined {
+  let current = artifacts.find((a) => a.id === id);
+  const seen = new Set<string>();
+  while (current && current.status === "superseded" && !seen.has(current.id)) {
+    seen.add(current.id);
+    const successor = artifacts.find((a) => a.parentId === current!.id);
+    if (!successor) break;
+    current = successor;
+  }
+  return current;
+}
+
+/**
+ * #138 — every decision made across EVERY session of a project, flattened and
+ * newest-first, for the project-wide decisions view. Walks
+ * `.deeppairing/sessions/&#42;/decisions.json` on disk (never touches a live
+ * FileStore), salvaging each file: a single corrupt session is reported in
+ * `failedSessions` and its `.corrupt` sidecar is written — it NEVER fails the
+ * whole read or silently truncates the list.
+ */
+export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
+  const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
+  if (!fs.existsSync(sessionsDir)) return { decisions: [], failedSessions: [] };
+
+  const decisions: ProjectDecision[] = [];
+  const failedSessions: Array<{ sessionId: string; reason: string }> = [];
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return { decisions: [], failedSessions: [] };
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const sessionId = entry.name;
+    const sessionDir = path.join(sessionsDir, sessionId);
+    const decFile = path.join(sessionDir, "decisions.json");
+    // No decisions.json → the session simply never recorded a decision. That
+    // is NOT a failure; only a file that exists-but-won't-parse is.
+    if (!fs.existsSync(decFile)) continue;
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+    } catch (err: any) {
+      // Whole-file corruption (unparseable): back up the raw bytes (.corrupt)
+      // exactly like FileStore.loadJsonFile, then REPORT the session rather than
+      // dropping it silently — the single most important requirement of this view.
+      try { fs.copyFileSync(decFile, decFile + ".corrupt"); } catch { /* best-effort */ }
+      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json" });
+      continue;
+    }
+    // Valid JSON but not an array — the whole file is unusable AS decisions.
+    // `decRecords.length === 0` below can't distinguish this from a legitimately
+    // empty [], so detect + report it HERE rather than dropping the session in
+    // silence (console.error alone reaches no user).
+    if (!Array.isArray(raw)) {
+      failedSessions.push({
+        sessionId,
+        reason: `decisions.json is not an array (got ${raw === null ? "null" : typeof raw})`,
+      });
+      continue;
+    }
+    // An empty array is the LEGITIMATE "this session made no decisions" case.
+    if (raw.length === 0) continue;
+    // salvageArray drops malformed ELEMENTS (and logs) but keeps the good ones —
+    // partial data survives instead of taking down the session.
+    const decRecords = salvageArray<DecisionRecord>(`${sessionId}/decisions.json`, raw, "decisionId");
+    // The file HAD content but EVERY record was rejected — a failure the user
+    // must see, not a silent drop.
+    if (decRecords.length === 0) {
+      failedSessions.push({
+        sessionId,
+        reason: `all ${raw.length} decision record(s) in decisions.json were malformed`,
+      });
+      continue;
+    }
+
+    // Artifacts are only for title/nav enrichment — a corrupt artifacts.json
+    // must NOT drop the decisions (they render from their own record). Degrade
+    // to an empty artifact set (titles fall back to the decision context).
+    let artifacts: Artifact[] = [];
+    const artFile = path.join(sessionDir, "artifacts.json");
+    if (fs.existsSync(artFile)) {
+      try {
+        artifacts = salvageArray<Artifact>(
+          `${sessionId}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
+      } catch { /* leave artifacts empty */ }
+    }
+    const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const sessionTitle = sorted[0]?.title ?? sessionId;
+
+    for (const dec of decRecords) {
+      const live = resolveLiveArtifact(artifacts, dec.artifactId);
+      const options = Array.isArray(dec.options) ? dec.options : [];
+      const chosen = dec.response
+        ? options.find((o) => o?.id === dec.response!.optionId)
+        : undefined;
+      decisions.push({
+        decisionId: dec.decisionId,
+        sessionId,
+        sessionTitle,
+        artifactId: dec.artifactId,
+        artifactTitle: live?.title ?? dec.context ?? dec.artifactId,
+        artifactMissing: !live,
+        context: dec.context ?? "",
+        stakes: dec.stakes,
+        optionCount: options.length,
+        resolved: !!dec.response,
+        chosenOptionId: dec.response?.optionId,
+        // Prefer the option's title; fall back to the raw optionId so a
+        // resolved decision whose option list drifted still shows a choice.
+        chosenOptionTitle: dec.response
+          ? chosen?.title ?? dec.response.optionId
+          : undefined,
+        reasoning: dec.response?.reasoning,
+        confidence: dec.response?.confidence,
+        createdAt: dec.createdAt,
+        resolvedAt: dec.resolvedAt,
+      });
+    }
+  }
+
+  // Newest-first. The comparator MUST be total: salvageArray only guarantees a
+  // string decisionId, so a salvage-passing record can lack BOTH createdAt and
+  // resolvedAt. Its key is "" (the smallest string) → it sorts to the BOTTOM (an
+  // unknown date is not "newest"), and `(undefined).localeCompare(...)` never
+  // runs — that throw would escape the per-session try/catch above and 500 the
+  // whole view (the invariant this function promises it never does).
+  const sortKey = (d: ProjectDecision): string => d.resolvedAt ?? d.createdAt ?? "";
+  decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+  return { decisions, failedSessions };
+}
+
+/**
  * P2 — write a retrospective for a decision that was made in some past
  * session. Walks sessions to find the one owning the decisionId; replaces
  * any existing retrospective for that decision (users can change their

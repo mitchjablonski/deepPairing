@@ -23389,6 +23389,106 @@ function findPastPredictions(projectRoot2, query, opts = {}) {
   }
   return out.sort((a, b) => b.resolvedAt.localeCompare(a.resolvedAt)).slice(0, limit);
 }
+function resolveLiveArtifact(artifacts, id) {
+  let current = artifacts.find((a) => a.id === id);
+  const seen = /* @__PURE__ */ new Set();
+  while (current && current.status === "superseded" && !seen.has(current.id)) {
+    seen.add(current.id);
+    const successor = artifacts.find((a) => a.parentId === current.id);
+    if (!successor) break;
+    current = successor;
+  }
+  return current;
+}
+function listAllDecisions(projectRoot2) {
+  const sessionsDir = path3.join(projectRoot2, ".deeppairing", "sessions");
+  if (!fs4.existsSync(sessionsDir)) return { decisions: [], failedSessions: [] };
+  const decisions = [];
+  const failedSessions = [];
+  let entries;
+  try {
+    entries = fs4.readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return { decisions: [], failedSessions: [] };
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const sessionId = entry.name;
+    const sessionDir = path3.join(sessionsDir, sessionId);
+    const decFile = path3.join(sessionDir, "decisions.json");
+    if (!fs4.existsSync(decFile)) continue;
+    let raw2;
+    try {
+      raw2 = JSON.parse(fs4.readFileSync(decFile, "utf-8"));
+    } catch (err) {
+      try {
+        fs4.copyFileSync(decFile, decFile + ".corrupt");
+      } catch {
+      }
+      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json" });
+      continue;
+    }
+    if (!Array.isArray(raw2)) {
+      failedSessions.push({
+        sessionId,
+        reason: `decisions.json is not an array (got ${raw2 === null ? "null" : typeof raw2})`
+      });
+      continue;
+    }
+    if (raw2.length === 0) continue;
+    const decRecords = salvageArray(`${sessionId}/decisions.json`, raw2, "decisionId");
+    if (decRecords.length === 0) {
+      failedSessions.push({
+        sessionId,
+        reason: `all ${raw2.length} decision record(s) in decisions.json were malformed`
+      });
+      continue;
+    }
+    let artifacts = [];
+    const artFile = path3.join(sessionDir, "artifacts.json");
+    if (fs4.existsSync(artFile)) {
+      try {
+        artifacts = salvageArray(
+          `${sessionId}/artifacts.json`,
+          JSON.parse(fs4.readFileSync(artFile, "utf-8")),
+          "id"
+        );
+      } catch {
+      }
+    }
+    const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const sessionTitle = sorted[0]?.title ?? sessionId;
+    for (const dec of decRecords) {
+      const live = resolveLiveArtifact(artifacts, dec.artifactId);
+      const options = Array.isArray(dec.options) ? dec.options : [];
+      const chosen = dec.response ? options.find((o) => o?.id === dec.response.optionId) : void 0;
+      decisions.push({
+        decisionId: dec.decisionId,
+        sessionId,
+        sessionTitle,
+        artifactId: dec.artifactId,
+        artifactTitle: live?.title ?? dec.context ?? dec.artifactId,
+        artifactMissing: !live,
+        context: dec.context ?? "",
+        stakes: dec.stakes,
+        optionCount: options.length,
+        resolved: !!dec.response,
+        chosenOptionId: dec.response?.optionId,
+        // Prefer the option's title; fall back to the raw optionId so a
+        // resolved decision whose option list drifted still shows a choice.
+        chosenOptionTitle: dec.response ? chosen?.title ?? dec.response.optionId : void 0,
+        reasoning: dec.response?.reasoning,
+        confidence: dec.response?.confidence,
+        createdAt: dec.createdAt,
+        resolvedAt: dec.resolvedAt
+      });
+    }
+  }
+  const sortKey = (d) => d.resolvedAt ?? d.createdAt ?? "";
+  decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+  return { decisions, failedSessions };
+}
 function addRetrospective(projectRoot2, params) {
   const sessions2 = listSessions(projectRoot2);
   for (const session of sessions2) {
@@ -24761,6 +24861,9 @@ var FileStore = class _FileStore {
   static findPastPredictions = findPastPredictions;
   /** P2 — see addRetrospective in session-scan.ts. */
   static addRetrospective = addRetrospective;
+  /** #138 — project-wide decisions (every session's decisions.json, flattened
+   *  newest-first, with a partial-data report). See session-scan.ts. */
+  static listAllDecisions = listAllDecisions;
   // BB2 — targeted cache invalidation for the digest below.
   static invalidateLedgerDigestCache = invalidateLedgerDigestCache;
   /** AA5 — project-wide preflight-trace digest; see ledger-digest.ts. */
@@ -26267,6 +26370,15 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!projectRoot2) return c.json({ sessions: [] });
     const sessions2 = FileStore.listSessions(projectRoot2);
     return c.json({ sessions: sessions2 });
+  });
+  app2.get("/api/decisions", (c) => {
+    if (!projectRoot2) return c.json({ decisions: [], failedSessions: [] });
+    try {
+      return c.json(FileStore.listAllDecisions(projectRoot2));
+    } catch (err) {
+      log2(`[decisions] read failed, returning empty: ${err}`);
+      return c.json({ decisions: [], failedSessions: [] });
+    }
   });
   app2.get("/api/search", (c) => {
     if (!projectRoot2) return c.json({ results: [] });

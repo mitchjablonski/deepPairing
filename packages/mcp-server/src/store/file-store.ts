@@ -8,7 +8,7 @@ import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
-import { listSessions, searchAll, findPastPredictions, addRetrospective } from "./session-scan.js";
+import { listSessions, searchAll, findPastPredictions, addRetrospective, listAllDecisions } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
@@ -1322,6 +1322,10 @@ export class FileStore implements IStore {
 
   /** P2 — see addRetrospective in session-scan.ts. */
   static addRetrospective = addRetrospective;
+
+  /** #138 — project-wide decisions (every session's decisions.json, flattened
+   *  newest-first, with a partial-data report). See session-scan.ts. */
+  static listAllDecisions = listAllDecisions;
 
   // BB2 — targeted cache invalidation for the digest below.
   static invalidateLedgerDigestCache = invalidateLedgerDigestCache;
