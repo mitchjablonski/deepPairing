@@ -163,6 +163,33 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });
 
+test("a11y: session view in the LIGHT theme has no serious/critical axe violations (#150)", async ({ page }) => {
+  // #150 — every scan above runs in the default dark theme, which let the
+  // light theme ship five accent-on-dim pairs at 1.6–2.9:1 (dark's accent
+  // fgs leaking onto pale light washes) with CI none the wiser. This is the
+  // session-view scan re-run with the light theme active via the REAL toggle
+  // mechanism: the preferences store reads localStorage "dp-theme" at load
+  // and stamps data-theme on <html> (web/src/stores/preferences.ts), so
+  // seeding localStorage before navigation exercises the same code path as a
+  // user picking Light — no CSS override, no attribute forced from the test.
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  // Same marquee-surface rule as the dark scan: never analyze before the lazy
+  // DecisionCard chunk mounts its Select buttons.
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  // Belt-and-braces: assert the store actually applied the theme, so a future
+  // rename of the localStorage key degrades this test to a loud failure
+  // instead of silently re-scanning dark.
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    // Zero disabled rules — same contract as every other scan in this file.
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+});
+
 test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {
   // #138 — the decisions view is a modal (useModal: role=dialog, focus trap,
   // Esc). Scan it with the same ZERO-disabled-rules axe net: real semantics

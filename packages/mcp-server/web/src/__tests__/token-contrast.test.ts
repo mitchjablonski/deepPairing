@@ -23,11 +23,24 @@ const css = fs.readFileSync(cssPath, "utf-8");
 // Match the light block's SELECTOR (`[data-theme="light"] {`), not the bare
 // attribute string — the header comment mentions it too.
 const darkBlock = css.slice(0, css.indexOf('[data-theme="light"] {'));
+const lightBlock = css.slice(css.indexOf('[data-theme="light"] {'));
 
 function token(name: string): string {
   const m = darkBlock.match(new RegExp(`--color-${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`));
   if (!m?.[1]) throw new Error(`token --color-${name} not found (or not a 6-digit hex) in index.css dark block`);
   return m[1];
+}
+
+/**
+ * #150 — resolve a token as the LIGHT theme sees it: the [data-theme="light"]
+ * override if declared, else CSS-custom-property inheritance falls back to the
+ * dark @theme value. This fallback is exactly the mechanism that caused the
+ * bug (dark accent fgs leaking onto pale light dims), so the resolver must
+ * model it rather than require every token in the light block.
+ */
+function lightToken(name: string): string {
+  const m = lightBlock.match(new RegExp(`--color-${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`));
+  return m?.[1] ?? token(name);
 }
 
 /** WCAG 2.x relative luminance + contrast ratio (the axe formula). */
@@ -63,5 +76,38 @@ describe("#149 — accent text on its own -dim pill fill keeps real AA margin (d
     ["accent-cyan", "accent-cyan-dim"],
   ])("%s on %s ≥ 4.6", (fg, bg) => {
     expect(contrast(token(fg), token(bg))).toBeGreaterThanOrEqual(4.6);
+  });
+});
+
+describe("#150 — LIGHT theme accent text on its own -dim pill keeps real AA margin", () => {
+  // Pre-fix, five of six pairs failed hard (red 2.85, amber 2.08, green 2.31,
+  // violet 2.35, cyan 1.61): the light block re-declared the -dim fills but
+  // inherited DARK's accent foregrounds. Invisible to the axe e2e, which only
+  // scanned the dark theme (now covered by a11y.e2e.ts's light-theme scan).
+  // Same 4.6 floor as the dark section — margin over 4.5 so animation-frame
+  // sampling can't dip a pair under AA.
+  it.each([
+    ["accent-blue", "accent-blue-dim"],
+    ["accent-red", "accent-red-dim"],
+    ["accent-amber", "accent-amber-dim"],
+    ["accent-green", "accent-green-dim"],
+    ["accent-violet", "accent-violet-dim"],
+    ["accent-cyan", "accent-cyan-dim"],
+  ])("%s on %s ≥ 4.6 (light)", (fg, bg) => {
+    expect(contrast(lightToken(fg), lightToken(bg))).toBeGreaterThanOrEqual(4.6);
+  });
+
+  // The same accent fgs also render as text on the plain light surfaces
+  // (links, badges outside pills). Lock AA there too — a future lightening of
+  // a light accent could pass the pale dim yet fail on white.
+  it.each([
+    ["accent-blue"],
+    ["accent-red"],
+    ["accent-amber"],
+    ["accent-green"],
+    ["accent-violet"],
+    ["accent-cyan"],
+  ])("%s on light surface-primary ≥ 4.5", (fg) => {
+    expect(contrast(lightToken(fg), lightToken("surface-primary"))).toBeGreaterThanOrEqual(4.5);
   });
 });
