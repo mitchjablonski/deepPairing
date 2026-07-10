@@ -413,7 +413,11 @@ app.get("/api/daemon-info", (c) => {
   // X-Project-Hash for any X-Session-Id'd request. Advertised here so a
   // future client can verify before sending mutations.
   // MP1 — pendingCount drives the cross-project "agent waiting" badge.
-  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, pendingCount: computeDaemonPendingCount() });
+  // #136 — advertise the running daemon's SERVER_VERSION so a freshly-updated
+  // wrapper's ensureDaemon can tell "this daemon is running OLD code" and
+  // restart it instead of silently adopting the stale process. This is the
+  // authoritative source (daemon.json mirrors it for a no-HTTP probe).
+  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, version: SERVER_VERSION, pendingCount: computeDaemonPendingCount() });
 });
 
 // MP1 (multi-project spike) — discover every live deepPairing daemon so the
@@ -693,7 +697,11 @@ function writeDaemonInfo(port: number): void {
   // II1 — the bearer token lets DaemonClient call /api/internal/*. It must
   // land in a file only the same uid can read. III9 — WHERE that file lives
   // depends on whether the project's .deeppairing/ filesystem honors 0600.
-  const discovery = { pid: process.pid, port, startedAt, projectRoot };
+  // #136 — stamp the running daemon's version into daemon.json so a wrapper's
+  // ensureDaemon can read it WITHOUT an HTTP round-trip and decide whether to
+  // adopt (same/newer) or restart (older/absent) the running daemon. Absence
+  // of this field on a discovered daemon ⇒ pre-#136 build ⇒ definitely stale.
+  const discovery = { pid: process.pid, port, startedAt, projectRoot, version: SERVER_VERSION };
   try {
     fs.mkdirSync(dpDir, { recursive: true });
 
