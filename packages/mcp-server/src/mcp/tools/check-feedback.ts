@@ -38,6 +38,23 @@ function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: st
 }
 
 /**
+ * #140 — a comment anchored to a region of a Mermaid diagram carries the nodes
+ * it covers TEXTUALLY (labels + ids), never a screenshot. Render the referent
+ * as `[AuthGate, Login]` (labels preferred; ids as fallback) so the agent can
+ * find the node in the Mermaid source it authored. Returns "" when the comment
+ * has no region or the region names nothing — nothing to append.
+ */
+type CommentRegion = { labels?: string[]; elementIds?: string[] } | undefined;
+function describeRegionRef(region: CommentRegion): string {
+  if (!region) return "";
+  const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
+  if (labels.length > 0) return `[${labels.join(", ")}]`;
+  const ids = (region.elementIds ?? []).filter((s) => typeof s === "string" && s.length > 0);
+  if (ids.length > 0) return `[${ids.join(", ")}]`;
+  return "";
+}
+
+/**
  * V-fix — derive the {previousStatus, at} of the LATEST transition from the
  * artifact's statusHistory. The store appends [..., {prev, at}, {current, at}]
  * on each transition, so the last entry is the current status and the
@@ -347,6 +364,12 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           : ` (answers open question #${c.target.questionIndex + 1})`;
       }
       if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
+      // #140 — a region comment names the diagram nodes it covers TEXTUALLY so
+      // the agent can find them in the Mermaid source it authored (no image).
+      // e.g. "— on region [AuthGate, Login]". Labels preferred; ids as a
+      // fallback. A region carrying neither is skipped (nothing to say).
+      const regionRef = describeRegionRef(c.target.region);
+      if (regionRef) loc += ` — on region ${regionRef}`;
 
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
@@ -360,6 +383,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
           requirementId: c.target.requirementId,
+          // #140 — spread ONLY when the comment carries a region, so the
+          // healthy/no-region payload stays byte-for-byte as before.
+          ...(c.target.region ? { region: c.target.region } : {}),
         });
         continue;
       }
@@ -388,6 +414,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
         requirementId: c.target.requirementId,
+        // #140 — see structuredQuestions: present only for region comments.
+        ...(c.target.region ? { region: c.target.region } : {}),
       });
     }
     if (questionLines.length > 0) {

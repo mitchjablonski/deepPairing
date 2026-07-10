@@ -266,6 +266,51 @@ describe("CommentSchema", () => {
       CommentSchema.parse({ ...sampleComment, humanResolvedAt: "not-a-date" }),
     ).toThrow();
   });
+
+  // #140 — region-anchored comments on Mermaid diagrams.
+  it("is backward-compatible: a comment without a region still parses and has no region", () => {
+    const result = CommentSchema.parse(sampleComment);
+    expect(result.target.region).toBeUndefined();
+  });
+
+  it("parses a region-anchored diagram comment (rect + node ids + labels)", () => {
+    const result = CommentSchema.parse({
+      ...sampleComment,
+      target: {
+        artifactId: "art_1",
+        visualId: "vis_1",
+        region: {
+          x: 0.1,
+          y: 0.2,
+          w: 0.3,
+          h: 0.15,
+          elementIds: ["flowchart-AuthGate-1"],
+          labels: ["AuthGate"],
+        },
+      },
+    });
+    expect(result.target.region?.x).toBe(0.1);
+    expect(result.target.region?.elementIds).toEqual(["flowchart-AuthGate-1"]);
+    expect(result.target.region?.labels).toEqual(["AuthGate"]);
+  });
+
+  it("accepts a region with just the rect (elementIds/labels optional)", () => {
+    const result = CommentSchema.parse({
+      ...sampleComment,
+      target: { artifactId: "art_1", visualId: "vis_1", region: { x: 0, y: 0, w: 0.5, h: 0.5 } },
+    });
+    expect(result.target.region?.w).toBe(0.5);
+    expect(result.target.region?.labels).toBeUndefined();
+  });
+
+  it("rejects a region missing a required rect coordinate", () => {
+    expect(() =>
+      CommentSchema.parse({
+        ...sampleComment,
+        target: { artifactId: "art_1", region: { x: 0, y: 0, w: 0.5 } },
+      }),
+    ).toThrow();
+  });
 });
 
 describe("AgentEventSchema - artifact events", () => {
