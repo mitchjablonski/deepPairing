@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.1.7 — 2026-07-10
+
+Three features you asked for, and a safety dial that now fails the right way.
+No breaking changes.
+
+### Added
+- **Project-wide decisions view.** Every decision across every session of the
+  project, in one searchable place — the question, the option you chose, when,
+  and which session — with one click back to the decision in context. Until now
+  a decision was only visible inside the session that made it, so the record of
+  *what we decided and why* was effectively unreachable once a session scrolled
+  away. Honest by construction: if one session's decisions file is corrupt, the
+  view names it in a banner and still shows everything else — it will never
+  render "no decisions yet" while something failed to load, and a decision with
+  no readable date shows "date unknown" at the bottom instead of masquerading
+  as the newest.
+- **Detail density (verbosity) control.** A "Detail: Rich / Terse" toggle in the
+  Autonomy popover. Terse tells the agent to tighten the *prose* inside each
+  artifact — findings and recommendations in 1–2 sentences, evidence first —
+  while never reducing the number of artifacts, never skipping options or code
+  review, and never omitting evidence. Evidence is the load-bearing content;
+  terse trims the explanation around it. Off by default: a session that doesn't
+  opt in behaves byte-for-byte as before.
+- **Region-anchored comments on diagrams.** Drag a rectangle over a Mermaid
+  diagram (or pick a node by keyboard) and your comment carries the referent by
+  *name* — "the box labelled AuthGate" — so the agent can find it in the diagram
+  source it authored and revise it. Anchors are matched by node label, so a
+  comment survives page reloads and diagram revisions; a node that is genuinely
+  removed is flagged honestly. No screenshots: the textual anchor is cheaper,
+  browser-independent, and more useful to the agent than pixels. (Prototype
+  previews remain un-annotatable by design — they run in an opaque-origin
+  sandbox the page cannot read into, and that boundary stays.)
+
+### Fixed
+- **The Autonomy dial now fails closed.** An invalid autonomy value (a corrupted
+  or hand-edited preferences file, or a bad API write) used to persist and be
+  read as "not supervised" — which silently armed the auto-approve countdown and
+  relaxed the agent's guidance. Exactly backwards for a safety control. Both
+  internal preference routes now validate their input (400 on garbage), and an
+  unrecognized stored value heals to `supervised` — the most supervised state —
+  on load.
+- **A frozen philosophy ledger is now discoverable.** `dp doctor` reports the
+  ledger's health, any `.corrupt-*` recovery snapshots, and the exact (safely
+  quoted) command to move an unreadable file aside; `check_feedback` tells the
+  agent when recording is frozen — and adds nothing to the payload when healthy.
+- **Malformed request bodies return 400, never 500**, across all daemon and
+  companion-UI routes, with field-level validation messages preserved.
+- **`daemon.json` is written atomically at mode 0600.** A disk-full mid-write can
+  no longer truncate it (or drop the auth token with it), and a persistently
+  failing heartbeat now escalates to stderr instead of failing silently forever.
+
 ## v0.1.6 — 2026-07-09
 
 **Updating deepPairing now actually updates deepPairing.** This is the release
