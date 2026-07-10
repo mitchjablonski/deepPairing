@@ -2294,7 +2294,7 @@ var require_websocket = __commonJS({
     var EventEmitter = __require("events");
     var https = __require("https");
     var http = __require("http");
-    var net = __require("net");
+    var net2 = __require("net");
     var tls = __require("tls");
     var { randomBytes: randomBytes2, createHash } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
@@ -3038,12 +3038,12 @@ var require_websocket = __commonJS({
     }
     function netConnect(options) {
       options.path = options.socketPath;
-      return net.connect(options);
+      return net2.connect(options);
     }
     function tlsConnect(options) {
       options.path = void 0;
       if (!options.servername && options.servername !== "") {
-        options.servername = net.isIP(options.host) ? "" : options.host;
+        options.servername = net2.isIP(options.host) ? "" : options.host;
       }
       return tls.connect(options);
     }
@@ -3744,6 +3744,30 @@ var init_project_root = __esm({
   }
 });
 
+// src/version.ts
+function parseSemver(v) {
+  const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+function compareServerVersions(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb) return NaN;
+  const [aMaj, aMin, aPatch] = pa;
+  const [bMaj, bMin, bPatch] = pb;
+  if (aMaj !== bMaj) return aMaj - bMaj;
+  if (aMin !== bMin) return aMin - bMin;
+  return aPatch - bPatch;
+}
+var SERVER_VERSION;
+var init_version = __esm({
+  "src/version.ts"() {
+    "use strict";
+    SERVER_VERSION = "0.1.5";
+  }
+});
+
 // src/daemon/token.ts
 import fs12 from "node:fs";
 import os3 from "node:os";
@@ -3857,16 +3881,27 @@ var lifecycle_exports = {};
 __export(lifecycle_exports, {
   DEFAULT_PORT: () => DEFAULT_PORT,
   MAX_PORT_ATTEMPTS: () => MAX_PORT_ATTEMPTS,
+  classifyDaemonVersion: () => classifyDaemonVersion,
   daemonAuthHeaders: () => daemonAuthHeaders,
+  describeDaemonVersionHealth: () => describeDaemonVersionHealth,
   ensureDaemon: () => ensureDaemon,
   evictDaemon: () => evictDaemon,
   isDaemonRunning: () => isDaemonRunning,
-  probeDaemonIdentity: () => probeDaemonIdentity
+  probeDaemonIdentity: () => probeDaemonIdentity,
+  resolveStaleDaemon: () => resolveStaleDaemon
 });
 import { spawn } from "node:child_process";
 import fs13 from "node:fs";
+import net from "node:net";
 import path12 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+function logStale(msg) {
+  try {
+    process.stderr.write(`${msg}
+`);
+  } catch {
+  }
+}
 function daemonInfoPath(projectRoot2) {
   return path12.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
@@ -3915,7 +3950,12 @@ async function probeDaemonIdentity(port, timeoutMs = 1500) {
     if (!res.ok) return null;
     const data = await res.json();
     if (typeof data?.pid !== "number" || typeof data?.projectRoot !== "string") return null;
-    return data;
+    return {
+      pid: data.pid,
+      projectRoot: data.projectRoot,
+      startedAt: data.startedAt,
+      version: typeof data.version === "string" ? data.version : void 0
+    };
   } catch {
     return null;
   }
@@ -3963,7 +4003,10 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
       pid: identity.pid,
       port,
       startedAt: identity.startedAt,
-      projectRoot: identity.projectRoot
+      projectRoot: identity.projectRoot,
+      // #136 — carry the probed version so ensureDaemon's stale-check has it
+      // even on the daemon.json-less sweep path.
+      version: identity.version
     };
     return adopted;
   }
@@ -4045,9 +4088,140 @@ function spawnDaemon(projectRoot2) {
   child.unref();
   return { stderrTail: () => stderrBuf };
 }
+function classifyDaemonVersion(runningVersion, myVersion) {
+  if (runningVersion === void 0 || runningVersion === null || runningVersion === "") {
+    return "absent";
+  }
+  const cmp = compareServerVersions(runningVersion, myVersion);
+  if (Number.isNaN(cmp)) return "unknown";
+  if (cmp < 0) return "older";
+  if (cmp > 0) return "newer";
+  return "same";
+}
+function verdictIsStale(v) {
+  return v === "older" || v === "absent" || v === "unknown";
+}
+function describeDaemonVersionHealth(runningVersion, pluginVersion) {
+  const verdict = classifyDaemonVersion(runningVersion, pluginVersion);
+  if (verdict === "same") {
+    return { stale: false, verdict, message: `Daemon version v${runningVersion} matches this plugin (v${pluginVersion}).` };
+  }
+  if (verdict === "newer") {
+    return {
+      stale: false,
+      verdict,
+      message: `Daemon is running v${runningVersion}, NEWER than this plugin (v${pluginVersion}) \u2014 not stale (you likely run a newer deepPairing in another project). Left as-is.`
+    };
+  }
+  const runningLabel = verdict === "absent" ? "an unversioned build (pre-0.1.4)" : verdict === "unknown" ? `an unparseable version ("${runningVersion}")` : `v${runningVersion}`;
+  return {
+    stale: true,
+    verdict,
+    message: `Daemon on this port is running ${runningLabel}, but this plugin is v${pluginVersion}. A plugin update does NOT restart a running daemon, so it keeps serving old code \u2014 every shipped fix stays invisible until it restarts.`
+  };
+}
+async function portRefusesConnections(port, timeoutMs = 400) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    let settled = false;
+    const done = (refuses) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(refuses);
+    };
+    socket.once("connect", () => done(false));
+    socket.once(
+      "error",
+      (err) => done(err.code === "ECONNREFUSED" || err.code === "ECONNRESET")
+    );
+    socket.setTimeout(timeoutMs, () => done(false));
+  });
+}
+function pidIsGone(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch {
+    return true;
+  }
+}
+async function waitForPortRelease(port, pid, opts = {}) {
+  const graceMs = opts.graceMs ?? 6e3;
+  const killWaitMs = opts.killWaitMs ?? 2e3;
+  const kill = opts.kill ?? ((p, s) => {
+    try {
+      process.kill(p, s);
+    } catch {
+    }
+  });
+  const isDown = async () => pidIsGone(pid) && await portRefusesConnections(port);
+  const graceDeadline = Date.now() + graceMs;
+  while (Date.now() < graceDeadline) {
+    if (await isDown()) return;
+    await sleep(50);
+  }
+  kill(pid, "SIGKILL");
+  const killDeadline = Date.now() + killWaitMs;
+  while (Date.now() < killDeadline) {
+    if (await isDown()) return;
+    await sleep(50);
+  }
+}
+async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) {
+  const probeIdentity = deps.probeIdentity ?? probeDaemonIdentity;
+  const kill = deps.kill ?? ((p, s) => {
+    try {
+      process.kill(p, s);
+    } catch {
+    }
+  });
+  const waitForRelease = deps.waitForRelease ?? ((port, pid) => waitForPortRelease(port, pid));
+  const log2 = deps.log ?? (() => {
+  });
+  const verdict = classifyDaemonVersion(existing.version, myVersion);
+  if (!verdictIsStale(verdict)) {
+    if (verdict === "newer") {
+      log2(
+        `[deepPairing] daemon on :${existing.port} is running v${existing.version} which is NEWER than this plugin (v${myVersion}); adopting it (a newer daemon serves a different project/terminal \u2014 refusing to downgrade).`
+      );
+    }
+    return "adopt";
+  }
+  const identity = await probeIdentity(existing.port);
+  if (!identity) {
+    log2(
+      `[deepPairing] daemon on :${existing.port} looked stale (v${existing.version ?? "absent"}) but its identity could not be re-confirmed; adopting rather than signalling an unidentified process.`
+    );
+    return "adopt";
+  }
+  if (identity.pid !== existing.pid || identity.projectRoot !== projectRoot2) {
+    log2(
+      `[deepPairing] refusing to restart daemon on :${existing.port}: identity drifted since discovery (expected pid ${existing.pid} for ${projectRoot2}, now pid ${identity.pid} for ${identity.projectRoot}). Adopting instead.`
+    );
+    return "adopt";
+  }
+  const liveVerdict = classifyDaemonVersion(identity.version, myVersion);
+  if (!verdictIsStale(liveVerdict)) {
+    log2(
+      `[deepPairing] daemon on :${existing.port} looked stale in daemon.json (v${existing.version ?? "absent"}) but its live /api/daemon-info reports v${identity.version ?? "absent"} (${liveVerdict}); adopting \u2014 not restarting a current daemon.`
+    );
+    return "adopt";
+  }
+  const runningLabel = identity.version ?? (liveVerdict === "absent" ? "pre-0.1.4 (no version)" : "unknown");
+  log2(
+    `[deepPairing] daemon was running v${runningLabel}, plugin is v${myVersion} \u2014 restarting it. A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`
+  );
+  kill(existing.pid, "SIGTERM");
+  await waitForRelease(existing.port, existing.pid);
+  return "restarted";
+}
 async function ensureDaemon(projectRoot2) {
   const existing = await isDaemonRunning(projectRoot2);
-  if (existing) return existing;
+  if (existing) {
+    const outcome = await resolveStaleDaemon(existing, SERVER_VERSION, projectRoot2, { log: logStale });
+    if (outcome === "adopt") return existing;
+  }
   const { stderrTail } = spawnDaemon(projectRoot2);
   try {
     return await waitForDaemon(projectRoot2);
@@ -4061,16 +4235,18 @@ ${tail}`);
     throw err;
   }
 }
-var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS;
+var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, sleep;
 var init_lifecycle = __esm({
   "src/daemon/lifecycle.ts"() {
     "use strict";
     init_token();
     init_project_root();
+    init_version();
     __thisDir = path12.dirname(fileURLToPath2(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = 3847;
     MAX_PORT_ATTEMPTS = 10;
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
 
@@ -27355,10 +27531,8 @@ async function sendPing(url2, payload) {
   }
 }
 
-// src/version.ts
-var SERVER_VERSION = "0.1.5";
-
 // src/daemon/index.ts
+init_version();
 init_token();
 init_project_root();
 async function openBrowser(url2) {
@@ -27571,7 +27745,7 @@ function computeDaemonPendingCount() {
   return n;
 }
 app.get("/api/daemon-info", (c) => {
-  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, pendingCount: computeDaemonPendingCount() });
+  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, version: SERVER_VERSION, pendingCount: computeDaemonPendingCount() });
 });
 var PROJECTS_SWEEP_TTL_MS = 35e3;
 var projectsSweepCache = null;
@@ -27735,7 +27909,7 @@ function resolveTokenPlacement() {
   return tokenPlacementCached;
 }
 function writeDaemonInfo(port) {
-  const discovery = { pid: process.pid, port, startedAt, projectRoot };
+  const discovery = { pid: process.pid, port, startedAt, projectRoot, version: SERVER_VERSION };
   try {
     fs14.mkdirSync(dpDir, { recursive: true });
     if (resolveTokenPlacement() === "in-repo") {

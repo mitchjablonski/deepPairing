@@ -13,7 +13,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders } from "../daemon/lifecycle.js";
+import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders, describeDaemonVersionHealth } from "../daemon/lifecycle.js";
+import { SERVER_VERSION } from "../version.js";
 import {
   ensureDeepPairingDir,
   ensureGitignoreEntry,
@@ -676,6 +677,58 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     }
   } catch {
     // probeDaemonIdentity already swallows network errors; nothing to do.
+  }
+
+  // #136 — stale-daemon detection. When the daemon on this port serves OUR
+  // project but is running an OLDER version than the installed plugin, a plugin
+  // update silently left the old process running — it keeps serving pre-fix
+  // behavior until restarted. Report it, and (with --fix) offer to SIGTERM it
+  // so the next Claude Code session spawns a fresh daemon on the new code.
+  try {
+    const mine = await probeDaemonIdentity(port);
+    if (mine && mine.projectRoot === cwd) {
+      const health = describeDaemonVersionHealth(mine.version, SERVER_VERSION);
+      if (health.stale) {
+        console.log(`  ${red("✗")} Stale daemon: ${health.message}`);
+        const expectedPid = mine.pid;
+        fixes.push({
+          label: `Restart stale daemon (PID ${expectedPid}, running ${mine.version ? "v" + mine.version : "unversioned"} < plugin v${SERVER_VERSION})`,
+          apply: async () => {
+            // Re-confirm identity so we never signal a recycled pid or a daemon
+            // that changed under us between diagnosis and apply.
+            const reprobe = await probeDaemonIdentity(port);
+            if (!reprobe) {
+              return { ok: true, message: `Port ${port} is now free; nothing to do.` };
+            }
+            if (reprobe.pid !== expectedPid || reprobe.projectRoot !== cwd) {
+              return {
+                ok: false,
+                message: `Daemon on :${port} changed since diagnosis (now PID ${reprobe.pid} for ${reprobe.projectRoot}). Re-run doctor.`,
+              };
+            }
+            // SIGTERM → graceful flush + port release (no data loss). On Windows
+            // Node has no SIGTERM equivalent; process.kill is unconditional.
+            try {
+              process.kill(expectedPid, process.platform === "win32" ? undefined : "SIGTERM");
+              return {
+                ok: true,
+                message:
+                  process.platform === "win32"
+                    ? `Force-terminated PID ${expectedPid} (Windows has no SIGTERM). Restart Claude Code to spawn a fresh daemon on v${SERVER_VERSION}.`
+                    : `Sent SIGTERM to PID ${expectedPid}; it flushes + exits. Restart Claude Code to spawn a fresh daemon on v${SERVER_VERSION}.`,
+              };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { ok: false, message: `Could not signal PID ${expectedPid}: ${msg}` };
+            }
+          },
+        });
+      } else if (health.verdict === "newer") {
+        console.log(`  ${dim("·")} ${health.message}`);
+      }
+    }
+  } catch {
+    // probe already swallows network errors; a version check is best-effort.
   }
 
   let probeOk = false;
@@ -1600,7 +1653,11 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 `);
   }
 } else if (cmd === "--version" || cmd === "-v") {
-  console.log("0.1.0");
+  // #136 — read the single SERVER_VERSION source of truth, never a hardcoded
+  // literal. A user runs `dp --version` precisely to confirm an update took;
+  // a stale literal here would mislead them into the exact stale-daemon
+  // confusion this change set exists to end.
+  console.log(SERVER_VERSION);
 } else if (cmd === "init") {
   const offerDemo = !args.includes("--no-demo");
   const yes = args.includes("--yes") || args.includes("-y");
