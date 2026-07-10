@@ -12,7 +12,7 @@
     {
       "name": "deeppairing",
       "source": "./claude-plugin",
-      "description": "Turn Claude Code into a thinking partner: structured findings / specs / options / plans you shape in a local companion UI, concept-naming for learning, and a cross-project philosophy ledger that remembers your rejections so your taste compounds.",
+      "description": "Turn Claude Code into a thinking partner: structured findings / specs / options / plans you shape in a local companion UI, concept-naming for learning, and a rejection gate that stops a concept you've turned down before the edit lands — in the project where you rejected it, with an advisory cross-project flag everywhere else — so your taste compounds.",
       "homepage": "https://github.com/mitchjablonski/deepPairing",
       "license": "MIT",
       "keywords": [

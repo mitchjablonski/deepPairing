@@ -27290,6 +27290,36 @@ Team rationale: "${pref.rationale}"${attribution}.${scope}
   };
 }
 
+// src/mcp/advisory-recall.ts
+function tokenSetKey(s) {
+  const toks = meaningfulTokens(s);
+  return toks.length ? [...toks].sort().join(" ") : "";
+}
+var globalStoreAdvisoryRecall = {
+  conceptsFor(proposal) {
+    const hits = [];
+    try {
+      for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
+        const concept = entry.concept?.trim();
+        if (!concept) continue;
+        const k = tokenSetKey(concept);
+        if (k && proposal.localConceptKeys.has(k)) continue;
+        const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
+        hits.push({
+          concept,
+          project: nonManual?.project,
+          reason: nonManual?.reason
+        });
+      }
+    } catch {
+    }
+    return hits;
+  }
+};
+function getAdvisoryRecall() {
+  return globalStoreAdvisoryRecall;
+}
+
 // src/mcp/tool-helpers.ts
 async function tryElicit(server, message) {
   if (!terminalApproveEnabled(process.env)) return null;
@@ -27310,10 +27340,6 @@ function terminalApproveEnabled(env) {
 async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) {
   const memory = await store.getSessionMemory();
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
-  const tokenSetKey = (s) => {
-    const toks = meaningfulTokens(s);
-    return toks.length ? [...toks].sort().join(" ") : "";
-  };
   const localKeys = /* @__PURE__ */ new Set();
   for (const r of memory.rejectedApproaches) {
     const k = tokenSetKey(r.concept ?? r.description);
@@ -27323,22 +27349,9 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     const k = tokenSetKey(a);
     if (k) localKeys.add(k);
   }
-  const globalAdvisoryConcepts = [];
-  try {
-    for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
-      const concept = entry.concept?.trim();
-      if (!concept) continue;
-      const k = tokenSetKey(concept);
-      if (k && localKeys.has(k)) continue;
-      const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
-      globalAdvisoryConcepts.push({
-        concept,
-        project: nonManual?.project,
-        reason: nonManual?.reason
-      });
-    }
-  } catch {
-  }
+  const globalAdvisoryConcepts = getAdvisoryRecall().conceptsFor({
+    localConceptKeys: localKeys
+  });
   const result = runPreflight({
     toolName,
     proposalStrings,

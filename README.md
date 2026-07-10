@@ -5,8 +5,9 @@
 Before Claude Code writes code, deepPairing shows you what it found, the options
 it weighed, and the plan it'll follow — as structured artifacts you approve or
 redirect in a local UI, not a wall of terminal text. Reject an approach once,
-with your reason, and it's remembered across every project: next time the agent
-proposes a concept you've turned down, a gate stops it before the edit lands.
+with your reason, and a gate stops the agent from re-proposing that concept —
+before the edit lands, in the project where you rejected it — and flags it,
+advisory, on every other project.
 
 *MIT · no account · no telemetry · 1,500+ tests · everything stays on your disk.*
 
@@ -34,9 +35,10 @@ Node 22+, pnpm 10+. Then, to use it in your own project:
 - **Decision cards.** Options arrive as cards you pick in the UI. High-stakes
   ones capture your prediction + confidence up front; a later breadcrumb closes
   the loop with a ✓/✗/◐ calibration retrospective against what you called.
-- **The Philosophy Ledger.** Reject an approach with a reason and the stance is
-  remembered across *every* project. A pre-flight gate then stops the agent from
-  re-proposing that concept — before the edit lands.
+- **The rejection gate.** Reject an approach with a reason and a pre-flight
+  gate stops the agent from re-proposing that concept here — before the edit
+  lands. On your other projects it's flagged, not stopped (advisory), backed by
+  a cross-project ledger you can inspect and export.
 - **Live plan checklists.** Plans render as checklists that tick off as the
   work lands, so "what's left" never lies.
 - **Session replay.** Reopen any past session from the command palette →
@@ -108,12 +110,6 @@ the collaboration, not the headline:
 
 ![The enforcement moment — the agent re-proposes a concept you rejected on another project ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click "Not my taste" override.](docs/assets/enforcement.png)
 
-- **Cross-project Philosophy Ledger.** Reject something with a reason and the
-  stance is remembered — across every project, at
-  `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo sees your
-  ledger); writes are **opt-in** per project (one prompt at `init`, default
-  off), so a dependency in one project can't poison the others. Portable via
-  `deeppairing philosophy export | import --merge`.
 - **You're not silently re-proposed past.** In the project where you rejected a
   concept, re-proposing it is **stopped**: the `present_*` tool refuses
   (`REJECTED_APPROACH_BLOCKED`) and a **PreToolUse hook** catches a *direct*
@@ -128,6 +124,12 @@ the collaboration, not the headline:
   are one click away:** "Not my taste" in the UI scopes the stance down and
   records the correction. (Blocks from a committed **team rule** point you to
   `.deeppairing/team.json` instead.)
+- **The ledger underneath.** Reject something with a reason and the
+  stance is remembered — across every project, at
+  `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo sees your
+  ledger); writes are **opt-in** per project (one prompt at `init`, default
+  off), so a dependency in one project can't poison the others. Portable via
+  `deeppairing philosophy export | import --merge`.
 - **Three-layer memory, never merged.** Filesystem-sensed guardrails
   (migrations, CI), committable team conventions, and personal philosophy are
   surfaced to the agent separately.

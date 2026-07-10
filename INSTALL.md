@@ -90,8 +90,8 @@ Either way you get the tools, the companion UI, and an always-on first-call
 protocol preamble. Then just work normally — *"Let's analyze the auth module"* —
 and Claude routes findings, decisions, plans, and changes through the companion
 UI with structured evidence. You comment, pick options, ask "why", and request
-revisions; every rejection (if you've opted into publishing) joins your
-cross-project Philosophy Ledger.
+revisions; every rejection becomes a hard gate in this project — and (if you've
+opted into publishing) an advisory flag on your other projects.
 
 If something misbehaves, [docs/troubleshooting.md](docs/troubleshooting.md) is
 keyed on the actual error strings, and `deeppairing doctor` diagnoses common

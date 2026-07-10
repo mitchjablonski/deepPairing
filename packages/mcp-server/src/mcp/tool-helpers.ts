@@ -1,12 +1,12 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
 import type { TeamPreference } from "@deeppairing/shared";
-import { getGlobalStore } from "../store/global-store.js";
 import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
 } from "./elicit.js";
-import { runPreflight, meaningfulTokens, type PreflightTracePartial } from "./preflight-validator.js";
+import { runPreflight, type PreflightTracePartial } from "./preflight-validator.js";
+import { getAdvisoryRecall, tokenSetKey } from "./advisory-recall.js";
 
 type BroadcastFn = (event: any) => void;
 
@@ -107,26 +107,21 @@ export async function preflightRejectedApproaches(
   // AA7b — typed optional method on IStore.
   const teamPrefs: TeamPreference[] = (await store.getTeamPreferences?.()) ?? [];
 
-  // Phase-1 (C, advisory-first) — surface the GLOBAL philosophy ledger as an
+  // Phase-1 (C, advisory-first) — surface cross-project 'avoid' stances as an
   // ADVISORY overlay, NOT a hard block. A stance rejected in project A must
   // never refuse an artifact in project B; it only NUDGES ("you avoided this in
   // <project> — still want it here?"). Local session/team rejections remain the
-  // only hard-block authority. This path is async/occasional so a live global
-  // read is fine. Reads are unfiltered by the publish opt-in (III8 gates WRITES
-  // only). Fail-open: a ledger read error must never break the tool.
+  // only hard-block authority.
+  //
+  // #143 step 3 — the recall itself lives behind the AdvisoryRecall adapter
+  // (advisory-recall.ts); today's only provider reads the global philosophy
+  // ledger. Fail-open is part of the adapter contract: a recall error must
+  // never break the tool — without the advisory overlay the gate still
+  // enforces session + team.
   //
   // Finding 2/3 — dedupe against BOTH local rejections AND local
-  // approvals/overrides (an approved/retired concept must not even nudge). The
-  // dedup key MUST be the SAME basis the matcher (isCrossProjectAdvisoryHit)
-  // uses — a sorted STEMMED meaningful-token set — not normalizeConceptKey.
-  // normalizeConceptKey is hyphen/punct-sensitive, so approved
-  // "pay-per-request hosting" would NOT dedup against global-avoid
-  // "pay per request hosting" and the concept would still nudge. Token-set
-  // equality collapses that variance the same way the matcher does.
-  const tokenSetKey = (s: string): string => {
-    const toks = meaningfulTokens(s);
-    return toks.length ? [...toks].sort().join(" ") : "";
-  };
+  // approvals/overrides (an approved/retired concept must not even nudge),
+  // keyed on tokenSetKey (the matcher's own basis; see advisory-recall.ts).
   const localKeys = new Set<string>();
   for (const r of memory.rejectedApproaches) {
     const k = tokenSetKey(r.concept ?? r.description);
@@ -136,25 +131,9 @@ export async function preflightRejectedApproaches(
     const k = tokenSetKey(a);
     if (k) localKeys.add(k);
   }
-  const globalAdvisoryConcepts: Array<{ concept: string; project?: string; reason?: string }> = [];
-  try {
-    for (const entry of getGlobalStore().query({ stance: "avoid", limit: 200 })) {
-      const concept = entry.concept?.trim();
-      if (!concept) continue;
-      // Skip anything this project has already rejected (hard-blocks locally) or
-      // approved/overridden (deliberately allowed here) — no redundant nudge.
-      const k = tokenSetKey(concept);
-      if (k && localKeys.has(k)) continue;
-      const nonManual = [...entry.instances].reverse().find((i) => i.project && i.project !== "manual");
-      globalAdvisoryConcepts.push({
-        concept,
-        project: nonManual?.project,
-        reason: nonManual?.reason,
-      });
-    }
-  } catch {
-    // Non-fatal — without the advisory overlay the gate still enforces session + team.
-  }
+  const globalAdvisoryConcepts = getAdvisoryRecall().conceptsFor({
+    localConceptKeys: localKeys,
+  });
 
   const result = runPreflight({
     toolName,
