@@ -7,6 +7,7 @@ import path from "node:path";
 import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore } from "../store/file-store.js";
+import type { LiveDecisionSource } from "../store/session-scan.js";
 import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore, isSeededEntry } from "../store/global-store.js";
@@ -149,6 +150,15 @@ export function createHttpRoutes(
    * thread the token; the route gate is a no-op when undefined.
    */
   authToken?: string,
+  /**
+   * #151 — the daemon's currently-registered LIVE session stores, snapshotted
+   * per call, so GET /api/decisions can source those sessions' decisions from
+   * memory instead of the debounce-flush-lagged decisions.json (a decision
+   * resolved moments ago was missing from the project-wide view for ~2-3s).
+   * Optional: when absent (standalone/test fixtures) the route degrades to
+   * the pure disk scan — exactly the pre-#151 behavior.
+   */
+  getLiveDecisionSources?: () => LiveDecisionSource[],
 ) {
   const getStore: StoreGetter = typeof storeOrGetter === "function"
     ? storeOrGetter as StoreGetter
@@ -1328,12 +1338,23 @@ export function createHttpRoutes(
   // the empty shape when no projectRoot (test fixtures / bad cwd).
   app.get("/api/decisions", (c) => {
     if (!projectRoot) return c.json({ decisions: [], failedSessions: [] });
+    // #151 — merge live over disk. Sessions with a registered in-memory store
+    // are sourced from memory (a just-resolved decision must not vanish for
+    // the debounced-flush window); dead sessions still come from the disk
+    // scan. A live-snapshot failure degrades to disk-only — strictly the
+    // pre-#151 behavior, never a blank view.
+    let live: LiveDecisionSource[] = [];
+    try {
+      live = getLiveDecisionSources?.() ?? [];
+    } catch (err) {
+      log(`[decisions] live-session snapshot failed, falling back to disk: ${err}`);
+    }
     // Degrade, don't 500 — same guard the ledger reads use (see /api/philosophy,
     // /api/philosophy/digest, /api/ledger/digest above). listAllDecisions is
     // hardened against per-session corruption, but a future disk-shape bug must
     // never take the whole view down with an opaque 500.
     try {
-      return c.json(FileStore.listAllDecisions(projectRoot));
+      return c.json(FileStore.listAllDecisions(projectRoot, live));
     } catch (err) {
       log(`[decisions] read failed, returning empty: ${err}`);
       return c.json({ decisions: [], failedSessions: [] });

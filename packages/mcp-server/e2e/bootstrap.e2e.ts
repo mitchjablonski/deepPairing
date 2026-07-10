@@ -42,7 +42,10 @@ test.beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-e2e-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-e2e-"));
   proc = spawn(process.execPath, [daemonJs], {
-    env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot },
+    // #152 — DEEPPAIRING_NO_OPEN: this is a scripted daemon start; without it
+    // the daemon xdg-opens a real browser on every CI/local suite run (and on
+    // WSL2 leaves Chrome crashpad orphans behind).
+    env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
     stdio: "ignore",
   });
 

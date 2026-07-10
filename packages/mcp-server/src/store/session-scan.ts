@@ -9,7 +9,9 @@ import type { DecisionRecord } from "./store-interface.js";
 /**
  * Cross-session READ helpers — every function here walks
  * `.deeppairing/sessions/` on disk and never touches a live FileStore
- * instance. Extracted from file-store.ts; the FileStore statics
+ * instance. (#151: listAllDecisions additionally accepts plain-data
+ * SNAPSHOTS of live sessions from the daemon — still no store coupling.)
+ * Extracted from file-store.ts; the FileStore statics
  * (listSessions/searchAll/findPastPredictions/addRetrospective) delegate
  * here so existing call sites stay byte-compatible.
  */
@@ -357,6 +359,13 @@ export interface ProjectDecision {
    *  as "date unknown" and sorts it last rather than fabricating a position. */
   createdAt?: string;
   resolvedAt?: string;
+  /**
+   * #153 (S5) — true when the decision is UNRESOLVED but its origin artifact
+   * was superseded: the artifact is closed, so the decision can never resolve.
+   * The view renders "Superseded (never resolved)" instead of a permanent
+   * "Awaiting your decision" pill. Optional for back-compat (absent = open).
+   */
+  closedUnresolved?: boolean;
 }
 
 export interface ProjectDecisionsResult {
@@ -369,8 +378,32 @@ export interface ProjectDecisionsResult {
    * worse than none. Individual malformed ELEMENTS inside a parseable array
    * are salvaged+dropped by salvageArray (logged, not fatal); this list is
    * the whole-file-unreadable case.
+   *
+   * #153 — `kind` distinguishes the two honest-partial cases so the UI can
+   * word its banner truthfully. Optional for back-compat:
+   *   - "unreadable" (or absent): the live decisions.json can't be read NOW.
+   *   - "recovered": the live file parses, but a `decisions.json.corrupt`
+   *     sidecar shows earlier decisions were lost to corruption and the file
+   *     was later rewritten (FileStore's fall-back-and-rewrite on session
+   *     re-open). Without this, a daemon restart silently closed the honest-
+   *     partial window: the view reported `failedSessions: []` while the
+   *     pre-corruption decisions had NO surviving surface.
    */
-  failedSessions: Array<{ sessionId: string; reason: string }>;
+  failedSessions: Array<{ sessionId: string; reason: string; kind?: "unreadable" | "recovered" }>;
+}
+
+/**
+ * #151 — one live session's in-memory state, supplied by the daemon so the
+ * project-wide decisions view can source a session's decisions from the live
+ * FileStore instead of its (debounce-flush-lagged) decisions.json. A decision
+ * recorded/resolved moments ago lives only in memory for ~100ms-worth of
+ * debounce (observed 2-3s end-to-end); reading disk alone made a just-resolved
+ * decision vanish from the view the user opened to confirm it.
+ */
+export interface LiveDecisionSource {
+  sessionId: string;
+  decisions: DecisionRecord[];
+  artifacts: Artifact[];
 }
 
 /**
@@ -395,23 +428,86 @@ function resolveLiveArtifact(artifacts: Artifact[], id: string): Artifact | unde
 /**
  * #138 — every decision made across EVERY session of a project, flattened and
  * newest-first, for the project-wide decisions view. Walks
- * `.deeppairing/sessions/&#42;/decisions.json` on disk (never touches a live
- * FileStore), salvaging each file: a single corrupt session is reported in
- * `failedSessions` and its `.corrupt` sidecar is written — it NEVER fails the
- * whole read or silently truncates the list.
+ * `.deeppairing/sessions/&#42;/decisions.json` on disk, salvaging each file: a
+ * single corrupt session is reported in `failedSessions` and its `.corrupt`
+ * sidecar is written — it NEVER fails the whole read or silently truncates
+ * the list.
+ *
+ * #151 — `liveSessions` (optional) carries the daemon's currently-registered
+ * in-memory stores. A session present there is sourced from MEMORY and its
+ * on-disk decisions.json is skipped entirely — live wins by sessionId, so the
+ * live/disk seam can never produce duplicate rows. Sessions with no live
+ * store (dead sessions on disk) still come from the disk scan. This closes
+ * the flush-lag window where a just-resolved decision was missing from the
+ * view until the debounced flush landed. The fix is deliberately NOT a
+ * force-flush: a GET that writes is worse than a GET that merges.
  */
-export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
+export function listAllDecisions(
+  projectRoot: string,
+  liveSessions: LiveDecisionSource[] = [],
+): ProjectDecisionsResult {
   const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
-  if (!fs.existsSync(sessionsDir)) return { decisions: [], failedSessions: [] };
-
   const decisions: ProjectDecision[] = [];
-  const failedSessions: Array<{ sessionId: string; reason: string }> = [];
+  const failedSessions: ProjectDecisionsResult["failedSessions"] = [];
 
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-  } catch {
-    return { decisions: [], failedSessions: [] };
+  // Shared per-session shaping — identical for live (memory) and disk sources,
+  // so the two paths can't drift.
+  const pushSession = (sessionId: string, decRecords: DecisionRecord[], artifacts: Artifact[]): void => {
+    const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const sessionTitle = sorted[0]?.title ?? sessionId;
+
+    for (const dec of decRecords) {
+      const liveArtifact = resolveLiveArtifact(artifacts, dec.artifactId);
+      const options = Array.isArray(dec.options) ? dec.options : [];
+      const chosen = dec.response
+        ? options.find((o) => o?.id === dec.response!.optionId)
+        : undefined;
+      // #153 (S5) — an UNRESOLVED decision whose origin artifact was
+      // superseded can never resolve (the artifact is closed); flag it so the
+      // view doesn't render a permanent "Awaiting your decision" pill.
+      const origin = artifacts.find((a) => a.id === dec.artifactId);
+      const closedUnresolved = !dec.response && origin?.status === "superseded";
+      decisions.push({
+        decisionId: dec.decisionId,
+        sessionId,
+        sessionTitle,
+        artifactId: dec.artifactId,
+        artifactTitle: liveArtifact?.title ?? dec.context ?? dec.artifactId,
+        artifactMissing: !liveArtifact,
+        context: dec.context ?? "",
+        stakes: dec.stakes,
+        optionCount: options.length,
+        resolved: !!dec.response,
+        chosenOptionId: dec.response?.optionId,
+        // Prefer the option's title; fall back to the raw optionId so a
+        // resolved decision whose option list drifted still shows a choice.
+        chosenOptionTitle: dec.response
+          ? chosen?.title ?? dec.response.optionId
+          : undefined,
+        reasoning: dec.response?.reasoning,
+        confidence: dec.response?.confidence,
+        createdAt: dec.createdAt,
+        resolvedAt: dec.resolvedAt,
+        ...(closedUnresolved ? { closedUnresolved: true } : {}),
+      });
+    }
+  };
+
+  const liveById = new Map<string, LiveDecisionSource>();
+  for (const src of liveSessions) liveById.set(src.sessionId, src);
+  const consumedLive = new Set<string>();
+  // #153 — sessions whose dir holds a decisions.json.corrupt sidecar (from an
+  // earlier corruption, whether this scan wrote it or FileStore's re-open
+  // recovery did). Collected during the walk, reported (deduped) after it.
+  const sidecarSessions: string[] = [];
+
+  let entries: fs.Dirent[] = [];
+  if (fs.existsSync(sessionsDir)) {
+    try {
+      entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
   }
 
   for (const entry of entries) {
@@ -419,6 +515,24 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
     const sessionId = entry.name;
     const sessionDir = path.join(sessionsDir, sessionId);
     const decFile = path.join(sessionDir, "decisions.json");
+    // #153 — sidecar check runs for EVERY session dir, live or dead, even
+    // when the live decisions.json is absent or parses cleanly: after a
+    // session re-open, FileStore's fall-back-and-rewrite leaves a perfectly
+    // valid file whose pre-corruption decisions survive ONLY in the sidecar.
+    try {
+      if (fs.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
+    } catch { /* best-effort */ }
+
+    // #151 — live wins by sessionId: source this session's decisions from the
+    // registered in-memory store, never ALSO from its (possibly-lagged) disk
+    // file — that seam is where duplicate rows would come from.
+    const liveSrc = liveById.get(sessionId);
+    if (liveSrc) {
+      consumedLive.add(sessionId);
+      pushSession(sessionId, liveSrc.decisions, liveSrc.artifacts);
+      continue;
+    }
+
     // No decisions.json → the session simply never recorded a decision. That
     // is NOT a failure; only a file that exists-but-won't-parse is.
     if (!fs.existsSync(decFile)) continue;
@@ -431,7 +545,7 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
       // exactly like FileStore.loadJsonFile, then REPORT the session rather than
       // dropping it silently — the single most important requirement of this view.
       try { fs.copyFileSync(decFile, decFile + ".corrupt"); } catch { /* best-effort */ }
-      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json" });
+      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json", kind: "unreadable" });
       continue;
     }
     // Valid JSON but not an array — the whole file is unusable AS decisions.
@@ -442,6 +556,7 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
       failedSessions.push({
         sessionId,
         reason: `decisions.json is not an array (got ${raw === null ? "null" : typeof raw})`,
+        kind: "unreadable",
       });
       continue;
     }
@@ -456,6 +571,7 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
       failedSessions.push({
         sessionId,
         reason: `all ${raw.length} decision record(s) in decisions.json were malformed`,
+        kind: "unreadable",
       });
       continue;
     }
@@ -471,38 +587,26 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
           `${sessionId}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
       } catch { /* leave artifacts empty */ }
     }
-    const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const sessionTitle = sorted[0]?.title ?? sessionId;
+    pushSession(sessionId, decRecords, artifacts);
+  }
 
-    for (const dec of decRecords) {
-      const live = resolveLiveArtifact(artifacts, dec.artifactId);
-      const options = Array.isArray(dec.options) ? dec.options : [];
-      const chosen = dec.response
-        ? options.find((o) => o?.id === dec.response!.optionId)
-        : undefined;
-      decisions.push({
-        decisionId: dec.decisionId,
-        sessionId,
-        sessionTitle,
-        artifactId: dec.artifactId,
-        artifactTitle: live?.title ?? dec.context ?? dec.artifactId,
-        artifactMissing: !live,
-        context: dec.context ?? "",
-        stakes: dec.stakes,
-        optionCount: options.length,
-        resolved: !!dec.response,
-        chosenOptionId: dec.response?.optionId,
-        // Prefer the option's title; fall back to the raw optionId so a
-        // resolved decision whose option list drifted still shows a choice.
-        chosenOptionTitle: dec.response
-          ? chosen?.title ?? dec.response.optionId
-          : undefined,
-        reasoning: dec.response?.reasoning,
-        confidence: dec.response?.confidence,
-        createdAt: dec.createdAt,
-        resolvedAt: dec.resolvedAt,
-      });
-    }
+  // #151 — a live session so fresh its directory hasn't been created (or was
+  // removed) still appears: memory is the only truth it has.
+  for (const src of liveSessions) {
+    if (consumedLive.has(src.sessionId)) continue;
+    pushSession(src.sessionId, src.decisions, src.artifacts);
+  }
+
+  // #153 — surface recovered-from-corruption sessions where the user already
+  // looks. Dedupe: a session already reported for a LIVE parse failure (this
+  // scan writes the same sidecar it would then find) gets one row, not two.
+  for (const sessionId of sidecarSessions) {
+    if (failedSessions.some((f) => f.sessionId === sessionId)) continue;
+    failedSessions.push({
+      sessionId,
+      reason: "earlier decisions were recovered from corruption; the pre-corruption file is preserved at decisions.json.corrupt",
+      kind: "recovered",
+    });
   }
 
   // Newest-first. The comparator MUST be total: salvageArray only guarantees a

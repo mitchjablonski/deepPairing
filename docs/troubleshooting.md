@@ -113,6 +113,13 @@ loaded deepPairing's MCP server.
   for the next free slot if that one is busy. If it can't bind, doctor will
   tell you what's holding the ports.
 
+## A browser window opens every time the daemon starts
+
+That's the intended interactive behavior: on a fresh start the daemon opens
+the companion UI once. For scripted, CI, or agent-driven starts, set
+`DEEPPAIRING_NO_OPEN=1` in the daemon's environment to suppress it (the
+older `DEEPPAIRING_OPEN_BROWSER=0` opt-out also still works).
+
 ## Still stuck?
 
 Open an issue with:

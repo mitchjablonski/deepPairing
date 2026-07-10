@@ -126,4 +126,52 @@ describe("ProjectDecisionsModal", () => {
     render(<ProjectDecisionsModal onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText(/couldn't load decisions/i)).toBeInTheDocument());
   });
+
+  // #153 (S5) — a decision whose artifact was superseded while unresolved can
+  // never resolve; a permanent "Awaiting your decision" pill would lie.
+  it("renders 'Superseded (never resolved)' instead of the awaiting pill for closedUnresolved", async () => {
+    const stuck = { ...UNRESOLVED, decisionId: "d4", context: "Superseded before anyone chose", closedUnresolved: true };
+    stubDecisions({ decisions: [stuck], failedSessions: [] });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Superseded before anyone chose")).toBeInTheDocument());
+    expect(screen.getByText(/superseded \(never resolved\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting your decision/i)).not.toBeInTheDocument();
+  });
+
+  // #153 — the recovered-corruption case keeps the honest-partial banner
+  // truthful after a session re-open rewrote a fresh valid decisions.json.
+  it("words the partial banner for a recovered-from-corruption session and points at the sidecar", async () => {
+    stubDecisions({
+      decisions: [RESOLVED],
+      failedSessions: [{
+        sessionId: "s_recovered",
+        reason: "earlier decisions were recovered from corruption; the pre-corruption file is preserved at decisions.json.corrupt",
+        kind: "recovered",
+      }],
+    });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/couldn't be loaded/i)).toBeInTheDocument());
+    expect(screen.getByText(/previously recovered from a corrupted file/i)).toBeInTheDocument();
+    expect(screen.getByText(/s_recovered/)).toBeInTheDocument();
+    expect(screen.getByText(/decisions\.json\.corrupt/)).toBeInTheDocument();
+    // The recovered wording replaces (not joins) the unreadable-NOW sentence.
+    expect(screen.queryByText(/unreadable/i)).not.toBeInTheDocument();
+    // The healthy decision still renders — the list is partial, not blank.
+    expect(screen.getByText("Which cache should we use?")).toBeInTheDocument();
+  });
+
+  it("can report an unreadable session AND a recovered session in the same banner", async () => {
+    stubDecisions({
+      decisions: [],
+      failedSessions: [
+        { sessionId: "s_bad", reason: "bad json", kind: "unreadable" },
+        { sessionId: "s_recovered", reason: "recovered", kind: "recovered" },
+      ],
+    });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/couldn't be loaded/i)).toBeInTheDocument());
+    expect(screen.getByText(/s_bad/)).toBeInTheDocument();
+    expect(screen.getByText(/s_recovered/)).toBeInTheDocument();
+    expect(screen.getByText(/previously recovered/i)).toBeInTheDocument();
+  });
 });
