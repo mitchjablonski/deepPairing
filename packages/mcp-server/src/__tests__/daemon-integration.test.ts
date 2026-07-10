@@ -1275,3 +1275,32 @@ describe("C2 — decisions/acknowledge broadcasts the consumption moment", () =>
     expect(broadcasts.filter((b) => b.event?.type === "decisions_acknowledged")).toHaveLength(0);
   });
 });
+
+describe("NIT — acknowledge routes return 400 (not 500) on a malformed body", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const raw = (body: string) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body });
+
+  const ackRoutes = [
+    "artifacts/status-changes/acknowledge",
+    "comments/acknowledge",
+    "decisions/acknowledge",
+  ];
+
+  for (const route of ackRoutes) {
+    it(`${route}: non-JSON body → 400, null body → 400, valid { ids } → 200`, async () => {
+      await app.request(`/api/internal/sessions/s1/register`, j({}));
+
+      // Non-JSON body — pre-fix c.req.json() threw → 500.
+      const bad = await app.request(`/api/internal/sessions/s1/${route}`, raw("not json at all"));
+      expect(bad.status).toBe(400);
+
+      // A literal `null` body parses but isn't an object.
+      const nullBody = await app.request(`/api/internal/sessions/s1/${route}`, raw("null"));
+      expect(nullBody.status).toBe(400);
+
+      // A well-formed body still works.
+      const ok = await app.request(`/api/internal/sessions/s1/${route}`, j({ ids: [] }));
+      expect(ok.status).toBe(200);
+    });
+  }
+});
