@@ -3,7 +3,7 @@ import { timeAgo } from "../lib/time";
 import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
-import { useReplayStore } from "../stores/replay";
+import { enterSessionReplay } from "../lib/session-replay";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { WaitingForClaude } from "./WaitingForClaude";
 import { demoArtifacts, demoComments } from "@deeppairing/shared/__fixtures__/demo-session";
@@ -69,43 +69,14 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
   const loadSession = async (sessionId: string, focusArtifactId?: string) => {
     setLoadingSession(sessionId);
     try {
-      const res = await apiGet(`${apiBase()}/api/sessions/${sessionId}`);
-      const state = await res.json();
-
-      reset();
-      for (const artifact of state.artifacts ?? []) {
-        addArtifact(artifact);
-      }
-      for (const comment of state.comments ?? []) {
-        addComment(comment);
-      }
-      // C2 review — reset() clears acknowledgedDecisions, so without this
-      // re-seed every REPLAYED decision showed a permanently-false
-      // "Delivered — Claude will pick it up" for resolutions the agent
-      // consumed long ago. Mirror the connection.ts hydration seed.
-      const ackedIds = (state.decisions ?? [])
-        .filter((d: any) => d?.acknowledged && d?.decisionId)
-        .map((d: any) => d.decisionId as string);
-      if (ackedIds.length > 0) {
-        useArtifactStore.getState().markDecisionsAcknowledged(ackedIds);
-      }
-      // Opening a past session drops us into replay mode — the scrubber
-      // above ArtifactPanel hides events after the cursor, so re-reading
-      // feels like walking through the session as it happened.
-      await useReplayStore.getState().enterReplay(sessionId, state);
-
-      // When a search result was clicked, advance the scrubber to the
-      // matched artifact's creation event so the user lands where they
-      // expected to land.
-      if (focusArtifactId) {
-        const target = (state.artifacts ?? []).find((a: any) => a.id === focusArtifactId);
-        if (target) {
-          useReplayStore.getState().setCursor(target.createdAt);
-          selectArtifact(focusArtifactId);
-        }
-      }
+      // #138 — the reset+refill+replay sequence now lives in the shared
+      // enterSessionReplay helper (the ONE cross-session routing scheme,
+      // reused by the project-wide DecisionsView). Behavior is unchanged:
+      // opening a past session drops into replay mode, the scrubber hides
+      // events after the cursor, and a focused artifact advances the cursor.
+      const ok = await enterSessionReplay(sessionId, focusArtifactId);
       // H1 — hosted in the modal, entering replay closes it.
-      onPicked?.();
+      if (ok) onPicked?.();
     } catch {
       // Failed to load
     } finally {

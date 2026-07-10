@@ -20,6 +20,7 @@ import { ToastLayer } from "./components/ToastLayer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LedgerDrawer } from "./components/LedgerDrawer";
 import { SessionBrowserModal } from "./components/SessionBrowserModal";
+import { ProjectDecisionsModal } from "./components/ProjectDecisionsModal";
 import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
@@ -98,6 +99,15 @@ function App() {
     const open = () => setShowSessions(true);
     window.addEventListener("dp:open-sessions", open);
     return () => window.removeEventListener("dp:open-sessions", open);
+  }, []);
+  // #138 — project-wide decisions view. Opened from the header button and the
+  // command palette (dp:open-decisions), same overlay pattern as the sessions
+  // browser above.
+  const [showDecisions, setShowDecisions] = useState(false);
+  useEffect(() => {
+    const open = () => setShowDecisions(true);
+    window.addEventListener("dp:open-decisions", open);
+    return () => window.removeEventListener("dp:open-decisions", open);
   }, []);
   // BB6 — when a PreflightBreadcrumb concept is clicked, open the drawer
   // straight to the ledger tab and highlight the matching row. Cleared on
@@ -214,6 +224,7 @@ function App() {
         closeTaste(); // CC9 — also clears tasteOpts
         setShowConversation(false);
         setShowSessions(false);
+        setShowDecisions(false);
         // F9 (L3) — replay is a MODE, and Escape is how modes end everywhere
         // else in the app; there was no keyboard exit at all.
         // Layered (review): overlay-registered surfaces get their own Esc
@@ -425,6 +436,20 @@ function App() {
             )}
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
+          {/* #138 — project-wide decisions view: every decision across all
+              sessions, in one place. */}
+          <button
+            onClick={() => setShowDecisions(true)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            title="Decisions — every choice made across all sessions of this project"
+            aria-label="Open project decisions"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 3.5h8M2 6h8M2 8.5h5" />
+            </svg>
+            <span className="hidden min-[700px]:inline">Decisions</span>
+          </button>
+          <span className="text-2xs text-text-muted mx-1">·</span>
           <HookStatus />
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
@@ -604,6 +629,9 @@ function App() {
 
       {/* H1 — past-sessions browser (replay's front door for connected tabs). */}
       {showSessions && <SessionBrowserModal onClose={() => setShowSessions(false)} />}
+
+      {/* #138 — project-wide decisions view (read-only, all sessions). */}
+      {showDecisions && <ProjectDecisionsModal onClose={() => setShowDecisions(false)} />}
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}

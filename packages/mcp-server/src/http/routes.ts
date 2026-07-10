@@ -1311,6 +1311,19 @@ export function createHttpRoutes(
     return c.json({ sessions });
   });
 
+  // #138 — project-wide decisions view. Read-only, project-scoped (walks every
+  // session's decisions.json), newest-first, with an HONEST partial-data report
+  // (`failedSessions`) so the view never silently truncates when one session's
+  // decisions.json is corrupt. Sibling of /api/sessions and /api/search: takes
+  // no body and no session lookup, so the AA4 wrong-store threat model doesn't
+  // apply — the global X-Project-Hash middleware (registered above, before any
+  // handler) is the gate, exactly like the other project-scoped reads. Returns
+  // the empty shape when no projectRoot (test fixtures / bad cwd).
+  app.get("/api/decisions", (c) => {
+    if (!projectRoot) return c.json({ decisions: [], failedSessions: [] });
+    return c.json(FileStore.listAllDecisions(projectRoot));
+  });
+
   // Cross-session search
   app.get("/api/search", (c) => {
     if (!projectRoot) return c.json({ results: [] });
