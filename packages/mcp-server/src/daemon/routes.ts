@@ -935,6 +935,24 @@ export function createDaemonRoutes(
     return c.json({ status: "updated" });
   });
 
+  // --- Detail density (#139) — verbosity of artifact prose ---
+
+  app.get("/api/internal/sessions/:sessionId/detail-density", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ density: r.store.getDetailDensity() });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/detail-density", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { density } = parsed.body as { density: Parameters<typeof r.store.setDetailDensity>[0] };
+    r.store.setDetailDensity(density);
+    return c.json({ status: "updated" });
+  });
+
   // --- Active sessions list ---
 
   app.get("/api/internal/sessions", (c) => {

@@ -86,6 +86,7 @@ export {
   StatusUpdateBodySchema,
   RenameBodySchema,
   PreferenceBodySchema,
+  DetailDensitySchema,
   RetrospectiveBodySchema,
   PromptBodySchema,
   formatZodIssues,
@@ -94,6 +95,7 @@ export {
   type StatusUpdateBody,
   type RenameBody,
   type PreferenceBody,
+  type DetailDensity,
   type RetrospectiveBody,
   type PromptBody,
 } from "./schemas/request-bodies.js";

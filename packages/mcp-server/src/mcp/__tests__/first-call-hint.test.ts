@@ -84,3 +84,49 @@ describe("first-call hint — always-on protocol preamble", () => {
     expect(hint).toMatch(/5173/);
   });
 });
+
+/**
+ * #139 — detail density (verbosity). The setting is delivered ONCE per session
+ * through this first-call hint (never in check_feedback's per-loop payload).
+ * These pin: terse emits concrete prose-tightening guidance; rich (the default)
+ * emits NOTHING (byte-for-byte the pre-feature hint); and the FLOOR — terse may
+ * shrink prose but the guidance must NEVER tell the agent to drop Evidence,
+ * skip an artifact, or reduce the number of artifacts.
+ */
+describe("first-call hint — #139 detail density", () => {
+  it("emits terse prose-tightening guidance when detailDensity is 'terse'", async () => {
+    store.setDetailDensity("terse");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Detail density: TERSE/);
+    // The concrete instruction that IS the feature.
+    expect(hint).toMatch(/1[–-]2 sentences/);
+    expect(hint).toMatch(/[Ll]ead with the evidence/);
+  });
+
+  it("emits NO detail-density guidance in the default 'rich' mode", async () => {
+    // Default (never set) is rich; the hint must not carry the terse block.
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Detail density: TERSE/);
+    expect(hint).not.toMatch(/detail density/i);
+  });
+
+  it("emits NO detail-density guidance when explicitly set back to 'rich'", async () => {
+    store.setDetailDensity("terse");
+    store.setDetailDensity("rich");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Detail density: TERSE/);
+  });
+
+  it("FLOOR — terse guidance never tells the agent to omit Evidence or skip/reduce artifacts", async () => {
+    store.setDetailDensity("terse");
+    const hint = await buildFirstCallHint(store, 4000);
+    // The floor is stated as an explicit prohibition…
+    expect(hint).toMatch(/NEVER omit `Evidence`/);
+    expect(hint).toMatch(/Do NOT reduce the number of artifacts/);
+    expect(hint).toMatch(/do NOT skip present_options or present_code_change/);
+    // …and the guidance must NOT contain any instruction to drop the review
+    // surface. These would invert the feature into an unsafe one.
+    expect(hint).not.toMatch(/omit evidence|skip evidence|drop evidence/i);
+    expect(hint).not.toMatch(/fewer artifacts|skip (an )?artifact|reduce (the )?evidence/i);
+  });
+});

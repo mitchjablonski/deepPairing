@@ -49,6 +49,31 @@ const PROTOCOL_PREAMBLE = [
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach.",
 ].join("\n");
 
+// #139 — detail-density (verbosity) guidance. This is a STANDING preference,
+// so it's delivered here in the once-per-session first-call hint — NOT in
+// check_feedback's per-loop structuredContent (that payload is deliberately
+// byte-minimal when healthy and must stay so). The two modes live side by side
+// so the contrast is legible:
+//
+// RICH (default): today's behavior — full explanatory prose. We deliberately
+// add NOTHING to the hint, so a default (rich) session's hint stays
+// byte-for-byte as before and the common path carries zero extra tokens. The
+// agent's baseline verbosity IS rich.
+const DETAIL_DENSITY_RICH_GUIDANCE = "";
+//
+// TERSE: shrink the PROSE around each artifact — never the review surface.
+// The FLOOR is load-bearing and stated explicitly here: every artifact still
+// posts, present_options still surfaces genuine tradeoffs, present_code_change
+// still precedes writes, and Evidence (filePath/lineStart/lineEnd/snippet) is
+// ALWAYS attached. Terse means less explanation AROUND the evidence, never less
+// evidence and never fewer artifacts.
+const DETAIL_DENSITY_TERSE_GUIDANCE = [
+  "\n✂️ Detail density: TERSE — the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
+  "  - Keep each finding's `detail` and `recommendation` to 1–2 sentences. Lead with the evidence; skip preamble and restatement of the task.",
+  "  - Trim option and plan descriptions to the decision-relevant essentials — pros/cons as short phrases, not paragraphs.",
+  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself.",
+].join("\n");
+
 export async function buildFirstCallHint(store: IStore, port: number): Promise<string> {
   // EE1 — three-tier ordering for assembly:
   //   1. obligationsParts: real this-turn obligations (Q4 follow-ups,
@@ -446,6 +471,19 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     }
   } catch {
     // Non-fatal.
+  }
+
+  // #139 — detail density. A direct, explicit user setting (opt-in; default
+  // "rich" adds nothing), so it rides in the UNCAPPED obligations tier: a
+  // verbosity instruction that silently lost the truncation lottery would make
+  // the feature unreliable. Rich contributes the empty string, so the default
+  // session's hint is unchanged; only an explicit "terse" appends guidance.
+  try {
+    const density = await store.getDetailDensity?.();
+    const guidance = density === "terse" ? DETAIL_DENSITY_TERSE_GUIDANCE : DETAIL_DENSITY_RICH_GUIDANCE;
+    if (guidance) obligationsParts.push(guidance);
+  } catch {
+    // Non-fatal — absent/unreadable preference falls back to rich (no guidance).
   }
 
   // EE1 — three-tier assembly:

@@ -60,9 +60,17 @@ export const RenameBodySchema = z.object({
 });
 export type RenameBody = z.infer<typeof RenameBodySchema>;
 
-// POST /api/preferences — autonomy level + future per-session prefs.
+// #139 — detail density (verbosity) is ORTHOGONAL to autonomy: autonomy
+// governs artifact COUNT + gating (auto-approve), detailDensity governs how
+// much PROSE rides inside each artifact. Optional + absent-means-"rich" so an
+// existing preferences.json with no field behaves exactly as today.
+export const DetailDensitySchema = z.enum(["rich", "terse"]);
+export type DetailDensity = z.infer<typeof DetailDensitySchema>;
+
+// POST /api/preferences — autonomy level + detail density + future per-session prefs.
 export const PreferenceBodySchema = z.object({
   autonomyLevel: z.enum(["supervised", "balanced", "autonomous"]).optional(),
+  detailDensity: DetailDensitySchema.optional(),
 });
 export type PreferenceBody = z.infer<typeof PreferenceBodySchema>;
 
