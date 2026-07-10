@@ -265,6 +265,24 @@ h1, h2, h3, h4, h5, h6 {
   --color-accent-blue-strong: #2f5fd6;
   --color-accent-blue-strong-hover: #2a56c1;
   --color-accent-blue-dim: #e8f0fe;
+  /* #150 — light-theme accent AA (the F1/#149 method, applied to the block
+     F1 missed): blue got a light-specific fg above, but red/amber/green/
+     violet/cyan kept inheriting DARK's accent fgs — tuned to sit on near-black
+     dims, hopeless on these pale washes (red 2.85, amber 2.08, green 2.31,
+     violet 2.35, cyan 1.61 on their own -dim; the axe net never saw it
+     because e2e only scanned the dark theme). Darken the FOREGROUNDS, keep
+     the washes: every rendered use of these tokens in the light theme puts
+     the accent ON a pale bg (dim pill, surface) or WHITE text on the accent
+     (solid buttons), so darker fgs improve all of them at once — white-on-
+     amber buttons go 2.24 → 6.31, white-on-green 2.54 → 5.80. All five land
+     ≥5.2 on their own -dim, matching #149's dark-theme margins so animation
+     sampling can't dip a pair under 4.5; pinned by token-contrast.test.ts
+     (light section). */
+  --color-accent-red: #bd1f2a;
+  --color-accent-amber: #835700;
+  --color-accent-green: #17752f;
+  --color-accent-violet: #6a3fe3;
+  --color-accent-cyan: #0d6f7c;
   --color-accent-green-dim: #e6f9ec;
   --color-accent-amber-dim: #fef6e0;
   --color-accent-red-dim: #fde8e8;
