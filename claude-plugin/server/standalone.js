@@ -26579,7 +26579,8 @@ var AUTONOMY_HINT_BALANCED = [
 \u{1F39A} Autonomy: BALANCED \u2014 the human set this dial, and it applies from your FIRST artifact, not just later turns. ${AUTONOMY_POLICY_LINE.balanced}`,
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs \u2014 not routine implementation choices with one reasonable answer.",
-  "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings \u2192 options \u2192 spec/plan."
+  "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings \u2192 options \u2192 spec/plan.",
+  "  - FLOOR (unchanged): present_code_change BEFORE every Write/Edit is still required \u2014 this dial only trims findings/options."
 ].join("\n");
 var AUTONOMY_HINT_AUTONOMOUS = [
   `
@@ -26588,6 +26589,9 @@ var AUTONOMY_HINT_AUTONOMOUS = [
   "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required \u2014 it is the review record.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths."
 ].join("\n");
+function autonomyHintFor(level) {
+  return level === "balanced" ? AUTONOMY_HINT_BALANCED : level === "autonomous" ? AUTONOMY_HINT_AUTONOMOUS : AUTONOMY_HINT_SUPERVISED;
+}
 async function buildFirstCallHint(store, port) {
   const obligationsParts = [];
   const policyParts = [];
@@ -26865,8 +26869,7 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const autonomy = await store.getAutonomyLevel();
-    const guidance = autonomy === "balanced" ? AUTONOMY_HINT_BALANCED : autonomy === "autonomous" ? AUTONOMY_HINT_AUTONOMOUS : AUTONOMY_HINT_SUPERVISED;
+    const guidance = autonomyHintFor(await store.getAutonomyLevel());
     if (guidance) obligationsParts.push(guidance);
   } catch {
   }
@@ -27567,14 +27570,15 @@ var NETWORK_ERROR_CODES = /* @__PURE__ */ new Set([
   "UND_ERR_SOCKET",
   "UND_ERR_CONNECT_TIMEOUT"
 ]);
-var NETWORK_ERROR_MSG = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket|network|daemon connection lost/i;
+var NETWORK_ERROR_MSG = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|EPIPE|fetch failed|\bnetwork error\b|daemon connection lost/i;
 function formatHandlerError(toolName, err, projectRoot2 = process.cwd()) {
   const e = err;
   const rawMsg = e?.message ?? String(err);
   let msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
   if (projectRoot2 && projectRoot2 !== "/" && msg.includes(projectRoot2)) {
     const withSep = projectRoot2.endsWith("/") ? projectRoot2 : `${projectRoot2}/`;
-    msg = msg.split(withSep).join("").split(projectRoot2).join(".");
+    const escaped = projectRoot2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    msg = msg.split(withSep).join("").replace(new RegExp(`${escaped}(?=['"\`\\s,;:)\\]}]|$)`, "g"), ".");
   }
   const isBodyCap = e?.code === ERROR_CODES.body_too_large || e?.status === 413 || /body exceeds|too large/i.test(msg);
   if (isBodyCap) {
@@ -27596,7 +27600,7 @@ Trim the input and retry: shorten long before/after or code snippets, split find
 
 This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been created \u2014 call check_feedback to see the current state, then retry ${toolName} if needed.` : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
 
-This looks deterministic (a handler bug or an unsupported request), not transient \u2014 retrying the identical input will fail the same way. Call check_feedback to see the current state, then adjust the input or approach before calling ${toolName} again. The artifact was NOT created.`;
+This looks deterministic (a handler bug or an unsupported request), not transient \u2014 retrying the identical input will fail the same way. The artifact may NOT have been created \u2014 call check_feedback to see the current state, then adjust the input or approach before calling ${toolName} again.`;
   return {
     content: [{ type: "text", text }],
     isError: true,

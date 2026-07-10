@@ -12,7 +12,7 @@
  * the guaranteed surface again.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { buildFirstCallHint } from "../first-call-hint.js";
+import { buildFirstCallHint, autonomyHintFor } from "../first-call-hint.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
@@ -145,9 +145,10 @@ describe("first-call hint — #139 detail density", () => {
  * artifacts), so "Light"/"Minimal" users still watched the full
  * findings→options→spec→plan ceremony before the dial ever spoke. These pin:
  * balanced/autonomous each emit their block in the first-call hint; supervised
- * (the default) emits NOTHING — sha-identical to a never-set session, #139
- * style; and the FLOOR — even autonomous never lifts present_code_change or
- * the guardrail-path escalation.
+ * (the default) emits NOTHING — the contribution is pinned as the literal
+ * empty string, plus a sha self-consistency check that an explicit set equals
+ * never-set; and the FLOOR — NEITHER balanced nor autonomous lifts
+ * present_code_change, and autonomous still defers to guardrail escalation.
  */
 describe("first-call hint — #148 autonomy dial guidance", () => {
   it("emits the balanced block iff autonomy is 'balanced'", async () => {
@@ -185,10 +186,25 @@ describe("first-call hint — #148 autonomy dial guidance", () => {
     expect(hint).toMatch(/escalate to supervised/);
   });
 
-  it("supervised (default) adds NOTHING — hint is sha-identical to a never-set session", async () => {
-    // Default store: autonomy never set (getAutonomyLevel() -> "supervised").
+  it("FLOOR — the balanced block restates present_code_change too (review: 'go straight to the work' must not read as 'Edit directly')", async () => {
+    // Review-caught asymmetry: stating the floor ONLY in the autonomous block
+    // invites the inference that balanced's skip-license is broader — i.e.
+    // that "skip findings and go straight to the work" licenses skipping the
+    // pre-write review record as well. Pin the floor in BOTH blocks.
+    store.setAutonomyLevel("balanced");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/present_code_change BEFORE every Write\/Edit is still required/);
+    expect(hint).toMatch(/this dial only trims findings\/options/);
+  });
+
+  it("supervised (default) contributes the EMPTY STRING — and an explicit set equals never-set", async () => {
+    // The actual invariant, pinned directly: supervised's contribution to the
+    // hint is zero bytes. (Deliberately NOT a recorded sha of the whole hint —
+    // that would false-fail on every legitimate preamble edit.)
+    expect(autonomyHintFor("supervised")).toBe("");
+    // Self-consistency: explicitly setting supervised produces the same hint
+    // as a never-set default store.
     const defaultHint = await buildFirstCallHint(store, 4000);
-    // Explicitly setting supervised must be byte-for-byte the same hint.
     store.setAutonomyLevel("supervised");
     const supervisedHint = await buildFirstCallHint(store, 4000);
     const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");

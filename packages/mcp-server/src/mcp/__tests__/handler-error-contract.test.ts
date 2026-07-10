@@ -138,6 +138,47 @@ describe("#147 — TOOL_EXECUTION_FAILED retryability split", () => {
     expect(text).not.toContain(projectRoot);
     expect(text).toContain("scandir '.'");
   });
+
+  it("does NOT mangle a prefix-SIBLING path (review repro: /proj vs /proj-archive)", () => {
+    // Review-caught: a bare split(projectRoot).join('.') with no boundary
+    // check rendered '/home/u/proj-archive/x' as '.-archive/x'. The bare
+    // replacement must only fire at a path boundary; the sibling path (root +
+    // non-separator suffix) survives verbatim while the true child relativizes.
+    const projectRoot = "/home/u/proj";
+    const err = new Error(
+      `EPERM: cannot link '/home/u/proj-archive/x' to '${projectRoot}/src/a.ts'`,
+    );
+    const res = formatHandlerError("present_plan", err, projectRoot);
+    const text = res.content[0]!.text;
+    expect(text).toContain("/home/u/proj-archive/x"); // sibling untouched
+    expect(text).not.toContain(".-archive");          // the mangled form
+    expect(text).toContain("'src/a.ts'");             // the child relativized
+    expect(text).not.toContain(`${projectRoot}/src`); // and the root gone
+  });
+
+  it("a deterministic TypeError merely MENTIONING 'socket' is NOT retryable (no loose classifier terms)", () => {
+    // Review-caught: bare `socket|network` regex terms classified
+    // `TypeError: Cannot read properties of undefined (reading 'socket')` —
+    // a deterministic handler bug — as a transient network error.
+    let err: unknown;
+    try {
+      (undefined as unknown as { socket: object }).socket.toString();
+    } catch (thrown) {
+      err = thrown; // real TypeError: "... (reading 'socket')"
+    }
+    const res = formatHandlerError("present_findings", err);
+    expect(res._meta?.code).toBe(TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED);
+    expect(res._meta?.retryable).toBe(false);
+    // While the REAL network shapes stay retryable: undici's fetch wrapper…
+    expect(formatHandlerError("recall", new TypeError("fetch failed"))._meta?.retryable).toBe(true);
+    // …and DaemonClient's untagged dead-daemon rethrow (client.ts request()).
+    expect(
+      formatHandlerError(
+        "recall",
+        new Error("daemon connection lost (likely after host sleep). Reconnect failed — run `npx deeppairing doctor` to diagnose, or restart Claude Code."),
+      )._meta?.retryable,
+    ).toBe(true);
+  });
 });
 
 describe("H1-6 — the dispatch wrapper returns isError, not a protocol error", () => {

@@ -99,10 +99,17 @@ const NETWORK_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
 ]);
 
-/** #147 — same signal when it only survives in the message (fetch wraps the
- *  cause; DaemonClient's connection-lost throw is a plain Error). */
+/** #147 — same signal when it only survives in the message. Every term is a
+ *  SPECIFIC throw shape this process can actually see: the errno codes (Node
+ *  stringifies them into connection-failure messages), undici's
+ *  `TypeError: fetch failed`, a word-bounded "network error", and
+ *  DaemonClient's dead-daemon rethrow ("daemon connection lost" — a plain
+ *  untagged Error, client.ts request()). Deliberately NO bare
+ *  `socket`/`network` terms: a deterministic `TypeError: Cannot read
+ *  properties of undefined (reading 'socket')` must NOT classify as
+ *  transient (pinned by test). */
 const NETWORK_ERROR_MSG =
-  /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket|network|daemon connection lost/i;
+  /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|EPIPE|fetch failed|\bnetwork error\b|daemon connection lost/i;
 
 /**
  * H1-6 — turn an UNEXPECTED handler throw into a clean isError tool result,
@@ -141,10 +148,19 @@ export function formatHandlerError(
   let msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
   // #147 — relativize the project root out of the message (in-process
   // FileStore fs errors carry the user's absolute project path). Trailing-
-  // separator occurrences become relative paths; a bare occurrence becomes ".".
+  // separator occurrences become relative paths; a bare occurrence becomes
+  // "." — but ONLY at a path boundary: a review-caught repro showed root
+  // `/home/u/proj` mangling a SIBLING path `/home/u/proj-archive/x` into
+  // `.-archive/x`. The bare replacement therefore requires the next char to
+  // be a quote / whitespace / punctuation-after-path (or end-of-string); the
+  // separator case is already consumed by the withSep split above it.
   if (projectRoot && projectRoot !== "/" && msg.includes(projectRoot)) {
     const withSep = projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`;
-    msg = msg.split(withSep).join("").split(projectRoot).join(".");
+    const escaped = projectRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    msg = msg
+      .split(withSep)
+      .join("")
+      .replace(new RegExp(`${escaped}(?=['"\`\\s,;:)\\]}]|$)`, "g"), ".");
   }
 
   const isBodyCap =
@@ -182,8 +198,8 @@ export function formatHandlerError(
       `created — call check_feedback to see the current state, then retry ${toolName} if needed.`
     : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
       `This looks deterministic (a handler bug or an unsupported request), not transient — retrying the ` +
-      `identical input will fail the same way. Call check_feedback to see the current state, then adjust ` +
-      `the input or approach before calling ${toolName} again. The artifact was NOT created.`;
+      `identical input will fail the same way. The artifact may NOT have been created — call check_feedback ` +
+      `to see the current state, then adjust the input or approach before calling ${toolName} again.`;
   return {
     content: [{ type: "text", text }],
     isError: true as const,

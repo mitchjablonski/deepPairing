@@ -1,6 +1,6 @@
 import type { IStore } from "../store/store-interface.js";
 import { getGlobalStore } from "../store/global-store.js";
-import { AUTONOMY_POLICY_LINE } from "./autonomy-policy.js";
+import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 
 /**
  * X4 — first-call hint builder, lifted out of server.ts so the CallTool
@@ -85,19 +85,24 @@ const DETAIL_DENSITY_TERSE_GUIDANCE = [
 // it. Injecting here lets the dial shape the very first artifact.
 //
 // SUPERVISED (default): contributes the empty string — the preamble already
-// prescribes the full ceremony, so a default session's hint stays
-// byte-for-byte identical to pre-#148 (pinned by a sha test). Deliberate; see
-// autonomy-policy.ts.
+// prescribes the full ceremony, so a default session's hint stays identical
+// to pre-#148. The test pins this invariant DIRECTLY (autonomyHintFor
+// ("supervised") === "") rather than via a recorded sha, so legitimate
+// preamble edits don't false-fail. Deliberate; see autonomy-policy.ts.
 const AUTONOMY_HINT_SUPERVISED = "";
 //
 // BALANCED: the opening ceremony scales with the task. Leads with the exact
 // AUTONOMY_POLICY_LINE check_feedback repeats per poll, so the two surfaces
-// cannot contradict each other.
+// cannot contradict each other. The FLOOR is restated here too — "go straight
+// to the work" would otherwise read, for exactly the simple-task class it
+// licenses, as "Edit directly"; and stating the floor ONLY in the autonomous
+// block invites the inference that balanced's skip-license is broader.
 const AUTONOMY_HINT_BALANCED = [
   `\n🎚 Autonomy: BALANCED — the human set this dial, and it applies from your FIRST artifact, not just later turns. ${AUTONOMY_POLICY_LINE.balanced}`,
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs — not routine implementation choices with one reasonable answer.",
   "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings → options → spec/plan.",
+  "  - FLOOR (unchanged): present_code_change BEFORE every Write/Edit is still required — this dial only trims findings/options.",
 ].join("\n");
 //
 // AUTONOMOUS: bias to motion — but the FLOOR is stated explicitly and is
@@ -110,6 +115,19 @@ const AUTONOMY_HINT_AUTONOMOUS = [
   "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required — it is the review record.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths.",
 ].join("\n");
+
+/**
+ * #148 — the autonomy dial's contribution to the first-call hint, exported so
+ * the test can pin the ACTUAL invariant (supervised contributes the empty
+ * string) directly instead of via sha self-comparison of the whole hint.
+ */
+export function autonomyHintFor(level: AutonomyLevel): string {
+  return level === "balanced"
+    ? AUTONOMY_HINT_BALANCED
+    : level === "autonomous"
+      ? AUTONOMY_HINT_AUTONOMOUS
+      : AUTONOMY_HINT_SUPERVISED;
+}
 
 export async function buildFirstCallHint(store: IStore, port: number): Promise<string> {
   // EE1 — three-tier ordering for assembly:
@@ -535,13 +553,7 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // above and is never weakened by this — the autonomous block explicitly
   // defers to it.
   try {
-    const autonomy = await store.getAutonomyLevel();
-    const guidance =
-      autonomy === "balanced"
-        ? AUTONOMY_HINT_BALANCED
-        : autonomy === "autonomous"
-          ? AUTONOMY_HINT_AUTONOMOUS
-          : AUTONOMY_HINT_SUPERVISED;
+    const guidance = autonomyHintFor(await store.getAutonomyLevel());
     if (guidance) obligationsParts.push(guidance);
   } catch {
     // Non-fatal — absent/unreadable preference falls back to supervised (no guidance).
