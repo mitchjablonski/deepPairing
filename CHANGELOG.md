@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.1.10 — 2026-07-10
+
+Region-comment ergonomics, shaped by two rounds of live field testing.
+No breaking changes.
+
+### Fixed
+- **The diagram's drag-selection area is now visible — and all of it works.**
+  The diagram sits in a bounded well (its own background, border, and padding)
+  with a crosshair cursor, so you can see exactly where region selection
+  starts and ends, in both themes. And the entire well is the capture surface:
+  a centered diagram's side gutters used to look selectable but were dead
+  ("I can't select left of the login form") — a drag starting there now works,
+  clamped to the diagram's edge.
+- **Overshooting the diagram no longer cuts your selection short.** The old
+  drag handling force-completed the selection the instant your pointer crossed
+  the (previously invisible) boundary — no mouse-up, composer opens with a
+  partial rectangle. The drag is now pointer-captured: start inside the
+  diagram, move anywhere on the page, and the selection completes where you
+  release, clamped to the diagram.
+
 ## v0.1.9 — 2026-07-10
 
 Fixes from a full release-verification pass — the v0.1.7→v0.1.8 update path was
