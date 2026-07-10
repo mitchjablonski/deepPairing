@@ -7132,11 +7132,21 @@ var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
   INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
   /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
-  REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED"
+  REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
+  /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
+   *  should trim/split the input and retry. */
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
+  /** H1-6 — a tool handler threw (e.g. daemon down/restarting). Usually
+   *  transient; the agent can re-check state and retry. Distinct from a clean
+   *  validation refusal — this is an unexpected error mapped to a clean
+   *  isError result instead of a raw JSON-RPC protocol error. */
+  TOOL_EXECUTION_FAILED: "TOOL_EXECUTION_FAILED"
 };
 var TOOL_ERROR_RETRYABLE = {
   [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
-  [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false
+  [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
+  [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
+  [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
 };
 
 // src/store/file-store.ts
@@ -7196,6 +7206,32 @@ function writeStringAtomic(filePath, data) {
     }
     throw err;
   }
+}
+
+// src/store/salvage.ts
+var salvageLogged = /* @__PURE__ */ new Set();
+function salvageLog(label, message) {
+  if (salvageLogged.has(label)) return;
+  salvageLogged.add(label);
+  console.error(`[deepPairing] ${label}: ${message}`);
+}
+function salvageArray(label, raw2, idField) {
+  if (!Array.isArray(raw2)) {
+    if (raw2 != null) salvageLog(label, `expected an array, got ${typeof raw2} \u2014 using []`);
+    return [];
+  }
+  const kept = raw2.filter(
+    (el) => el !== null && typeof el === "object" && typeof el[idField] === "string"
+  );
+  if (kept.length !== raw2.length) {
+    salvageLog(label, `dropped ${raw2.length - kept.length} malformed element(s) (missing string '${idField}')`);
+  }
+  return kept;
+}
+function salvageRecord(label, raw2, fallback) {
+  if (raw2 !== null && typeof raw2 === "object" && !Array.isArray(raw2)) return raw2;
+  if (raw2 != null) salvageLog(label, `expected an object, got ${Array.isArray(raw2) ? "array" : typeof raw2} \u2014 using fallback`);
+  return fallback;
 }
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
@@ -22689,32 +22725,114 @@ function deriveStance(entry) {
   if (approvals > rejections * 2 && approvals >= 1) return "prefer";
   return "mixed";
 }
+var backedUpLedgers = /* @__PURE__ */ new Set();
 var GlobalStore = class _GlobalStore {
   ledgerPath;
+  // H1-5 — set by read() when the on-disk ledger couldn't be trusted
+  // (unparseable JSON or a wrong top-level shape). write() consults these to
+  // REFUSE overwriting a ledger we failed to read — silently persisting the
+  // empty shape over it would permanently destroy all cross-project history.
+  lastReadCorrupt = false;
+  lastBackupSucceeded = false;
   constructor(ledgerPath) {
     this.ledgerPath = ledgerPath ?? defaultLedgerPath();
   }
   getLedgerPath() {
     return this.ledgerPath;
   }
+  /**
+   * H1-5 — whole-file corruption path: back the on-disk copy up to
+   * `<path>.corrupt-<ts>` BEFORE we fall back to empty, and log LOUDLY. Mirrors
+   * FileStore.loadJsonFile (which already does copy-then-fallback) — GlobalStore
+   * was the one store that silently reset to empty with no backup, so the next
+   * write() destroyed the ledger. Backing up once per path per process avoids
+   * a snapshot storm from read-only callers hitting a persistently bad file.
+   */
+  markCorrupt(err) {
+    this.lastReadCorrupt = true;
+    if (backedUpLedgers.has(this.ledgerPath)) {
+      this.lastBackupSucceeded = true;
+      return;
+    }
+    const msg = err?.message ?? String(err);
+    const backup = `${this.ledgerPath}.corrupt-${Date.now()}`;
+    let backedUp = false;
+    try {
+      fs2.copyFileSync(this.ledgerPath, backup);
+      backedUp = true;
+      backedUpLedgers.add(this.ledgerPath);
+    } catch {
+    }
+    this.lastBackupSucceeded = backedUp;
+    console.error(
+      `[deepPairing] GlobalStore: the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable (${msg}). ` + (backedUp ? `Backed the on-disk copy up to ${backup} before falling back \u2014 your cross-project history is preserved there and can be hand-repaired. deepPairing will NOT overwrite the current file until you fix or remove it (writes are refused so the ledger isn't reset to empty).` : `WARNING: could NOT back it up either \u2014 refusing all writes so the only copy survives. Fix or remove the file to restore the ledger.`)
+    );
+  }
+  /**
+   * Per-entry salvage on read (mirrors salvage.ts). Drops a malformed concept
+   * entry and keeps the rest — one hand-edited entry whose `instances` isn't an
+   * array otherwise makes deriveStance/query `.filter` throw → 500 on every
+   * taste/ledger route. Returns null to drop; otherwise a structurally sound
+   * entry with malformed instances filtered out.
+   */
+  static salvageEntry(raw2) {
+    if (!raw2 || typeof raw2 !== "object" || Array.isArray(raw2)) return null;
+    const e = raw2;
+    if (typeof e.key !== "string" || typeof e.concept !== "string") return null;
+    if (typeof e.firstSeenAt !== "string" || typeof e.lastSeenAt !== "string") return null;
+    if (!Array.isArray(e.instances)) return null;
+    const instances = e.instances.filter((i) => {
+      if (!i || typeof i !== "object") return false;
+      const inst = i;
+      return typeof inst.project === "string" && typeof inst.sessionId === "string" && (inst.verdict === "approved" || inst.verdict === "rejected") && typeof inst.at === "string";
+    });
+    return { key: e.key, concept: e.concept, instances, firstSeenAt: e.firstSeenAt, lastSeenAt: e.lastSeenAt };
+  }
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   read() {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
-    try {
-      if (!fs2.existsSync(this.ledgerPath)) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      const raw2 = fs2.readFileSync(this.ledgerPath, "utf-8");
-      const parsed = JSON.parse(raw2);
-      if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      return { version: LEDGER_VERSION, concepts: Object.assign(emptyConcepts(), parsed.concepts) };
-    } catch {
+    this.lastReadCorrupt = false;
+    this.lastBackupSucceeded = false;
+    if (!fs2.existsSync(this.ledgerPath)) {
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
+    let raw2;
+    try {
+      raw2 = fs2.readFileSync(this.ledgerPath, "utf-8");
+    } catch (err) {
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw2);
+    } catch (err) {
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(parsed.version)})`));
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    const concepts = emptyConcepts();
+    let dropped = 0;
+    for (const [key, rawEntry] of Object.entries(parsed.concepts)) {
+      const salv = _GlobalStore.salvageEntry(rawEntry);
+      if (salv) concepts[key] = salv;
+      else dropped++;
+    }
+    if (dropped > 0) {
+      salvageLog("philosophy-ledger", `dropped ${dropped} malformed concept entry(ies) on read (kept the rest)`);
+    }
+    return { version: LEDGER_VERSION, concepts };
   }
   write(ledger) {
+    if (this.lastReadCorrupt) {
+      console.error(
+        `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt${this.lastBackupSucceeded ? " (a .corrupt-<ts> backup was made)" : " and could not be backed up"}; not overwriting it with a reset shape. Fix or remove the file to resume recording.`
+      );
+      return;
+    }
     try {
       fs2.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
@@ -22896,32 +23014,6 @@ var _singleton = null;
 function getGlobalStore() {
   if (!_singleton) _singleton = new GlobalStore();
   return _singleton;
-}
-
-// src/store/salvage.ts
-var salvageLogged = /* @__PURE__ */ new Set();
-function salvageLog(label, message) {
-  if (salvageLogged.has(label)) return;
-  salvageLogged.add(label);
-  console.error(`[deepPairing] ${label}: ${message}`);
-}
-function salvageArray(label, raw2, idField) {
-  if (!Array.isArray(raw2)) {
-    if (raw2 != null) salvageLog(label, `expected an array, got ${typeof raw2} \u2014 using []`);
-    return [];
-  }
-  const kept = raw2.filter(
-    (el) => el !== null && typeof el === "object" && typeof el[idField] === "string"
-  );
-  if (kept.length !== raw2.length) {
-    salvageLog(label, `dropped ${raw2.length - kept.length} malformed element(s) (missing string '${idField}')`);
-  }
-  return kept;
-}
-function salvageRecord(label, raw2, fallback) {
-  if (raw2 !== null && typeof raw2 === "object" && !Array.isArray(raw2)) return raw2;
-  if (raw2 != null) salvageLog(label, `expected an object, got ${Array.isArray(raw2) ? "array" : typeof raw2} \u2014 using fallback`);
-  return fallback;
 }
 
 // src/store/project-signals.ts
@@ -24535,7 +24627,7 @@ var FileStore = class _FileStore {
   waitForFeedback(timeoutMs = 3e4) {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        this.feedbackWaiters = this.feedbackWaiters.filter((w) => w !== resolve);
+        this.feedbackWaiters = this.feedbackWaiters.filter((w) => w !== wrappedResolve);
         resolve();
       }, timeoutMs);
       const wrappedResolve = () => {
@@ -25655,11 +25747,17 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const stance = c.req.query("stance");
     const concept = c.req.query("concept") ?? void 0;
     const limit = Number(c.req.query("limit") ?? 50);
-    const entries = getGlobalStore().query({
-      stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : void 0,
-      concept,
-      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50
-    });
+    let entries;
+    try {
+      entries = getGlobalStore().query({
+        stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : void 0,
+        concept,
+        limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50
+      });
+    } catch (err) {
+      log2(`[philosophy] query failed, returning empty: ${err}`);
+      return c.json({ entries: [], total: 0 });
+    }
     const summary = entries.map((e) => {
       const projects = new Set(e.instances.map((i) => i.project));
       const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
@@ -25790,7 +25888,18 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const fromMs = now - sinceDays * 24 * 60 * 60 * 1e3;
     const fromIso = new Date(fromMs).toISOString();
     const toIso = new Date(now).toISOString();
-    const entries = getGlobalStore().query({ limit: 500 });
+    let entries;
+    try {
+      entries = getGlobalStore().query({ limit: 500 });
+    } catch (err) {
+      log2(`[philosophy/digest] query failed, returning empty digest: ${err}`);
+      return c.json({
+        window: { sinceDays, fromIso, toIso },
+        totals: { concepts: 0, instances: 0, multiProjectConcepts: 0 },
+        newThisPeriod: [],
+        strengthenedThisPeriod: []
+      });
+    }
     const realProjects = (insts) => new Set(insts.filter((i) => i.project !== "manual").map((i) => i.project));
     const totals = {
       concepts: entries.length,
@@ -25847,8 +25956,23 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 }
       });
     }
-    const project = FileStore.ledgerDigest(projectRoot2);
-    const entries = getGlobalStore().query({ limit: 1e4 });
+    let project;
+    let entries;
+    try {
+      project = FileStore.ledgerDigest(projectRoot2);
+      entries = getGlobalStore().query({ limit: 1e4 });
+    } catch (err) {
+      log2(`[ledger/digest] read failed, returning empty digest: ${err}`);
+      return c.json({
+        shapedThisProject: 0,
+        nearMissesThisProject: 0,
+        blockedThisProject: 0,
+        sessionsTouched: 0,
+        topCitedStances: [],
+        seededStances: [],
+        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 }
+      });
+    }
     const projects = /* @__PURE__ */ new Set();
     let multiProjectConcepts = 0;
     const globalCitationByConcept = /* @__PURE__ */ new Map();
@@ -26480,7 +26604,11 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/artifacts/status-changes/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { ids } = await c.req.json();
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body;
     r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
     return c.json({ status: "acknowledged" });
   });
@@ -26546,8 +26674,12 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/comments/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { ids } = await c.req.json();
-    r.store.acknowledgeComments(ids);
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body;
+    r.store.acknowledgeComments(Array.isArray(ids) ? ids : []);
     return c.json({ status: "acknowledged" });
   });
   app2.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
@@ -26643,8 +26775,12 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/decisions/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { ids } = await c.req.json();
-    r.store.acknowledgeDecisions(ids);
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body;
+    r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
     const known = (Array.isArray(ids) ? ids : []).filter((id) => r.store.getDecision(id));
     if (known.length > 0) {
       broadcast3(c.req.param("sessionId"), { type: "decisions_acknowledged", decisionIds: known });
@@ -27535,6 +27671,35 @@ async function sendPing(url2, payload) {
 init_version();
 init_token();
 init_project_root();
+
+// src/daemon/watchdog.ts
+function guardWatcher(watcher, log2) {
+  let handled = false;
+  watcher.on("error", (err) => {
+    if (handled) return;
+    handled = true;
+    const e = err;
+    log2(
+      `[hook-watcher] watcher error (${e?.code ?? e?.message ?? err}); disabling live hook-status updates but keeping the daemon alive. Common cause: inotify watch limit \u2014 raise fs.inotify.max_user_watches to restore live updates.`
+    );
+    try {
+      watcher.close?.();
+    } catch {
+    }
+  });
+}
+function safeHeartbeatTick(tick, log2) {
+  try {
+    tick();
+  } catch (err) {
+    const e = err;
+    log2(
+      `[heartbeat] periodic writeDaemonInfo failed (${e?.code ?? e?.message ?? err}); continuing \u2014 the daemon stays up and the next tick will retry.`
+    );
+  }
+}
+
+// src/daemon/index.ts
 async function openBrowser(url2) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url2] : [url2];
@@ -28104,7 +28269,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
     log(`[wss] server error: ${err?.code ?? err?.message ?? err}`);
   });
   writeDaemonInfo(port);
-  const heartbeat = setInterval(() => writeDaemonInfo(port), 3e4);
+  const heartbeat = setInterval(() => safeHeartbeatTick(() => writeDaemonInfo(port), log), 3e4);
   heartbeat.unref?.();
   let lastFireSeen = 0;
   const hooksStatePath = path13.join(projectRoot, ".deeppairing", "hooks-state.json");
@@ -28136,11 +28301,12 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
   try {
     const hooksDir = path13.dirname(hooksStatePath);
     fs14.mkdirSync(hooksDir, { recursive: true });
-    fs14.watch(hooksDir, (_event, filename) => {
+    const watcher = fs14.watch(hooksDir, (_event, filename) => {
       if (filename === "hooks-state.json" || filename === path13.basename(hooksStatePath)) {
         broadcastNewFires();
       }
     });
+    guardWatcher(watcher, log);
   } catch (err) {
     log(`Hook-state watcher failed to start: ${err}`);
   }

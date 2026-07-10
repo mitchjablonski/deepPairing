@@ -25173,6 +25173,14 @@ function writeStringAtomic(filePath, data) {
   }
 }
 
+// src/store/salvage.ts
+var salvageLogged = /* @__PURE__ */ new Set();
+function salvageLog(label, message) {
+  if (salvageLogged.has(label)) return;
+  salvageLogged.add(label);
+  console.error(`[deepPairing] ${label}: ${message}`);
+}
+
 // ../shared/dist/schemas/session.js
 var SessionStatusSchema = external_exports.enum([
   "idle",
@@ -26137,32 +26145,114 @@ function deriveStance(entry) {
   if (approvals > rejections * 2 && approvals >= 1) return "prefer";
   return "mixed";
 }
+var backedUpLedgers = /* @__PURE__ */ new Set();
 var GlobalStore = class _GlobalStore {
   ledgerPath;
+  // H1-5 — set by read() when the on-disk ledger couldn't be trusted
+  // (unparseable JSON or a wrong top-level shape). write() consults these to
+  // REFUSE overwriting a ledger we failed to read — silently persisting the
+  // empty shape over it would permanently destroy all cross-project history.
+  lastReadCorrupt = false;
+  lastBackupSucceeded = false;
   constructor(ledgerPath) {
     this.ledgerPath = ledgerPath ?? defaultLedgerPath();
   }
   getLedgerPath() {
     return this.ledgerPath;
   }
+  /**
+   * H1-5 — whole-file corruption path: back the on-disk copy up to
+   * `<path>.corrupt-<ts>` BEFORE we fall back to empty, and log LOUDLY. Mirrors
+   * FileStore.loadJsonFile (which already does copy-then-fallback) — GlobalStore
+   * was the one store that silently reset to empty with no backup, so the next
+   * write() destroyed the ledger. Backing up once per path per process avoids
+   * a snapshot storm from read-only callers hitting a persistently bad file.
+   */
+  markCorrupt(err) {
+    this.lastReadCorrupt = true;
+    if (backedUpLedgers.has(this.ledgerPath)) {
+      this.lastBackupSucceeded = true;
+      return;
+    }
+    const msg = err?.message ?? String(err);
+    const backup = `${this.ledgerPath}.corrupt-${Date.now()}`;
+    let backedUp = false;
+    try {
+      fs2.copyFileSync(this.ledgerPath, backup);
+      backedUp = true;
+      backedUpLedgers.add(this.ledgerPath);
+    } catch {
+    }
+    this.lastBackupSucceeded = backedUp;
+    console.error(
+      `[deepPairing] GlobalStore: the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable (${msg}). ` + (backedUp ? `Backed the on-disk copy up to ${backup} before falling back \u2014 your cross-project history is preserved there and can be hand-repaired. deepPairing will NOT overwrite the current file until you fix or remove it (writes are refused so the ledger isn't reset to empty).` : `WARNING: could NOT back it up either \u2014 refusing all writes so the only copy survives. Fix or remove the file to restore the ledger.`)
+    );
+  }
+  /**
+   * Per-entry salvage on read (mirrors salvage.ts). Drops a malformed concept
+   * entry and keeps the rest — one hand-edited entry whose `instances` isn't an
+   * array otherwise makes deriveStance/query `.filter` throw → 500 on every
+   * taste/ledger route. Returns null to drop; otherwise a structurally sound
+   * entry with malformed instances filtered out.
+   */
+  static salvageEntry(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const e = raw;
+    if (typeof e.key !== "string" || typeof e.concept !== "string") return null;
+    if (typeof e.firstSeenAt !== "string" || typeof e.lastSeenAt !== "string") return null;
+    if (!Array.isArray(e.instances)) return null;
+    const instances = e.instances.filter((i) => {
+      if (!i || typeof i !== "object") return false;
+      const inst = i;
+      return typeof inst.project === "string" && typeof inst.sessionId === "string" && (inst.verdict === "approved" || inst.verdict === "rejected") && typeof inst.at === "string";
+    });
+    return { key: e.key, concept: e.concept, instances, firstSeenAt: e.firstSeenAt, lastSeenAt: e.lastSeenAt };
+  }
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   read() {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
-    try {
-      if (!fs2.existsSync(this.ledgerPath)) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      const raw = fs2.readFileSync(this.ledgerPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      return { version: LEDGER_VERSION, concepts: Object.assign(emptyConcepts(), parsed.concepts) };
-    } catch {
+    this.lastReadCorrupt = false;
+    this.lastBackupSucceeded = false;
+    if (!fs2.existsSync(this.ledgerPath)) {
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
+    let raw;
+    try {
+      raw = fs2.readFileSync(this.ledgerPath, "utf-8");
+    } catch (err) {
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(parsed.version)})`));
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    const concepts = emptyConcepts();
+    let dropped = 0;
+    for (const [key, rawEntry] of Object.entries(parsed.concepts)) {
+      const salv = _GlobalStore.salvageEntry(rawEntry);
+      if (salv) concepts[key] = salv;
+      else dropped++;
+    }
+    if (dropped > 0) {
+      salvageLog("philosophy-ledger", `dropped ${dropped} malformed concept entry(ies) on read (kept the rest)`);
+    }
+    return { version: LEDGER_VERSION, concepts };
   }
   write(ledger) {
+    if (this.lastReadCorrupt) {
+      console.error(
+        `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt${this.lastBackupSucceeded ? " (a .corrupt-<ts> backup was made)" : " and could not be backed up"}; not overwriting it with a reset shape. Fix or remove the file to resume recording.`
+      );
+      return;
+    }
     try {
       fs2.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
@@ -27241,6 +27331,59 @@ function nanoid3(size = 21) {
   return id;
 }
 
+// src/error-codes.ts
+var ERROR_CODES = {
+  /** /api/internal/* received a missing or invalid Authorization header. */
+  daemon_auth_required: "daemon_auth_required",
+  /** Wrapper called an internal route for a session the daemon doesn't know about. */
+  session_not_registered: "session_not_registered",
+  /** Wrapper registered with expectedProjectRoot != daemon's projectRoot. */
+  project_mismatch: "project_mismatch",
+  /** X-Project-Hash header missing or mismatched on a public route. */
+  project_hash_mismatch: "project_hash_mismatch",
+  /** /api/evict received the wrong X-DeepPairing-Confirm-Pid. */
+  evict_pid_mismatch: "evict_pid_mismatch",
+  /** III6 — request body exceeded the 64 KiB cap. */
+  body_too_large: "body_too_large",
+  /** Browser sent X-Session-Id but the daemon has no active session. */
+  no_active_session: "no_active_session",
+  /** Zod (or hand-rolled) validation failed on a request body. */
+  validation_error: "validation_error",
+  /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
+  forbidden_host: "forbidden_host",
+  /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
+  artifact_not_in_session: "artifact_not_in_session",
+  /** F6 — decision resolve for a decision the bound session doesn't know. */
+  decision_not_in_session: "decision_not_in_session",
+  /** F6 — mark-resolved for a comment the bound session doesn't own. */
+  comment_not_in_session: "comment_not_in_session"
+};
+var USER_FACING_ERROR_CODES = [
+  ERROR_CODES.daemon_auth_required,
+  ERROR_CODES.project_hash_mismatch,
+  ERROR_CODES.session_not_registered
+];
+var TOOL_ERROR_CODES = {
+  /** Zod validation failed on tool input — agent should fix the shape and retry. */
+  INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
+  /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
+  REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
+  /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
+   *  should trim/split the input and retry. */
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
+  /** H1-6 — a tool handler threw (e.g. daemon down/restarting). Usually
+   *  transient; the agent can re-check state and retry. Distinct from a clean
+   *  validation refusal — this is an unexpected error mapped to a clean
+   *  isError result instead of a raw JSON-RPC protocol error. */
+  TOOL_EXECUTION_FAILED: "TOOL_EXECUTION_FAILED"
+};
+var TOOL_ERROR_RETRYABLE = {
+  [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
+  [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
+  [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
+  [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
+};
+
 // src/mcp/validate-tool-input.ts
 function formatValidationError(toolName, err, example) {
   const issues = err.issues.slice(0, 5).map((i) => {
@@ -27263,6 +27406,32 @@ Fix the input and call ${toolName} again. The artifact was NOT created.`;
     // INPUT_VALIDATION_FAILED that's in the text body, but lifted into
     // _meta so clients can branch without parsing prose.
     _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+  };
+}
+function formatHandlerError(toolName, err) {
+  const e = err;
+  const rawMsg = e?.message ?? String(err);
+  const msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
+  const isBodyCap = e?.code === ERROR_CODES.body_too_large || e?.status === 413 || /body exceeds|too large/i.test(msg);
+  if (isBodyCap) {
+    const code2 = TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE;
+    const text2 = `${code2}: ${toolName} could not be recorded \u2014 the artifact payload is too large for the daemon (${msg}).
+
+Trim the input and retry: shorten long before/after or code snippets, split findings/steps across multiple ${toolName} calls, or summarize verbose evidence. The artifact was NOT created.`;
+    return {
+      content: [{ type: "text", text: text2 }],
+      isError: true,
+      _meta: { code: code2, retryable: TOOL_ERROR_RETRYABLE[code2] }
+    };
+  }
+  const code = TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED;
+  const text = `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
+
+This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been created \u2014 call check_feedback to see the current state, then retry ${toolName} if needed.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true,
+    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
   };
 }
 var EXAMPLE_FINDINGS = `{
@@ -28454,8 +28623,11 @@ async function handleCheckFeedback(ctx, args) {
           });
         }, 1e4);
       }
-      await store.waitForFeedback(3e4);
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      try {
+        await store.waitForFeedback(3e4);
+      } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
     }
   }
   const parts = [];
@@ -30185,46 +30357,51 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       // B3 — per-request progress token for check_feedback's heartbeats.
       progressToken: request.params._meta?.progressToken
     };
-    const result = await (async () => {
-      switch (name) {
-        case "present_findings":
-          return handlePresentFindings(ctx, args);
-        case "present_options":
-          return handlePresentOptions(ctx, args);
-        case "present_spec":
-          return handlePresentSpec(ctx, args);
-        case "present_plan":
-          return handlePresentPlan(ctx, args);
-        case "log_reasoning":
-          return handleLogReasoning(ctx, args);
-        case "present_code_change":
-          return handlePresentCodeChange(ctx, args);
-        case "check_feedback":
-          return handleCheckFeedback(ctx, args);
-        // III12 — case "request_horizon_check" removed. The workflow
-        // (post a question on an artifact with a templated horizon prompt)
-        // is now: call addComment / answer_question with the horizon
-        // template as the question text. The deeppairing.md skill carries
-        // the templates so the LLM still has them available.
-        case "update_plan_progress":
-          return await handleUpdatePlanProgress(ctx, args);
-        case "answer_question":
-          return handleAnswerQuestion(ctx, args);
-        case "revise_artifact":
-          return handleReviseArtifact(ctx, args);
-        case "recall":
-          return handleRecall(ctx, args);
-        case "post_pr_review":
-          return handlePostPrReview(ctx, args);
-        case "export_session":
-          return handleExportSession(ctx, args);
-        default:
-          return {
-            content: [{ type: "text", text: `Unknown tool: ${name}` }],
-            isError: true
-          };
-      }
-    })();
+    let result;
+    try {
+      result = await (async () => {
+        switch (name) {
+          case "present_findings":
+            return handlePresentFindings(ctx, args);
+          case "present_options":
+            return handlePresentOptions(ctx, args);
+          case "present_spec":
+            return handlePresentSpec(ctx, args);
+          case "present_plan":
+            return handlePresentPlan(ctx, args);
+          case "log_reasoning":
+            return handleLogReasoning(ctx, args);
+          case "present_code_change":
+            return handlePresentCodeChange(ctx, args);
+          case "check_feedback":
+            return handleCheckFeedback(ctx, args);
+          // III12 — case "request_horizon_check" removed. The workflow
+          // (post a question on an artifact with a templated horizon prompt)
+          // is now: call addComment / answer_question with the horizon
+          // template as the question text. The deeppairing.md skill carries
+          // the templates so the LLM still has them available.
+          case "update_plan_progress":
+            return await handleUpdatePlanProgress(ctx, args);
+          case "answer_question":
+            return handleAnswerQuestion(ctx, args);
+          case "revise_artifact":
+            return handleReviseArtifact(ctx, args);
+          case "recall":
+            return handleRecall(ctx, args);
+          case "post_pr_review":
+            return handlePostPrReview(ctx, args);
+          case "export_session":
+            return handleExportSession(ctx, args);
+          default:
+            return {
+              content: [{ type: "text", text: `Unknown tool: ${name}` }],
+              isError: true
+            };
+        }
+      })();
+    } catch (err) {
+      result = formatHandlerError(name, err);
+    }
     if (firstCallHint && HINT_TOOLS.has(name) && result?.content && Array.isArray(result.content) && !result.isError) {
       result.content.push({ type: "text", text: firstCallHint });
     }
@@ -30375,8 +30552,8 @@ var DaemonClient = class {
     let res;
     try {
       res = await fetch(`${this.baseUrl}${path6}`, initWithHash);
-    } catch (err) {
-      if (err?.name === "AbortError" || err?.name === "TimeoutError") throw err;
+    } catch (err2) {
+      if (err2?.name === "AbortError" || err2?.name === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
         if (recovered) return this.request(path6, init, true);
@@ -30409,7 +30586,10 @@ var DaemonClient = class {
       return this.request(path6, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
-    throw new Error(`[deepPairing] ${msg}`);
+    const err = new Error(`[deepPairing] ${msg}`);
+    err.status = res.status;
+    if (typeof body?.code === "string") err.code = body.code;
+    throw err;
   }
   async post(path6, body) {
     return this.request(path6, {
@@ -30683,7 +30863,10 @@ var DaemonClient = class {
     } catch {
     }
     const msg = body?.error ?? `request failed (${res.status})`;
-    throw new Error(`[deepPairing] ${msg}`);
+    const err = new Error(`[deepPairing] ${msg}`);
+    err.status = res.status;
+    if (typeof body?.code === "string") err.code = body.code;
+    throw err;
   }
   /** List past sessions for this project. Uses the daemon's public /api/sessions. */
   async listPastSessions() {

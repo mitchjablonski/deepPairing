@@ -1277,7 +1277,7 @@ describe("C2 — decisions/acknowledge broadcasts the consumption moment", () =>
 });
 
 describe("NIT — acknowledge routes return 400 (not 500) on a malformed body", () => {
-  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = (body: unknown) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const raw = (body: string) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body });
 
   const ackRoutes = [
