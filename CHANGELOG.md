@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.1.8 — 2026-07-10
+
+Polish and honesty. No breaking changes.
+
+### Fixed
+- **The Autonomy dial now applies from the agent's first artifact.** Its guidance
+  used to arrive only via `check_feedback` — *after* the opening findings/options
+  were already posted — so sliding to "Light" or "Minimal" couldn't affect the
+  very sequence that felt heavy. The level is now standing guidance in the
+  session preamble. The floor is stated at every level, in both blocks: no
+  setting ever skips `present_code_change` before a write, and project
+  guardrails still escalate to full supervision. The default (Full/supervised)
+  preamble is byte-for-byte unchanged.
+- **Light theme is now WCAG AA.** Five accent colors inherited dark-theme
+  foregrounds onto pale backgrounds — the worst pair measured 1.61 against the
+  4.5 floor. All re-tinted to ≥4.6 with margin, hues preserved, and CI now runs
+  an axe scan with the light theme active so this class of bug can't return.
+  (The dark theme's two borderline tokens were also re-tinted to ≥5.1 — a CI
+  flake traced to axe sampling mid-animation on zero-margin pairs.)
+- **The agent no longer retries deterministic failures.** Tool errors now
+  distinguish transient conditions (daemon 5xx, network failures — retryable)
+  from deterministic ones (invalid requests, handler bugs — not retryable), so
+  the agent stops looping on errors that can't succeed. Error messages also
+  relativize your project path instead of echoing it absolute.
+
+### Changed
+- **The docs now lead with the gate, not the Ledger.** README, INSTALL, and the
+  plugin manifests reframed around the enforcement promise — a concept you
+  rejected is stopped before the edit lands, in the project where you rejected
+  it, and flagged (advisory) on your other projects. This also corrects an
+  overclaim: the old copy implied rejections were gate-stopped "across every
+  project"; cross-project has always been advisory. The Philosophy Ledger is
+  still there — inspectable, exportable — as the mechanism underneath.
+
+### Internal
+- Cross-project advisory recall now sits behind a narrow `AdvisoryRecall`
+  adapter (advisory output proven byte-identical; the synchronous hard-block
+  hook gained no dependency), so a future native-memory provider is a swap,
+  not a surgery.
+
 ## v0.1.7 — 2026-07-10
 
 Three features you asked for, and a safety dial that now fails the right way.
