@@ -1653,7 +1653,11 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
 `);
   }
 } else if (cmd === "--version" || cmd === "-v") {
-  console.log("0.1.0");
+  // #136 — read the single SERVER_VERSION source of truth, never a hardcoded
+  // literal. A user runs `dp --version` precisely to confirm an update took;
+  // a stale literal here would mislead them into the exact stale-daemon
+  // confusion this change set exists to end.
+  console.log(SERVER_VERSION);
 } else if (cmd === "init") {
   const offerDemo = !args.includes("--no-demo");
   const yes = args.includes("--yes") || args.includes("-y");

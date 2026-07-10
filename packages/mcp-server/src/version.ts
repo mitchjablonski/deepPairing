@@ -7,9 +7,12 @@
  * version the MCP handshake advertised. The install-health ping
  * (daemon/index.ts) reads it too, so all three report one number.
  *
- * Keep this in lockstep with packages/mcp-server/package.json "version" on
- * every release bump. (A literal, not a package.json import, so the bundled
- * plugin build has no runtime JSON-resolution dependency.)
+ * A literal, not a package.json import, so the bundled plugin build has no
+ * runtime JSON-resolution dependency. Lockstep with the two package.json
+ * "version" fields and claude-plugin/.claude-plugin/plugin.json is no longer a
+ * remembered ritual (it silently desynced three times when it was) — it is
+ * enforced by src/__tests__/version-lockstep.test.ts, which fails a release
+ * bump that updates this literal without the manifests (or vice-versa).
  */
 export const SERVER_VERSION = "0.1.5";
 
