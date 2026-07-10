@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createHttpRoutes } from "../routes.js";
+import { FileStore } from "../../store/file-store.js";
 import { createRoutesTestContext, destroyRoutesTestContext, type RoutesTestContext } from "./routes.harness.js";
 
 let ctx: RoutesTestContext;
@@ -65,6 +66,17 @@ describe("GET /api/decisions", () => {
     const body = await res.json();
     expect(body.decisions.map((d: { decisionId: string }) => d.decisionId)).toContain("d_good");
     expect(body.failedSessions).toEqual([{ sessionId: "s_bad", reason: expect.any(String) }]);
+  });
+
+  it("degrades to the empty shape (200, not 500) if the project read throws", async () => {
+    // Force listAllDecisions to throw — the route must catch and degrade, like
+    // the ledger reads, never surface an opaque 500 that blanks the whole view.
+    vi.spyOn(FileStore, "listAllDecisions").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    const res = await ctx.app.request("/api/decisions");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ decisions: [], failedSessions: [] });
   });
 
   it("is X-Project-Hash gated — no hash → 403 (unwrapped app)", async () => {

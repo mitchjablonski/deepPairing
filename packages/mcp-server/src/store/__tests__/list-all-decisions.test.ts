@@ -180,4 +180,70 @@ describe("FileStore.listAllDecisions", () => {
     expect(decisions).toEqual([]);
     expect(failedSessions).toEqual([]);
   });
+
+  // Fix 1 — salvageArray only guarantees a string decisionId, NOT createdAt. A
+  // dateless-but-salvage-passing record used to reach the sort and throw
+  // `(undefined ?? undefined).localeCompare(...)`, escaping the per-session
+  // try/catch and 500ing the whole view.
+  it("does not throw on a dateless (salvage-passing) record, and sorts it last", () => {
+    seedDecision("s1", {
+      decisionId: "d_dated", artifactId: "a1", context: "Dated",
+      resolveWith: { optionId: "o1" },
+    });
+    // A record with a string decisionId (passes salvage) but NO createdAt/resolvedAt.
+    const decPath = path.join(tmpDir, ".deeppairing", "sessions", "s1", "decisions.json");
+    const arr = JSON.parse(fs.readFileSync(decPath, "utf-8"));
+    arr.push({ decisionId: "d_dateless", artifactId: "a1", context: "Dateless", options: OPTS });
+    fs.writeFileSync(decPath, JSON.stringify(arr));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    let result: ReturnType<typeof FileStore.listAllDecisions> | undefined;
+    expect(() => { result = FileStore.listAllDecisions(tmpDir); }).not.toThrow();
+    const ids = result!.decisions.map((d) => d.decisionId);
+    // Both survive — the dateless one is never dropped...
+    expect(ids).toContain("d_dated");
+    expect(ids).toContain("d_dateless");
+    // ...but an unknown date is NOT "newest" — it sorts to the bottom.
+    expect(ids[ids.length - 1]).toBe("d_dateless");
+    expect(result!.failedSessions).toEqual([]);
+  });
+
+  // Fix 2 — a valid-JSON-but-not-an-array decisions.json is unusable; it must
+  // be REPORTED, not silently dropped (decRecords.length===0 can't tell it from
+  // a legitimately empty []).
+  it("reports a non-array decisions.json in failedSessions (not silently dropped)", () => {
+    seedDecision("s_good", {
+      decisionId: "d_good", artifactId: "a1", context: "Good",
+      resolveWith: { optionId: "o1" },
+    });
+    const badDir = path.join(tmpDir, ".deeppairing", "sessions", "s_obj");
+    fs.mkdirSync(badDir, { recursive: true });
+    fs.writeFileSync(path.join(badDir, "decisions.json"), JSON.stringify({ decisionId: "x" }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { decisions, failedSessions } = FileStore.listAllDecisions(tmpDir);
+    expect(decisions.map((d) => d.decisionId)).toContain("d_good");
+    expect(failedSessions.map((f) => f.sessionId)).toContain("s_obj");
+  });
+
+  it("reports an all-elements-malformed decisions.json in failedSessions", () => {
+    const badDir = path.join(tmpDir, ".deeppairing", "sessions", "s_garbage");
+    fs.mkdirSync(badDir, { recursive: true });
+    // Valid JSON array, but every element fails salvage (no string decisionId).
+    fs.writeFileSync(path.join(badDir, "decisions.json"), JSON.stringify([null, { notADecision: true }]));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { failedSessions } = FileStore.listAllDecisions(tmpDir);
+    expect(failedSessions.map((f) => f.sessionId)).toContain("s_garbage");
+  });
+
+  it("stays silent for a legitimately empty decisions array (no false failure)", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "s_empty");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "decisions.json"), "[]");
+
+    const { decisions, failedSessions } = FileStore.listAllDecisions(tmpDir);
+    expect(decisions).toEqual([]);
+    expect(failedSessions).toEqual([]);
+  });
 });

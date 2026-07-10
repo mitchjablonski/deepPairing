@@ -23417,10 +23417,9 @@ function listAllDecisions(projectRoot2) {
     const sessionDir = path3.join(sessionsDir, sessionId);
     const decFile = path3.join(sessionDir, "decisions.json");
     if (!fs4.existsSync(decFile)) continue;
-    let decRecords;
+    let raw2;
     try {
-      const raw2 = JSON.parse(fs4.readFileSync(decFile, "utf-8"));
-      decRecords = salvageArray(`${sessionId}/decisions.json`, raw2, "decisionId");
+      raw2 = JSON.parse(fs4.readFileSync(decFile, "utf-8"));
     } catch (err) {
       try {
         fs4.copyFileSync(decFile, decFile + ".corrupt");
@@ -23429,7 +23428,22 @@ function listAllDecisions(projectRoot2) {
       failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json" });
       continue;
     }
-    if (decRecords.length === 0) continue;
+    if (!Array.isArray(raw2)) {
+      failedSessions.push({
+        sessionId,
+        reason: `decisions.json is not an array (got ${raw2 === null ? "null" : typeof raw2})`
+      });
+      continue;
+    }
+    if (raw2.length === 0) continue;
+    const decRecords = salvageArray(`${sessionId}/decisions.json`, raw2, "decisionId");
+    if (decRecords.length === 0) {
+      failedSessions.push({
+        sessionId,
+        reason: `all ${raw2.length} decision record(s) in decisions.json were malformed`
+      });
+      continue;
+    }
     let artifacts = [];
     const artFile = path3.join(sessionDir, "artifacts.json");
     if (fs4.existsSync(artFile)) {
@@ -23470,9 +23484,8 @@ function listAllDecisions(projectRoot2) {
       });
     }
   }
-  decisions.sort(
-    (a, b) => (b.resolvedAt ?? b.createdAt).localeCompare(a.resolvedAt ?? a.createdAt)
-  );
+  const sortKey = (d) => d.resolvedAt ?? d.createdAt ?? "";
+  decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return { decisions, failedSessions };
 }
@@ -26360,7 +26373,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app2.get("/api/decisions", (c) => {
     if (!projectRoot2) return c.json({ decisions: [], failedSessions: [] });
-    return c.json(FileStore.listAllDecisions(projectRoot2));
+    try {
+      return c.json(FileStore.listAllDecisions(projectRoot2));
+    } catch (err) {
+      log2(`[decisions] read failed, returning empty: ${err}`);
+      return c.json({ decisions: [], failedSessions: [] });
+    }
   });
   app2.get("/api/search", (c) => {
     if (!projectRoot2) return c.json({ results: [] });

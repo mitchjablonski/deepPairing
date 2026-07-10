@@ -1321,7 +1321,16 @@ export function createHttpRoutes(
   // the empty shape when no projectRoot (test fixtures / bad cwd).
   app.get("/api/decisions", (c) => {
     if (!projectRoot) return c.json({ decisions: [], failedSessions: [] });
-    return c.json(FileStore.listAllDecisions(projectRoot));
+    // Degrade, don't 500 — same guard the ledger reads use (see /api/philosophy,
+    // /api/philosophy/digest, /api/ledger/digest above). listAllDecisions is
+    // hardened against per-session corruption, but a future disk-shape bug must
+    // never take the whole view down with an opaque 500.
+    try {
+      return c.json(FileStore.listAllDecisions(projectRoot));
+    } catch (err) {
+      log(`[decisions] read failed, returning empty: ${err}`);
+      return c.json({ decisions: [], failedSessions: [] });
+    }
   });
 
   // Cross-session search

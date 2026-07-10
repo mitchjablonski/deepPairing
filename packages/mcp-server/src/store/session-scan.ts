@@ -352,7 +352,10 @@ export interface ProjectDecision {
   chosenOptionTitle?: string;
   reasoning?: string;
   confidence?: "low" | "medium" | "high";
-  createdAt: string;
+  /** Optional: salvageArray only guarantees a string decisionId, so a
+   *  salvage-passing record can lack a timestamp. The view renders such a row
+   *  as "date unknown" and sorts it last rather than fabricating a position. */
+  createdAt?: string;
   resolvedAt?: string;
 }
 
@@ -420,21 +423,42 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
     // is NOT a failure; only a file that exists-but-won't-parse is.
     if (!fs.existsSync(decFile)) continue;
 
-    let decRecords: DecisionRecord[];
+    let raw: unknown;
     try {
-      const raw = JSON.parse(fs.readFileSync(decFile, "utf-8"));
-      // salvageArray drops malformed ELEMENTS (and logs) but keeps a parseable
-      // array — partial data survives instead of taking down the session.
-      decRecords = salvageArray<DecisionRecord>(`${sessionId}/decisions.json`, raw, "decisionId");
+      raw = JSON.parse(fs.readFileSync(decFile, "utf-8"));
     } catch (err: any) {
-      // Whole-file corruption: back up the raw bytes (.corrupt) exactly like
-      // FileStore.loadJsonFile, then REPORT the session rather than dropping it
-      // silently — the single most important requirement of this view.
+      // Whole-file corruption (unparseable): back up the raw bytes (.corrupt)
+      // exactly like FileStore.loadJsonFile, then REPORT the session rather than
+      // dropping it silently — the single most important requirement of this view.
       try { fs.copyFileSync(decFile, decFile + ".corrupt"); } catch { /* best-effort */ }
       failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json" });
       continue;
     }
-    if (decRecords.length === 0) continue;
+    // Valid JSON but not an array — the whole file is unusable AS decisions.
+    // `decRecords.length === 0` below can't distinguish this from a legitimately
+    // empty [], so detect + report it HERE rather than dropping the session in
+    // silence (console.error alone reaches no user).
+    if (!Array.isArray(raw)) {
+      failedSessions.push({
+        sessionId,
+        reason: `decisions.json is not an array (got ${raw === null ? "null" : typeof raw})`,
+      });
+      continue;
+    }
+    // An empty array is the LEGITIMATE "this session made no decisions" case.
+    if (raw.length === 0) continue;
+    // salvageArray drops malformed ELEMENTS (and logs) but keeps the good ones —
+    // partial data survives instead of taking down the session.
+    const decRecords = salvageArray<DecisionRecord>(`${sessionId}/decisions.json`, raw, "decisionId");
+    // The file HAD content but EVERY record was rejected — a failure the user
+    // must see, not a silent drop.
+    if (decRecords.length === 0) {
+      failedSessions.push({
+        sessionId,
+        reason: `all ${raw.length} decision record(s) in decisions.json were malformed`,
+      });
+      continue;
+    }
 
     // Artifacts are only for title/nav enrichment — a corrupt artifacts.json
     // must NOT drop the decisions (they render from their own record). Degrade
@@ -481,9 +505,14 @@ export function listAllDecisions(projectRoot: string): ProjectDecisionsResult {
     }
   }
 
-  decisions.sort((a, b) =>
-    (b.resolvedAt ?? b.createdAt).localeCompare(a.resolvedAt ?? a.createdAt),
-  );
+  // Newest-first. The comparator MUST be total: salvageArray only guarantees a
+  // string decisionId, so a salvage-passing record can lack BOTH createdAt and
+  // resolvedAt. Its key is "" (the smallest string) → it sorts to the BOTTOM (an
+  // unknown date is not "newest"), and `(undefined).localeCompare(...)` never
+  // runs — that throw would escape the per-session try/catch above and 500 the
+  // whole view (the invariant this function promises it never does).
+  const sortKey = (d: ProjectDecision): string => d.resolvedAt ?? d.createdAt ?? "";
+  decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return { decisions, failedSessions };
 }

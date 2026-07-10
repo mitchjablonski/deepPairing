@@ -109,6 +109,18 @@ describe("ProjectDecisionsModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  it("renders a dateless decision honestly as 'date unknown' (never a fabricated time)", async () => {
+    const dateless = {
+      decisionId: "d3", sessionId: "s3", sessionTitle: "Old work",
+      artifactId: "a3", artifactTitle: "Legacy choice", artifactMissing: false,
+      context: "A decision with no timestamp", optionCount: 2, resolved: false,
+    };
+    stubDecisions({ decisions: [dateless], failedSessions: [] });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("A decision with no timestamp")).toBeInTheDocument());
+    expect(screen.getByText(/date unknown/i)).toBeInTheDocument();
+  });
+
   it("surfaces a load failure honestly", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) }));
     render(<ProjectDecisionsModal onClose={() => {}} />);

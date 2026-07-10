@@ -31,7 +31,9 @@ interface ProjectDecision {
   chosenOptionTitle?: string;
   reasoning?: string;
   confidence?: "low" | "medium" | "high";
-  createdAt: string;
+  // Optional: a salvage-passing record can lack a timestamp — render "date
+  // unknown" rather than a fabricated one.
+  createdAt?: string;
   resolvedAt?: string;
 }
 
@@ -235,9 +237,13 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
                           {d.sessionTitle}
                         </span>
                         <span className="text-2xs text-text-muted">·</span>
-                        <span className="text-2xs text-text-muted" title={formatDate(d.resolvedAt ?? d.createdAt)}>
-                          {timeAgo(d.resolvedAt ?? d.createdAt)}
-                        </span>
+                        {d.resolvedAt ?? d.createdAt ? (
+                          <span className="text-2xs text-text-muted" title={formatDate((d.resolvedAt ?? d.createdAt)!)}>
+                            {timeAgo((d.resolvedAt ?? d.createdAt)!)}
+                          </span>
+                        ) : (
+                          <span className="text-2xs text-text-muted italic">date unknown</span>
+                        )}
                         {d.artifactMissing ? (
                           <span className="text-2xs text-text-muted italic">· artifact unavailable</span>
                         ) : (
