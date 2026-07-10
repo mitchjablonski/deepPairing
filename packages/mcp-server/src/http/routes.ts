@@ -663,11 +663,20 @@ export function createHttpRoutes(
     const stance = c.req.query("stance") as "avoid" | "prefer" | "mixed" | undefined;
     const concept = c.req.query("concept") ?? undefined;
     const limit = Number(c.req.query("limit") ?? 50);
-    const entries = getGlobalStore().query({
-      stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : undefined,
-      concept,
-      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50,
-    });
+    // H1-5(c) — query() reads the on-disk global ledger; a future shape bug
+    // there must DEGRADE this taste route to empty, not 500 it. (Read-only,
+    // safe to return []).
+    let entries;
+    try {
+      entries = getGlobalStore().query({
+        stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : undefined,
+        concept,
+        limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 500) : 50,
+      });
+    } catch (err) {
+      log(`[philosophy] query failed, returning empty: ${err}`);
+      return c.json({ entries: [], total: 0 });
+    }
     // Trim to the bits the UI needs so we don't ship every full instance
     // history on page load. The drawer can click-to-expand for details.
     const summary = entries.map((e) => {
@@ -854,7 +863,20 @@ export function createHttpRoutes(
     const toIso = new Date(now).toISOString();
 
     // Pull a wide slice — the digest computes its own breakdowns.
-    const entries = getGlobalStore().query({ limit: 500 });
+    // H1-5(c) — degrade to an empty digest rather than 500 if the ledger read
+    // ever throws on a future shape bug.
+    let entries;
+    try {
+      entries = getGlobalStore().query({ limit: 500 });
+    } catch (err) {
+      log(`[philosophy/digest] query failed, returning empty digest: ${err}`);
+      return c.json({
+        window: { sinceDays, fromIso, toIso },
+        totals: { concepts: 0, instances: 0, multiProjectConcepts: 0 },
+        newThisPeriod: [],
+        strengthenedThisPeriod: [],
+      });
+    }
 
     // BB1 — synthetic project="manual" markers (AA9 seeds) must NOT
     // count as a real project in cross-project totals. Otherwise a
@@ -949,8 +971,27 @@ export function createHttpRoutes(
         globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
       });
     }
-    const project = FileStore.ledgerDigest(projectRoot);
-    const entries = getGlobalStore().query({ limit: 10000 });
+    // H1-5(c) — both reads touch the on-disk ledgers; a future shape bug must
+    // degrade this route to the same zeros shape as the no-projectRoot branch
+    // above, not 500. Only the two disk reads can throw; the fold below runs on
+    // validated in-memory data.
+    let project: ReturnType<typeof FileStore.ledgerDigest>;
+    let entries;
+    try {
+      project = FileStore.ledgerDigest(projectRoot);
+      entries = getGlobalStore().query({ limit: 10000 });
+    } catch (err) {
+      log(`[ledger/digest] read failed, returning empty digest: ${err}`);
+      return c.json({
+        shapedThisProject: 0,
+        nearMissesThisProject: 0,
+        blockedThisProject: 0,
+        sessionsTouched: 0,
+        topCitedStances: [],
+        seededStances: [],
+        globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
+      });
+    }
     // FF6 — single-pass fold over entries. Pre-FF6 the same array was
     // walked four separate times (projects Set, multiProjectConcepts
     // filter with per-entry Set allocation, seededStances filter+map,

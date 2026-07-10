@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
+import { salvageLog } from "./salvage.js";
 import { normalizeConceptKey } from "@deeppairing/shared";
 
 /**
@@ -111,8 +112,20 @@ export function deriveStance(entry: PhilosophyEntry): PhilosophyStance {
   return "mixed";
 }
 
+// H1-5 — remember which ledger paths we've already backed up this process, so
+// repeated read-only calls (query/get/size all read) against a still-corrupt
+// file don't spew a fresh `.corrupt-<ts>` copy per call. Timestamped, so a
+// later process backing up again never overwrites an earlier snapshot.
+const backedUpLedgers = new Set<string>();
+
 export class GlobalStore {
   private ledgerPath: string;
+  // H1-5 — set by read() when the on-disk ledger couldn't be trusted
+  // (unparseable JSON or a wrong top-level shape). write() consults these to
+  // REFUSE overwriting a ledger we failed to read — silently persisting the
+  // empty shape over it would permanently destroy all cross-project history.
+  private lastReadCorrupt = false;
+  private lastBackupSucceeded = false;
 
   constructor(ledgerPath?: string) {
     this.ledgerPath = ledgerPath ?? defaultLedgerPath();
@@ -122,6 +135,70 @@ export class GlobalStore {
     return this.ledgerPath;
   }
 
+  /**
+   * H1-5 — whole-file corruption path: back the on-disk copy up to
+   * `<path>.corrupt-<ts>` BEFORE we fall back to empty, and log LOUDLY. Mirrors
+   * FileStore.loadJsonFile (which already does copy-then-fallback) — GlobalStore
+   * was the one store that silently reset to empty with no backup, so the next
+   * write() destroyed the ledger. Backing up once per path per process avoids
+   * a snapshot storm from read-only callers hitting a persistently bad file.
+   */
+  private markCorrupt(err: unknown): void {
+    this.lastReadCorrupt = true;
+    if (backedUpLedgers.has(this.ledgerPath)) {
+      // Already preserved a copy this process — history is safe on disk.
+      this.lastBackupSucceeded = true;
+      return;
+    }
+    const msg = (err as { message?: string })?.message ?? String(err);
+    const backup = `${this.ledgerPath}.corrupt-${Date.now()}`;
+    let backedUp = false;
+    try {
+      fs.copyFileSync(this.ledgerPath, backup);
+      backedUp = true;
+      backedUpLedgers.add(this.ledgerPath);
+    } catch {
+      /* best-effort backup — see the fail-closed branch below */
+    }
+    this.lastBackupSucceeded = backedUp;
+    console.error(
+      `[deepPairing] GlobalStore: the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable (${msg}). ` +
+        (backedUp
+          ? `Backed the on-disk copy up to ${backup} before falling back — your cross-project history is preserved there and can be hand-repaired. ` +
+            `deepPairing will NOT overwrite the current file until you fix or remove it (writes are refused so the ledger isn't reset to empty).`
+          : `WARNING: could NOT back it up either — refusing all writes so the only copy survives. Fix or remove the file to restore the ledger.`),
+    );
+  }
+
+  /**
+   * Per-entry salvage on read (mirrors salvage.ts). Drops a malformed concept
+   * entry and keeps the rest — one hand-edited entry whose `instances` isn't an
+   * array otherwise makes deriveStance/query `.filter` throw → 500 on every
+   * taste/ledger route. Returns null to drop; otherwise a structurally sound
+   * entry with malformed instances filtered out.
+   */
+  private static salvageEntry(raw: unknown): PhilosophyEntry | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const e = raw as Partial<PhilosophyEntry>;
+    if (typeof e.key !== "string" || typeof e.concept !== "string") return null;
+    if (typeof e.firstSeenAt !== "string" || typeof e.lastSeenAt !== "string") return null;
+    // A hostile/hand-edited `instances` (scalar, null, object) is the exact
+    // shape that 500s deriveStance/query — drop the whole entry (a real entry
+    // always has an array here).
+    if (!Array.isArray(e.instances)) return null;
+    const instances = e.instances.filter((i): i is PhilosophyInstance => {
+      if (!i || typeof i !== "object") return false;
+      const inst = i as Partial<PhilosophyInstance>;
+      return (
+        typeof inst.project === "string" &&
+        typeof inst.sessionId === "string" &&
+        (inst.verdict === "approved" || inst.verdict === "rejected") &&
+        typeof inst.at === "string"
+      );
+    });
+    return { key: e.key, concept: e.concept, instances, firstSeenAt: e.firstSeenAt, lastSeenAt: e.lastSeenAt };
+  }
+
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   private read(): LedgerFile {
     // SEC1 — the concepts map is keyed by user/agent-supplied concept names.
@@ -129,24 +206,67 @@ export class GlobalStore {
     // own property (not Object.prototype / the constructor), which otherwise made
     // `concepts[key]` truthy-but-malformed and 500'd recordInstance.
     const emptyConcepts = (): Record<string, PhilosophyEntry> => Object.create(null);
-    try {
-      if (!fs.existsSync(this.ledgerPath)) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      const raw = fs.readFileSync(this.ledgerPath, "utf-8");
-      const parsed = JSON.parse(raw) as Partial<LedgerFile>;
-      if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      // JSON.parse yields an Object.prototype-backed map; reparent to null.
-      return { version: LEDGER_VERSION, concepts: Object.assign(emptyConcepts(), parsed.concepts) };
-    } catch {
-      // Corrupted or unreadable — return empty rather than crash.
+    this.lastReadCorrupt = false;
+    this.lastBackupSucceeded = false;
+
+    if (!fs.existsSync(this.ledgerPath)) {
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
+    let raw: string;
+    try {
+      raw = fs.readFileSync(this.ledgerPath, "utf-8");
+    } catch (err) {
+      // Unreadable (EACCES/EBUSY/…) — can't trust it; treat as corrupt so a
+      // later write() doesn't reset the file we simply couldn't open.
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    let parsed: Partial<LedgerFile>;
+    try {
+      parsed = JSON.parse(raw) as Partial<LedgerFile>;
+    } catch (err) {
+      // H1-5 — was `catch { return empty }` with NO backup, NO log; the next
+      // write() then persisted the empty shape over the ledger. Now: back up + log.
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
+      // Parseable JSON but a wrong top-level shape — same treatment: preserve
+      // and refuse to overwrite rather than silently reset.
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify((parsed as { version?: unknown }).version)})`));
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    // Top-level shape is sound (NOT corruption) — salvage per entry. Dropping a
+    // malformed entry is normal disk-hygiene (mirrors salvageArray), not the
+    // catastrophic reset, so writes stay ALLOWED here.
+    const concepts = emptyConcepts();
+    let dropped = 0;
+    for (const [key, rawEntry] of Object.entries(parsed.concepts)) {
+      const salv = GlobalStore.salvageEntry(rawEntry);
+      if (salv) concepts[key] = salv;
+      else dropped++;
+    }
+    if (dropped > 0) {
+      salvageLog("philosophy-ledger", `dropped ${dropped} malformed concept entry(ies) on read (kept the rest)`);
+    }
+    return { version: LEDGER_VERSION, concepts };
   }
 
   private write(ledger: LedgerFile): void {
+    // H1-5 — REFUSE to overwrite a ledger the most recent read couldn't trust.
+    // Writing the (empty) fallback shape here is exactly the permanent
+    // data-loss bug: recordInstance reads empty-on-corruption, appends one
+    // instance, and this write clobbers all cross-project history. The
+    // timestamped `.corrupt-<ts>` backup (made in read/markCorrupt) is the
+    // recovery copy; the file itself stays untouched until a human repairs it.
+    if (this.lastReadCorrupt) {
+      console.error(
+        `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} — the current on-disk ledger is corrupt` +
+          `${this.lastBackupSucceeded ? " (a .corrupt-<ts> backup was made)" : " and could not be backed up"}; ` +
+          `not overwriting it with a reset shape. Fix or remove the file to resume recording.`,
+      );
+      return;
+    }
     try {
       fs.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
       // II4 — was a fixed `.tmp` suffix; two daemons on two projects writing

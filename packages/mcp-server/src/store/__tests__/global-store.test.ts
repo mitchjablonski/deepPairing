@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { GlobalStore, deriveStance } from "../global-store.js";
+import { GlobalStore, deriveStance, type PhilosophyEntry } from "../global-store.js";
 
 let tmpDir: string;
 let ledgerPath: string;
@@ -363,5 +363,56 @@ describe("GlobalStore — SEC1: reserved-name concepts don't crash or pollute", 
     // persists + reloads (Object.prototype-backed JSON re-parented) without throwing
     const reloaded = new GlobalStore(ledgerPath);
     expect(() => reloaded.recordInstance("__proto__", { project: "p", sessionId: "s", verdict: "approved" })).not.toThrow();
+  });
+});
+
+describe("H1-5 — corrupt/malformed ledger is preserved, not silently reset", () => {
+  it("backs a corrupt (unparseable) ledger up to .corrupt-<ts>, logs, and REFUSES to overwrite it with empty", () => {
+    // A hand-corrupted or half-written ledger holding real history.
+    fs.writeFileSync(ledgerPath, '{ "version": 1, "concepts": { broken JSON ]]]');
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const s = new GlobalStore(ledgerPath);
+    // Reading it returns empty (can't parse) but must FIRST back it up + log.
+    expect(s.query()).toEqual([]);
+    const backups = fs.readdirSync(tmpDir).filter((f) => f.startsWith("philosophy.json.corrupt-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(tmpDir, backups[0]!), "utf-8")).toContain("broken JSON");
+    expect(errSpy).toHaveBeenCalled();
+
+    // THE data-loss guard: a subsequent recordInstance must NOT overwrite the
+    // corrupt file with the empty+new shape (which permanently destroys the
+    // pre-corruption history). The write is refused; the file is untouched.
+    s.recordInstance("use redis", { project: "p", sessionId: "s", verdict: "rejected" });
+    expect(fs.readFileSync(ledgerPath, "utf-8")).toContain("broken JSON ]]]");
+    // And still exactly ONE backup (read-only re-reads don't spam snapshots).
+    expect(fs.readdirSync(tmpDir).filter((f) => f.startsWith("philosophy.json.corrupt-"))).toHaveLength(1);
+    errSpy.mockRestore();
+  });
+
+  it("salvages a malformed entry on read: drops it, keeps the good ones, query() does not throw", () => {
+    const good: PhilosophyEntry = {
+      key: "redis", concept: "redis",
+      instances: [{ project: "p", sessionId: "s", verdict: "rejected", at: "2026-01-02T00:00:00.000Z" }],
+      firstSeenAt: "2026-01-01T00:00:00.000Z", lastSeenAt: "2026-01-02T00:00:00.000Z",
+    };
+    // A hostile hand-edited entry whose `instances` is NOT an array — pre-fix
+    // this 500s deriveStance/query (.filter on a scalar) on every taste route.
+    const bad = { key: "kafka", concept: "kafka", instances: "not-an-array", firstSeenAt: "x", lastSeenAt: "y" };
+    fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, concepts: { redis: good, kafka: bad } }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const s = new GlobalStore(ledgerPath);
+    // query() must NOT throw and must return the survivor, dropping the bad one.
+    let results: ReturnType<typeof s.query> = [];
+    expect(() => { results = s.query(); }).not.toThrow();
+    expect(results.map((e) => e.concept)).toEqual(["redis"]);
+    expect(results[0]!.stance).toBe("avoid"); // deriveStance works on the survivor
+    // This file parses with a valid top-level shape, so it is NOT "corrupt":
+    // no backup, and writes stay allowed (recording appends normally).
+    expect(fs.readdirSync(tmpDir).filter((f) => f.includes(".corrupt-"))).toHaveLength(0);
+    s.recordInstance("redis", { project: "p2", sessionId: "s2", verdict: "rejected" });
+    expect(s.get("redis")?.instances).toHaveLength(2);
+    errSpy.mockRestore();
   });
 });
