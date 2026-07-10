@@ -35,11 +35,18 @@ interface ProjectDecision {
   // unknown" rather than a fabricated one.
   createdAt?: string;
   resolvedAt?: string;
+  // #153 (S5) — unresolved AND its origin artifact was superseded: it can
+  // never resolve, so render "Superseded (never resolved)" instead of a
+  // permanent "Awaiting your decision" pill.
+  closedUnresolved?: boolean;
 }
 
 interface ProjectDecisionsResult {
   decisions: ProjectDecision[];
-  failedSessions: Array<{ sessionId: string; reason: string }>;
+  // #153 — kind distinguishes "can't read the file NOW" (unreadable/absent)
+  // from "the file reads fine but earlier decisions were recovered from
+  // corruption and live only in a .corrupt sidecar" (recovered).
+  failedSessions: Array<{ sessionId: string; reason: string; kind?: "unreadable" | "recovered" }>;
 }
 
 export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
@@ -154,18 +161,36 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Honest partial-data report — a decisions view that silently omits a
-            session's decisions is worse than none. */}
-        {failedSessions.length > 0 && (
-          <div
-            role="status"
-            className="mb-3 px-3 py-2 rounded-lg bg-accent-amber-dim border border-accent-amber/30 text-2xs text-accent-amber"
-          >
-            <span className="font-semibold">Some decisions couldn't be loaded.</span>{" "}
-            {failedSessions.length} session{failedSessions.length === 1 ? "" : "s"} had an unreadable
-            decisions.json ({failedSessions.map((f) => f.sessionId).join(", ")}) — the list below is
-            partial. A <code>.corrupt</code> backup was written for each.
-          </div>
-        )}
+            session's decisions is worse than none. Two truths, worded apart
+            (#153): a file we can't read NOW, vs a file that reads fine but
+            whose pre-corruption decisions survive only in a .corrupt sidecar. */}
+        {failedSessions.length > 0 && (() => {
+          const unreadable = failedSessions.filter((f) => f.kind !== "recovered");
+          const recovered = failedSessions.filter((f) => f.kind === "recovered");
+          return (
+            <div
+              role="status"
+              className="mb-3 px-3 py-2 rounded-lg bg-accent-amber-dim border border-accent-amber/30 text-2xs text-accent-amber"
+            >
+              <span className="font-semibold">Some decisions couldn't be loaded.</span>{" "}
+              {unreadable.length > 0 && (
+                <>
+                  {unreadable.length} session{unreadable.length === 1 ? "" : "s"} had an unreadable
+                  decisions.json ({unreadable.map((f) => f.sessionId).join(", ")}) — the list below is
+                  partial. A <code>.corrupt</code> backup was written for each.{" "}
+                </>
+              )}
+              {recovered.length > 0 && (
+                <>
+                  Some of this project's decision history was previously recovered from a corrupted
+                  file ({recovered.map((f) => f.sessionId).join(", ")}) — decisions from before the
+                  recovery aren't shown. The original file is preserved as{" "}
+                  <code>decisions.json.corrupt</code> in each session's folder.
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {loading && (
           <div className="py-8 text-center text-text-muted text-sm" role="status">
@@ -219,6 +244,13 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
                                 <span className="text-text-muted"> — {d.reasoning}</span>
                               )}
                             </span>
+                          </span>
+                        ) : d.closedUnresolved ? (
+                          // #153 (S5) — the origin artifact was superseded while
+                          // this was unresolved: it can never resolve, so don't
+                          // show a permanently-lit "awaiting" pill.
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-semibold bg-surface-secondary text-text-muted">
+                            Superseded (never resolved)
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-semibold bg-accent-amber-dim text-accent-amber">

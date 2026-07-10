@@ -22,6 +22,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { ERROR_CODES } from "../error-codes.js";
 import { FileStore } from "../store/file-store.js";
+import type { LiveDecisionSource } from "../store/session-scan.js";
 import { createHttpRoutes } from "../http/routes.js";
 import { mountStaticUi } from "../http/static-ui.js";
 import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./routes.js";
@@ -63,6 +64,7 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { corsAllowedOrigin, isAllowedWsOrigin } from "../http/origin-policy.js";
 import { guardWatcher, safeHeartbeatTick, type HeartbeatState } from "./watchdog.js";
+import { shouldAutoOpenBrowser } from "./auto-open.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 // MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
@@ -375,6 +377,26 @@ const publicRoutes = createHttpRoutes(
   // window.__deepPairingToken injection in the index.html serve path
   // (see static-serve block below).
   daemonAuthToken,
+  // #151 — snapshot every registered session's IN-MEMORY decisions +
+  // artifacts so GET /api/decisions reflects a decision the instant it is
+  // recorded/resolved, not after the debounced flush lands on disk. The
+  // `sessions` map deliberately retains stores after /unregister — those
+  // in-memory copies are still at least as fresh as their files, so live-
+  // wins-by-sessionId stays correct for them too. A single failing store is
+  // skipped (that session falls back to the disk scan) rather than losing
+  // the live view for every other session.
+  (): LiveDecisionSource[] => {
+    const out: LiveDecisionSource[] = [];
+    for (const [sessionId, store] of sessions.entries()) {
+      try {
+        const state = store.getFullState();
+        out.push({ sessionId, decisions: state.decisions, artifacts: state.artifacts });
+      } catch (err) {
+        log(`[decisions] live snapshot failed for ${sessionId}, using disk: ${err}`);
+      }
+    }
+    return out;
+  },
 );
 app.route("/", publicRoutes);
 
@@ -1115,12 +1137,12 @@ async function main() {
     log(`Daemon running on http://localhost:${port}`);
 
     // H4: auto-open the companion UI on first daemon start. Skip if the user
-    // set DEEPPAIRING_OPEN_BROWSER=0/false (CI, VS Code extension mode, etc.).
-    // Skip if we're adopting an already-running daemon (only this fresh
-    // process hits this code path).
-    const openFlag = process.env.DEEPPAIRING_OPEN_BROWSER;
-    const shouldOpen = openFlag !== "0" && openFlag !== "false" && openFlag !== "no";
-    if (shouldOpen) {
+    // set DEEPPAIRING_NO_OPEN=1 (#152 — scripted/CI/agent-driven starts) or
+    // DEEPPAIRING_OPEN_BROWSER=0/false (legacy opt-out; CI, VS Code extension
+    // mode, etc.) — see auto-open.ts for why this is an env var and not TTY
+    // sniffing. Skip if we're adopting an already-running daemon (only this
+    // fresh process hits this code path).
+    if (shouldAutoOpenBrowser(process.env)) {
       openBrowser(`http://localhost:${port}`).catch((err) => {
         log(`Failed to auto-open browser: ${err}`);
       });

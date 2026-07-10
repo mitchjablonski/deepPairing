@@ -246,4 +246,176 @@ describe("FileStore.listAllDecisions", () => {
     expect(decisions).toEqual([]);
     expect(failedSessions).toEqual([]);
   });
+
+  // #151 — the flush-lag hole: a decision recorded/resolved moments ago lives
+  // only in the session's in-memory FileStore until the debounced flush lands.
+  // The disk-only scan missed it; the live merge must not.
+  describe("live-session merge (#151)", () => {
+    /** Snapshot a real FileStore's in-memory state as a LiveDecisionSource. */
+    const liveSourceOf = (store: FileStore) => {
+      const state = store.getFullState();
+      return { sessionId: state.sessionId, decisions: state.decisions, artifacts: state.artifacts };
+    };
+
+    it("includes a decision recorded+resolved in a live store BEFORE any flush lands", () => {
+      // Real store, real filesystem — but the debounced flush never fires:
+      // everything below is synchronous, so the 100ms timer can't run.
+      const store = new FileStore(tmpDir, "s_live");
+      store.createArtifact({ id: "a1", type: "decision", title: "Which cache?", content: {} });
+      store.recordDecisionRequest({ decisionId: "d_live", artifactId: "a1", context: "Which cache?", options: OPTS });
+      store.resolveDecision("d_live", "o1", "lowest latency");
+      // Deliberately NO forceFlush — decisions.json on disk is still absent.
+      expect(fs.existsSync(path.join(tmpDir, ".deeppairing", "sessions", "s_live", "decisions.json"))).toBe(false);
+
+      const { decisions, failedSessions } = FileStore.listAllDecisions(tmpDir, [liveSourceOf(store)]);
+      expect(failedSessions).toEqual([]);
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].decisionId).toBe("d_live");
+      expect(decisions[0].resolved).toBe(true);
+      expect(decisions[0].chosenOptionTitle).toBe("Redis");
+      expect(decisions[0].reasoning).toBe("lowest latency");
+      // Title enrichment comes from the live artifacts too.
+      expect(decisions[0].artifactTitle).toBe("Which cache?");
+      store.dispose(); // discard the pending debounced flush (tmpDir is removed in afterEach)
+    });
+
+    it("does NOT duplicate a session that exists on disk AND live — live wins by sessionId", () => {
+      // Flushed (on disk) as unresolved…
+      const store = seedDecision("s_both", { decisionId: "d_both", artifactId: "a1", context: "Which queue?" });
+      // …then resolved in memory only (no flush): the seam where a naive
+      // disk+live concat would produce two rows (one stale, one fresh).
+      store.resolveDecision("d_both", "o2", "already deployed");
+
+      const { decisions } = FileStore.listAllDecisions(tmpDir, [liveSourceOf(store)]);
+      const rows = decisions.filter((d) => d.decisionId === "d_both");
+      expect(rows).toHaveLength(1);
+      // And the surviving row is the LIVE one (resolved), not the stale disk one.
+      expect(rows[0].resolved).toBe(true);
+      expect(rows[0].chosenOptionTitle).toBe("In-proc");
+      store.dispose();
+    });
+
+    it("still lists a dead session from disk when only OTHER sessions are live", () => {
+      seedDecision("s_dead", {
+        decisionId: "d_dead", artifactId: "a1", context: "Old decision",
+        resolveWith: { optionId: "o1" },
+      });
+      const liveStore = new FileStore(tmpDir, "s_live2");
+      liveStore.createArtifact({ id: "a2", type: "decision", title: "New", content: {} });
+      liveStore.recordDecisionRequest({ decisionId: "d_new", artifactId: "a2", context: "New", options: OPTS });
+
+      const { decisions } = FileStore.listAllDecisions(tmpDir, [liveSourceOf(liveStore)]);
+      expect(decisions.map((d) => d.decisionId).sort()).toEqual(["d_dead", "d_new"]);
+      liveStore.dispose();
+    });
+  });
+
+  // #153 — session re-open must not silently close the honest-partial window:
+  // FileStore's fall-back-and-rewrite leaves a VALID decisions.json whose
+  // pre-corruption decisions survive only in the .corrupt sidecar.
+  describe("recovered-corruption sidecar reporting (#153)", () => {
+    it("STILL reports the session after a re-open rewrote a fresh valid decisions.json", () => {
+      // 1. Corrupt decisions.json → scan reports it + writes the sidecar (honest).
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "s_reopen");
+      fs.mkdirSync(dir, { recursive: true });
+      const decPath = path.join(dir, "decisions.json");
+      fs.writeFileSync(decPath, "{ not valid json ]");
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const before = FileStore.listAllDecisions(tmpDir);
+      expect(before.failedSessions.map((f) => f.sessionId)).toEqual(["s_reopen"]);
+      expect(fs.existsSync(decPath + ".corrupt")).toBe(true);
+
+      // 2. Session re-opened by a live FileStore (daemon restart): loadJsonFile
+      // falls back to [] and the next flush rewrites a fresh VALID file with
+      // only new records.
+      const store = new FileStore(tmpDir, "s_reopen");
+      store.createArtifact({ id: "a1", type: "decision", title: "Post-recovery", content: {} });
+      store.recordDecisionRequest({ decisionId: "d_after", artifactId: "a1", context: "Post-recovery", options: OPTS });
+      store.resolveDecision("d_after", "o1");
+      store.forceFlush();
+      expect(JSON.parse(fs.readFileSync(decPath, "utf-8"))).toHaveLength(1); // file parses fine now
+
+      // 3. The view must keep telling the truth: the session stays in
+      // failedSessions (distinct "recovered" reason), new decisions list, no dup rows.
+      const after = FileStore.listAllDecisions(tmpDir);
+      expect(after.decisions.map((d) => d.decisionId)).toEqual(["d_after"]);
+      const failed = after.failedSessions.filter((f) => f.sessionId === "s_reopen");
+      expect(failed).toHaveLength(1);
+      expect(failed[0].kind).toBe("recovered");
+      expect(failed[0].reason).toMatch(/recovered from corruption/);
+      expect(failed[0].reason).toMatch(/\.corrupt/);
+    });
+
+    it("does not double-report a session that is corrupt RIGHT NOW (sidecar dedupe)", () => {
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "s_still_bad");
+      fs.mkdirSync(dir, { recursive: true });
+      const decPath = path.join(dir, "decisions.json");
+      fs.writeFileSync(decPath, "not json ]");
+      vi.spyOn(console, "error").mockImplementation(() => {});
+
+      // First scan writes the sidecar; second scan sees BOTH the parse failure
+      // and the sidecar — one row, the live parse failure.
+      FileStore.listAllDecisions(tmpDir);
+      const { failedSessions } = FileStore.listAllDecisions(tmpDir);
+      expect(failedSessions).toHaveLength(1);
+      expect(failedSessions[0].sessionId).toBe("s_still_bad");
+      expect(failedSessions[0].kind).toBe("unreadable");
+    });
+
+    it("reports the sidecar for a LIVE session too (re-open is exactly the live case)", () => {
+      const dir = path.join(tmpDir, ".deeppairing", "sessions", "s_live_recovered");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "decisions.json") + ".corrupt", "old corrupt bytes");
+      const store = new FileStore(tmpDir, "s_live_recovered");
+      store.recordDecisionRequest({ decisionId: "d1", artifactId: "a1", context: "Fresh", options: OPTS });
+
+      const state = store.getFullState();
+      const { decisions, failedSessions } = FileStore.listAllDecisions(tmpDir, [
+        { sessionId: "s_live_recovered", decisions: state.decisions, artifacts: state.artifacts },
+      ]);
+      expect(decisions.map((d) => d.decisionId)).toEqual(["d1"]);
+      expect(failedSessions.map((f) => f.kind)).toEqual(["recovered"]);
+      store.dispose();
+    });
+  });
+
+  // #153 (S5) — a decision whose artifact was superseded while unresolved can
+  // never resolve; flag it so the view doesn't show a permanent awaiting pill.
+  describe("closedUnresolved (S5)", () => {
+    it("flags an UNRESOLVED decision whose origin artifact was superseded", () => {
+      const store = seedDecision("s1", {
+        decisionId: "d_stuck", artifactId: "a1", context: "Which cache?", title: "Cache v1",
+      });
+      store.createArtifact({
+        id: "a2", type: "decision", title: "Cache v2",
+        content: {}, parentId: "a1", version: 2,
+      });
+      store.updateArtifactStatus("a1", "superseded", "agent_supersede");
+      store.forceFlush();
+
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      const d = decisions.find((x) => x.decisionId === "d_stuck")!;
+      expect(d.resolved).toBe(false);
+      expect(d.closedUnresolved).toBe(true);
+    });
+
+    it("does NOT flag a genuinely-open decision, nor a resolved one on a superseded artifact", () => {
+      const store = seedDecision("s1", {
+        decisionId: "d_open", artifactId: "a1", context: "Still open",
+      });
+      // A RESOLVED decision whose artifact was later superseded — resolved
+      // rows keep their chosen-option rendering, never the closed flag.
+      store.createArtifact({ id: "b1", type: "decision", title: "Resolved v1", content: {} });
+      store.recordDecisionRequest({ decisionId: "d_done", artifactId: "b1", context: "Done", options: OPTS });
+      store.resolveDecision("d_done", "o1");
+      store.createArtifact({ id: "b2", type: "decision", title: "Resolved v2", content: {}, parentId: "b1", version: 2 });
+      store.updateArtifactStatus("b1", "superseded", "agent_supersede");
+      store.forceFlush();
+
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      expect(decisions.find((x) => x.decisionId === "d_open")!.closedUnresolved).toBeUndefined();
+      expect(decisions.find((x) => x.decisionId === "d_done")!.closedUnresolved).toBeUndefined();
+    });
+  });
 });

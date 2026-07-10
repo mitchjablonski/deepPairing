@@ -23418,22 +23418,69 @@ function resolveLiveArtifact(artifacts, id) {
   }
   return current;
 }
-function listAllDecisions(projectRoot2) {
+function listAllDecisions(projectRoot2, liveSessions = []) {
   const sessionsDir = path3.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs4.existsSync(sessionsDir)) return { decisions: [], failedSessions: [] };
   const decisions = [];
   const failedSessions = [];
-  let entries;
-  try {
-    entries = fs4.readdirSync(sessionsDir, { withFileTypes: true });
-  } catch {
-    return { decisions: [], failedSessions: [] };
+  const pushSession = (sessionId, decRecords, artifacts) => {
+    const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const sessionTitle = sorted[0]?.title ?? sessionId;
+    for (const dec of decRecords) {
+      const liveArtifact = resolveLiveArtifact(artifacts, dec.artifactId);
+      const options = Array.isArray(dec.options) ? dec.options : [];
+      const chosen = dec.response ? options.find((o) => o?.id === dec.response.optionId) : void 0;
+      const origin = artifacts.find((a) => a.id === dec.artifactId);
+      const closedUnresolved = !dec.response && origin?.status === "superseded";
+      decisions.push({
+        decisionId: dec.decisionId,
+        sessionId,
+        sessionTitle,
+        artifactId: dec.artifactId,
+        artifactTitle: liveArtifact?.title ?? dec.context ?? dec.artifactId,
+        artifactMissing: !liveArtifact,
+        context: dec.context ?? "",
+        stakes: dec.stakes,
+        optionCount: options.length,
+        resolved: !!dec.response,
+        chosenOptionId: dec.response?.optionId,
+        // Prefer the option's title; fall back to the raw optionId so a
+        // resolved decision whose option list drifted still shows a choice.
+        chosenOptionTitle: dec.response ? chosen?.title ?? dec.response.optionId : void 0,
+        reasoning: dec.response?.reasoning,
+        confidence: dec.response?.confidence,
+        createdAt: dec.createdAt,
+        resolvedAt: dec.resolvedAt,
+        ...closedUnresolved ? { closedUnresolved: true } : {}
+      });
+    }
+  };
+  const liveById = /* @__PURE__ */ new Map();
+  for (const src of liveSessions) liveById.set(src.sessionId, src);
+  const consumedLive = /* @__PURE__ */ new Set();
+  const sidecarSessions = [];
+  let entries = [];
+  if (fs4.existsSync(sessionsDir)) {
+    try {
+      entries = fs4.readdirSync(sessionsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const sessionId = entry.name;
     const sessionDir = path3.join(sessionsDir, sessionId);
     const decFile = path3.join(sessionDir, "decisions.json");
+    try {
+      if (fs4.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
+    } catch {
+    }
+    const liveSrc = liveById.get(sessionId);
+    if (liveSrc) {
+      consumedLive.add(sessionId);
+      pushSession(sessionId, liveSrc.decisions, liveSrc.artifacts);
+      continue;
+    }
     if (!fs4.existsSync(decFile)) continue;
     let raw2;
     try {
@@ -23443,13 +23490,14 @@ function listAllDecisions(projectRoot2) {
         fs4.copyFileSync(decFile, decFile + ".corrupt");
       } catch {
       }
-      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json" });
+      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json", kind: "unreadable" });
       continue;
     }
     if (!Array.isArray(raw2)) {
       failedSessions.push({
         sessionId,
-        reason: `decisions.json is not an array (got ${raw2 === null ? "null" : typeof raw2})`
+        reason: `decisions.json is not an array (got ${raw2 === null ? "null" : typeof raw2})`,
+        kind: "unreadable"
       });
       continue;
     }
@@ -23458,7 +23506,8 @@ function listAllDecisions(projectRoot2) {
     if (decRecords.length === 0) {
       failedSessions.push({
         sessionId,
-        reason: `all ${raw2.length} decision record(s) in decisions.json were malformed`
+        reason: `all ${raw2.length} decision record(s) in decisions.json were malformed`,
+        kind: "unreadable"
       });
       continue;
     }
@@ -23474,33 +23523,19 @@ function listAllDecisions(projectRoot2) {
       } catch {
       }
     }
-    const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const sessionTitle = sorted[0]?.title ?? sessionId;
-    for (const dec of decRecords) {
-      const live = resolveLiveArtifact(artifacts, dec.artifactId);
-      const options = Array.isArray(dec.options) ? dec.options : [];
-      const chosen = dec.response ? options.find((o) => o?.id === dec.response.optionId) : void 0;
-      decisions.push({
-        decisionId: dec.decisionId,
-        sessionId,
-        sessionTitle,
-        artifactId: dec.artifactId,
-        artifactTitle: live?.title ?? dec.context ?? dec.artifactId,
-        artifactMissing: !live,
-        context: dec.context ?? "",
-        stakes: dec.stakes,
-        optionCount: options.length,
-        resolved: !!dec.response,
-        chosenOptionId: dec.response?.optionId,
-        // Prefer the option's title; fall back to the raw optionId so a
-        // resolved decision whose option list drifted still shows a choice.
-        chosenOptionTitle: dec.response ? chosen?.title ?? dec.response.optionId : void 0,
-        reasoning: dec.response?.reasoning,
-        confidence: dec.response?.confidence,
-        createdAt: dec.createdAt,
-        resolvedAt: dec.resolvedAt
-      });
-    }
+    pushSession(sessionId, decRecords, artifacts);
+  }
+  for (const src of liveSessions) {
+    if (consumedLive.has(src.sessionId)) continue;
+    pushSession(src.sessionId, src.decisions, src.artifacts);
+  }
+  for (const sessionId of sidecarSessions) {
+    if (failedSessions.some((f) => f.sessionId === sessionId)) continue;
+    failedSessions.push({
+      sessionId,
+      reason: "earlier decisions were recovered from corruption; the pre-corruption file is preserved at decisions.json.corrupt",
+      kind: "recovered"
+    });
   }
   const sortKey = (d) => d.resolvedAt ?? d.createdAt ?? "";
   decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
@@ -25668,7 +25703,7 @@ var EMPTY_STATE = {
   rejectedApproaches: [],
   approvedPatterns: []
 };
-function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken) {
+function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources) {
   const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
   const broadcast3 = broadcastFn ?? ((event) => broadcast(event));
   const log2 = logFn ?? (() => {
@@ -26423,8 +26458,14 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app2.get("/api/decisions", (c) => {
     if (!projectRoot2) return c.json({ decisions: [], failedSessions: [] });
+    let live = [];
     try {
-      return c.json(FileStore.listAllDecisions(projectRoot2));
+      live = getLiveDecisionSources?.() ?? [];
+    } catch (err) {
+      log2(`[decisions] live-session snapshot failed, falling back to disk: ${err}`);
+    }
+    try {
+      return c.json(FileStore.listAllDecisions(projectRoot2, live));
     } catch (err) {
       log2(`[decisions] read failed, returning empty: ${err}`);
       return c.json({ decisions: [], failedSessions: [] });
@@ -28050,6 +28091,14 @@ function safeHeartbeatTick(tick, log2, state, escalate) {
   }
 }
 
+// src/daemon/auto-open.ts
+function shouldAutoOpenBrowser(env) {
+  const noOpen = (env.DEEPPAIRING_NO_OPEN ?? "").trim().toLowerCase();
+  if (noOpen === "1" || noOpen === "true" || noOpen === "yes") return false;
+  const openFlag = env.DEEPPAIRING_OPEN_BROWSER;
+  return openFlag !== "0" && openFlag !== "false" && openFlag !== "no";
+}
+
 // src/daemon/index.ts
 async function openBrowser(url2) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -28244,7 +28293,27 @@ var publicRoutes = createHttpRoutes(
   // Authorization. The browser receives this token via the
   // window.__deepPairingToken injection in the index.html serve path
   // (see static-serve block below).
-  daemonAuthToken
+  daemonAuthToken,
+  // #151 — snapshot every registered session's IN-MEMORY decisions +
+  // artifacts so GET /api/decisions reflects a decision the instant it is
+  // recorded/resolved, not after the debounced flush lands on disk. The
+  // `sessions` map deliberately retains stores after /unregister — those
+  // in-memory copies are still at least as fresh as their files, so live-
+  // wins-by-sessionId stays correct for them too. A single failing store is
+  // skipped (that session falls back to the disk scan) rather than losing
+  // the live view for every other session.
+  () => {
+    const out = [];
+    for (const [sessionId, store] of sessions.entries()) {
+      try {
+        const state = store.getFullState();
+        out.push({ sessionId, decisions: state.decisions, artifacts: state.artifacts });
+      } catch (err) {
+        log(`[decisions] live snapshot failed for ${sessionId}, using disk: ${err}`);
+      }
+    }
+    return out;
+  }
 );
 app.route("/", publicRoutes);
 var PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change"]);
@@ -28661,9 +28730,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
     log(`Hook-state watcher failed to start: ${err}`);
   }
   log(`Daemon running on http://localhost:${port}`);
-  const openFlag = process.env.DEEPPAIRING_OPEN_BROWSER;
-  const shouldOpen = openFlag !== "0" && openFlag !== "false" && openFlag !== "no";
-  if (shouldOpen) {
+  if (shouldAutoOpenBrowser(process.env)) {
     openBrowser(`http://localhost:${port}`).catch((err) => {
       log(`Failed to auto-open browser: ${err}`);
     });

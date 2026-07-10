@@ -56,7 +56,8 @@ test.beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-a11y-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-a11y-"));
   proc = spawn(process.execPath, [daemonJs], {
-    env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot },
+    // #152 — scripted start: suppress the daemon's browser auto-open.
+    env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
     stdio: "ignore",
   });
   const daemon = await waitForDaemon(projectRoot);
