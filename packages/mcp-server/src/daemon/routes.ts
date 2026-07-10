@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
+import { AutonomyLevelSchema, DetailDensitySchema } from "@deeppairing/shared";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
 
@@ -55,6 +56,10 @@ const AddCommentBody = z
   })
   .passthrough();
 const RecordDecisionBody = z.record(z.string(), z.unknown()); // must be an object; shape is the store's concern
+// Preference-setter bodies — validated against the SHARED enum schemas so the
+// internal route rejects a poison value the same way /api/preferences does.
+const AutonomyPostBody = z.object({ level: AutonomyLevelSchema });
+const DetailDensityPostBody = z.object({ density: DetailDensitySchema });
 
 async function parseJsonBody<T>(
   c: Context,
@@ -928,10 +933,32 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/autonomy", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const parsed = await readJsonObject(c);
+    // MUST validate the enum (not just "is an object"): this dial arms the
+    // auto-approve countdown, so a garbage value reaching the store fails OPEN
+    // toward LESS supervision. Zod-parse against the SAME schema
+    // /api/preferences uses → clean 400, nothing written.
+    const parsed = await parseJsonBody(c, AutonomyPostBody);
     if (!parsed.ok) return parsed.res;
-    const { level } = parsed.body as { level: Parameters<typeof r.store.setAutonomyLevel>[0] };
-    r.store.setAutonomyLevel(level);
+    r.store.setAutonomyLevel(parsed.data.level);
+    return c.json({ status: "updated" });
+  });
+
+  // --- Detail density (#139) — verbosity of artifact prose ---
+
+  app.get("/api/internal/sessions/:sessionId/detail-density", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ density: r.store.getDetailDensity() });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/detail-density", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    // Validate the enum against the shared schema (single source of truth) →
+    // 400 on an invalid value, nothing written.
+    const parsed = await parseJsonBody(c, DetailDensityPostBody);
+    if (!parsed.ok) return parsed.res;
+    r.store.setDetailDensity(parsed.data.density);
     return c.json({ status: "updated" });
   });
 

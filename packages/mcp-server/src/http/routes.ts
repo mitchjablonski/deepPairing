@@ -118,6 +118,7 @@ const EMPTY_STATE = {
   decisions: [],
   planReviews: [],
   autonomyLevel: "supervised",
+  detailDensity: "rich",
   rejectedApproaches: [],
   approvedPatterns: [],
 } as const;
@@ -1204,6 +1205,12 @@ export function createHttpRoutes(
     if (parsed.data.autonomyLevel) {
       await store.setAutonomyLevel(parsed.data.autonomyLevel);
       broadcast({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
+    }
+    // #139 — detail density: orthogonal to autonomy, so handle independently
+    // (a POST may carry either or both).
+    if (parsed.data.detailDensity) {
+      await store.setDetailDensity(parsed.data.detailDensity);
+      broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
     }
     return c.json({ status: "updated" });
   });

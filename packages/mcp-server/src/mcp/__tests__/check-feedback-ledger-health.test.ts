@@ -76,3 +76,44 @@ describe("H2-1 — check_feedback surfaces a frozen philosophy ledger", () => {
     expect(sc.ledgerHealth!.remedy).toMatch(/doctor/);
   });
 });
+
+/**
+ * #139 — the detail-density feature is delivered exclusively via the once-per-
+ * session first-call hint. This test PINS that it never leaks into the per-loop
+ * check_feedback payload: the healthy structuredContent key set is exactly what
+ * it was before the feature, and `detailDensity` is NOT among the keys. If a
+ * future change routes the setting through check_feedback, this fails loudly.
+ */
+describe("#139 — check_feedback healthy payload is unchanged (no detailDensity leak)", () => {
+  it("carries the exact pre-feature key set, with detailDensity terse in the store", async () => {
+    const store = new FileStore(tmpDir, "s_density");
+    // A terse preference must NOT change the poll payload — it belongs in the
+    // first-call hint, not this hot path.
+    store.setDetailDensity("terse");
+    const ctx = makeCtx();
+    (ctx as unknown as { store: FileStore }).store = store;
+    const res = await handleCheckFeedback(ctx, {});
+    const sc = res.structuredContent as Record<string, unknown>;
+
+    // The exact healthy key set (companionUrl present because port=4000>0;
+    // ledgerHealth omitted because the ledger is healthy).
+    expect(Object.keys(sc).sort()).toEqual(
+      [
+        "comments",
+        "companionUrl",
+        "decisions",
+        "pendingArtifacts",
+        "questions",
+        "rejected",
+        "serverVersion",
+        "statusChanges",
+        "status",
+        "suggestedAction",
+        "summary",
+      ].sort(),
+    );
+    // The feature must not appear anywhere in the poll payload.
+    expect("detailDensity" in sc).toBe(false);
+    expect(JSON.stringify(sc)).not.toMatch(/detailDensity|detail density/i);
+  });
+});

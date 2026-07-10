@@ -96,6 +96,109 @@ describe("C1 — failed save rolls back and warns (this control governs auto-app
   });
 });
 
+describe("#139 — detail density (verbosity) toggle", () => {
+  function mockState(state: Record<string, unknown>) {
+    return vi.fn((url: string, init?: any) => {
+      if (String(url).endsWith("/api/state") && (!init || !init.method || init.method === "GET")) {
+        return Promise.resolve({ ok: true, json: async () => state });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ status: "updated" }) });
+    });
+  }
+
+  async function openPopover() {
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
+  }
+
+  it("renders a radiogroup with an accessible name, both options, and roving tabindex", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
+    render(<AutonomySlider />);
+    await openPopover();
+
+    const group = screen.getByRole("radiogroup", { name: /detail density/i });
+    expect(group).toBeInTheDocument();
+    // Both options are real radios with accessible names + checked state.
+    const rich = screen.getByRole("radio", { name: /rich/i });
+    const terse = screen.getByRole("radio", { name: /terse/i });
+    expect(rich).toHaveAttribute("aria-checked", "true"); // default
+    expect(terse).toHaveAttribute("aria-checked", "false");
+    // Roving tabindex: exactly the checked radio is in the tab order.
+    expect(rich).toHaveAttribute("tabindex", "0");
+    expect(terse).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("is arrow-key navigable — ArrowRight/ArrowLeft move selection (WAI-ARIA radiogroup)", async () => {
+    const fetchMock = mockState({ autonomyLevel: "supervised" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+
+    const rich = screen.getByRole("radio", { name: /rich/i });
+    const terse = screen.getByRole("radio", { name: /terse/i });
+    // Focus the current (rich) radio, then arrow to the next.
+    rich.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    await waitFor(() => expect(terse).toHaveAttribute("aria-checked", "true"));
+    expect(rich).toHaveAttribute("aria-checked", "false");
+    // Roving tabindex follows selection.
+    expect(terse).toHaveAttribute("tabindex", "0");
+    expect(rich).toHaveAttribute("tabindex", "-1");
+    // Selection moving via keyboard persisted the choice.
+    const post = fetchMock.mock.calls.find(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    expect(JSON.parse(post![1].body)).toEqual({ detailDensity: "terse" });
+
+    // ArrowLeft moves back to rich.
+    await userEvent.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(rich).toHaveAttribute("aria-checked", "true"));
+    expect(terse).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("reflects a 'terse' preference loaded from /api/state", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised", detailDensity: "terse" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /terse/i })).toHaveAttribute("aria-checked", "true"),
+    );
+    expect(screen.getByRole("radio", { name: /rich/i })).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("POSTs { detailDensity: 'terse' } and updates the checked state when Terse is picked", async () => {
+    const fetchMock = mockState({ autonomyLevel: "supervised" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+    await userEvent.click(screen.getByRole("radio", { name: /terse/i }));
+
+    const postCall = fetchMock.mock.calls.find(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    expect(postCall).toBeTruthy();
+    expect(JSON.parse(postCall![1].body)).toEqual({ detailDensity: "terse" });
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /terse/i })).toHaveAttribute("aria-checked", "true"),
+    );
+  });
+
+  it("does NOT couple to autonomy — picking Terse never POSTs an autonomyLevel", async () => {
+    const fetchMock = mockState({ autonomyLevel: "supervised" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+    await userEvent.click(screen.getByRole("radio", { name: /terse/i }));
+
+    const prefCalls = fetchMock.mock.calls.filter(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    for (const call of prefCalls) {
+      expect(JSON.parse(call[1].body)).not.toHaveProperty("autonomyLevel");
+    }
+  });
+});
+
 describe("F5 — unknown autonomy level from unvalidated /api/state (the crash class)", () => {
   it("renders the supervised default instead of throwing on an unrecognized level", async () => {
     vi.stubGlobal("fetch", mockStateAutonomy("yolo"));

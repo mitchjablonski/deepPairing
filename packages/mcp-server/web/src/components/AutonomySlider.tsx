@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { apiBase, sessionHeaders, apiGet } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
+type DetailDensity = "rich" | "terse";
 
 /**
  * Q6 + III9: was displayed as a "Ceremony" dial. Council product review
@@ -19,9 +20,28 @@ const levels: { id: AutonomyLevel; label: string; description: string }[] = [
   { id: "autonomous", label: "Minimal", description: "Agent proceeds with its recommendations; you review after" },
 ];
 
+/**
+ * #139 — detail density (verbosity) is ORTHOGONAL to autonomy. Autonomy governs
+ * how MANY artifacts post + gating (auto-approve); this governs how much PROSE
+ * rides inside each artifact. It lives inside the same popover as a small
+ * Rich/Terse toggle — deliberately NOT a second slider, since two "how much"
+ * sliders would blur which one controls auto-approve. Terse only trims text:
+ * every artifact still posts and Evidence is always attached.
+ */
+const densities: { id: DetailDensity; label: string; description: string }[] = [
+  { id: "rich",  label: "Rich",  description: "Full explanations around each artifact" },
+  { id: "terse", label: "Terse", description: "Tight prose; same artifacts + evidence, less text" },
+];
+
 export function AutonomySlider() {
   const [level, setLevel] = useState<AutonomyLevel>("supervised");
+  // #139 — default "rich" mirrors the store default so an old preferences.json
+  // (no detailDensity field) reads as Rich.
+  const [density, setDensity] = useState<DetailDensity>("rich");
   const [showTooltip, setShowTooltip] = useState(false);
+  // #139 — refs for the detail-density radios so arrow-key navigation can move
+  // focus (the WAI-ARIA radiogroup pattern: one tab stop, arrows move+select).
+  const densityRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Load from server on mount
   useEffect(() => {
@@ -29,6 +49,9 @@ export function AutonomySlider() {
       .then((r) => r.json())
       .then((state) => {
         if (state.autonomyLevel) setLevel(state.autonomyLevel);
+        if (state.detailDensity === "rich" || state.detailDensity === "terse") {
+          setDensity(state.detailDensity);
+        }
       })
       .catch(() => {});
   }, []);
@@ -58,6 +81,45 @@ export function AutonomySlider() {
         body: "It still controls auto-approve, so the change was rolled back.",
       });
     }
+  };
+
+  // #139 — detail density is orthogonal to autonomy and does NOT gate
+  // auto-approve, so a failed save is a soft rollback (toast, no auto-approve
+  // safety claim). Mirrors handleChange's optimistic-then-reconcile shape.
+  const handleDensityChange = async (newDensity: DetailDensity) => {
+    if (newDensity === density) return;
+    const prev = density;
+    setDensity(newDensity);
+    try {
+      const res = await fetch(`${apiBase()}/api/preferences`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ detailDensity: newDensity }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setDensity((cur) => (cur === newDensity ? prev : cur));
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Detail density not saved",
+        body: "The change was rolled back.",
+      });
+    }
+  };
+
+  // #139 — WAI-ARIA radiogroup keyboard nav: arrows move focus AND selection
+  // (single tab stop via roving tabindex below). Home/End jump to the ends.
+  const handleDensityKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, idx: number) => {
+    let nextIdx: number | null = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") nextIdx = (idx + 1) % densities.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") nextIdx = (idx - 1 + densities.length) % densities.length;
+    else if (e.key === "Home") nextIdx = 0;
+    else if (e.key === "End") nextIdx = densities.length - 1;
+    if (nextIdx === null) return;
+    e.preventDefault();
+    const next = densities[nextIdx]!;
+    densityRefs.current[nextIdx]?.focus?.(); // optional chain for jsdom compat
+    void handleDensityChange(next.id);
   };
 
   // The /api/state response isn't schema-validated, so an unknown
@@ -101,6 +163,39 @@ export function AutonomySlider() {
                 <div className="text-2xs text-text-muted">{l.description}</div>
               </button>
             ))}
+
+            {/* #139 — detail density. A radiogroup (not a second slider): two
+                "how much" sliders would blur which one governs auto-approve.
+                Keyboard-operable radios with a real group name + checked state. */}
+            <div className="px-3 py-2 border-t border-border-subtle">
+              <div className="text-2xs text-text-muted mb-1.5">
+                Detail: how much text rides inside each artifact
+              </div>
+              <div role="radiogroup" aria-label="Detail density" className="flex gap-1">
+                {densities.map((d, i) => (
+                  <button
+                    key={d.id}
+                    ref={(el) => { densityRefs.current[i] = el; }}
+                    type="button"
+                    role="radio"
+                    aria-checked={d.id === density}
+                    // Roving tabindex: only the checked radio is in the tab
+                    // order; arrows move within the group (WAI-ARIA pattern).
+                    tabIndex={d.id === density ? 0 : -1}
+                    title={d.description}
+                    onClick={() => handleDensityChange(d.id)}
+                    onKeyDown={(e) => handleDensityKeyDown(e, i)}
+                    className={`flex-1 px-2 py-1 rounded text-2xs font-medium border transition-colors ${
+                      d.id === density
+                        ? "bg-accent-blue-dim/40 text-accent-blue border-accent-blue/40"
+                        : "border-border-default text-text-secondary hover:bg-surface-hover"
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </>
       )}

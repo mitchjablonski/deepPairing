@@ -411,6 +411,78 @@ describe("FileStore", () => {
     expect(store2.getAutonomyLevel()).toBe("balanced");
   });
 
+  // The autonomy dial arms the auto-approve countdown, so its LOAD must fail
+  // CLOSED: a poisoned/legacy preferences.json value must land on `supervised`
+  // (most supervision), never survive as garbage that reads as "not supervised".
+  describe("autonomy level fails closed on a poisoned preferences.json", () => {
+    it("loads an unrecognized autonomyLevel as 'supervised' (not the garbage value)", () => {
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "banana" }));
+      // Fail-safe: garbage collapses to the most-supervised default.
+      expect(createStore("autonomy-poison").getAutonomyLevel()).toBe("supervised");
+    });
+
+    it("still loads a VALID persisted autonomyLevel unchanged", () => {
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "autonomous" }));
+      expect(createStore("autonomy-valid").getAutonomyLevel()).toBe("autonomous");
+    });
+  });
+
+  // #139 — detail density (verbosity). Orthogonal to autonomy; persisted in the
+  // same preferences.json. Round-trip, default-when-absent, and back-compat with
+  // a legacy preferences.json that predates the field.
+  describe("#139 — detail density", () => {
+    it("defaults to 'rich' when never set", () => {
+      const store = createStore("dd-default");
+      expect(store.getDetailDensity()).toBe("rich");
+    });
+
+    it("persists and reloads a 'terse' setting across store instances", () => {
+      const store = createStore("dd-persist");
+      store.setDetailDensity("terse");
+      // A fresh store over the same basePath reads the persisted preference.
+      const store2 = createStore("dd-persist");
+      expect(store2.getDetailDensity()).toBe("terse");
+    });
+
+    it("round-trips back to 'rich' after being toggled", () => {
+      const store = createStore("dd-roundtrip");
+      store.setDetailDensity("terse");
+      store.setDetailDensity("rich");
+      expect(createStore("dd-roundtrip").getDetailDensity()).toBe("rich");
+    });
+
+    it("does NOT disturb the sibling autonomyLevel preference", () => {
+      const store = createStore("dd-sibling");
+      store.setAutonomyLevel("balanced");
+      store.setDetailDensity("terse");
+      const reloaded = createStore("dd-sibling");
+      expect(reloaded.getAutonomyLevel()).toBe("balanced");
+      expect(reloaded.getDetailDensity()).toBe("terse");
+    });
+
+    it("loads a legacy preferences.json with NO detailDensity field as 'rich' (back-compat)", () => {
+      // Simulate a preferences.json written before this feature existed.
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "autonomous" }));
+      const store = createStore("dd-legacy");
+      // Absent field → rich; the pre-existing autonomyLevel still loads as before.
+      expect(store.getDetailDensity()).toBe("rich");
+      expect(store.getAutonomyLevel()).toBe("autonomous");
+    });
+
+    it("surfaces detailDensity in getFullState for the companion UI", () => {
+      const store = createStore("dd-fullstate");
+      expect(store.getFullState().detailDensity).toBe("rich");
+      store.setDetailDensity("terse");
+      expect(store.getFullState().detailDensity).toBe("terse");
+    });
+  });
+
   it("records and retrieves session memory", () => {
     const store = createStore( "memory");
     store.recordApprovedPattern({ description: "Service pattern" });

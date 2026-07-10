@@ -597,6 +597,17 @@ export class DaemonClient implements IStore {
     return data.level;
   }
 
+  // --- Detail Density (#139) ---
+
+  async setDetailDensity(density: "rich" | "terse"): Promise<void> {
+    await this.post("/detail-density", { density });
+  }
+
+  async getDetailDensity(): Promise<"rich" | "terse"> {
+    const data = await this.get<{ density: "rich" | "terse" }>("/detail-density");
+    return data.density;
+  }
+
   // --- Feedback polling ---
 
   /**

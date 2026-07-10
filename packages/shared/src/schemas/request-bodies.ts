@@ -60,9 +60,25 @@ export const RenameBodySchema = z.object({
 });
 export type RenameBody = z.infer<typeof RenameBodySchema>;
 
-// POST /api/preferences — autonomy level + future per-session prefs.
+// Autonomy level — the single source of truth for the enum. Exported so the
+// internal daemon route validates against the SAME schema as /api/preferences
+// (per the repo convention: schemas, not hand-rolled checks). This dial arms
+// the auto-approve countdown, so an unvalidated value that survives to the
+// store fails OPEN toward less supervision — every write path must gate on it.
+export const AutonomyLevelSchema = z.enum(["supervised", "balanced", "autonomous"]);
+export type AutonomyLevel = z.infer<typeof AutonomyLevelSchema>;
+
+// #139 — detail density (verbosity) is ORTHOGONAL to autonomy: autonomy
+// governs artifact COUNT + gating (auto-approve), detailDensity governs how
+// much PROSE rides inside each artifact. Optional + absent-means-"rich" so an
+// existing preferences.json with no field behaves exactly as today.
+export const DetailDensitySchema = z.enum(["rich", "terse"]);
+export type DetailDensity = z.infer<typeof DetailDensitySchema>;
+
+// POST /api/preferences — autonomy level + detail density + future per-session prefs.
 export const PreferenceBodySchema = z.object({
-  autonomyLevel: z.enum(["supervised", "balanced", "autonomous"]).optional(),
+  autonomyLevel: AutonomyLevelSchema.optional(),
+  detailDensity: DetailDensitySchema.optional(),
 });
 export type PreferenceBody = z.infer<typeof PreferenceBodySchema>;
 

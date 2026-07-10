@@ -84,3 +84,55 @@ describe("first-call hint — always-on protocol preamble", () => {
     expect(hint).toMatch(/5173/);
   });
 });
+
+/**
+ * #139 — detail density (verbosity). The setting is delivered ONCE per session
+ * through this first-call hint (never in check_feedback's per-loop payload).
+ * These pin: terse emits concrete prose-tightening guidance; rich (the default)
+ * emits NOTHING (byte-for-byte the pre-feature hint); and the FLOOR — terse may
+ * shrink prose but the guidance must NEVER tell the agent to drop Evidence,
+ * skip an artifact, or reduce the number of artifacts.
+ */
+describe("first-call hint — #139 detail density", () => {
+  it("emits terse prose-tightening guidance when detailDensity is 'terse'", async () => {
+    store.setDetailDensity("terse");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Detail density: TERSE/);
+    // The concrete instruction that IS the feature.
+    expect(hint).toMatch(/1[–-]2 sentences/);
+    expect(hint).toMatch(/[Ll]ead with the evidence/);
+  });
+
+  it("emits NO detail-density guidance in the default 'rich' mode", async () => {
+    // Default (never set) is rich; the hint must not carry the terse block.
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Detail density: TERSE/);
+    expect(hint).not.toMatch(/detail density/i);
+  });
+
+  it("emits NO detail-density guidance when explicitly set back to 'rich'", async () => {
+    store.setDetailDensity("terse");
+    store.setDetailDensity("rich");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Detail density: TERSE/);
+  });
+
+  it("FLOOR — terse guidance carries the load-bearing prohibitions verbatim", async () => {
+    store.setDetailDensity("terse");
+    const hint = await buildFirstCallHint(store, 4000);
+    // The floor is the POSITIVE guard: these exact prohibition sentences must
+    // exist, so a well-meaning rewrite that softens the floor (e.g. "attach
+    // evidence when relevant") deletes one of them and fails HERE. A blacklist
+    // of phrasings-we-happened-to-avoid is theater — it can't catch a novel
+    // floor-violating rewrite — so this test asserts presence, not absence.
+    expect(hint).toMatch(/Do NOT reduce the number of artifacts/);
+    expect(hint).toMatch(/do NOT skip present_options or present_code_change/);
+    expect(hint).toMatch(/NEVER omit `Evidence`/);
+    // Pin the LITERAL evidence shape the agent must always attach — the whole
+    // point of the floor is that terse trims prose, never the four Evidence
+    // fields. If the parenthetical is dropped/reworded, this fails.
+    expect(hint).toContain("`Evidence` (filePath, lineStart, lineEnd, snippet)");
+    // And the explicit statement that terse trims prose, not evidence.
+    expect(hint).toMatch(/never the evidence itself/);
+  });
+});

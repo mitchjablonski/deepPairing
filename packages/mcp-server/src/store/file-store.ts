@@ -35,6 +35,9 @@ export class FileStore implements IStore {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
   private autonomyLevel: "supervised" | "balanced" | "autonomous" = "supervised";
+  // #139 — detail density (verbosity). Default "rich" == today's behavior, so
+  // a preferences.json with no `detailDensity` field loads as rich.
+  private detailDensity: "rich" | "terse" = "rich";
 
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
@@ -113,7 +116,25 @@ export class FileStore implements IStore {
       // G6 — labels are the once-per-process suppression KEY: session-scope
       // them (F10's sid:file format) so a second corrupt session still logs.
       `${this.sessionId}:preferences.json`, this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
-    if (prefs.autonomyLevel) this.autonomyLevel = prefs.autonomyLevel;
+    // FAIL CLOSED: this dial arms the auto-approve countdown, so an
+    // unrecognized value (a poisoned file, or one written before the route was
+    // enum-validated) must land on `supervised` (MOST supervision), never
+    // survive as garbage that ArtifactStatusActions reads as "not supervised"
+    // and arms auto-approve. Enum-guard the load like the density field below;
+    // the `supervised` default (set at the field declaration) is the fallback,
+    // so an invalid file self-heals to fail-safe on next write.
+    if (
+      prefs.autonomyLevel === "supervised" ||
+      prefs.autonomyLevel === "balanced" ||
+      prefs.autonomyLevel === "autonomous"
+    ) {
+      this.autonomyLevel = prefs.autonomyLevel;
+    }
+    // #139 — absent field keeps the "rich" default (back-compat: an existing
+    // preferences.json written before this feature has no `detailDensity`).
+    if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
+      this.detailDensity = prefs.detailDensity;
+    }
   }
 
   private load(): void {
@@ -1252,6 +1273,19 @@ export class FileStore implements IStore {
     return this.autonomyLevel;
   }
 
+  // --- Detail Density (#139) ---
+
+  setDetailDensity(density: "rich" | "terse"): void {
+    this.detailDensity = density;
+    const prefs = this.readPreferences();
+    prefs.detailDensity = density;
+    this.writePreferences(prefs);
+  }
+
+  getDetailDensity(): "rich" | "terse" {
+    return this.detailDensity;
+  }
+
   // --- Feedback notification (for long-poll) ---
 
   private feedbackWaiters: Array<() => void> = [];
@@ -1296,6 +1330,7 @@ export class FileStore implements IStore {
       decisions: Array.from(this.decisions.values()),
       planReviews: Array.from(this.planReviews.values()),
       autonomyLevel: this.autonomyLevel,
+      detailDensity: this.detailDensity,
       sessionMemory: this.getSessionMemory(),
       engagementMetrics: this.getEngagementMetrics(),
     };

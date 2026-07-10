@@ -168,6 +168,7 @@ export interface IStore {
     decisions: DecisionRecord[];
     planReviews: PlanReviewRecord[];
     autonomyLevel: string;
+    detailDensity: string;
     sessionMemory: { rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] };
     engagementMetrics: {
       avgReviewLatencyMs: number;
@@ -386,6 +387,13 @@ export interface IStore {
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;
   getAutonomyLevel(): MaybePromise<"supervised" | "balanced" | "autonomous">;
+
+  // #139 — detail density (verbosity). Orthogonal to autonomy: this governs
+  // how much PROSE rides inside each artifact, not how many artifacts post or
+  // whether the agent waits for approval. Optional in the store's persisted
+  // shape; absent means "rich" (today's behavior).
+  setDetailDensity(density: "rich" | "terse"): MaybePromise<void>;
+  getDetailDensity(): MaybePromise<"rich" | "terse">;
 
   // Feedback polling
   waitForFeedback(timeoutMs?: number): Promise<void>;

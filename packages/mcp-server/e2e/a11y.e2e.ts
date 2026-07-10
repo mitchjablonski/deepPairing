@@ -164,6 +164,26 @@ test("a11y: project-wide decisions view has no serious/critical axe violations",
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });
 
+test("a11y: the Autonomy popover (with the #139 detail-density toggle) has no serious/critical axe violations", async ({ page }) => {
+  // #139 added a Detail: Rich/Terse radiogroup inside the Autonomy popover.
+  // The two page-level scans above never open the popover, so this opens it and
+  // scans the live radiogroup markup (accessible name + radio checked state).
+  // The Autonomy control lives in the shell CHROME (header), so this test
+  // depends only on the button rendering — NOT on any artifact loading (waiting
+  // for [data-artifact-id] here just adds an unrelated session-load flake).
+  await page.goto(`${baseURL}/?session=a11y`);
+  const autonomyBtn = page.getByRole("button", { name: /autonomy:/i });
+  await autonomyBtn.waitFor({ timeout: 15000 });
+  await autonomyBtn.click();
+  // Wait for the popover's detail-density radiogroup to mount before scanning.
+  await page.getByRole("radiogroup", { name: /detail density/i }).waitFor({ timeout: 15000 });
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+});
+
 test("a11y: app shell (no session selected) has no serious/critical axe violations", async ({ page }) => {
   // Note: a session exists (seeded in beforeAll), so this scans the shell
   // chrome + aggregate surface rather than a truly empty app.
