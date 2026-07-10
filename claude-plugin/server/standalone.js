@@ -26145,75 +26145,94 @@ function deriveStance(entry) {
   if (approvals > rejections * 2 && approvals >= 1) return "prefer";
   return "mixed";
 }
-var backedUpLedgers = /* @__PURE__ */ new Set();
+var corruptSnapshots = /* @__PURE__ */ new Map();
 var GlobalStore = class _GlobalStore {
   ledgerPath;
-  // H1-5 — set by read() when the on-disk ledger couldn't be trusted
-  // (unparseable JSON or a wrong top-level shape). write() consults these to
-  // REFUSE overwriting a ledger we failed to read — silently persisting the
-  // empty shape over it would permanently destroy all cross-project history.
+  // H1-5 — set by read() when the on-disk ledger couldn't be trusted at all
+  // (unreadable / unparseable / wrong top-level shape). write() consults this to
+  // REFUSE overwriting — silently persisting the empty shape would permanently
+  // destroy all cross-project history.
   lastReadCorrupt = false;
-  lastBackupSucceeded = false;
+  // H1-5 R1 — set by read() when per-entry salvage had to DROP ≥1 unsalvageable
+  // entry (zero recoverable instances). The top-level shape is valid so writes
+  // stay allowed, but write() must snapshot the pre-drop bytes before it shrinks
+  // the on-disk ledger — losing an entry is not the catastrophic reset, but we
+  // never destroy an entry with no copy on disk.
+  lastReadDroppedEntries = false;
   constructor(ledgerPath) {
     this.ledgerPath = ledgerPath ?? defaultLedgerPath();
   }
   getLedgerPath() {
     return this.ledgerPath;
   }
+  /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
+   *  backup path on success, or null if the copy failed. */
+  snapshotLedger() {
+    const backup = `${this.ledgerPath}.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      fs2.copyFileSync(this.ledgerPath, backup);
+      return backup;
+    } catch {
+      return null;
+    }
+  }
   /**
    * H1-5 — whole-file corruption path: back the on-disk copy up to
    * `<path>.corrupt-<ts>` BEFORE we fall back to empty, and log LOUDLY. Mirrors
    * FileStore.loadJsonFile (which already does copy-then-fallback) — GlobalStore
    * was the one store that silently reset to empty with no backup, so the next
-   * write() destroyed the ledger. Backing up once per path per process avoids
-   * a snapshot storm from read-only callers hitting a persistently bad file.
+   * write() destroyed the ledger. Snapshot once per path per current corruption
+   * so read-only callers hitting a persistently bad file don't storm snapshots.
    */
   markCorrupt(err) {
     this.lastReadCorrupt = true;
-    if (backedUpLedgers.has(this.ledgerPath)) {
-      this.lastBackupSucceeded = true;
-      return;
-    }
+    const existing = corruptSnapshots.get(this.ledgerPath);
+    if (existing) return;
     const msg = err?.message ?? String(err);
-    const backup = `${this.ledgerPath}.corrupt-${Date.now()}`;
-    let backedUp = false;
-    try {
-      fs2.copyFileSync(this.ledgerPath, backup);
-      backedUp = true;
-      backedUpLedgers.add(this.ledgerPath);
-    } catch {
-    }
-    this.lastBackupSucceeded = backedUp;
+    const backup = this.snapshotLedger();
+    if (backup) corruptSnapshots.set(this.ledgerPath, backup);
     console.error(
-      `[deepPairing] GlobalStore: the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable (${msg}). ` + (backedUp ? `Backed the on-disk copy up to ${backup} before falling back \u2014 your cross-project history is preserved there and can be hand-repaired. deepPairing will NOT overwrite the current file until you fix or remove it (writes are refused so the ledger isn't reset to empty).` : `WARNING: could NOT back it up either \u2014 refusing all writes so the only copy survives. Fix or remove the file to restore the ledger.`)
+      `[deepPairing] GlobalStore: the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable (${msg}). ` + (backup ? `Backed the on-disk copy up to ${backup} before falling back \u2014 your cross-project history is preserved there and can be hand-repaired. deepPairing will NOT overwrite the current file until you fix or remove it (writes are refused so the ledger isn't reset to empty).` : `WARNING: could NOT back it up either \u2014 refusing all writes so the only copy survives. Fix or remove the file to restore the ledger.`)
     );
   }
   /**
-   * Per-entry salvage on read (mirrors salvage.ts). Drops a malformed concept
-   * entry and keeps the rest — one hand-edited entry whose `instances` isn't an
-   * array otherwise makes deriveStance/query `.filter` throw → 500 on every
-   * taste/ledger route. Returns null to drop; otherwise a structurally sound
-   * entry with malformed instances filtered out.
+   * H1-5 R1 — per-entry salvage on read with RECONSTRUCTION. An entry is only
+   * worthless if it carries ZERO recoverable instances (the instance log is the
+   * irreplaceable data). If ≥1 instance survives, keep the entry and rebuild any
+   * malformed scalar rather than dropping months of history over a bad
+   * timestamp: `key`/`concept` fall back to the map key (always available),
+   * `firstSeenAt`/`lastSeenAt` to the min/max of the surviving instance
+   * timestamps. Returns `{ entry: null }` ONLY when nothing is salvageable.
    */
-  static salvageEntry(raw) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  static salvageEntry(mapKey, raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { entry: null, reconstructed: false };
     const e = raw;
-    if (typeof e.key !== "string" || typeof e.concept !== "string") return null;
-    if (typeof e.firstSeenAt !== "string" || typeof e.lastSeenAt !== "string") return null;
-    if (!Array.isArray(e.instances)) return null;
-    const instances = e.instances.filter((i) => {
+    const rawInstances = Array.isArray(e.instances) ? e.instances : [];
+    const instances = rawInstances.filter((i) => {
       if (!i || typeof i !== "object") return false;
       const inst = i;
       return typeof inst.project === "string" && typeof inst.sessionId === "string" && (inst.verdict === "approved" || inst.verdict === "rejected") && typeof inst.at === "string";
     });
-    return { key: e.key, concept: e.concept, instances, firstSeenAt: e.firstSeenAt, lastSeenAt: e.lastSeenAt };
+    if (instances.length === 0) return { entry: null, reconstructed: false };
+    let reconstructed = false;
+    const key = typeof e.key === "string" && e.key.length > 0 ? e.key : mapKey;
+    if (key !== e.key) reconstructed = true;
+    const concept = typeof e.concept === "string" && e.concept.length > 0 ? e.concept : key;
+    if (concept !== e.concept) reconstructed = true;
+    const ats = instances.map((i) => i.at).sort();
+    const firstSeenAt = typeof e.firstSeenAt === "string" && e.firstSeenAt.length > 0 ? e.firstSeenAt : ats[0];
+    if (firstSeenAt !== e.firstSeenAt) reconstructed = true;
+    const lastSeenAt = typeof e.lastSeenAt === "string" && e.lastSeenAt.length > 0 ? e.lastSeenAt : ats[ats.length - 1];
+    if (lastSeenAt !== e.lastSeenAt) reconstructed = true;
+    return { entry: { key, concept, instances, firstSeenAt, lastSeenAt }, reconstructed };
   }
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   read() {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
     this.lastReadCorrupt = false;
-    this.lastBackupSucceeded = false;
+    this.lastReadDroppedEntries = false;
     if (!fs2.existsSync(this.ledgerPath)) {
+      corruptSnapshots.delete(this.ledgerPath);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     let raw;
@@ -26223,6 +26242,11 @@ var GlobalStore = class _GlobalStore {
       this.markCorrupt(err);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
+    if (raw.trim() === "") {
+      salvageLog(`philosophy-ledger-empty:${this.ledgerPath}`, `philosophy ledger at ${this.ledgerPath} was empty; starting fresh`);
+      corruptSnapshots.delete(this.ledgerPath);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
     let parsed;
     try {
       parsed = JSON.parse(raw);
@@ -26230,32 +26254,46 @@ var GlobalStore = class _GlobalStore {
       this.markCorrupt(err);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
-    if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
-      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(parsed.version)})`));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      const rootKind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`));
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    const top = parsed;
+    if (top.version !== LEDGER_VERSION || typeof top.concepts !== "object" || !top.concepts) {
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`));
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     const concepts = emptyConcepts();
     let dropped = 0;
-    for (const [key, rawEntry] of Object.entries(parsed.concepts)) {
-      const salv = _GlobalStore.salvageEntry(rawEntry);
-      if (salv) concepts[key] = salv;
+    for (const [key, rawEntry] of Object.entries(top.concepts)) {
+      const { entry } = _GlobalStore.salvageEntry(key, rawEntry);
+      if (entry) concepts[key] = entry;
       else dropped++;
     }
     if (dropped > 0) {
-      salvageLog("philosophy-ledger", `dropped ${dropped} malformed concept entry(ies) on read (kept the rest)`);
+      salvageLog("philosophy-ledger", `dropped ${dropped} unsalvageable concept entry(ies) on read (no recoverable instances)`);
+      this.lastReadDroppedEntries = true;
+    } else {
+      corruptSnapshots.delete(this.ledgerPath);
     }
     return { version: LEDGER_VERSION, concepts };
   }
   write(ledger) {
     if (this.lastReadCorrupt) {
+      const snap = corruptSnapshots.get(this.ledgerPath);
       console.error(
-        `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt${this.lastBackupSucceeded ? " (a .corrupt-<ts> backup was made)" : " and could not be backed up"}; not overwriting it with a reset shape. Fix or remove the file to resume recording.`
+        `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt; not overwriting it with a reset shape. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) + `Fix or remove the file to resume recording.`
       );
       return;
+    }
+    if (this.lastReadDroppedEntries) {
+      this.snapshotLedger();
     }
     try {
       fs2.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
+      corruptSnapshots.delete(this.ledgerPath);
     } catch {
     }
   }
