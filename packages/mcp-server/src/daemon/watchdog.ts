@@ -55,14 +55,58 @@ export function guardWatcher(
  * the startup call's fatal semantics are preserved by NOT routing it through
  * here.
  */
-export function safeHeartbeatTick(tick: () => void, log: (msg: string) => void): void {
+/**
+ * H2-3 (#146) — mutable state threaded across ticks so safeHeartbeatTick can
+ * count CONSECUTIVE failures and escalate a persistent one. A fresh object per
+ * daemon; passing it in (rather than a module-level counter) keeps the function
+ * pure enough to unit-test with a real object + a throwing fake.
+ */
+export interface HeartbeatState {
+  consecutiveFailures: number;
+}
+
+/**
+ * H2-3 (#146) — escalate after this many CONSECUTIVE failed ticks. The
+ * heartbeat runs every 30s: one failure self-heals on the next tick (~30s), so
+ * a single hiccup stays quiet (only the routine per-tick log). Three in a row is
+ * ~90s of sustained failure — no longer "transient" but a standing condition (a
+ * full disk, a permanent EACCES) that leaves daemon.json stale/possibly
+ * truncated while nothing else notices. Escalate ONCE at the threshold (`===`,
+ * not `>=`) so a stuck daemon doesn't spam stderr every 30s; the counter resets
+ * to 0 on the next success, so a recover-then-refail cycle re-escalates.
+ */
+export const HEARTBEAT_ESCALATE_AFTER = 3;
+
+export function safeHeartbeatTick(
+  tick: () => void,
+  log: (msg: string) => void,
+  state?: HeartbeatState,
+  escalate?: (msg: string) => void,
+): void {
   try {
     tick();
+    // Success — a prior run of failures is over.
+    if (state) state.consecutiveFailures = 0;
   } catch (err) {
     const e = err as { code?: string; message?: string } | undefined;
+    const detail = e?.code ?? e?.message ?? String(err);
     log(
-      `[heartbeat] periodic writeDaemonInfo failed (${e?.code ?? e?.message ?? err}); ` +
+      `[heartbeat] periodic writeDaemonInfo failed (${detail}); ` +
         `continuing — the daemon stays up and the next tick will retry.`,
     );
+    if (state) {
+      state.consecutiveFailures += 1;
+      // Escalate exactly once when we cross the threshold. NOT fatal — the
+      // periodic tick stays non-fatal by design (only the STARTUP write is
+      // fatal); this just makes a persistent failure loud instead of silent.
+      if (state.consecutiveFailures === HEARTBEAT_ESCALATE_AFTER && escalate) {
+        escalate(
+          `[deepPairing daemon] WARNING: writeDaemonInfo has failed ${state.consecutiveFailures} consecutive heartbeats ` +
+            `(~${state.consecutiveFailures * 30}s) — last error: ${detail}. The discovery file .deeppairing/daemon.json may be ` +
+            `stale or truncated, so new wrappers/UI could fail to connect. The daemon is still serving; free disk space or fix ` +
+            `permissions on .deeppairing/, or restart the daemon.`,
+        );
+      }
+    }
   }
 }

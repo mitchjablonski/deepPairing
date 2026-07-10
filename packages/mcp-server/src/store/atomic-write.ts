@@ -36,8 +36,13 @@ import { randomBytes } from "node:crypto";
  * Caller is responsible for the parent dir existing (matches the
  * `fs.writeFileSync` contract this replaces).
  */
-export function writeJsonAtomic(filePath: string, value: unknown, indent = 2): void {
-  writeStringAtomic(filePath, JSON.stringify(value, null, indent));
+export function writeJsonAtomic(
+  filePath: string,
+  value: unknown,
+  indent = 2,
+  opts?: { mode?: number },
+): void {
+  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
 }
 
 /**
@@ -45,7 +50,7 @@ export function writeJsonAtomic(filePath: string, value: unknown, indent = 2): v
  * writeJsonAtomic; split out so a caller that has already stringified (e.g. to
  * compare against a skip-unchanged cache) doesn't pay JSON.stringify twice.
  */
-export function writeStringAtomic(filePath: string, data: string): void {
+export function writeStringAtomic(filePath: string, data: string, opts?: { mode?: number }): void {
   // Sibling temp path so the rename is on the same filesystem (cross-fs
   // renames are NOT atomic; a tmp under /tmp would defeat the purpose
   // when filePath is on a different volume).
@@ -54,12 +59,49 @@ export function writeStringAtomic(filePath: string, data: string): void {
   // tmp filenames. Without this, debounced flush bursts could have one
   // write's writeFileSync truncate another's tmp before its rename.
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  fs.writeFileSync(tmp, data);
+  // H2-3 review — wrap the ENTIRE create → fchmod → write → rename sequence so
+  // ANY throw unlinks the temp before rethrowing, not just a failed rename. On
+  // a full disk, openSync(O_CREAT) succeeds (an empty inode needs no data
+  // blocks) but the following writeFileSync throws ENOSPC — and pre-fix that
+  // left an orphaned 0-byte `*.tmp.<pid>.<ts>.<rand>`. Same gap if fchmodSync
+  // throws EPERM. Because v0.1.6 now TOLERATES + retries an ENOSPC heartbeat
+  // every 30s (instead of exiting), a wedged disk would otherwise litter
+  // .deeppairing/ with ~2,880 orphans/day. Cleanup is best-effort inside its
+  // own try/catch so it can never mask the original error. After a SUCCESSFUL
+  // rename the temp no longer exists at `tmp`, so no catch runs and there's no
+  // double-unlink.
   try {
+    if (opts?.mode !== undefined) {
+      // H2-3 (#146) — mode-controlled atomic write, for a secret-bearing file
+      // (daemon.json carries the bearer token). Create the temp at the target
+      // mode BEFORE any content is written — a default-umask temp then renamed
+      // would expose the secret world-readable for the pre-rename window, and
+      // rename preserves the SOURCE file's mode, so the destination would also
+      // stay 0644. O_EXCL|O_NOFOLLOW additionally refuses a pre-planted
+      // symlink/file at the (random) temp path. fchmod normalizes to the EXACT
+      // mode regardless of umask (which can only strip bits, never add — so the
+      // file is never more permissive than requested at any instant). rename
+      // then carries that mode onto the destination.
+      const O_NOFOLLOW = (fs.constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+      const fd = fs.openSync(
+        tmp,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
+        opts.mode,
+      );
+      try {
+        fs.fchmodSync(fd, opts.mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data);
+    }
     fs.renameSync(tmp, filePath);
   } catch (err) {
-    // Best-effort cleanup so an interrupted rename doesn't leave a
-    // pile of .tmp.PID.TS files in the session dir.
+    // Best-effort cleanup so an interrupted write/fchmod/rename doesn't leave
+    // a pile of `.tmp.PID.TS.RAND` files in the session dir. Never let a
+    // cleanup failure (e.g. the temp was never created) mask the real error.
     try { fs.unlinkSync(tmp); } catch {}
     throw err;
   }

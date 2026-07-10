@@ -25156,13 +25156,28 @@ import path from "node:path";
 // src/store/atomic-write.ts
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
-function writeJsonAtomic(filePath, value, indent = 2) {
-  writeStringAtomic(filePath, JSON.stringify(value, null, indent));
+function writeJsonAtomic(filePath, value, indent = 2, opts) {
+  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
 }
-function writeStringAtomic(filePath, data) {
+function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  fs.writeFileSync(tmp, data);
   try {
+    if (opts?.mode !== void 0) {
+      const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+      const fd = fs.openSync(
+        tmp,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
+        opts.mode
+      );
+      try {
+        fs.fchmodSync(fd, opts.mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data);
+    }
     fs.renameSync(tmp, filePath);
   } catch (err) {
     try {
@@ -26153,6 +26168,11 @@ var GlobalStore = class _GlobalStore {
   // REFUSE overwriting — silently persisting the empty shape would permanently
   // destroy all cross-project history.
   lastReadCorrupt = false;
+  // H2-1 — the human-readable reason the last read distrusted the file, so
+  // getHealth() can report WHY the ledger is frozen (unparseable JSON, wrong
+  // top-level shape, EACCES, …) without recomputing it. Set by markCorrupt,
+  // cleared at the top of every read().
+  lastReadCorruptReason = void 0;
   // H1-5 R1 — set by read() when per-entry salvage had to DROP ≥1 unsalvageable
   // entry (zero recoverable instances). The top-level shape is valid so writes
   // stay allowed, but write() must snapshot the pre-drop bytes before it shrinks
@@ -26164,6 +26184,35 @@ var GlobalStore = class _GlobalStore {
   }
   getLedgerPath() {
     return this.ledgerPath;
+  }
+  /**
+   * H2-1 — queryable ledger health. v0.1.6 made write() REFUSE to overwrite a
+   * ledger it couldn't read (correct — it preserves months of irreplaceable
+   * cross-project history), but recordInstance() returns void and every call
+   * site swallows in try/catch, so a frozen ledger was INVISIBLE: present_* /
+   * check_feedback reported success while nothing was recorded, forever, with
+   * the only signal a console.error on daemon stderr no user ever sees. Freezing
+   * is only defensible if the freeze is discoverable — this getter exposes the
+   * state read() already tracks (lastReadCorrupt + the per-path corrupt-snapshot
+   * map) so `dp doctor` and check_feedback can surface it. Does NOT recompute
+   * corruption and does NOT change recordInstance's signature.
+   *
+   * "frozen" ⇒ the on-disk ledger is unreadable/unparseable/wrong-shape and
+   * writes are being refused. `backupPath` is the `.corrupt-<ts>` snapshot when
+   * one was captured this process; absent when even the copy failed.
+   */
+  getHealth() {
+    this.read();
+    if (this.lastReadCorrupt) {
+      const backupPath = corruptSnapshots.get(this.ledgerPath);
+      return {
+        state: "frozen",
+        ledgerPath: this.ledgerPath,
+        ...backupPath ? { backupPath } : {},
+        ...this.lastReadCorruptReason ? { reason: this.lastReadCorruptReason } : {}
+      };
+    }
+    return { state: "ok", ledgerPath: this.ledgerPath };
   }
   /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
    *  backup path on success, or null if the copy failed. */
@@ -26186,9 +26235,10 @@ var GlobalStore = class _GlobalStore {
    */
   markCorrupt(err) {
     this.lastReadCorrupt = true;
+    const msg = err?.message ?? String(err);
+    this.lastReadCorruptReason = msg;
     const existing = corruptSnapshots.get(this.ledgerPath);
     if (existing) return;
-    const msg = err?.message ?? String(err);
     const backup = this.snapshotLedger();
     if (backup) corruptSnapshots.set(this.ledgerPath, backup);
     console.error(
@@ -26230,6 +26280,7 @@ var GlobalStore = class _GlobalStore {
   read() {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
     this.lastReadCorrupt = false;
+    this.lastReadCorruptReason = void 0;
     this.lastReadDroppedEntries = false;
     if (!fs2.existsSync(this.ledgerPath)) {
       corruptSnapshots.delete(this.ledgerPath);
@@ -28602,6 +28653,22 @@ var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"];
 
 // src/mcp/tools/check-feedback.ts
 init_version();
+function ledgerHealthField() {
+  try {
+    const health = getGlobalStore().getHealth();
+    if (health.state !== "frozen") return {};
+    return {
+      ledgerHealth: {
+        state: "frozen",
+        ledgerPath: health.ledgerPath,
+        ...health.backupPath ? { backupPath: health.backupPath } : {},
+        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `npx deeppairing doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
+      }
+    };
+  } catch {
+    return {};
+  }
+}
 function deriveTransition(a) {
   const history = a.statusHistory;
   if (!Array.isArray(history) || history.length === 0) {
@@ -29007,7 +29074,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     comments: structuredComments,
     decisions: structuredDecisions,
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
-    statusChanges: structuredStatusChanges
+    statusChanges: structuredStatusChanges,
+    // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
+    // spreads nothing (byte-for-byte-unchanged payload) when healthy.
+    ...ledgerHealthField()
   };
   const [preamble] = parts;
   if (parts.length === 1 && preamble !== void 0) {

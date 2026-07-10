@@ -74,6 +74,81 @@ describe("writeJsonAtomic (Z4)", () => {
   });
 });
 
+describe("H2-3 (#146) — mode-controlled atomic write (secret-bearing files)", () => {
+  const isWindows = process.platform === "win32";
+
+  it("creates the destination at exactly mode 0600 when { mode } is passed", () => {
+    writeJsonAtomic(target, { authToken: "s3cr3t", pid: 1, port: 3847 }, 2, { mode: 0o600 });
+    expect(JSON.parse(fs.readFileSync(target, "utf-8")).authToken).toBe("s3cr3t");
+    // Skip the bit assertion on Windows (advisory mode bits), but NEVER on
+    // Linux — daemon.json carries the bearer token and MUST be 0600.
+    if (!isWindows) {
+      expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("re-tightens an existing over-permissive file to 0600 via the temp+rename", () => {
+    // Simulate the pre-fix bug's residue: a daemon.json left world-readable.
+    fs.writeFileSync(target, '{"stale":true}');
+    if (!isWindows) fs.chmodSync(target, 0o644);
+    writeJsonAtomic(target, { authToken: "new" }, 2, { mode: 0o600 });
+    if (!isWindows) {
+      // rename carries the 0600 temp's mode onto the destination — the old
+      // 0644 does not survive (pre-fix rename preserved the SOURCE mode, so a
+      // default-umask temp would have left it 0644 and leaked the token).
+      expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("without { mode } the default write path is byte-for-byte unchanged", () => {
+    writeJsonAtomic(target, { a: 1 });
+    expect(fs.readFileSync(target, "utf-8")).toBe('{\n  "a": 1\n}');
+  });
+
+  it("preserves the OLD file if a mode-write fails at rename (never truncated)", () => {
+    fs.writeFileSync(target, '{"important":"keep me"}');
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("simulated ENOSPC at rename");
+    });
+    expect(() => writeJsonAtomic(target, { fresh: true }, 2, { mode: 0o600 })).toThrow(/ENOSPC/);
+    renameSpy.mockRestore();
+    // #146 core: the live file is intact, NOT truncated to 0 bytes.
+    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ important: "keep me" });
+    expect(fs.readdirSync(dir).filter(isAtomicTmpFile)).toEqual([]);
+  });
+
+  it("ENOSPC on the CONTENT write leaves no orphaned tmp and preserves the 0600 original", () => {
+    // Exact reproduction of the reviewer's orphan: openSync(O_CREAT) succeeds
+    // on a full disk (empty inode needs no blocks), then writeFileSync(fd)
+    // throws ENOSPC. Pre-fix the cleanup only wrapped rename, so a real
+    // `*.tmp.<pid>.<ts>.<rand>` was left behind every retry (~2,880/day under a
+    // wedged disk + the tolerated 30s heartbeat).
+    writeJsonAtomic(target, { keep: "me" }, 2, { mode: 0o600 });
+    const before = fs.readFileSync(target, "utf-8");
+    // openSync/fchmodSync/renameSync stay REAL — only the content write throws,
+    // so the temp genuinely exists on disk at throw time.
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    });
+    expect(() => writeJsonAtomic(target, { fresh: true }, 2, { mode: 0o600 })).toThrow(/ENOSPC/);
+    writeSpy.mockRestore();
+    // (a) original survives byte-for-byte + still 0600
+    expect(fs.readFileSync(target, "utf-8")).toBe(before);
+    if (!isWindows) expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+    // (c) no orphaned tmp remains
+    expect(fs.readdirSync(dir).filter(isAtomicTmpFile)).toEqual([]);
+  });
+
+  it("EPERM on fchmod leaves no orphaned tmp (cleanup covers the whole sequence)", () => {
+    const chmodSpy = vi.spyOn(fs, "fchmodSync").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM: operation not permitted, fchmod"), { code: "EPERM" });
+    });
+    expect(() => writeJsonAtomic(target, { x: 1 }, 2, { mode: 0o600 })).toThrow(/EPERM/);
+    chmodSpy.mockRestore();
+    expect(fs.readdirSync(dir).filter(isAtomicTmpFile)).toEqual([]);
+  });
+});
+
 describe("isAtomicTmpFile (Z4 + AA6.2)", () => {
   it("matches the .tmp.PID.TIMESTAMP suffix shape (Z4 legacy)", () => {
     expect(isAtomicTmpFile("data.json.tmp.1234.567890")).toBe(true);

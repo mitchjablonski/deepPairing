@@ -7191,13 +7191,28 @@ import path from "node:path";
 // src/store/atomic-write.ts
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
-function writeJsonAtomic(filePath, value, indent = 2) {
-  writeStringAtomic(filePath, JSON.stringify(value, null, indent));
+function writeJsonAtomic(filePath, value, indent = 2, opts) {
+  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
 }
-function writeStringAtomic(filePath, data) {
+function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  fs.writeFileSync(tmp, data);
   try {
+    if (opts?.mode !== void 0) {
+      const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+      const fd = fs.openSync(
+        tmp,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
+        opts.mode
+      );
+      try {
+        fs.fchmodSync(fd, opts.mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data);
+    }
     fs.renameSync(tmp, filePath);
   } catch (err) {
     try {
@@ -22733,6 +22748,11 @@ var GlobalStore = class _GlobalStore {
   // REFUSE overwriting — silently persisting the empty shape would permanently
   // destroy all cross-project history.
   lastReadCorrupt = false;
+  // H2-1 — the human-readable reason the last read distrusted the file, so
+  // getHealth() can report WHY the ledger is frozen (unparseable JSON, wrong
+  // top-level shape, EACCES, …) without recomputing it. Set by markCorrupt,
+  // cleared at the top of every read().
+  lastReadCorruptReason = void 0;
   // H1-5 R1 — set by read() when per-entry salvage had to DROP ≥1 unsalvageable
   // entry (zero recoverable instances). The top-level shape is valid so writes
   // stay allowed, but write() must snapshot the pre-drop bytes before it shrinks
@@ -22744,6 +22764,35 @@ var GlobalStore = class _GlobalStore {
   }
   getLedgerPath() {
     return this.ledgerPath;
+  }
+  /**
+   * H2-1 — queryable ledger health. v0.1.6 made write() REFUSE to overwrite a
+   * ledger it couldn't read (correct — it preserves months of irreplaceable
+   * cross-project history), but recordInstance() returns void and every call
+   * site swallows in try/catch, so a frozen ledger was INVISIBLE: present_* /
+   * check_feedback reported success while nothing was recorded, forever, with
+   * the only signal a console.error on daemon stderr no user ever sees. Freezing
+   * is only defensible if the freeze is discoverable — this getter exposes the
+   * state read() already tracks (lastReadCorrupt + the per-path corrupt-snapshot
+   * map) so `dp doctor` and check_feedback can surface it. Does NOT recompute
+   * corruption and does NOT change recordInstance's signature.
+   *
+   * "frozen" ⇒ the on-disk ledger is unreadable/unparseable/wrong-shape and
+   * writes are being refused. `backupPath` is the `.corrupt-<ts>` snapshot when
+   * one was captured this process; absent when even the copy failed.
+   */
+  getHealth() {
+    this.read();
+    if (this.lastReadCorrupt) {
+      const backupPath = corruptSnapshots.get(this.ledgerPath);
+      return {
+        state: "frozen",
+        ledgerPath: this.ledgerPath,
+        ...backupPath ? { backupPath } : {},
+        ...this.lastReadCorruptReason ? { reason: this.lastReadCorruptReason } : {}
+      };
+    }
+    return { state: "ok", ledgerPath: this.ledgerPath };
   }
   /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
    *  backup path on success, or null if the copy failed. */
@@ -22766,9 +22815,10 @@ var GlobalStore = class _GlobalStore {
    */
   markCorrupt(err) {
     this.lastReadCorrupt = true;
+    const msg = err?.message ?? String(err);
+    this.lastReadCorruptReason = msg;
     const existing = corruptSnapshots.get(this.ledgerPath);
     if (existing) return;
-    const msg = err?.message ?? String(err);
     const backup = this.snapshotLedger();
     if (backup) corruptSnapshots.set(this.ledgerPath, backup);
     console.error(
@@ -22810,6 +22860,7 @@ var GlobalStore = class _GlobalStore {
   read() {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
     this.lastReadCorrupt = false;
+    this.lastReadCorruptReason = void 0;
     this.lastReadDroppedEntries = false;
     if (!fs2.existsSync(this.ledgerPath)) {
       corruptSnapshots.delete(this.ledgerPath);
@@ -25422,6 +25473,21 @@ function isAllowedWsOrigin(origin, hostHeader) {
 }
 
 // src/http/routes.ts
+async function readJsonValue(c) {
+  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalid();
+  }
+  if (raw2.trim() === "") return invalid();
+  try {
+    return { ok: true, value: JSON.parse(raw2) };
+  } catch {
+    return invalid();
+  }
+}
 function getSessionId(c) {
   return c.req.header("X-Session-Id") ?? void 0;
 }
@@ -25544,7 +25610,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const parsed = CommentBodySchema.safeParse(await c.req.json());
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = CommentBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, content, target, intent, parentCommentId } = parsed.data;
     const targetArtifactId = target?.artifactId;
@@ -25626,7 +25694,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const decisionId = c.req.param("decisionId");
-    const parsed = DecisionResolveBodySchema.safeParse(await c.req.json());
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionResolveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
     const knownRecord = await store.getDecision(decisionId);
@@ -25679,7 +25749,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const storeSid = store.getSessionId?.() ?? "(unknown)";
     const artifactId = c.req.param("artifactId");
-    const parsed = StatusUpdateBodySchema.safeParse(await c.req.json());
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = StatusUpdateBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) {
       log2(`[status] REJECTED \u2014 body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
       return c.json(formatZodIssues(parsed.error), 400);
@@ -25750,7 +25822,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifactId = c.req.param("artifactId");
-    const parsed = RenameBodySchema.safeParse(await c.req.json());
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RenameBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const title = parsed.data.title.trim();
     if (!(await store.getArtifacts()).some((a) => a.id === artifactId)) {
@@ -26085,8 +26159,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app2.post("/api/retrospectives", async (c) => {
     if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
-    const raw2 = await c.req.json().catch(() => null);
-    const parsed = RetrospectiveBodySchema.safeParse(raw2);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RetrospectiveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { decisionId, verdict, note } = parsed.data;
     const result = FileStore.addRetrospective(projectRoot2, { decisionId, verdict, note });
@@ -26113,7 +26188,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const parsed = PreferenceBodySchema.safeParse(await c.req.json());
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = PreferenceBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     if (parsed.data.autonomyLevel) {
       await store.setAutonomyLevel(parsed.data.autonomyLevel);
@@ -26231,7 +26308,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    const body = await c.req.json();
+    const body = await c.req.json().catch(() => null);
     const { targetEventId, note, tags } = body ?? {};
     if (!targetEventId || !note) {
       return c.json({ error: "targetEventId and note required" }, 400);
@@ -26252,7 +26329,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         );
       }
     }
-    const body = await c.req.json();
+    const body = await c.req.json().catch(() => null);
     const content = typeof body?.content === "string" ? body.content : "";
     if (!content.trim()) return c.json({ error: "content required" }, 400);
     const sanitize = (s) => String(s ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
@@ -26483,6 +26560,31 @@ async function parseJsonBody(c, schema) {
     return { ok: false, res: c.json({ error: message, code: ERROR_CODES.validation_error }, 400) };
   }
 }
+async function readJsonObject(c, opts) {
+  const invalidJson = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalidJson();
+  }
+  if (opts?.allowEmpty && raw2.trim() === "") {
+    return { ok: true, body: {} };
+  }
+  let body;
+  try {
+    body = JSON.parse(raw2);
+  } catch {
+    return invalidJson();
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {
+      ok: false,
+      res: c.json({ error: "expected a JSON object body", code: ERROR_CODES.validation_error }, 400)
+    };
+  }
+  return { ok: true, body };
+}
 function createActiveSessionRoutes(sessions2, sessionMeta2, daemonHash, activeSessions2) {
   const app2 = new Hono2();
   const gate = projectHashGate(daemonHash);
@@ -26566,7 +26668,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   }
   app2.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
-    const body = await c.req.json().catch(() => ({}));
+    const parsedReg = await readJsonObject(c, { allowEmpty: true });
+    if (!parsedReg.ok) return parsedReg.res;
+    const body = parsedReg.body;
     if (typeof body.expectedProjectRoot === "string" && daemonProjectRoot && body.expectedProjectRoot !== daemonProjectRoot) {
       log2(
         `[register] 403 \u2014 project mismatch: sid=${sessionId} wrapper.expected=${body.expectedProjectRoot} daemon.actual=${daemonProjectRoot}`
@@ -26600,7 +26704,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   });
   app2.post("/api/internal/sessions/:sessionId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
-    const { title } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { title } = parsed.body;
     const meta3 = sessionMeta2.get(sessionId);
     if (meta3) meta3.title = title;
     broadcast3(sessionId, { type: "session_renamed", sessionId, title });
@@ -26655,7 +26761,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     const artifactId = c.req.param("artifactId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { status, reason } = await c.req.json();
+    const bodyR = await readJsonObject(c);
+    if (!bodyR.ok) return bodyR.res;
+    const { status, reason } = bodyR.body;
     const target = r.store.getArtifacts().find((a) => a.id === artifactId);
     log2(
       `[status:internal] sid=${sessionId} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason ?? "unspecified"}`
@@ -26670,7 +26778,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     const artifactId = c.req.param("artifactId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { updates } = await c.req.json();
+    const bodyR = await readJsonObject(c);
+    if (!bodyR.ok) return bodyR.res;
+    const { updates } = bodyR.body;
     if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
     const VALID = /* @__PURE__ */ new Set(["pending", "in_progress", "done", "skipped"]);
     const clean = updates.filter(
@@ -26685,7 +26795,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { title } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { title } = parsed.body;
     r.store.renameArtifact(c.req.param("artifactId"), title);
     broadcast3(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
     return c.json({ status: "renamed" });
@@ -26734,7 +26846,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/comments/:commentId/answered", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { answerCommentId } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { answerCommentId } = parsed.body;
     r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
     if (daemonProjectRoot) {
       try {
@@ -26771,7 +26885,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { resolvedAt } = await c.req.json().catch(() => ({}));
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { resolvedAt } = parsed.body;
     r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
     return c.json({ status: "resolved" });
   });
@@ -26787,7 +26903,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { optionId, reasoning, confidence, predictedOutcome } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { optionId, reasoning, confidence, predictedOutcome } = parsed.body;
     const decisionId = c.req.param("decisionId");
     if (typeof optionId !== "string" || optionId.length === 0) {
       return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
@@ -26838,14 +26956,18 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/plan-reviews", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { artifactId } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { artifactId } = parsed.body;
     r.store.recordPlanReview(artifactId);
     return c.json({ status: "recorded" });
   });
   app2.post("/api/internal/sessions/:sessionId/plan-reviews/:artifactId/resolve", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { verdict, feedback } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { verdict, feedback } = parsed.body;
     r.store.resolvePlanReview(c.req.param("artifactId"), verdict, feedback);
     return c.json({ status: "resolved" });
   });
@@ -26952,7 +27074,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { trace } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { trace } = parsed.body;
     r.store.recordPreflightTrace?.(c.req.param("artifactId"), trace);
     return c.json({ status: "recorded" });
   });
@@ -26982,7 +27106,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/autonomy", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { level } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { level } = parsed.body;
     r.store.setAutonomyLevel(level);
     return c.json({ status: "updated" });
   });
@@ -27726,14 +27852,25 @@ function guardWatcher(watcher, log2) {
     }
   });
 }
-function safeHeartbeatTick(tick, log2) {
+var HEARTBEAT_ESCALATE_AFTER = 3;
+function safeHeartbeatTick(tick, log2, state, escalate) {
   try {
     tick();
+    if (state) state.consecutiveFailures = 0;
   } catch (err) {
     const e = err;
+    const detail = e?.code ?? e?.message ?? String(err);
     log2(
-      `[heartbeat] periodic writeDaemonInfo failed (${e?.code ?? e?.message ?? err}); continuing \u2014 the daemon stays up and the next tick will retry.`
+      `[heartbeat] periodic writeDaemonInfo failed (${detail}); continuing \u2014 the daemon stays up and the next tick will retry.`
     );
+    if (state) {
+      state.consecutiveFailures += 1;
+      if (state.consecutiveFailures === HEARTBEAT_ESCALATE_AFTER && escalate) {
+        escalate(
+          `[deepPairing daemon] WARNING: writeDaemonInfo has failed ${state.consecutiveFailures} consecutive heartbeats (~${state.consecutiveFailures * 30}s) \u2014 last error: ${detail}. The discovery file .deeppairing/daemon.json may be stale or truncated, so new wrappers/UI could fail to connect. The daemon is still serving; free disk space or fix permissions on .deeppairing/, or restart the daemon.`
+        );
+      }
+    }
   }
 }
 
@@ -28089,17 +28226,7 @@ function cleanup() {
   }
 }
 function writeFile0600(file2, obj2) {
-  const O_NOFOLLOW = fs14.constants.O_NOFOLLOW ?? 0;
-  const fd = fs14.openSync(file2, fs14.constants.O_WRONLY | fs14.constants.O_CREAT | fs14.constants.O_TRUNC | O_NOFOLLOW, 384);
-  try {
-    fs14.writeFileSync(fd, JSON.stringify(obj2, null, 2));
-  } finally {
-    fs14.closeSync(fd);
-  }
-  try {
-    fs14.chmodSync(file2, 384);
-  } catch {
-  }
+  writeJsonAtomic(file2, obj2, 2, { mode: 384 });
 }
 var tokenPlacementCached = null;
 function resolveTokenPlacement() {
@@ -28307,7 +28434,16 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
     log(`[wss] server error: ${err?.code ?? err?.message ?? err}`);
   });
   writeDaemonInfo(port);
-  const heartbeat = setInterval(() => safeHeartbeatTick(() => writeDaemonInfo(port), log), 3e4);
+  const heartbeatState = { consecutiveFailures: 0 };
+  const heartbeat = setInterval(
+    () => safeHeartbeatTick(
+      () => writeDaemonInfo(port),
+      log,
+      heartbeatState,
+      (msg) => process.stderr.write(msg + "\n")
+    ),
+    3e4
+  );
   heartbeat.unref?.();
   let lastFireSeen = 0;
   const hooksStatePath = path13.join(projectRoot, ".deeppairing", "hooks-state.json");
