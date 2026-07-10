@@ -154,7 +154,15 @@ export function MermaidDiagram({
       <div className="relative">
         <div
           ref={hostRef}
-          className="dp-mermaid overflow-x-auto flex justify-center [&_svg]:max-w-full [&_svg]:h-auto"
+          // Bounded "well" so the diagram — and with it the region-drag capture
+          // zone — reads as a distinct surface inside the bg-surface-secondary
+          // visual card ("can't tell where the diagram starts and ends, so
+          // selection might end early"). surface-primary + border-default are
+          // both theme-aware: dark = a visibly darker inset well, light = a
+          // white panel with a real gray border (white/[0.06] borders vanish
+          // in the light theme). Mermaid paints its own node fills/text, so
+          // the bg only shows through between nodes — legible on both.
+          className="dp-mermaid overflow-x-auto flex justify-center [&_svg]:max-w-full [&_svg]:h-auto bg-surface-primary border border-border-default rounded-md p-2"
           // mermaid output is sanitized at securityLevel "strict".
           dangerouslySetInnerHTML={{ __html: svg }}
         />
