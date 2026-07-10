@@ -26571,7 +26571,14 @@ var DETAIL_DENSITY_TERSE_GUIDANCE = [
   "\n\u2702\uFE0F Detail density: TERSE \u2014 the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
   "  - Keep each finding's `detail` and `recommendation` to 1\u20132 sentences. Lead with the evidence; skip preamble and restatement of the task.",
   "  - Trim option and plan descriptions to the decision-relevant essentials \u2014 pros/cons as short phrases, not paragraphs.",
-  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself."
+  // S2 — the trailing parenthetical states the division of labor with the
+  // autonomy dial explicitly. Without it, this line's "do NOT skip
+  // present_options" sits two lines above the autonomous block's "Skip the
+  // opening findings/options ceremony" — adjacent absolutes pointing opposite
+  // ways on the same tool. Each self-scopes, but the model shouldn't have to
+  // infer the scoping: terse governs prose, the Autonomy dial governs whether
+  // an artifact posts at all.
+  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)"
 ].join("\n");
 var AUTONOMY_HINT_SUPERVISED = "";
 var AUTONOMY_HINT_BALANCED = [
@@ -26624,7 +26631,7 @@ ${memoryParts.join("\n")}`);
       const lines = guardrails.map(
         (g) => `  - ${g.category} (${(g.paths ?? []).join(", ")}): ${g.rationale}`
       );
-      contextualParts.push(
+      obligationsParts.push(
         `
 \u{1F6E1} Project guardrails (escalate to supervised for changes in these paths, even when autonomy is 'autonomous'):
 ${lines.join("\n")}`
