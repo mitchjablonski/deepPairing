@@ -116,7 +116,20 @@ export class FileStore implements IStore {
       // G6 — labels are the once-per-process suppression KEY: session-scope
       // them (F10's sid:file format) so a second corrupt session still logs.
       `${this.sessionId}:preferences.json`, this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
-    if (prefs.autonomyLevel) this.autonomyLevel = prefs.autonomyLevel;
+    // FAIL CLOSED: this dial arms the auto-approve countdown, so an
+    // unrecognized value (a poisoned file, or one written before the route was
+    // enum-validated) must land on `supervised` (MOST supervision), never
+    // survive as garbage that ArtifactStatusActions reads as "not supervised"
+    // and arms auto-approve. Enum-guard the load like the density field below;
+    // the `supervised` default (set at the field declaration) is the fallback,
+    // so an invalid file self-heals to fail-safe on next write.
+    if (
+      prefs.autonomyLevel === "supervised" ||
+      prefs.autonomyLevel === "balanced" ||
+      prefs.autonomyLevel === "autonomous"
+    ) {
+      this.autonomyLevel = prefs.autonomyLevel;
+    }
     // #139 — absent field keeps the "rich" default (back-compat: an existing
     // preferences.json written before this feature has no `detailDensity`).
     if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {

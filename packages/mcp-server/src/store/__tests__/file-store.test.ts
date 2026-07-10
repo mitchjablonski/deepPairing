@@ -411,6 +411,26 @@ describe("FileStore", () => {
     expect(store2.getAutonomyLevel()).toBe("balanced");
   });
 
+  // The autonomy dial arms the auto-approve countdown, so its LOAD must fail
+  // CLOSED: a poisoned/legacy preferences.json value must land on `supervised`
+  // (most supervision), never survive as garbage that reads as "not supervised".
+  describe("autonomy level fails closed on a poisoned preferences.json", () => {
+    it("loads an unrecognized autonomyLevel as 'supervised' (not the garbage value)", () => {
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "banana" }));
+      // Fail-safe: garbage collapses to the most-supervised default.
+      expect(createStore("autonomy-poison").getAutonomyLevel()).toBe("supervised");
+    });
+
+    it("still loads a VALID persisted autonomyLevel unchanged", () => {
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "autonomous" }));
+      expect(createStore("autonomy-valid").getAutonomyLevel()).toBe("autonomous");
+    });
+  });
+
   // #139 — detail density (verbosity). Orthogonal to autonomy; persisted in the
   // same preferences.json. Round-trip, default-when-absent, and back-compat with
   // a legacy preferences.json that predates the field.

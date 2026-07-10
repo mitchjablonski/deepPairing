@@ -117,16 +117,22 @@ describe("first-call hint — #139 detail density", () => {
     expect(hint).not.toMatch(/Detail density: TERSE/);
   });
 
-  it("FLOOR — terse guidance never tells the agent to omit Evidence or skip/reduce artifacts", async () => {
+  it("FLOOR — terse guidance carries the load-bearing prohibitions verbatim", async () => {
     store.setDetailDensity("terse");
     const hint = await buildFirstCallHint(store, 4000);
-    // The floor is stated as an explicit prohibition…
-    expect(hint).toMatch(/NEVER omit `Evidence`/);
+    // The floor is the POSITIVE guard: these exact prohibition sentences must
+    // exist, so a well-meaning rewrite that softens the floor (e.g. "attach
+    // evidence when relevant") deletes one of them and fails HERE. A blacklist
+    // of phrasings-we-happened-to-avoid is theater — it can't catch a novel
+    // floor-violating rewrite — so this test asserts presence, not absence.
     expect(hint).toMatch(/Do NOT reduce the number of artifacts/);
     expect(hint).toMatch(/do NOT skip present_options or present_code_change/);
-    // …and the guidance must NOT contain any instruction to drop the review
-    // surface. These would invert the feature into an unsafe one.
-    expect(hint).not.toMatch(/omit evidence|skip evidence|drop evidence/i);
-    expect(hint).not.toMatch(/fewer artifacts|skip (an )?artifact|reduce (the )?evidence/i);
+    expect(hint).toMatch(/NEVER omit `Evidence`/);
+    // Pin the LITERAL evidence shape the agent must always attach — the whole
+    // point of the floor is that terse trims prose, never the four Evidence
+    // fields. If the parenthetical is dropped/reworded, this fails.
+    expect(hint).toContain("`Evidence` (filePath, lineStart, lineEnd, snippet)");
+    // And the explicit statement that terse trims prose, not evidence.
+    expect(hint).toMatch(/never the evidence itself/);
   });
 });

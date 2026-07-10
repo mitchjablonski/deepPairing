@@ -168,8 +168,10 @@ test("a11y: the Autonomy popover (with the #139 detail-density toggle) has no se
   // #139 added a Detail: Rich/Terse radiogroup inside the Autonomy popover.
   // The two page-level scans above never open the popover, so this opens it and
   // scans the live radiogroup markup (accessible name + radio checked state).
+  // The Autonomy control lives in the shell CHROME (header), so this test
+  // depends only on the button rendering — NOT on any artifact loading (waiting
+  // for [data-artifact-id] here just adds an unrelated session-load flake).
   await page.goto(`${baseURL}/?session=a11y`);
-  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
   const autonomyBtn = page.getByRole("button", { name: /autonomy:/i });
   await autonomyBtn.waitFor({ timeout: 15000 });
   await autonomyBtn.click();

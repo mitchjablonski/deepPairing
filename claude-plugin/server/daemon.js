@@ -22531,8 +22531,11 @@ var StatusUpdateBodySchema = external_exports.object({
 var RenameBodySchema = external_exports.object({
   title: external_exports.string().min(1)
 });
+var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
+var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
 var PreferenceBodySchema = external_exports.object({
-  autonomyLevel: external_exports.enum(["supervised", "balanced", "autonomous"]).optional()
+  autonomyLevel: AutonomyLevelSchema.optional(),
+  detailDensity: DetailDensitySchema.optional()
 });
 var RetrospectiveBodySchema = external_exports.object({
   decisionId: external_exports.string().min(1),
@@ -23856,6 +23859,9 @@ var FileStore = class _FileStore {
   flushTimer = null;
   sessionId;
   autonomyLevel = "supervised";
+  // #139 — detail density (verbosity). Default "rich" == today's behavior, so
+  // a preferences.json with no `detailDensity` field loads as rich.
+  detailDensity = "rich";
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
    * flush we re-stat each session JSON; if EITHER mtime has advanced OR
@@ -23921,7 +23927,12 @@ var FileStore = class _FileStore {
       this.loadJsonFile(prefsPath, {}),
       {}
     );
-    if (prefs.autonomyLevel) this.autonomyLevel = prefs.autonomyLevel;
+    if (prefs.autonomyLevel === "supervised" || prefs.autonomyLevel === "balanced" || prefs.autonomyLevel === "autonomous") {
+      this.autonomyLevel = prefs.autonomyLevel;
+    }
+    if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
+      this.detailDensity = prefs.detailDensity;
+    }
   }
   load() {
     const dir = this.sessionDir();
@@ -24810,6 +24821,16 @@ var FileStore = class _FileStore {
   getAutonomyLevel() {
     return this.autonomyLevel;
   }
+  // --- Detail Density (#139) ---
+  setDetailDensity(density) {
+    this.detailDensity = density;
+    const prefs = this.readPreferences();
+    prefs.detailDensity = density;
+    this.writePreferences(prefs);
+  }
+  getDetailDensity() {
+    return this.detailDensity;
+  }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];
   /** Register a waiter that resolves when new feedback arrives */
@@ -24841,6 +24862,7 @@ var FileStore = class _FileStore {
       decisions: Array.from(this.decisions.values()),
       planReviews: Array.from(this.planReviews.values()),
       autonomyLevel: this.autonomyLevel,
+      detailDensity: this.detailDensity,
       sessionMemory: this.getSessionMemory(),
       engagementMetrics: this.getEngagementMetrics()
     };
@@ -25619,6 +25641,7 @@ var EMPTY_STATE = {
   decisions: [],
   planReviews: [],
   autonomyLevel: "supervised",
+  detailDensity: "rich",
   rejectedApproaches: [],
   approvedPatterns: []
 };
@@ -26299,6 +26322,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.setAutonomyLevel(parsed.data.autonomyLevel);
       broadcast3({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
     }
+    if (parsed.data.detailDensity) {
+      await store.setDetailDensity(parsed.data.detailDensity);
+      broadcast3({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
+    }
     return c.json({ status: "updated" });
   });
   app2.get("/api/files", (c) => {
@@ -26664,6 +26691,8 @@ var AddCommentBody = external_exports.object({
   author: external_exports.enum(["human", "agent"])
 }).passthrough();
 var RecordDecisionBody = external_exports.record(external_exports.string(), external_exports.unknown());
+var AutonomyPostBody = external_exports.object({ level: AutonomyLevelSchema });
+var DetailDensityPostBody = external_exports.object({ density: DetailDensitySchema });
 async function parseJsonBody(c, schema) {
   try {
     return { ok: true, data: schema.parse(await c.req.json()) };
@@ -27218,10 +27247,22 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/autonomy", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const parsed = await readJsonObject(c);
+    const parsed = await parseJsonBody(c, AutonomyPostBody);
     if (!parsed.ok) return parsed.res;
-    const { level } = parsed.body;
-    r.store.setAutonomyLevel(level);
+    r.store.setAutonomyLevel(parsed.data.level);
+    return c.json({ status: "updated" });
+  });
+  app2.get("/api/internal/sessions/:sessionId/detail-density", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ density: r.store.getDetailDensity() });
+  });
+  app2.post("/api/internal/sessions/:sessionId/detail-density", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, DetailDensityPostBody);
+    if (!parsed.ok) return parsed.res;
+    r.store.setDetailDensity(parsed.data.density);
     return c.json({ status: "updated" });
   });
   app2.get("/api/internal/sessions", (c) => {

@@ -25964,8 +25964,11 @@ var StatusUpdateBodySchema = external_exports.object({
 var RenameBodySchema = external_exports.object({
   title: external_exports.string().min(1)
 });
+var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
+var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
 var PreferenceBodySchema = external_exports.object({
-  autonomyLevel: external_exports.enum(["supervised", "balanced", "autonomous"]).optional()
+  autonomyLevel: AutonomyLevelSchema.optional(),
+  detailDensity: DetailDensitySchema.optional()
 });
 var RetrospectiveBodySchema = external_exports.object({
   decisionId: external_exports.string().min(1),
@@ -26542,6 +26545,13 @@ var PROTOCOL_PREAMBLE = [
   "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content \u2014 do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
+var DETAIL_DENSITY_RICH_GUIDANCE = "";
+var DETAIL_DENSITY_TERSE_GUIDANCE = [
+  "\n\u2702\uFE0F Detail density: TERSE \u2014 the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
+  "  - Keep each finding's `detail` and `recommendation` to 1\u20132 sentences. Lead with the evidence; skip preamble and restatement of the task.",
+  "  - Trim option and plan descriptions to the decision-relevant essentials \u2014 pros/cons as short phrases, not paragraphs.",
+  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself."
+].join("\n");
 async function buildFirstCallHint(store, port) {
   const obligationsParts = [];
   const policyParts = [];
@@ -26810,6 +26820,12 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
         );
       }
     }
+  } catch {
+  }
+  try {
+    const density = await store.getDetailDensity?.();
+    const guidance = density === "terse" ? DETAIL_DENSITY_TERSE_GUIDANCE : DETAIL_DENSITY_RICH_GUIDANCE;
+    if (guidance) obligationsParts.push(guidance);
   } catch {
   }
   const assembled = [headerLine, PROTOCOL_PREAMBLE, ...obligationsParts];
@@ -30923,6 +30939,14 @@ var DaemonClient = class {
   async getAutonomyLevel() {
     const data = await this.get("/autonomy");
     return data.level;
+  }
+  // --- Detail Density (#139) ---
+  async setDetailDensity(density) {
+    await this.post("/detail-density", { density });
+  }
+  async getDetailDensity() {
+    const data = await this.get("/detail-density");
+    return data.density;
   }
   // --- Feedback polling ---
   /**

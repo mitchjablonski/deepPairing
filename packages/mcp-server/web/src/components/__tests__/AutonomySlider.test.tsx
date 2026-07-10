@@ -111,7 +111,7 @@ describe("#139 — detail density (verbosity) toggle", () => {
     await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
   }
 
-  it("renders a keyboard-operable radiogroup with an accessible name and both options", async () => {
+  it("renders a radiogroup with an accessible name, both options, and roving tabindex", async () => {
     vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
     render(<AutonomySlider />);
     await openPopover();
@@ -122,6 +122,37 @@ describe("#139 — detail density (verbosity) toggle", () => {
     const rich = screen.getByRole("radio", { name: /rich/i });
     const terse = screen.getByRole("radio", { name: /terse/i });
     expect(rich).toHaveAttribute("aria-checked", "true"); // default
+    expect(terse).toHaveAttribute("aria-checked", "false");
+    // Roving tabindex: exactly the checked radio is in the tab order.
+    expect(rich).toHaveAttribute("tabindex", "0");
+    expect(terse).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("is arrow-key navigable — ArrowRight/ArrowLeft move selection (WAI-ARIA radiogroup)", async () => {
+    const fetchMock = mockState({ autonomyLevel: "supervised" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+
+    const rich = screen.getByRole("radio", { name: /rich/i });
+    const terse = screen.getByRole("radio", { name: /terse/i });
+    // Focus the current (rich) radio, then arrow to the next.
+    rich.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    await waitFor(() => expect(terse).toHaveAttribute("aria-checked", "true"));
+    expect(rich).toHaveAttribute("aria-checked", "false");
+    // Roving tabindex follows selection.
+    expect(terse).toHaveAttribute("tabindex", "0");
+    expect(rich).toHaveAttribute("tabindex", "-1");
+    // Selection moving via keyboard persisted the choice.
+    const post = fetchMock.mock.calls.find(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    expect(JSON.parse(post![1].body)).toEqual({ detailDensity: "terse" });
+
+    // ArrowLeft moves back to rich.
+    await userEvent.keyboard("{ArrowLeft}");
+    await waitFor(() => expect(rich).toHaveAttribute("aria-checked", "true"));
     expect(terse).toHaveAttribute("aria-checked", "false");
   });
 

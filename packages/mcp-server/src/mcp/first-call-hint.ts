@@ -477,7 +477,12 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   // "rich" adds nothing), so it rides in the UNCAPPED obligations tier: a
   // verbosity instruction that silently lost the truncation lottery would make
   // the feature unreliable. Rich contributes the empty string, so the default
-  // session's hint is unchanged; only an explicit "terse" appends guidance.
+  // session's hint is byte-for-byte unchanged; only an explicit "terse" appends
+  // guidance. NOTE: terse is NOT free — the ~680-byte block lands before the
+  // contextual budget is measured (baselineLen includes obligations), so a
+  // context-heavy terse session shrinks the advisory budget by that much and
+  // may drop one advisory section (recoverable via the recall pointer). That's
+  // the right trade: the terse block itself is never truncated.
   try {
     const density = await store.getDetailDensity?.();
     const guidance = density === "terse" ? DETAIL_DENSITY_TERSE_GUIDANCE : DETAIL_DENSITY_RICH_GUIDANCE;

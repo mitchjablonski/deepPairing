@@ -72,6 +72,8 @@ const GUARDED_ROUTES: Array<{ name: string; pathFor: (sid: string) => string }> 
   { name: "plan-review resolve", pathFor: (s) => `/api/internal/sessions/${s}/plan-reviews/a1/resolve` },
   { name: "preflight-trace", pathFor: (s) => `/api/internal/sessions/${s}/preflight-traces/a1` },
   { name: "autonomy", pathFor: (s) => `/api/internal/sessions/${s}/autonomy` },
+  // #139 — the detail-density setter is enum-validated too.
+  { name: "detail-density", pathFor: (s) => `/api/internal/sessions/${s}/detail-density` },
   // H2-2 review — these two used `.catch(() => ({}))`, which only caught a
   // THROWN parse; a valid-JSON `null` then Typeerror'd on destructure → 500.
   { name: "comment mark-resolved", pathFor: (s) => `/api/internal/sessions/${s}/comments/c1/mark-resolved` },
@@ -129,6 +131,58 @@ describe("H2-2 review — /register accepts an empty body but rejects non-object
   it("malformed body → 400", async () => {
     const res = await app.request("/api/internal/sessions/fresh5/register", { method: "POST", headers: authed, body: "{ not json" });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("#139 — preference setters reject a poison enum value (autonomy fails CLOSED)", () => {
+  it("autonomy: invalid level 'banana' → 400 and nothing written (dial stays supervised)", async () => {
+    const store = sessions.get("real")!;
+    expect(store.getAutonomyLevel()).toBe("supervised"); // default before
+    const res = await app.request("/api/internal/sessions/real/autonomy", {
+      method: "POST",
+      headers: authed,
+      body: JSON.stringify({ level: "banana" }),
+    });
+    expect(res.status).toBe(400);
+    // In-memory unchanged…
+    expect(store.getAutonomyLevel()).toBe("supervised");
+    // …and nothing persisted: a fresh store over the same dir still reads supervised.
+    expect(new FileStore(tmpDir, "real").getAutonomyLevel()).toBe("supervised");
+  });
+
+  it("autonomy: a valid level still round-trips (200 + persisted)", async () => {
+    const res = await app.request("/api/internal/sessions/real/autonomy", {
+      method: "POST",
+      headers: authed,
+      body: JSON.stringify({ level: "balanced" }),
+    });
+    expect(res.status).toBe(200);
+    expect(sessions.get("real")!.getAutonomyLevel()).toBe("balanced");
+    expect(new FileStore(tmpDir, "real").getAutonomyLevel()).toBe("balanced");
+  });
+
+  it("detail-density: invalid density 'banana' → 400 and nothing written (stays rich)", async () => {
+    const store = sessions.get("real")!;
+    expect(store.getDetailDensity()).toBe("rich");
+    const res = await app.request("/api/internal/sessions/real/detail-density", {
+      method: "POST",
+      headers: authed,
+      body: JSON.stringify({ density: "banana" }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.getDetailDensity()).toBe("rich");
+    expect(new FileStore(tmpDir, "real").getDetailDensity()).toBe("rich");
+  });
+
+  it("detail-density: a valid density still round-trips (200 + persisted)", async () => {
+    const res = await app.request("/api/internal/sessions/real/detail-density", {
+      method: "POST",
+      headers: authed,
+      body: JSON.stringify({ density: "terse" }),
+    });
+    expect(res.status).toBe(200);
+    expect(sessions.get("real")!.getDetailDensity()).toBe("terse");
+    expect(new FileStore(tmpDir, "real").getDetailDensity()).toBe("terse");
   });
 });
 
