@@ -1,5 +1,6 @@
 import type { IStore } from "../store/store-interface.js";
 import { getGlobalStore } from "../store/global-store.js";
+import { AUTONOMY_POLICY_LINE } from "./autonomy-policy.js";
 
 /**
  * X4 — first-call hint builder, lifted out of server.ts so the CallTool
@@ -72,6 +73,42 @@ const DETAIL_DENSITY_TERSE_GUIDANCE = [
   "  - Keep each finding's `detail` and `recommendation` to 1–2 sentences. Lead with the evidence; skip preamble and restatement of the task.",
   "  - Trim option and plan descriptions to the decision-relevant essentials — pros/cons as short phrases, not paragraphs.",
   "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself.",
+].join("\n");
+
+// #148 — autonomy-level guidance. Same delivery pattern as #139's detail
+// density above: a STANDING user setting, spoken once per session in the
+// UNCAPPED obligations tier (a dial instruction that lost the truncation
+// lottery would make the dial unreliable). Pre-#148 the level reached the
+// model ONLY via check_feedback — which runs AFTER the agent's opening
+// artifacts, so a user who set "Light"/"Minimal" still watched the agent post
+// the full findings→options→spec→plan ceremony and only then got told to skip
+// it. Injecting here lets the dial shape the very first artifact.
+//
+// SUPERVISED (default): contributes the empty string — the preamble already
+// prescribes the full ceremony, so a default session's hint stays
+// byte-for-byte identical to pre-#148 (pinned by a sha test). Deliberate; see
+// autonomy-policy.ts.
+const AUTONOMY_HINT_SUPERVISED = "";
+//
+// BALANCED: the opening ceremony scales with the task. Leads with the exact
+// AUTONOMY_POLICY_LINE check_feedback repeats per poll, so the two surfaces
+// cannot contradict each other.
+const AUTONOMY_HINT_BALANCED = [
+  `\n🎚 Autonomy: BALANCED — the human set this dial, and it applies from your FIRST artifact, not just later turns. ${AUTONOMY_POLICY_LINE.balanced}`,
+  "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
+  "  - Reserve present_options for genuine architectural tradeoffs — not routine implementation choices with one reasonable answer.",
+  "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings → options → spec/plan.",
+].join("\n");
+//
+// AUTONOMOUS: bias to motion — but the FLOOR is stated explicitly and is
+// load-bearing: present_code_change before every write is the human's review
+// record and is NEVER lifted by this dial, and project guardrails (the 🛡
+// section, when present) still escalate specific paths back to supervised.
+const AUTONOMY_HINT_AUTONOMOUS = [
+  `\n🎚 Autonomy: AUTONOMOUS — the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
+  "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
+  "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required — it is the review record.",
+  "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths.",
 ].join("\n");
 
 export async function buildFirstCallHint(store: IStore, port: number): Promise<string> {
@@ -489,6 +526,25 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     if (guidance) obligationsParts.push(guidance);
   } catch {
     // Non-fatal — absent/unreadable preference falls back to rich (no guidance).
+  }
+
+  // #148 — autonomy dial, same uncapped-tier pattern as detail density above.
+  // Supervised (the default) contributes the empty string, so the common path
+  // stays byte-identical; only an explicit balanced/autonomous appends its
+  // block. Guardrail escalation (the 🛡 section) is assembled independently
+  // above and is never weakened by this — the autonomous block explicitly
+  // defers to it.
+  try {
+    const autonomy = await store.getAutonomyLevel();
+    const guidance =
+      autonomy === "balanced"
+        ? AUTONOMY_HINT_BALANCED
+        : autonomy === "autonomous"
+          ? AUTONOMY_HINT_AUTONOMOUS
+          : AUTONOMY_HINT_SUPERVISED;
+    if (guidance) obligationsParts.push(guidance);
+  } catch {
+    // Non-fatal — absent/unreadable preference falls back to supervised (no guidance).
   }
 
   // EE1 — three-tier assembly:

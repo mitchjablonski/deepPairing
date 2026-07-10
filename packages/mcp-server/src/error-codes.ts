@@ -90,7 +90,13 @@ export const TOOL_ERROR_CODES = {
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];
 
-/** Retryability hint per tool error code. Used by `_meta.retryable`. */
+/** Retryability hint per tool error code. Used by `_meta.retryable`.
+ *
+ * #147 — TOOL_EXECUTION_FAILED's entry here is only the TRANSIENT-case
+ * default: formatHandlerError (validate-tool-input.ts) computes the actual
+ * `_meta.retryable` per error — daemon-tagged 5xx/408/429 and network-level
+ * failures are retryable; other 4xx and untagged deterministic throws
+ * (TypeError et al.) are NOT, so the agent doesn't loop-retry a bug. */
 export const TOOL_ERROR_RETRYABLE: Record<ToolErrorCode, boolean> = {
   [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
   [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,

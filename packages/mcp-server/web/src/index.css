@@ -54,13 +54,25 @@
      fails in light theme (composites toward white) while passing in dark. */
   --color-accent-blue-strong: #2f5fd6;
   --color-accent-blue-strong-hover: #2a56c1;
-  --color-accent-blue-dim: #1e2f54;
+  /* #149 — margin re-tint (the F1 method, applied again). F1 landed
+     blue-on-blue-dim at 4.51 and red-on-red-dim at 4.60 — technically AA, but
+     with ~zero margin: the artifact entrance fade (ArtifactPanel's
+     opacity 0→1 motion) means axe can sample the pill a frame before opacity
+     hits 1, blending the text toward the fill and dipping the measured ratio
+     under 4.5 (CI observed a phantom "serious" color-contrast at ~4.45 on the
+     decisions-view scan). Fix the TOKEN, not the rule: darken both -dim fills
+     so their accent text clears with real margin — blue 4.51 → 5.26,
+     red 4.60 → 5.17 — which stays ≥4.5 even sampled at ~95% opacity.
+     Every fg used on these fills is lighter than the fill (accent text,
+     text-primary, white step numbers), so darkening improves ALL pairings;
+     pinned by web/src/__tests__/token-contrast.test.ts. */
+  --color-accent-blue-dim: #172440;
   --color-accent-green: #3fb950;
   --color-accent-green-dim: #1a3524;
   --color-accent-amber: #d4a72c;
   --color-accent-amber-dim: #3d3219;
   --color-accent-red: #f85149;
-  --color-accent-red-dim: #3d1a1a;
+  --color-accent-red-dim: #2e1212;
   --color-accent-violet: #a78bfa;
   /* F1 — role split: #a78bfa works as TEXT on dark surfaces (7:1) but fails
      under white button text (2.72). Solid violet buttons use -strong. */

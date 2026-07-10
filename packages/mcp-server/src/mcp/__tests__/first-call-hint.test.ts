@@ -13,8 +13,10 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { buildFirstCallHint } from "../first-call-hint.js";
+import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -134,5 +136,73 @@ describe("first-call hint — #139 detail density", () => {
     expect(hint).toContain("`Evidence` (filePath, lineStart, lineEnd, snippet)");
     // And the explicit statement that terse trims prose, not evidence.
     expect(hint).toMatch(/never the evidence itself/);
+  });
+});
+
+/**
+ * #148 — the autonomy dial reaches the OPENING artifacts. Pre-#148 the level
+ * was delivered ONLY via check_feedback (which runs after the agent's first
+ * artifacts), so "Light"/"Minimal" users still watched the full
+ * findings→options→spec→plan ceremony before the dial ever spoke. These pin:
+ * balanced/autonomous each emit their block in the first-call hint; supervised
+ * (the default) emits NOTHING — sha-identical to a never-set session, #139
+ * style; and the FLOOR — even autonomous never lifts present_code_change or
+ * the guardrail-path escalation.
+ */
+describe("first-call hint — #148 autonomy dial guidance", () => {
+  it("emits the balanced block iff autonomy is 'balanced'", async () => {
+    store.setAutonomyLevel("balanced");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Autonomy: BALANCED/);
+    // Leads with the SAME policy line check_feedback repeats — no drift.
+    expect(hint).toContain(AUTONOMY_POLICY_LINE.balanced);
+    // The opening-ceremony instruction that IS the fix.
+    expect(hint).toMatch(/skip present_findings/i);
+    expect(hint).toMatch(/genuine architectural tradeoffs/);
+    // Full sequence still applies to substantial work.
+    expect(hint).toMatch(/Substantial work .* still gets the full sequence/);
+    // Never the other level's block.
+    expect(hint).not.toMatch(/Autonomy: AUTONOMOUS/);
+  });
+
+  it("emits the autonomous block iff autonomy is 'autonomous'", async () => {
+    store.setAutonomyLevel("autonomous");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Autonomy: AUTONOMOUS/);
+    expect(hint).toContain(AUTONOMY_POLICY_LINE.autonomous);
+    expect(hint).not.toMatch(/Autonomy: BALANCED/);
+  });
+
+  it("FLOOR — the autonomous block keeps present_code_change required and defers to guardrails", async () => {
+    store.setAutonomyLevel("autonomous");
+    const hint = await buildFirstCallHint(store, 4000);
+    // Positive-presence pins (a softening rewrite deletes one and fails here):
+    // the dial never lifts the pre-write review record…
+    expect(hint).toMatch(/present_code_change BEFORE every Write\/Edit is still required/);
+    expect(hint).toMatch(/it is the review record/);
+    // …and guardrail-path escalation overrides the dial.
+    expect(hint).toMatch(/guardrails override this dial/i);
+    expect(hint).toMatch(/escalate to supervised/);
+  });
+
+  it("supervised (default) adds NOTHING — hint is sha-identical to a never-set session", async () => {
+    // Default store: autonomy never set (getAutonomyLevel() -> "supervised").
+    const defaultHint = await buildFirstCallHint(store, 4000);
+    // Explicitly setting supervised must be byte-for-byte the same hint.
+    store.setAutonomyLevel("supervised");
+    const supervisedHint = await buildFirstCallHint(store, 4000);
+    const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
+    expect(sha(supervisedHint)).toBe(sha(defaultHint));
+    // And no autonomy-dial text leaks into the default path (zero hot-path bytes).
+    expect(defaultHint).not.toMatch(/Autonomy: (BALANCED|AUTONOMOUS|SUPERVISED)/);
+    expect(defaultHint).not.toContain(AUTONOMY_POLICY_LINE.balanced);
+    expect(defaultHint).not.toContain(AUTONOMY_POLICY_LINE.autonomous);
+  });
+
+  it("round-trips: setting back to supervised removes the block again", async () => {
+    store.setAutonomyLevel("autonomous");
+    store.setAutonomyLevel("supervised");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Autonomy: (BALANCED|AUTONOMOUS)/);
   });
 });

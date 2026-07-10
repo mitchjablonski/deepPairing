@@ -84,6 +84,26 @@ function formatValidationError(
   };
 }
 
+/** #147 — Node/undici network-failure codes. A throw carrying one of these is
+ *  a dead socket / unreachable daemon: retrying can genuinely succeed. */
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/** #147 — same signal when it only survives in the message (fetch wraps the
+ *  cause; DaemonClient's connection-lost throw is a plain Error). */
+const NETWORK_ERROR_MSG =
+  /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|fetch failed|socket|network|daemon connection lost/i;
+
 /**
  * H1-6 — turn an UNEXPECTED handler throw into a clean isError tool result,
  * mirroring formatValidationError. The CallToolRequestSchema dispatch wraps the
@@ -93,13 +113,39 @@ function formatValidationError(
  * raw JSON-RPC protocol error — the agent got no actionable, retryable
  * guidance. This maps the throw to `{content, isError:true, _meta.code}` and
  * NEVER leaks a stack (only the sanitized message).
+ *
+ * #147 — retryability is now computed PER ERROR instead of the blanket
+ * `retryable: true` that had the agent loop-retrying deterministic handler
+ * bugs (a TypeError retried with identical input fails identically forever):
+ *   - daemon-tagged `{status}` 5xx, 408, 429 → retryable: true (transient)
+ *   - daemon-tagged other 4xx              → retryable: false (the request
+ *     is wrong; the same input can't start working)
+ *   - untagged network-level errors        → retryable: true (dead socket)
+ *   - any other untagged throw (TypeError, RangeError, fs errors from an
+ *     in-process FileStore, …)             → retryable: false (deterministic)
+ *
+ * `projectRoot` (default: process.cwd(), which is the project root for both
+ * the standalone wrapper and the daemon) is used to relativize absolute
+ * project paths an fs error message may carry — the user's directory layout
+ * is not a secret, but it's noise the agent doesn't need verbatim.
  */
-export function formatHandlerError(toolName: string, err: unknown): ToolErrorResponse {
+export function formatHandlerError(
+  toolName: string,
+  err: unknown,
+  projectRoot: string = process.cwd(),
+): ToolErrorResponse {
   const e = err as { message?: string; code?: string; status?: number } | undefined;
   // Sanitize: use only the message (never err.stack), and strip our own
   // "[deepPairing] " prefix so the agent sees a clean sentence.
   const rawMsg = e?.message ?? String(err);
-  const msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
+  let msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
+  // #147 — relativize the project root out of the message (in-process
+  // FileStore fs errors carry the user's absolute project path). Trailing-
+  // separator occurrences become relative paths; a bare occurrence becomes ".".
+  if (projectRoot && projectRoot !== "/" && msg.includes(projectRoot)) {
+    const withSep = projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`;
+    msg = msg.split(withSep).join("").split(projectRoot).join(".");
+  }
 
   const isBodyCap =
     e?.code === ERROR_CODES.body_too_large ||
@@ -119,15 +165,29 @@ export function formatHandlerError(toolName: string, err: unknown): ToolErrorRes
     };
   }
 
+  // #147 — split transient from deterministic (see the function doc above).
+  const status = typeof e?.status === "number" ? e.status : undefined;
+  const looksNetwork =
+    (typeof e?.code === "string" && NETWORK_ERROR_CODES.has(e.code)) ||
+    NETWORK_ERROR_MSG.test(msg);
+  const retryable =
+    status !== undefined
+      ? status >= 500 || status === 408 || status === 429
+      : looksNetwork;
+
   const code = TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED;
-  const text =
-    `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
-    `This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been ` +
-    `created — call check_feedback to see the current state, then retry ${toolName} if needed.`;
+  const text = retryable
+    ? `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
+      `This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been ` +
+      `created — call check_feedback to see the current state, then retry ${toolName} if needed.`
+    : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
+      `This looks deterministic (a handler bug or an unsupported request), not transient — retrying the ` +
+      `identical input will fail the same way. Call check_feedback to see the current state, then adjust ` +
+      `the input or approach before calling ${toolName} again. The artifact was NOT created.`;
   return {
     content: [{ type: "text", text }],
     isError: true as const,
-    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] },
+    _meta: { code, retryable },
   };
 }
 
