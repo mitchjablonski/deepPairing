@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.1.6 — 2026-07-09
+
+**Updating deepPairing now actually updates deepPairing.** This is the release
+that delivers the previous ones. No breaking changes.
+
+### Fixed
+- **A plugin update no longer keeps serving the old daemon.** deepPairing reuses
+  a running daemon for your project rather than starting a new one — but it never
+  checked *which version* was running. So after you updated the plugin, the old
+  daemon stayed resident and kept answering, and every fix you'd just installed
+  was invisible until you rebooted or killed it by hand. If you updated and
+  nothing seemed to change, this was why. Startup now compares the running
+  daemon's version against its own and restarts it when they differ.
+
+  Safety: the running daemon is only replaced when it proves it is *this*
+  project's daemon and *is* the process holding the port (its `pid` is
+  self-reported and must match). A recycled pid, another project's daemon, a
+  probe that fails, or a probe that times out all fall back to adopting what's
+  there — the restart path can never kill a healthy, current, or foreign
+  process. Shutdown is graceful: pending work is flushed to disk before exit.
+
+- **`dp --version` told you the truth.** It printed a hardcoded `0.1.0` no matter
+  what was installed — actively misleading for the one command you'd run to check
+  whether an update took. It now reads the same constant the MCP handshake and
+  the daemon report.
+
+- **Your philosophy ledger can no longer be silently erased.** A corrupt or
+  unreadable `~/.deeppairing/philosophy/v1.json` used to be read as *empty*, and
+  the next write then persisted that emptiness over months of cross-project
+  history. Now the file is snapshotted to `…​.corrupt-<timestamp>` and writes are
+  **refused** until you repair or remove it — deepPairing will not overwrite a
+  ledger it could not read. Recovery is automatic: fix the file and recording
+  resumes on the next read, no restart needed.
+
+  A single malformed entry no longer costs you that concept's whole history
+  either — it is rebuilt from the instances it still holds rather than dropped,
+  and any entry that genuinely must be dropped is backed up first. An empty
+  ledger file is treated as a fresh start, not as corruption.
+
+- **Two daemon crash vectors.** An `fs.watch` error with no listener (routine on
+  WSL, where the inotify watch limit is easy to exhaust) took the whole daemon
+  down with it. And a periodic heartbeat write that hit a transient disk error
+  re-threw from inside a timer and exited the process; it now logs and retries,
+  while a *startup* failure stays loud and fatal as it should.
+
+- **Two leaks.** Every `check_feedback` that timed out while you were away leaked
+  its waiter, unbounded. And a `check_feedback` that threw mid-poll orphaned its
+  10-second heartbeat interval forever.
+
+- **Tool errors read like errors, not protocol failures.** A rejected oversized
+  request surfaced as a raw JSON-RPC error the agent couldn't act on; it is now a
+  normal tool result the agent can read and retry from. Malformed request bodies
+  on the acknowledge routes return `400` instead of `500`.
+
+### Internal
+- The release version now lives in one place and a test enforces it. Four files
+  must agree on every bump; a comment used to ask a human to remember, and it had
+  silently failed three times. CI now fails instead.
+
 ## v0.1.5 — 2026-07-09
 
 Your comments are never ignored again. No breaking changes.
