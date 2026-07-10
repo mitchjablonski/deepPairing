@@ -7196,23 +7196,23 @@ function writeJsonAtomic(filePath, value, indent = 2, opts) {
 }
 function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  if (opts?.mode !== void 0) {
-    const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
-    const fd = fs.openSync(
-      tmp,
-      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
-      opts.mode
-    );
-    try {
-      fs.fchmodSync(fd, opts.mode);
-      fs.writeFileSync(fd, data);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } else {
-    fs.writeFileSync(tmp, data);
-  }
   try {
+    if (opts?.mode !== void 0) {
+      const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+      const fd = fs.openSync(
+        tmp,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
+        opts.mode
+      );
+      try {
+        fs.fchmodSync(fd, opts.mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data);
+    }
     fs.renameSync(tmp, filePath);
   } catch (err) {
     try {
@@ -25473,6 +25473,21 @@ function isAllowedWsOrigin(origin, hostHeader) {
 }
 
 // src/http/routes.ts
+async function readJsonValue(c) {
+  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalid();
+  }
+  if (raw2.trim() === "") return invalid();
+  try {
+    return { ok: true, value: JSON.parse(raw2) };
+  } catch {
+    return invalid();
+  }
+}
 function getSessionId(c) {
   return c.req.header("X-Session-Id") ?? void 0;
 }
@@ -25595,7 +25610,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const parsed = CommentBodySchema.safeParse(await c.req.json().catch(() => null));
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = CommentBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, content, target, intent, parentCommentId } = parsed.data;
     const targetArtifactId = target?.artifactId;
@@ -25677,7 +25694,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const decisionId = c.req.param("decisionId");
-    const parsed = DecisionResolveBodySchema.safeParse(await c.req.json().catch(() => null));
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionResolveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
     const knownRecord = await store.getDecision(decisionId);
@@ -25730,7 +25749,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const storeSid = store.getSessionId?.() ?? "(unknown)";
     const artifactId = c.req.param("artifactId");
-    const parsed = StatusUpdateBodySchema.safeParse(await c.req.json().catch(() => null));
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = StatusUpdateBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) {
       log2(`[status] REJECTED \u2014 body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
       return c.json(formatZodIssues(parsed.error), 400);
@@ -25801,7 +25822,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifactId = c.req.param("artifactId");
-    const parsed = RenameBodySchema.safeParse(await c.req.json().catch(() => null));
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RenameBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const title = parsed.data.title.trim();
     if (!(await store.getArtifacts()).some((a) => a.id === artifactId)) {
@@ -26136,8 +26159,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app2.post("/api/retrospectives", async (c) => {
     if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
-    const raw2 = await c.req.json().catch(() => null);
-    const parsed = RetrospectiveBodySchema.safeParse(raw2);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RetrospectiveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { decisionId, verdict, note } = parsed.data;
     const result = FileStore.addRetrospective(projectRoot2, { decisionId, verdict, note });
@@ -26164,7 +26188,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const parsed = PreferenceBodySchema.safeParse(await c.req.json().catch(() => null));
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = PreferenceBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     if (parsed.data.autonomyLevel) {
       await store.setAutonomyLevel(parsed.data.autonomyLevel);
@@ -26534,12 +26560,22 @@ async function parseJsonBody(c, schema) {
     return { ok: false, res: c.json({ error: message, code: ERROR_CODES.validation_error }, 400) };
   }
 }
-async function readJsonObject(c) {
+async function readJsonObject(c, opts) {
+  const invalidJson = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalidJson();
+  }
+  if (opts?.allowEmpty && raw2.trim() === "") {
+    return { ok: true, body: {} };
+  }
   let body;
   try {
-    body = await c.req.json();
+    body = JSON.parse(raw2);
   } catch {
-    return { ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) };
+    return invalidJson();
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {
@@ -26632,7 +26668,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   }
   app2.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
-    const body = await c.req.json().catch(() => ({}));
+    const parsedReg = await readJsonObject(c, { allowEmpty: true });
+    if (!parsedReg.ok) return parsedReg.res;
+    const body = parsedReg.body;
     if (typeof body.expectedProjectRoot === "string" && daemonProjectRoot && body.expectedProjectRoot !== daemonProjectRoot) {
       log2(
         `[register] 403 \u2014 project mismatch: sid=${sessionId} wrapper.expected=${body.expectedProjectRoot} daemon.actual=${daemonProjectRoot}`
@@ -26847,7 +26885,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   app2.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { resolvedAt } = await c.req.json().catch(() => ({}));
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { resolvedAt } = parsed.body;
     r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
     return c.json({ status: "resolved" });
   });

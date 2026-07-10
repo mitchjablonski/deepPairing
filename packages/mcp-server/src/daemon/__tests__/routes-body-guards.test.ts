@@ -72,6 +72,9 @@ const GUARDED_ROUTES: Array<{ name: string; pathFor: (sid: string) => string }> 
   { name: "plan-review resolve", pathFor: (s) => `/api/internal/sessions/${s}/plan-reviews/a1/resolve` },
   { name: "preflight-trace", pathFor: (s) => `/api/internal/sessions/${s}/preflight-traces/a1` },
   { name: "autonomy", pathFor: (s) => `/api/internal/sessions/${s}/autonomy` },
+  // H2-2 review — these two used `.catch(() => ({}))`, which only caught a
+  // THROWN parse; a valid-JSON `null` then Typeerror'd on destructure → 500.
+  { name: "comment mark-resolved", pathFor: (s) => `/api/internal/sessions/${s}/comments/c1/mark-resolved` },
 ];
 
 describe("H2-2 — malformed body yields 400, never 500", () => {
@@ -94,6 +97,39 @@ describe("H2-2 — malformed body yields 400, never 500", () => {
       expect(res.status).toBe(400);
     });
   }
+});
+
+describe("H2-2 review — /register accepts an empty body but rejects non-object bodies", () => {
+  // /register is the ONE route that legitimately accepts "" (⇒ {}). But a
+  // valid-JSON `null`/scalar used to sneak past `.catch(() => ({}))`: `null`
+  // then TypeError'd on `body.expectedProjectRoot` (500); `42` silently 200'd.
+  it("empty body → 200 (registers with defaults)", async () => {
+    const res = await app.request("/api/internal/sessions/fresh1/register", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}` }, // no Content-Type, no body
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("valid empty JSON object {} → 200", async () => {
+    const res = await app.request("/api/internal/sessions/fresh2/register", { method: "POST", headers: authed, body: "{}" });
+    expect(res.status).toBe(200);
+  });
+
+  it("literal null body → 400 (was a 500 TypeError on body.expectedProjectRoot)", async () => {
+    const res = await app.request("/api/internal/sessions/fresh3/register", { method: "POST", headers: authed, body: "null" });
+    expect(res.status).toBe(400);
+  });
+
+  it("scalar body 42 → 400 (was a silent 200 with a scalar)", async () => {
+    const res = await app.request("/api/internal/sessions/fresh4/register", { method: "POST", headers: authed, body: "42" });
+    expect(res.status).toBe(400);
+  });
+
+  it("malformed body → 400", async () => {
+    const res = await app.request("/api/internal/sessions/fresh5/register", { method: "POST", headers: authed, body: "{ not json" });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("H2-2 — bearer gate fires before body parse and before the session-exists probe", () => {

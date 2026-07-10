@@ -116,6 +116,37 @@ describe("H2-3 (#146) — mode-controlled atomic write (secret-bearing files)", 
     expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ important: "keep me" });
     expect(fs.readdirSync(dir).filter(isAtomicTmpFile)).toEqual([]);
   });
+
+  it("ENOSPC on the CONTENT write leaves no orphaned tmp and preserves the 0600 original", () => {
+    // Exact reproduction of the reviewer's orphan: openSync(O_CREAT) succeeds
+    // on a full disk (empty inode needs no blocks), then writeFileSync(fd)
+    // throws ENOSPC. Pre-fix the cleanup only wrapped rename, so a real
+    // `*.tmp.<pid>.<ts>.<rand>` was left behind every retry (~2,880/day under a
+    // wedged disk + the tolerated 30s heartbeat).
+    writeJsonAtomic(target, { keep: "me" }, 2, { mode: 0o600 });
+    const before = fs.readFileSync(target, "utf-8");
+    // openSync/fchmodSync/renameSync stay REAL — only the content write throws,
+    // so the temp genuinely exists on disk at throw time.
+    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    });
+    expect(() => writeJsonAtomic(target, { fresh: true }, 2, { mode: 0o600 })).toThrow(/ENOSPC/);
+    writeSpy.mockRestore();
+    // (a) original survives byte-for-byte + still 0600
+    expect(fs.readFileSync(target, "utf-8")).toBe(before);
+    if (!isWindows) expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+    // (c) no orphaned tmp remains
+    expect(fs.readdirSync(dir).filter(isAtomicTmpFile)).toEqual([]);
+  });
+
+  it("EPERM on fchmod leaves no orphaned tmp (cleanup covers the whole sequence)", () => {
+    const chmodSpy = vi.spyOn(fs, "fchmodSync").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM: operation not permitted, fchmod"), { code: "EPERM" });
+    });
+    expect(() => writeJsonAtomic(target, { x: 1 }, 2, { mode: 0o600 })).toThrow(/EPERM/);
+    chmodSpy.mockRestore();
+    expect(fs.readdirSync(dir).filter(isAtomicTmpFile)).toEqual([]);
+  });
 });
 
 describe("isAtomicTmpFile (Z4 + AA6.2)", () => {

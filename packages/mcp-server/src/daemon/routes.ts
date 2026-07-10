@@ -69,21 +69,45 @@ async function parseJsonBody<T>(
 }
 
 // H2-2 (#145) — guard ONLY the JSON parse for the internal routes that
-// destructure a bare `await c.req.json()`. A non-JSON / null / array body used
-// to throw (or throw on the subsequent destructure of null) → an uncaught 500;
-// return a clean 400 instead. This does NOT own field-level validation — each
-// route keeps its own downstream checks (FN5 optionId, D10 updates array, …)
-// which still run on a successfully-parsed object and still produce their
-// specific messages. Bearer auth is enforced by upstream middleware, so this
-// change never runs before the auth gate.
+// destructure a bare `await c.req.json()`. A non-JSON / null / array / scalar
+// body used to throw (or throw on the subsequent destructure of null / silently
+// proceed on a scalar) → an uncaught 500 or a wrong 200; return a clean 400
+// instead. This does NOT own field-level validation — each route keeps its own
+// downstream checks (FN5 optionId, D10 updates array, …) which still run on a
+// successfully-parsed object and still produce their specific messages. Bearer
+// auth is enforced by upstream middleware, so this never runs before the gate.
+//
+// `opts.allowEmpty` (H2-2 review) is for the ONE route (/register) that
+// legitimately accepts an EMPTY body — "" ⇒ {} ⇒ 200. A body of literal
+// `null` / `42` / `[]` is NOT empty and is still a 400. Reads via c.req.text()
+// so empty is distinguishable from malformed (c.req.json() throws on both).
+//
+// SECURITY / contract note (Fix C): this does NOT strip a `__proto__` own
+// property from the parsed object. That is safe TODAY only because every caller
+// destructures NAMED fields and never `...spread`s the body nor uses its keys
+// as map keys. A future route that spreads the body, or keys a map by it, must
+// sanitize itself (see the `Object.create(null)` pattern in global-store.read)
+// — do NOT assume this helper made the parsed body prototype-safe.
 async function readJsonObject(
   c: Context,
+  opts?: { allowEmpty?: boolean },
 ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; res: Response }> {
+  const invalidJson = () =>
+    ({ ok: false as const, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw: string;
+  try {
+    raw = await c.req.text();
+  } catch {
+    return invalidJson();
+  }
+  if (opts?.allowEmpty && raw.trim() === "") {
+    return { ok: true, body: {} };
+  }
   let body: unknown;
   try {
-    body = await c.req.json();
+    body = JSON.parse(raw);
   } catch {
-    return { ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) };
+    return invalidJson();
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {
@@ -292,7 +316,14 @@ export function createDaemonRoutes(
 
   app.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
-    const body = await c.req.json().catch(() => ({}));
+    // H2-2 review — /register is the one route that legitimately accepts an
+    // empty body (wrapper may POST nothing) → {}. But a literal `null`/`42`
+    // parsed successfully and then `body.expectedProjectRoot` threw a
+    // TypeError (500) or a scalar body silently 200'd. allowEmpty keeps ""⇒{}
+    // while rejecting non-object bodies.
+    const parsedReg = await readJsonObject(c, { allowEmpty: true });
+    if (!parsedReg.ok) return parsedReg.res;
+    const body = parsedReg.body as { expectedProjectRoot?: string; title?: string; project?: string };
     // Y3' — project binding handshake. When the wrapper provides
     // `expectedProjectRoot`, refuse if it doesn't match the daemon's own
     // root. Both response and the 403 echo `projectRoot` so the wrapper
@@ -587,7 +618,12 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { resolvedAt } = await c.req.json().catch(() => ({}));
+    // H2-2 review — was `.catch(() => ({}))`: a literal `null` body parsed OK
+    // then `const { resolvedAt } = null` threw a TypeError → 500. The real
+    // client always sends an object (`{resolvedAt}`), so no empty-body affordance.
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { resolvedAt } = parsed.body as { resolvedAt?: string };
     r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
     return c.json({ status: "resolved" });
   });

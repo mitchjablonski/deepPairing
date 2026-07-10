@@ -16,6 +16,18 @@ import type { GlobalStore } from "./global-store.js";
  * REPORTS: it computes the exact `mv` command for the user to run, and never
  * itself deletes/truncates/overwrites the ledger.
  */
+/**
+ * POSIX single-quote shell escaping. Wrap in single quotes and rewrite every
+ * embedded `'` as `'\''` (close-quote, escaped-quote, reopen-quote). The whole
+ * point of report-only is that the user TRUSTS and pastes the command we print;
+ * a path with a `'` in it (`$HOME=/tmp/o'brien`) would otherwise close the quote
+ * and silently retarget a DIFFERENT file — `bash -n` reports valid syntax, so
+ * the user gets no warning. Safe to paste into sh/bash.
+ */
+export function shQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 export interface LedgerHealthReport {
   state: "ok" | "frozen";
   ledgerPath: string;
@@ -76,6 +88,8 @@ export function buildLedgerHealthReport(store: GlobalStore): LedgerHealthReport 
     corruptSnapshots,
     ...(sizeBytes !== undefined ? { sizeBytes } : {}),
     asidePath,
-    remedyCommand: `mv '${ledgerPath}' '${asidePath}'`,
+    // shQuote both operands — a `'` in the path must not break out of the quote
+    // and retarget a different file (the user runs this verbatim).
+    remedyCommand: `mv ${shQuote(ledgerPath)} ${shQuote(asidePath)}`,
   };
 }

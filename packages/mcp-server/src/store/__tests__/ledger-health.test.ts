@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { GlobalStore } from "../global-store.js";
-import { buildLedgerHealthReport } from "../ledger-health.js";
+import { buildLedgerHealthReport, shQuote } from "../ledger-health.js";
 
 /**
  * H2-1 (#144) — the fact-gathering behind `dp doctor`'s ledger-health check.
@@ -54,4 +55,37 @@ describe("buildLedgerHealthReport", () => {
     expect(report.corruptSnapshots.every((p) => path.basename(p).startsWith("philosophy.json.corrupt-"))).toBe(true);
     errSpy.mockRestore();
   });
+});
+
+describe("shQuote — the printed remedy must round-trip a hostile path", () => {
+  it("wraps + escapes so a single-quote/space path can't break out of the quote", () => {
+    // POSIX: 'o'\''brien' is the literal o'brien.
+    expect(shQuote("o'brien ledger.json")).toBe("'o'\\''brien ledger.json'");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "remedyCommand actually moves the file to asidePath even when the path has a ' and a space",
+    () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      // A path with BOTH a single quote and a space — the exact shape that a
+      // naive `mv '${p}'` silently retargets ($HOME=/tmp/o'brien).
+      const hostilePath = path.join(tmpDir, "o'brien dir", "phil'osophy ledger.json");
+      fs.mkdirSync(path.dirname(hostilePath), { recursive: true });
+      fs.writeFileSync(hostilePath, "{ corrupt ");
+      const hostileStore = new GlobalStore(hostilePath);
+      const report = buildLedgerHealthReport(hostileStore);
+      expect(report.state).toBe("frozen");
+      expect(report.remedyCommand).toBeTruthy();
+
+      // Run the emitted command verbatim through a POSIX shell.
+      execFileSync("sh", ["-c", report.remedyCommand!]);
+
+      // The file landed at the EXACT asidePath, and the original is gone —
+      // proving the quoting addressed the real path, not a truncated one.
+      expect(fs.existsSync(report.asidePath!)).toBe(true);
+      expect(fs.existsSync(hostilePath)).toBe(false);
+      expect(fs.readFileSync(report.asidePath!, "utf-8")).toBe("{ corrupt ");
+      errSpy.mockRestore();
+    },
+  );
 });

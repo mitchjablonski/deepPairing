@@ -26,7 +26,7 @@ import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { getGlobalStore } from "../store/global-store.js";
-import { buildLedgerHealthReport } from "../store/ledger-health.js";
+import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 
 const cwd = process.cwd();
 
@@ -974,6 +974,11 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         console.log(`    ${dim(`${report.corruptSnapshots.length} old .corrupt-* snapshot(s) alongside it — safe to delete once you've confirmed the live ledger is good.`)}`);
       }
     } else {
+      // Fix B — a chmod-000 ledger is FROZEN for a PERMISSION reason, not
+      // corrupt content: no snapshot could be taken and a `cp`/`mv` would hit
+      // the same EACCES. Branch the remedy on the reason so we don't advise a
+      // command that can't run.
+      const isPermIssue = !!report.reason && /EACCES|EPERM|permission denied/i.test(report.reason);
       console.log(`  ${red("✗")} Philosophy ledger is FROZEN — corrupt/unreadable, so NOTHING is being recorded across projects (present_*/check_feedback silently drop appends)`);
       console.log(`    ${dim("path:")}   ${report.ledgerPath}${report.sizeBytes !== undefined ? dim(` (${report.sizeBytes} bytes on disk)`) : ""}`);
       if (report.reason) console.log(`    ${dim("reason:")} ${report.reason}`);
@@ -981,13 +986,21 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         console.log(`    ${dim("backup:")} ${report.backupPath} ${dim("(snapshot taken this session)")}`);
       } else if (report.corruptSnapshots.length > 0) {
         console.log(`    ${dim("backup:")} ${report.corruptSnapshots[report.corruptSnapshots.length - 1]} ${dim("(existing .corrupt snapshot)")}`);
-      } else {
-        console.log(`    ${yellow("!")} ${dim("no .corrupt-* snapshot exists — back the file up FIRST: ")}cp '${report.ledgerPath}' '${report.ledgerPath}.corrupt-manual'`);
+      } else if (!isPermIssue) {
+        // Only advise a cp-backup when the file is READABLE (unparseable
+        // content). Under EACCES the cp would fail too — the chmod remedy below
+        // is what actually unblocks it.
+        console.log(`    ${yellow("!")} ${dim("no .corrupt-* snapshot exists — back the file up FIRST: ")}cp ${shQuote(report.ledgerPath)} ${shQuote(report.ledgerPath + ".corrupt-manual")}`);
       }
       console.log();
       console.log(`  ${bold("To recover — run this yourself (doctor will NOT touch this file):")}`);
-      console.log(`      ${report.remedyCommand}`);
-      console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `npx deeppairing philosophy import <file> --merge` to keep its history.")}`);
+      if (isPermIssue) {
+        console.log(`      chmod u+rw ${shQuote(report.ledgerPath)}`);
+        console.log(`    ${dim("Then re-run ")}${bold("npx deeppairing doctor")}${dim(" — once the file is readable it'll tell you whether it's genuinely corrupt (with the mv remedy) or fine.")}`);
+      } else {
+        console.log(`      ${report.remedyCommand}`);
+        console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `npx deeppairing philosophy import <file> --merge` to keep its history.")}`);
+      }
     }
   } catch (err) {
     console.log(`  ${dim(`· Could not check philosophy ledger health: ${err}`)}`);

@@ -43,6 +43,25 @@ describe("H2-2 — malformed body → structured 400 (validation_error) on safeP
     expect((await res.json()).code).toBe("validation_error");
   });
 
+  it("malformed body gets an HONEST generic message, distinct from a genuine null body", async () => {
+    // Garbage text: the client did NOT send null — say "invalid JSON", not the
+    // misleading "expected object, received null".
+    const garbage = await app.request("/api/comments", { method: "POST", headers: jsonHeaders, body: "{ not json" });
+    expect(garbage.status).toBe(400);
+    const garbageBody = await garbage.json();
+    expect(garbageBody.error).toBe("invalid JSON");
+    expect(JSON.stringify(garbageBody).toLowerCase()).not.toContain("received null");
+
+    // A body that GENUINELY is null still earns the accurate Zod message.
+    const literalNull = await app.request("/api/comments", { method: "POST", headers: jsonHeaders, body: "null" });
+    expect(literalNull.status).toBe(400);
+    const nullBody = await literalNull.json();
+    expect(JSON.stringify(nullBody).toLowerCase()).toContain("null");
+
+    // The two malformed-vs-null messages are distinguishable.
+    expect(JSON.stringify(garbageBody)).not.toBe(JSON.stringify(nullBody));
+  });
+
   it("preserves field-level Zod errors: wrong-shape 400 names the offending field", async () => {
     store.createArtifact({ id: "art_1", type: "research", title: "t", content: {} });
 

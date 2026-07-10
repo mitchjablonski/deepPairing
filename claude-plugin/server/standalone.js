@@ -25161,23 +25161,23 @@ function writeJsonAtomic(filePath, value, indent = 2, opts) {
 }
 function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  if (opts?.mode !== void 0) {
-    const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
-    const fd = fs.openSync(
-      tmp,
-      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
-      opts.mode
-    );
-    try {
-      fs.fchmodSync(fd, opts.mode);
-      fs.writeFileSync(fd, data);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } else {
-    fs.writeFileSync(tmp, data);
-  }
   try {
+    if (opts?.mode !== void 0) {
+      const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+      const fd = fs.openSync(
+        tmp,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
+        opts.mode
+      );
+      try {
+        fs.fchmodSync(fd, opts.mode);
+        fs.writeFileSync(fd, data);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(tmp, data);
+    }
     fs.renameSync(tmp, filePath);
   } catch (err) {
     try {
