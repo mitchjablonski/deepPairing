@@ -12,9 +12,11 @@
  * the guaranteed surface again.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { buildFirstCallHint } from "../first-call-hint.js";
+import { buildFirstCallHint, autonomyHintFor } from "../first-call-hint.js";
+import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -134,5 +136,89 @@ describe("first-call hint — #139 detail density", () => {
     expect(hint).toContain("`Evidence` (filePath, lineStart, lineEnd, snippet)");
     // And the explicit statement that terse trims prose, not evidence.
     expect(hint).toMatch(/never the evidence itself/);
+  });
+});
+
+/**
+ * #148 — the autonomy dial reaches the OPENING artifacts. Pre-#148 the level
+ * was delivered ONLY via check_feedback (which runs after the agent's first
+ * artifacts), so "Light"/"Minimal" users still watched the full
+ * findings→options→spec→plan ceremony before the dial ever spoke. These pin:
+ * balanced/autonomous each emit their block in the first-call hint; supervised
+ * (the default) emits NOTHING — the contribution is pinned as the literal
+ * empty string, plus a sha self-consistency check that an explicit set equals
+ * never-set; and the FLOOR — NEITHER balanced nor autonomous lifts
+ * present_code_change, and autonomous still defers to guardrail escalation.
+ */
+describe("first-call hint — #148 autonomy dial guidance", () => {
+  it("emits the balanced block iff autonomy is 'balanced'", async () => {
+    store.setAutonomyLevel("balanced");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Autonomy: BALANCED/);
+    // Leads with the SAME policy line check_feedback repeats — no drift.
+    expect(hint).toContain(AUTONOMY_POLICY_LINE.balanced);
+    // The opening-ceremony instruction that IS the fix.
+    expect(hint).toMatch(/skip present_findings/i);
+    expect(hint).toMatch(/genuine architectural tradeoffs/);
+    // Full sequence still applies to substantial work.
+    expect(hint).toMatch(/Substantial work .* still gets the full sequence/);
+    // Never the other level's block.
+    expect(hint).not.toMatch(/Autonomy: AUTONOMOUS/);
+  });
+
+  it("emits the autonomous block iff autonomy is 'autonomous'", async () => {
+    store.setAutonomyLevel("autonomous");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Autonomy: AUTONOMOUS/);
+    expect(hint).toContain(AUTONOMY_POLICY_LINE.autonomous);
+    expect(hint).not.toMatch(/Autonomy: BALANCED/);
+  });
+
+  it("FLOOR — the autonomous block keeps present_code_change required and defers to guardrails", async () => {
+    store.setAutonomyLevel("autonomous");
+    const hint = await buildFirstCallHint(store, 4000);
+    // Positive-presence pins (a softening rewrite deletes one and fails here):
+    // the dial never lifts the pre-write review record…
+    expect(hint).toMatch(/present_code_change BEFORE every Write\/Edit is still required/);
+    expect(hint).toMatch(/it is the review record/);
+    // …and guardrail-path escalation overrides the dial.
+    expect(hint).toMatch(/guardrails override this dial/i);
+    expect(hint).toMatch(/escalate to supervised/);
+  });
+
+  it("FLOOR — the balanced block restates present_code_change too (review: 'go straight to the work' must not read as 'Edit directly')", async () => {
+    // Review-caught asymmetry: stating the floor ONLY in the autonomous block
+    // invites the inference that balanced's skip-license is broader — i.e.
+    // that "skip findings and go straight to the work" licenses skipping the
+    // pre-write review record as well. Pin the floor in BOTH blocks.
+    store.setAutonomyLevel("balanced");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/present_code_change BEFORE every Write\/Edit is still required/);
+    expect(hint).toMatch(/this dial only trims findings\/options/);
+  });
+
+  it("supervised (default) contributes the EMPTY STRING — and an explicit set equals never-set", async () => {
+    // The actual invariant, pinned directly: supervised's contribution to the
+    // hint is zero bytes. (Deliberately NOT a recorded sha of the whole hint —
+    // that would false-fail on every legitimate preamble edit.)
+    expect(autonomyHintFor("supervised")).toBe("");
+    // Self-consistency: explicitly setting supervised produces the same hint
+    // as a never-set default store.
+    const defaultHint = await buildFirstCallHint(store, 4000);
+    store.setAutonomyLevel("supervised");
+    const supervisedHint = await buildFirstCallHint(store, 4000);
+    const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
+    expect(sha(supervisedHint)).toBe(sha(defaultHint));
+    // And no autonomy-dial text leaks into the default path (zero hot-path bytes).
+    expect(defaultHint).not.toMatch(/Autonomy: (BALANCED|AUTONOMOUS|SUPERVISED)/);
+    expect(defaultHint).not.toContain(AUTONOMY_POLICY_LINE.balanced);
+    expect(defaultHint).not.toContain(AUTONOMY_POLICY_LINE.autonomous);
+  });
+
+  it("round-trips: setting back to supervised removes the block again", async () => {
+    store.setAutonomyLevel("autonomous");
+    store.setAutonomyLevel("supervised");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Autonomy: (BALANCED|AUTONOMOUS)/);
   });
 });

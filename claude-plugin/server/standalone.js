@@ -26543,6 +26543,12 @@ function getGlobalStore() {
   return _singleton;
 }
 
+// src/mcp/autonomy-policy.ts
+var AUTONOMY_POLICY_LINE = {
+  balanced: "Skip findings for simple tasks. Present options only for genuine architectural choices.",
+  autonomous: "Proceed with recommended options. The human will review after. Only present decisions for high-risk or irreversible changes."
+};
+
 // src/mcp/first-call-hint.ts
 var HINT_BUDGET_CHARS = 1500;
 var POLICY_BUDGET_CHARS = 600;
@@ -26567,6 +26573,25 @@ var DETAIL_DENSITY_TERSE_GUIDANCE = [
   "  - Trim option and plan descriptions to the decision-relevant essentials \u2014 pros/cons as short phrases, not paragraphs.",
   "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself."
 ].join("\n");
+var AUTONOMY_HINT_SUPERVISED = "";
+var AUTONOMY_HINT_BALANCED = [
+  `
+\u{1F39A} Autonomy: BALANCED \u2014 the human set this dial, and it applies from your FIRST artifact, not just later turns. ${AUTONOMY_POLICY_LINE.balanced}`,
+  "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
+  "  - Reserve present_options for genuine architectural tradeoffs \u2014 not routine implementation choices with one reasonable answer.",
+  "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings \u2192 options \u2192 spec/plan.",
+  "  - FLOOR (unchanged): present_code_change BEFORE every Write/Edit is still required \u2014 this dial only trims findings/options."
+].join("\n");
+var AUTONOMY_HINT_AUTONOMOUS = [
+  `
+\u{1F39A} Autonomy: AUTONOMOUS \u2014 the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
+  "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
+  "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required \u2014 it is the review record.",
+  "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths."
+].join("\n");
+function autonomyHintFor(level) {
+  return level === "balanced" ? AUTONOMY_HINT_BALANCED : level === "autonomous" ? AUTONOMY_HINT_AUTONOMOUS : AUTONOMY_HINT_SUPERVISED;
+}
 async function buildFirstCallHint(store, port) {
   const obligationsParts = [];
   const policyParts = [];
@@ -26840,6 +26865,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   try {
     const density = await store.getDetailDensity?.();
     const guidance = density === "terse" ? DETAIL_DENSITY_TERSE_GUIDANCE : DETAIL_DENSITY_RICH_GUIDANCE;
+    if (guidance) obligationsParts.push(guidance);
+  } catch {
+  }
+  try {
+    const guidance = autonomyHintFor(await store.getAutonomyLevel());
     if (guidance) obligationsParts.push(guidance);
   } catch {
   }
@@ -27528,10 +27558,28 @@ Fix the input and call ${toolName} again. The artifact was NOT created.`;
     _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
   };
 }
-function formatHandlerError(toolName, err) {
+var NETWORK_ERROR_CODES = /* @__PURE__ */ new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT"
+]);
+var NETWORK_ERROR_MSG = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|EPIPE|fetch failed|\bnetwork error\b|daemon connection lost/i;
+function formatHandlerError(toolName, err, projectRoot2 = process.cwd()) {
   const e = err;
   const rawMsg = e?.message ?? String(err);
-  const msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
+  let msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
+  if (projectRoot2 && projectRoot2 !== "/" && msg.includes(projectRoot2)) {
+    const withSep = projectRoot2.endsWith("/") ? projectRoot2 : `${projectRoot2}/`;
+    const escaped = projectRoot2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    msg = msg.split(withSep).join("").replace(new RegExp(`${escaped}(?=['"\`\\s,;:)\\]}]|$)`, "g"), ".");
+  }
   const isBodyCap = e?.code === ERROR_CODES.body_too_large || e?.status === 413 || /body exceeds|too large/i.test(msg);
   if (isBodyCap) {
     const code2 = TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE;
@@ -27544,14 +27592,19 @@ Trim the input and retry: shorten long before/after or code snippets, split find
       _meta: { code: code2, retryable: TOOL_ERROR_RETRYABLE[code2] }
     };
   }
+  const status = typeof e?.status === "number" ? e.status : void 0;
+  const looksNetwork = typeof e?.code === "string" && NETWORK_ERROR_CODES.has(e.code) || NETWORK_ERROR_MSG.test(msg);
+  const retryable = status !== void 0 ? status >= 500 || status === 408 || status === 429 : looksNetwork;
   const code = TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED;
-  const text = `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
+  const text = retryable ? `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
 
-This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been created \u2014 call check_feedback to see the current state, then retry ${toolName} if needed.`;
+This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been created \u2014 call check_feedback to see the current state, then retry ${toolName} if needed.` : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
+
+This looks deterministic (a handler bug or an unsupported request), not transient \u2014 retrying the identical input will fail the same way. The artifact may NOT have been created \u2014 call check_feedback to see the current state, then adjust the input or approach before calling ${toolName} again.`;
   return {
     content: [{ type: "text", text }],
     isError: true,
-    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
+    _meta: { code, retryable }
   };
 }
 var EXAMPLE_FINDINGS = `{
@@ -29090,7 +29143,7 @@ The human is reviewing in the companion UI. Call check_feedback again to pick up
   }
   const autonomy = await store.getAutonomyLevel();
   if (autonomy !== "supervised") {
-    parts.push(`Human autonomy preference: ${autonomy}. ${autonomy === "balanced" ? "Skip findings for simple tasks. Present options only for genuine architectural choices." : "Proceed with recommended options. The human will review after. Only present decisions for high-risk or irreversible changes."}`);
+    parts.push(`Human autonomy preference: ${autonomy}. ${autonomy === "balanced" ? AUTONOMY_POLICY_LINE.balanced : AUTONOMY_POLICY_LINE.autonomous}`);
   }
   const metrics = await store.getEngagementMetrics();
   if (autonomy !== "supervised" && metrics.avgReviewLatencyMs > 0) {

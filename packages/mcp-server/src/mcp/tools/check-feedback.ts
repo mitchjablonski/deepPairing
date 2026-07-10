@@ -3,6 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 import type { Artifact } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../../version.js";
 import { getGlobalStore } from "../../store/global-store.js";
+import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 
 /**
  * H2-1 — surface a FROZEN cross-project philosophy ledger. v0.1.6 makes the
@@ -614,13 +615,21 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // imperatives ("keep polling" vs "fix the violation now"). Pre-flight
   // validation in present_* tools is the enforcement point.
 
-  // Always include autonomy preference
+  // Autonomy preference reminder — non-default levels only.
+  // #148 — `supervised` is DELIBERATELY silent here, not an oversight:
+  // supervised IS the protocol preamble's default full ceremony, so there is
+  // nothing to remind the agent of, and the healthy poll payload stays
+  // byte-minimal (a standing contract — see check-feedback-ledger-health
+  // .test.ts). The standing per-level guidance now also rides in the
+  // first-call hint (first-call-hint.ts), sharing AUTONOMY_POLICY_LINE with
+  // this block so the two surfaces can't drift. Do not "fix" this by echoing
+  // the level for supervised.
   const autonomy = await store.getAutonomyLevel();
   if (autonomy !== "supervised") {
     parts.push(`Human autonomy preference: ${autonomy}. ${
       autonomy === "balanced"
-        ? "Skip findings for simple tasks. Present options only for genuine architectural choices."
-        : "Proceed with recommended options. The human will review after. Only present decisions for high-risk or irreversible changes."
+        ? AUTONOMY_POLICY_LINE.balanced
+        : AUTONOMY_POLICY_LINE.autonomous
     }`);
   }
 

@@ -60,6 +60,124 @@ describe("H1-6 — formatHandlerError mapping", () => {
     expect(text).toContain("ECONNREFUSED");
     expect(text).not.toContain("at "); // no stack frames leaked
     expect(text).not.toContain(".ts:");
+    // #147 — a dead socket is genuinely transient: retry can succeed.
+    expect(res._meta?.retryable).toBe(true);
+  });
+});
+
+/**
+ * #147 — retryability split. Pre-fix formatHandlerError stamped
+ * `retryable: true` on EVERY TOOL_EXECUTION_FAILED, so a deterministic
+ * handler bug (TypeError) told the agent to loop-retry input that can never
+ * work. These pin the per-error mapping:
+ *   tagged 5xx / 408 / 429 / network → retryable true
+ *   tagged other 4xx                 → retryable false
+ *   untagged TypeError/RangeError    → retryable false (and still no stack)
+ * plus the projectRoot-relativization of fs-error messages.
+ */
+describe("#147 — TOOL_EXECUTION_FAILED retryability split", () => {
+  const tagged = (message: string, status: number, code?: string) =>
+    Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
+
+  it("a daemon-tagged 503 is retryable (transient daemon trouble)", () => {
+    const res = formatHandlerError("present_findings", tagged("[deepPairing] request failed (503)", 503));
+    expect(res._meta?.code).toBe(TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED);
+    expect(res._meta?.retryable).toBe(true);
+    // Transient phrasing steers the agent to retry.
+    expect(res.content[0]!.text).toMatch(/transient/i);
+  });
+
+  it("a daemon-tagged 400 is NOT retryable (the request is wrong; identical input can't help)", () => {
+    const res = formatHandlerError("present_findings", tagged("[deepPairing] validation failed", 400, "validation_error"));
+    expect(res._meta?.code).toBe(TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED);
+    expect(res._meta?.retryable).toBe(false);
+    // The text must NOT tell the agent this is transient.
+    const text = res.content[0]!.text;
+    expect(text).not.toMatch(/usually transient/i);
+    expect(text).toMatch(/retrying the identical input will fail the same way/i);
+  });
+
+  it("daemon-tagged 408 and 429 stay retryable (timeout / rate limit ARE transient 4xx)", () => {
+    expect(formatHandlerError("recall", tagged("request timeout", 408))._meta?.retryable).toBe(true);
+    expect(formatHandlerError("recall", tagged("rate limited", 429))._meta?.retryable).toBe(true);
+  });
+
+  it("an untagged TypeError is NOT retryable and still leaks no stack", () => {
+    // A classic deterministic handler bug — same input, same throw, forever.
+    let err: unknown;
+    try {
+      (undefined as unknown as { title: string }).title.toString();
+    } catch (thrown) {
+      err = thrown; // a REAL TypeError with a real stack
+    }
+    const res = formatHandlerError("present_spec", err);
+    expect(res._meta?.code).toBe(TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED);
+    expect(res._meta?.retryable).toBe(false);
+    const text = res.content[0]!.text;
+    expect(text).not.toContain("at "); // no stack frames leaked
+    expect(text).not.toContain(".ts:");
+  });
+
+  it("relativizes the absolute project root out of fs-error messages", () => {
+    const projectRoot = "/home/someone/dev/secret-client-project";
+    const err = new Error(
+      `ENOENT: no such file or directory, open '${projectRoot}/.deeppairing/sessions/s1/artifacts.json'`,
+    );
+    const res = formatHandlerError("present_plan", err, projectRoot);
+    const text = res.content[0]!.text;
+    expect(text).not.toContain(projectRoot);
+    // The useful, project-relative tail survives.
+    expect(text).toContain(".deeppairing/sessions/s1/artifacts.json");
+  });
+
+  it("relativizes a bare project-root mention to '.'", () => {
+    const projectRoot = "/home/someone/dev/secret-client-project";
+    const err = new Error(`EACCES: permission denied, scandir '${projectRoot}'`);
+    const res = formatHandlerError("present_plan", err, projectRoot);
+    const text = res.content[0]!.text;
+    expect(text).not.toContain(projectRoot);
+    expect(text).toContain("scandir '.'");
+  });
+
+  it("does NOT mangle a prefix-SIBLING path (review repro: /proj vs /proj-archive)", () => {
+    // Review-caught: a bare split(projectRoot).join('.') with no boundary
+    // check rendered '/home/u/proj-archive/x' as '.-archive/x'. The bare
+    // replacement must only fire at a path boundary; the sibling path (root +
+    // non-separator suffix) survives verbatim while the true child relativizes.
+    const projectRoot = "/home/u/proj";
+    const err = new Error(
+      `EPERM: cannot link '/home/u/proj-archive/x' to '${projectRoot}/src/a.ts'`,
+    );
+    const res = formatHandlerError("present_plan", err, projectRoot);
+    const text = res.content[0]!.text;
+    expect(text).toContain("/home/u/proj-archive/x"); // sibling untouched
+    expect(text).not.toContain(".-archive");          // the mangled form
+    expect(text).toContain("'src/a.ts'");             // the child relativized
+    expect(text).not.toContain(`${projectRoot}/src`); // and the root gone
+  });
+
+  it("a deterministic TypeError merely MENTIONING 'socket' is NOT retryable (no loose classifier terms)", () => {
+    // Review-caught: bare `socket|network` regex terms classified
+    // `TypeError: Cannot read properties of undefined (reading 'socket')` —
+    // a deterministic handler bug — as a transient network error.
+    let err: unknown;
+    try {
+      (undefined as unknown as { socket: object }).socket.toString();
+    } catch (thrown) {
+      err = thrown; // real TypeError: "... (reading 'socket')"
+    }
+    const res = formatHandlerError("present_findings", err);
+    expect(res._meta?.code).toBe(TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED);
+    expect(res._meta?.retryable).toBe(false);
+    // While the REAL network shapes stay retryable: undici's fetch wrapper…
+    expect(formatHandlerError("recall", new TypeError("fetch failed"))._meta?.retryable).toBe(true);
+    // …and DaemonClient's untagged dead-daemon rethrow (client.ts request()).
+    expect(
+      formatHandlerError(
+        "recall",
+        new Error("daemon connection lost (likely after host sleep). Reconnect failed — run `npx deeppairing doctor` to diagnose, or restart Claude Code."),
+      )._meta?.retryable,
+    ).toBe(true);
   });
 });
 
