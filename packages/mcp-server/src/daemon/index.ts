@@ -62,7 +62,8 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // closing the stale-tab-after-port-recycling write hole.
 import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { corsAllowedOrigin, isAllowedWsOrigin } from "../http/origin-policy.js";
-import { guardWatcher, safeHeartbeatTick } from "./watchdog.js";
+import { guardWatcher, safeHeartbeatTick, type HeartbeatState } from "./watchdog.js";
+import { writeJsonAtomic } from "../store/atomic-write.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 // MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
 // so route handlers defined before the server starts can read it at call time
@@ -666,18 +667,21 @@ function cleanup(): void {
  *  NOT verify/throw on leaked bits — the caller decides where the secret-
  *  bearing file goes based on a measured FS-capability probe (III9). */
 function writeFile0600(file: string, obj: unknown): void {
-  // S1 — open with O_NOFOLLOW so a pre-placed symlink at this path can't
-  // redirect the write (the token goes into daemon.json in the in-repo case).
-  // Lower-risk than the /tmp sidecar since this is inside the user's own repo,
-  // but symmetric and cheap.
-  const O_NOFOLLOW = (fs.constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | O_NOFOLLOW, 0o600);
-  try {
-    fs.writeFileSync(fd, JSON.stringify(obj, null, 2));
-  } finally {
-    fs.closeSync(fd);
-  }
-  try { fs.chmodSync(file, 0o600); } catch {}
+  // H2-3 (#146) — was O_TRUNC + writeFileSync: NON-atomic. It truncated the
+  // live file to 0 bytes FIRST, then wrote. An ENOSPC mid-write (the exact
+  // failure the heartbeat guard now TOLERATES instead of exiting) left
+  // daemon.json truncated to 0 bytes — dropping pid/port AND, where the token
+  // lives in-repo, the authToken; DaemonClient's recovery re-read then
+  // JSON.parse("")-threw. writeJsonAtomic writes a sibling temp then renames,
+  // so a failed write leaves the previous valid file intact (never truncated).
+  //
+  // SECURITY: daemon.json can carry the bearer token, so it must be 0600. The
+  // temp is created at mode 0600 BEFORE any content is written (a default-umask
+  // temp then renamed would leak the token world-readable for the pre-rename
+  // window, and rename preserves the SOURCE mode → the file would stay 0644).
+  // O_EXCL|O_NOFOLLOW in the writer also preserves S1's refusal to follow a
+  // pre-planted symlink at the (now random) temp path.
+  writeJsonAtomic(file, obj, 2, { mode: 0o600 });
 }
 
 // III9 — token placement is decided once (the project dir's FS capability
@@ -1037,7 +1041,21 @@ async function main() {
     // so a transient ENOSPC/EACCES/EBUSY at a 30s tick can't uncaughtException
     // → exit(1) a healthy daemon. The STARTUP writeDaemonInfo(port) above stays
     // UNWRAPPED on purpose: a boot-time failure is fatal/loud (main().catch).
-    const heartbeat = setInterval(() => safeHeartbeatTick(() => writeDaemonInfo(port), log), 30000);
+    // H2-3 — thread a consecutive-failure counter so a PERSISTENT write failure
+    // (a full disk / permanent EACCES leaves daemon.json stale-or-truncated and
+    // nothing notices) escalates LOUDLY to stderr after N ticks. Still
+    // non-fatal — the startup/periodic fatal asymmetry above is preserved.
+    const heartbeatState: HeartbeatState = { consecutiveFailures: 0 };
+    const heartbeat = setInterval(
+      () =>
+        safeHeartbeatTick(
+          () => writeDaemonInfo(port),
+          log,
+          heartbeatState,
+          (msg) => process.stderr.write(msg + "\n"),
+        ),
+      30000,
+    );
     heartbeat.unref?.();
 
     // X7 — watch .deeppairing/hooks-state.json for new hook fires; broadcast

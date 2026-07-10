@@ -295,7 +295,11 @@ export function createHttpRoutes(
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     // U2 — validate at the boundary; replaces ad-hoc `if (!artifactId)` guards
     // that left malformed bodies to crash deeper in the handler.
-    const parsed = CommentBodySchema.safeParse(await c.req.json());
+    // H2-2 (#145) — guard the parse: a non-JSON body threw here BEFORE
+    // safeParse ran → 500. `.catch(() => null)` funnels it into safeParse,
+    // which returns a clean 400. A valid-JSON-but-wrong-shape body still runs
+    // through safeParse and still yields its Zod field-level error.
+    const parsed = CommentBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { artifactId, content, target, intent, parentCommentId } = parsed.data;
 
@@ -410,7 +414,9 @@ export function createHttpRoutes(
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const decisionId = c.req.param("decisionId");
-    const parsed = DecisionResolveBodySchema.safeParse(await c.req.json());
+    // H2-2 (#145) — guard the parse (see /api/comments); field-level Zod
+    // errors on a valid-but-wrong-shape body are preserved.
+    const parsed = DecisionResolveBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
 
@@ -497,7 +503,9 @@ export function createHttpRoutes(
     // AA7b — getSessionId is on IStore, the cast was dead weight.
     const storeSid = store.getSessionId?.() ?? "(unknown)";
     const artifactId = c.req.param("artifactId");
-    const parsed = StatusUpdateBodySchema.safeParse(await c.req.json());
+    // H2-2 (#145) — guard the parse (see /api/comments); field-level Zod
+    // errors on a valid-but-wrong-shape body are preserved.
+    const parsed = StatusUpdateBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) {
       log(`[status] REJECTED — body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
       return c.json(formatZodIssues(parsed.error), 400);
@@ -618,7 +626,9 @@ export function createHttpRoutes(
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifactId = c.req.param("artifactId");
-    const parsed = RenameBodySchema.safeParse(await c.req.json());
+    // H2-2 (#145) — guard the parse (see /api/comments); field-level Zod
+    // errors on a valid-but-wrong-shape body are preserved.
+    const parsed = RenameBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const title = parsed.data.title.trim();
     // F6 — same cross-session guard as status/comments/decisions.
@@ -1143,7 +1153,9 @@ export function createHttpRoutes(
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const parsed = PreferenceBodySchema.safeParse(await c.req.json());
+    // H2-2 (#145) — guard the parse (see /api/comments); field-level Zod
+    // errors on a valid-but-wrong-shape body are preserved.
+    const parsed = PreferenceBodySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     if (parsed.data.autonomyLevel) {
       await store.setAutonomyLevel(parsed.data.autonomyLevel);
@@ -1302,7 +1314,9 @@ export function createHttpRoutes(
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    const body = await c.req.json();
+    // H2-2 (#145) — guard the parse; a malformed body becomes null → the
+    // "required" 400 below, never a 500.
+    const body = await c.req.json().catch(() => null);
     const { targetEventId, note, tags } = body ?? {};
     if (!targetEventId || !note) {
       return c.json({ error: "targetEventId and note required" }, 400);
@@ -1334,7 +1348,10 @@ export function createHttpRoutes(
         );
       }
     }
-    const body = await c.req.json();
+    // H2-2 (#145) — guard the parse; runs AFTER the bearer gate above so an
+    // unauthenticated caller still 401s, never reaching this. A malformed body
+    // becomes null → the "content required" 400 below, never a 500.
+    const body = await c.req.json().catch(() => null);
     const content = typeof body?.content === "string" ? body.content : "";
     if (!content.trim()) return c.json({ error: "content required" }, 400);
 

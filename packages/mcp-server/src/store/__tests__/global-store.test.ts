@@ -528,3 +528,40 @@ describe("H1-5 — corrupt/malformed ledger is preserved, not silently reset", (
     errSpy.mockRestore();
   });
 });
+
+describe("H2-1 (#144) — getHealth() makes a frozen ledger queryable", () => {
+  it("reports state 'ok' with the ledger path on a fresh (absent) ledger", () => {
+    const health = store.getHealth();
+    expect(health.state).toBe("ok");
+    expect(health.ledgerPath).toBe(ledgerPath);
+    expect(health.backupPath).toBeUndefined();
+  });
+
+  it("reports state 'ok' after a normal healthy write", () => {
+    store.recordInstance("argon2id", { project: "p", sessionId: "s", verdict: "approved" });
+    expect(store.getHealth().state).toBe("ok");
+  });
+
+  it("reports 'frozen' with a reason + backup snapshot when the on-disk ledger is corrupt", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fs.writeFileSync(ledgerPath, "{ not valid json ");
+    const health = store.getHealth();
+    expect(health.state).toBe("frozen");
+    expect(health.ledgerPath).toBe(ledgerPath);
+    expect(health.reason).toBeTruthy();
+    // markCorrupt took a `.corrupt-<ts>` snapshot; getHealth exposes it.
+    expect(health.backupPath).toBeTruthy();
+    expect(fs.existsSync(health.backupPath!)).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("flips back to 'ok' once the corrupt file is repaired", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fs.writeFileSync(ledgerPath, "garbage");
+    expect(store.getHealth().state).toBe("frozen");
+    // Repair: a valid empty ledger shape.
+    fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, concepts: {} }));
+    expect(store.getHealth().state).toBe("ok");
+    errSpy.mockRestore();
+  });
+});

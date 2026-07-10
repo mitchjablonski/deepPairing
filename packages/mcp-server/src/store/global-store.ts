@@ -128,6 +128,11 @@ export class GlobalStore {
   // REFUSE overwriting — silently persisting the empty shape would permanently
   // destroy all cross-project history.
   private lastReadCorrupt = false;
+  // H2-1 — the human-readable reason the last read distrusted the file, so
+  // getHealth() can report WHY the ledger is frozen (unparseable JSON, wrong
+  // top-level shape, EACCES, …) without recomputing it. Set by markCorrupt,
+  // cleared at the top of every read().
+  private lastReadCorruptReason: string | undefined = undefined;
   // H1-5 R1 — set by read() when per-entry salvage had to DROP ≥1 unsalvageable
   // entry (zero recoverable instances). The top-level shape is valid so writes
   // stay allowed, but write() must snapshot the pre-drop bytes before it shrinks
@@ -141,6 +146,36 @@ export class GlobalStore {
 
   getLedgerPath(): string {
     return this.ledgerPath;
+  }
+
+  /**
+   * H2-1 — queryable ledger health. v0.1.6 made write() REFUSE to overwrite a
+   * ledger it couldn't read (correct — it preserves months of irreplaceable
+   * cross-project history), but recordInstance() returns void and every call
+   * site swallows in try/catch, so a frozen ledger was INVISIBLE: present_* /
+   * check_feedback reported success while nothing was recorded, forever, with
+   * the only signal a console.error on daemon stderr no user ever sees. Freezing
+   * is only defensible if the freeze is discoverable — this getter exposes the
+   * state read() already tracks (lastReadCorrupt + the per-path corrupt-snapshot
+   * map) so `dp doctor` and check_feedback can surface it. Does NOT recompute
+   * corruption and does NOT change recordInstance's signature.
+   *
+   * "frozen" ⇒ the on-disk ledger is unreadable/unparseable/wrong-shape and
+   * writes are being refused. `backupPath` is the `.corrupt-<ts>` snapshot when
+   * one was captured this process; absent when even the copy failed.
+   */
+  getHealth(): { state: "ok" | "frozen"; ledgerPath: string; backupPath?: string; reason?: string } {
+    this.read(); // refresh lastReadCorrupt + the per-path corrupt-snapshot map
+    if (this.lastReadCorrupt) {
+      const backupPath = corruptSnapshots.get(this.ledgerPath);
+      return {
+        state: "frozen",
+        ledgerPath: this.ledgerPath,
+        ...(backupPath ? { backupPath } : {}),
+        ...(this.lastReadCorruptReason ? { reason: this.lastReadCorruptReason } : {}),
+      };
+    }
+    return { state: "ok", ledgerPath: this.ledgerPath };
   }
 
   /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
@@ -165,9 +200,13 @@ export class GlobalStore {
    */
   private markCorrupt(err: unknown): void {
     this.lastReadCorrupt = true;
+    const msg = (err as { message?: string })?.message ?? String(err);
+    // H2-1 — remember the reason for getHealth() even when the snapshot was
+    // already taken this corruption (the early-return below skips re-logging,
+    // but a later getHealth() still needs to name why the ledger is frozen).
+    this.lastReadCorruptReason = msg;
     const existing = corruptSnapshots.get(this.ledgerPath);
     if (existing) return; // this corruption is already snapshotted + logged
-    const msg = (err as { message?: string })?.message ?? String(err);
     const backup = this.snapshotLedger();
     if (backup) corruptSnapshots.set(this.ledgerPath, backup);
     console.error(
@@ -228,6 +267,7 @@ export class GlobalStore {
     // `concepts[key]` truthy-but-malformed and 500'd recordInstance.
     const emptyConcepts = (): Record<string, PhilosophyEntry> => Object.create(null);
     this.lastReadCorrupt = false;
+    this.lastReadCorruptReason = undefined;
     this.lastReadDroppedEntries = false;
 
     // Truly fresh — no file. Writes allowed; forget any stale snapshot record.

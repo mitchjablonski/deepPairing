@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import { guardWatcher, safeHeartbeatTick } from "../watchdog.js";
+import { guardWatcher, safeHeartbeatTick, HEARTBEAT_ESCALATE_AFTER, type HeartbeatState } from "../watchdog.js";
 
 /**
  * H1-2 / H1-3 — two crash vectors that could uncaughtException → exit(1) an
@@ -69,5 +69,52 @@ describe("H1-3 — safeHeartbeatTick keeps a throwing periodic write from killin
     safeHeartbeatTick(() => { ran++; }, (m) => logs.push(m));
     expect(ran).toBe(1);
     expect(logs).toHaveLength(0);
+  });
+});
+
+describe("H2-3 (#146) — heartbeat escalates a PERSISTENT write failure to stderr", () => {
+  const throwing = () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+
+  it("stays silent-ish for the first N-1 failures, then escalates ONCE at the threshold", () => {
+    const logs: string[] = [];
+    const escalations: string[] = [];
+    const state: HeartbeatState = { consecutiveFailures: 0 };
+    // First N-1 failures: routine per-tick log only, no stderr escalation.
+    for (let i = 0; i < HEARTBEAT_ESCALATE_AFTER - 1; i++) {
+      safeHeartbeatTick(throwing, (m) => logs.push(m), state, (m) => escalations.push(m));
+    }
+    expect(escalations).toHaveLength(0);
+    expect(state.consecutiveFailures).toBe(HEARTBEAT_ESCALATE_AFTER - 1);
+
+    // The Nth consecutive failure escalates exactly once (pre-fix: never).
+    safeHeartbeatTick(throwing, (m) => logs.push(m), state, (m) => escalations.push(m));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]).toContain("consecutive heartbeats");
+    expect(escalations[0]).toContain("ENOSPC");
+
+    // Further consecutive failures do NOT re-spam stderr.
+    safeHeartbeatTick(throwing, (m) => logs.push(m), state, (m) => escalations.push(m));
+    expect(escalations).toHaveLength(1);
+    // Every failed tick still emits the routine per-tick log.
+    expect(logs).toHaveLength(HEARTBEAT_ESCALATE_AFTER + 1);
+  });
+
+  it("a success resets the consecutive-failure counter so a later streak re-escalates", () => {
+    const escalations: string[] = [];
+    const state: HeartbeatState = { consecutiveFailures: 0 };
+    for (let i = 0; i < HEARTBEAT_ESCALATE_AFTER; i++) {
+      safeHeartbeatTick(throwing, () => {}, state, (m) => escalations.push(m));
+    }
+    expect(escalations).toHaveLength(1);
+    // A healthy tick clears the streak.
+    safeHeartbeatTick(() => {}, () => {}, state, (m) => escalations.push(m));
+    expect(state.consecutiveFailures).toBe(0);
+    // A fresh streak escalates again.
+    for (let i = 0; i < HEARTBEAT_ESCALATE_AFTER; i++) {
+      safeHeartbeatTick(throwing, () => {}, state, (m) => escalations.push(m));
+    }
+    expect(escalations).toHaveLength(2);
   });
 });

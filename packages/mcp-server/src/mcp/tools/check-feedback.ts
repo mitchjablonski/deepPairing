@@ -2,6 +2,40 @@ import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 import type { Artifact } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../../version.js";
+import { getGlobalStore } from "../../store/global-store.js";
+
+/**
+ * H2-1 — surface a FROZEN cross-project philosophy ledger. v0.1.6 makes the
+ * ledger REFUSE writes when its file is corrupt (to preserve months of history),
+ * but recordInstance() returns void and every call site swallows in try/catch,
+ * so the freeze was invisible: present_* / check_feedback reported success while
+ * nothing was being recorded. This is the agent's poll loop, so surface it here.
+ *
+ * Returns `{ ledgerHealth: {...} }` ONLY when frozen; `{}` when healthy so the
+ * common-case structuredContent stays byte-for-byte as before (this is the hot
+ * path — no tokens added to the healthy payload). Best-effort: any error
+ * reading health degrades to `{}` rather than breaking the poll.
+ */
+function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: string; backupPath?: string; remedy: string } } {
+  try {
+    const health = getGlobalStore().getHealth();
+    if (health.state !== "frozen") return {};
+    return {
+      ledgerHealth: {
+        state: "frozen",
+        ledgerPath: health.ledgerPath,
+        ...(health.backupPath ? { backupPath: health.backupPath } : {}),
+        remedy:
+          `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; ` +
+          `new approvals/rejections are NOT being recorded until it is repaired. ` +
+          (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") +
+          "Run `npx deeppairing doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start).",
+      },
+    };
+  } catch {
+    return {};
+  }
+}
 
 /**
  * V-fix — derive the {previousStatus, at} of the LATEST transition from the
@@ -604,6 +638,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     decisions: structuredDecisions,
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
+    // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
+    // spreads nothing (byte-for-byte-unchanged payload) when healthy.
+    ...ledgerHealthField(),
   };
 
   // If only the preamble exists (no feedback, no waits), give a clean proceed signal

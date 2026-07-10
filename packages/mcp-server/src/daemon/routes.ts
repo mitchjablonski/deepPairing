@@ -7,6 +7,7 @@ import type { Context } from "hono";
 import { z } from "zod";
 import type { FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
+import type { PreflightTrace } from "@deeppairing/shared";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
 
@@ -65,6 +66,32 @@ async function parseJsonBody<T>(
     const message = err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid body" : "invalid JSON";
     return { ok: false, res: c.json({ error: message, code: ERROR_CODES.validation_error }, 400) };
   }
+}
+
+// H2-2 (#145) — guard ONLY the JSON parse for the internal routes that
+// destructure a bare `await c.req.json()`. A non-JSON / null / array body used
+// to throw (or throw on the subsequent destructure of null) → an uncaught 500;
+// return a clean 400 instead. This does NOT own field-level validation — each
+// route keeps its own downstream checks (FN5 optionId, D10 updates array, …)
+// which still run on a successfully-parsed object and still produce their
+// specific messages. Bearer auth is enforced by upstream middleware, so this
+// change never runs before the auth gate.
+async function readJsonObject(
+  c: Context,
+): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; res: Response }> {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return { ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return {
+      ok: false,
+      res: c.json({ error: "expected a JSON object body", code: ERROR_CODES.validation_error }, 400),
+    };
+  }
+  return { ok: true, body: body as Record<string, unknown> };
 }
 
 type SessionMap = Map<string, FileStore>;
@@ -314,7 +341,9 @@ export function createDaemonRoutes(
   // Rename a session
   app.post("/api/internal/sessions/:sessionId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
-    const { title } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { title } = parsed.body as { title: string };
     const meta = sessionMeta.get(sessionId);
     if (meta) meta.title = title;
     broadcast(sessionId, { type: "session_renamed", sessionId, title });
@@ -391,7 +420,12 @@ export function createDaemonRoutes(
     const artifactId = c.req.param("artifactId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { status, reason } = await c.req.json();
+    const bodyR = await readJsonObject(c);
+    if (!bodyR.ok) return bodyR.res;
+    const { status, reason } = bodyR.body as {
+      status: Parameters<typeof r.store.updateArtifactStatus>[1];
+      reason?: Parameters<typeof r.store.updateArtifactStatus>[2];
+    };
     const target = r.store.getArtifacts().find((a) => a.id === artifactId);
     log(
       `[status:internal] sid=${sessionId} artifactId=${artifactId} ` +
@@ -410,7 +444,9 @@ export function createDaemonRoutes(
     const artifactId = c.req.param("artifactId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { updates } = await c.req.json();
+    const bodyR = await readJsonObject(c);
+    if (!bodyR.ok) return bodyR.res;
+    const { updates } = bodyR.body as { updates?: unknown };
     if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
     // D10 review — mirror the handler's validation (junk statuses would
     // persist, then silently vanish on the next restart when coercePlanStep
@@ -440,7 +476,9 @@ export function createDaemonRoutes(
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { title } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { title } = parsed.body as { title: string };
     r.store.renameArtifact(c.req.param("artifactId"), title);
     broadcast(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
     return c.json({ status: "renamed" });
@@ -502,7 +540,9 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/answered", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { answerCommentId } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { answerCommentId } = parsed.body as { answerCommentId: string };
     r.store.markCommentAnswered(c.req.param("commentId"), answerCommentId);
     // F1 — record the metric HERE (daemon-side), the truth point for an
     // answered question. The MCP server's question_answered broadcast is a
@@ -570,7 +610,14 @@ export function createDaemonRoutes(
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
-    const { optionId, reasoning, confidence, predictedOutcome } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { optionId, reasoning, confidence, predictedOutcome } = parsed.body as {
+      optionId?: unknown;
+      reasoning?: string;
+      confidence?: "low" | "medium" | "high";
+      predictedOutcome?: string;
+    };
     const decisionId = c.req.param("decisionId");
     // FN5 — require a non-empty optionId. Without this, a missing optionId
     // no-ops resolveDecision but the F2 guard (undefined !== undefined → false)
@@ -642,7 +689,9 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/plan-reviews", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { artifactId } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { artifactId } = parsed.body as { artifactId: string };
     r.store.recordPlanReview(artifactId);
     return c.json({ status: "recorded" });
   });
@@ -650,7 +699,12 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/plan-reviews/:artifactId/resolve", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { verdict, feedback } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { verdict, feedback } = parsed.body as {
+      verdict: Parameters<typeof r.store.resolvePlanReview>[1];
+      feedback?: string;
+    };
     r.store.resolvePlanReview(c.req.param("artifactId"), verdict, feedback);
     return c.json({ status: "resolved" });
   });
@@ -793,7 +847,9 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { trace } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { trace } = parsed.body as { trace: PreflightTrace };
     r.store.recordPreflightTrace?.(c.req.param("artifactId"), trace);
     return c.json({ status: "recorded" });
   });
@@ -836,7 +892,9 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/autonomy", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { level } = await c.req.json();
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { level } = parsed.body as { level: Parameters<typeof r.store.setAutonomyLevel>[0] };
     r.store.setAutonomyLevel(level);
     return c.json({ status: "updated" });
   });

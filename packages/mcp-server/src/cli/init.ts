@@ -25,6 +25,8 @@ import {
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
+import { getGlobalStore } from "../store/global-store.js";
+import { buildLedgerHealthReport } from "../store/ledger-health.js";
 
 const cwd = process.cwd();
 
@@ -953,6 +955,42 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         return { ok: true, message: `Removed ${removed} cross-scope checkpoint entries` };
       },
     });
+  }
+
+  // 6b. Philosophy ledger health (H2-1). The cross-project philosophy ledger is
+  // the single most precious file deepPairing owns — months of accumulated taste
+  // with no other copy. v0.1.6 FREEZES writes when it can't read the file (so a
+  // reset can't destroy history), but that freeze was invisible: recordInstance
+  // returns void and every call site swallows. Surface it here — and REPORT ONLY.
+  // Per the hard safety rule, doctor NEVER deletes/truncates/overwrites the
+  // ledger (a bad repair could eat the only copy of months of taste); it prints
+  // the file's real shape and the exact non-destructive `mv` command for the
+  // user to run themselves. A correct diagnosis beats a repair that can eat it.
+  try {
+    const report = buildLedgerHealthReport(getGlobalStore());
+    if (report.state === "ok") {
+      console.log(`  ${green("✓")} Philosophy ledger parses ${dim(`(${report.ledgerPath})`)}`);
+      if (report.corruptSnapshots.length > 0) {
+        console.log(`    ${dim(`${report.corruptSnapshots.length} old .corrupt-* snapshot(s) alongside it — safe to delete once you've confirmed the live ledger is good.`)}`);
+      }
+    } else {
+      console.log(`  ${red("✗")} Philosophy ledger is FROZEN — corrupt/unreadable, so NOTHING is being recorded across projects (present_*/check_feedback silently drop appends)`);
+      console.log(`    ${dim("path:")}   ${report.ledgerPath}${report.sizeBytes !== undefined ? dim(` (${report.sizeBytes} bytes on disk)`) : ""}`);
+      if (report.reason) console.log(`    ${dim("reason:")} ${report.reason}`);
+      if (report.backupPath) {
+        console.log(`    ${dim("backup:")} ${report.backupPath} ${dim("(snapshot taken this session)")}`);
+      } else if (report.corruptSnapshots.length > 0) {
+        console.log(`    ${dim("backup:")} ${report.corruptSnapshots[report.corruptSnapshots.length - 1]} ${dim("(existing .corrupt snapshot)")}`);
+      } else {
+        console.log(`    ${yellow("!")} ${dim("no .corrupt-* snapshot exists — back the file up FIRST: ")}cp '${report.ledgerPath}' '${report.ledgerPath}.corrupt-manual'`);
+      }
+      console.log();
+      console.log(`  ${bold("To recover — run this yourself (doctor will NOT touch this file):")}`);
+      console.log(`      ${report.remedyCommand}`);
+      console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `npx deeppairing philosophy import <file> --merge` to keep its history.")}`);
+    }
+  } catch (err) {
+    console.log(`  ${dim(`· Could not check philosophy ledger health: ${err}`)}`);
   }
 
   // 7. Overall verdict
