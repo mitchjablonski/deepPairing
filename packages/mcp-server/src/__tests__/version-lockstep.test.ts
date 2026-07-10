@@ -20,6 +20,15 @@
  * deliberately avoids runtime JSON resolution so the bundled plugin has no
  * JSON-resolution dependency, and this test must not establish `import`-ing
  * package.json as an allowed pattern in src.
+ *
+ * DELIBERATELY EXCLUDED — these look like stale release versions and are not.
+ * Do not "fix" them to match SERVER_VERSION:
+ *   - `.claude-plugin/marketplace.json` → `metadata.version`: the version of the
+ *     marketplace CATALOG, not of the plugin. The installed-plugin version is
+ *     claude-plugin/.claude-plugin/plugin.json, which this test does pin.
+ *   - `packages/vscode-extension/package.json`: independently versioned (0.0.1).
+ *   - `"0.1.0"` in daemon/__tests__/ping.test.ts: arbitrary fixture input to
+ *     buildPingPayload, which echoes whatever it is handed.
  */
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
