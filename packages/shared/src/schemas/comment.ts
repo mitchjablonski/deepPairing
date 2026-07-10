@@ -30,6 +30,24 @@ export const CommentTargetSchema = z.object({
   questionIndex: z.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: z.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
   suggestion: z.string().optional().describe("Suggested code replacement for this line"),
+  // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
+  // screenshot: the agent gets the hit-tested node ids + labels (which it can
+  // locate in the Mermaid source it authored) plus the normalized rect. Every
+  // sub-field optional; an old comment with no `region` loads unchanged. The
+  // rect is normalized to the SVG's own rendered box (0..1) so it survives
+  // responsive scaling. `labels` disambiguates when a node id is later removed
+  // by a diagram revision (the comment must NOT vanish — see check-feedback).
+  region: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      w: z.number(),
+      h: z.number(),
+      elementIds: z.array(z.string()).optional().describe('Hit-tested g.node ids, e.g. ["flowchart-AuthGate-1"]'),
+      labels: z.array(z.string()).optional().describe('Hit-tested node labels, e.g. ["AuthGate"]'),
+    })
+    .optional()
+    .describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers"),
 });
 
 export type CommentTarget = z.infer<typeof CommentTargetSchema>;

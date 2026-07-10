@@ -81,6 +81,60 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(res.text).toContain("QUESTION");
     });
 
+    it("#140 — a region-anchored diagram comment reaches the agent as TEXT naming the nodes", async () => {
+      await callTool("present_findings", {
+        title: "Arch", summary: "s",
+        findings: [{ category: "arch", title: "F", detail: "d", evidence: "e", significance: "low" }],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "rc_1", artifactId: art.id, content: "split this box", author: "human",
+        target: {
+          artifactId: art.id,
+          visualId: "vis_1",
+          region: { x: 0.1, y: 0.1, w: 0.4, h: 0.2, elementIds: ["flowchart-AuthGate-1"], labels: ["AuthGate", "Login"] },
+        },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      // Text referent — labels, not a screenshot.
+      expect(res.text).toContain("on region [AuthGate, Login]");
+      const sc = res.structuredContent as any;
+      expect(sc.comments[0]).toMatchObject({ id: "rc_1" });
+      expect(sc.comments[0].region.labels).toEqual(["AuthGate", "Login"]);
+    });
+
+    it("#140 — a region with only ids (no labels, e.g. an unlabeled-node drag) appends NO referent (ids are render-unique noise) and carries no structured region", async () => {
+      await callTool("present_findings", {
+        title: "Arch", summary: "s",
+        findings: [{ category: "arch", title: "F", detail: "d", evidence: "e", significance: "low" }],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "rc_2", artifactId: art.id, content: "here", author: "human",
+        target: { artifactId: art.id, visualId: "v", region: { x: 0, y: 0, w: 0.5, h: 0.5, elementIds: ["dp-mmd-3-4-flowchart-Store-0"] } },
+      } as any);
+      const res = await callTool("check_feedback");
+      // The comment still reaches the agent…
+      expect(res.text).toContain("here");
+      // …but with no meaningless render-unique id dumped into prose or structure.
+      expect(res.text).not.toContain("on region");
+      expect("region" in (res.structuredContent as any).comments[0]).toBe(false);
+    });
+
+    it("#140 — a non-region comment carries NO region key in structuredContent (byte-for-byte minimal)", async () => {
+      await callTool("present_findings", {
+        title: "Arch", summary: "s",
+        findings: [{ category: "arch", title: "F", detail: "d", evidence: "e", significance: "low" }],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({ id: "pc_1", artifactId: art.id, content: "plain", author: "human", target: { artifactId: art.id } } as any);
+      const res = await callTool("check_feedback");
+      const sc = res.structuredContent as any;
+      expect(res.text).not.toContain("on region");
+      expect("region" in sc.comments[0]).toBe(false);
+    });
+
     it("F1 — warns to WAIT while a code_change is still under review (never 'you may proceed')", async () => {
       // confidence "low" keeps it a draft (no terminal quick-approve) → routed to UI.
       await callTool("present_code_change", {

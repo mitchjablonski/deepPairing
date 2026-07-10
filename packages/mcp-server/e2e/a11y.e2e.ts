@@ -101,6 +101,23 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed findings failed: ${r.status}`); });
+  // #140 — a SEPARATE single-artifact session whose plan carries a diagram, so
+  // it renders directly (like bootstrap's visuals test) and axe can scan the
+  // region-comment affordance (drag overlay + keyboard node-list disclosure)
+  // with ZERO disabled rules.
+  const regPlan = await fetch(`${baseURL}/api/internal/sessions/a11yplan/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regPlan.ok) throw new Error(`seed plan register failed: ${regPlan.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11yplan/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "plan_a11y", type: "plan", title: "Plan with a diagram",
+      content: {
+        steps: [{ description: "wire it up", reasoning: "because" }],
+        estimatedChanges: 1,
+        visuals: [{ id: "arch_a11y", kind: "diagram", title: "Architecture", source: "graph TD; AuthGate-->Login" }],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed plan failed: ${r.status}`); });
 });
 
 test.afterAll(async () => {
@@ -179,6 +196,22 @@ test("a11y: the Autonomy popover (with the #139 detail-density toggle) has no se
   await page.getByRole("radiogroup", { name: /detail density/i }).waitFor({ timeout: 15000 });
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y: a plan diagram's region-comment affordance has no serious/critical axe violations (#140)", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11yplan`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  // The region overlay + keyboard node-list disclosure mount only once the real
+  // Mermaid engine has produced the SVG — never analyze before it exists.
+  await page.waitForSelector(".dp-mermaid svg", { timeout: 15000 });
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    // Zero disabled rules — the region UI (drag-capture overlay is aria-hidden;
+    // the keyboard path is real <button>s inside a <details>) must pass as-is,
+    // notably nested-interactive + aria-hidden-focus.
     .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);

@@ -22107,7 +22107,22 @@ var CommentTargetSchema = external_exports.object({
   // D8 (H1) — open questions are now answerable; index into openQuestions[].
   questionIndex: external_exports.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: external_exports.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
-  suggestion: external_exports.string().optional().describe("Suggested code replacement for this line")
+  suggestion: external_exports.string().optional().describe("Suggested code replacement for this line"),
+  // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
+  // screenshot: the agent gets the hit-tested node ids + labels (which it can
+  // locate in the Mermaid source it authored) plus the normalized rect. Every
+  // sub-field optional; an old comment with no `region` loads unchanged. The
+  // rect is normalized to the SVG's own rendered box (0..1) so it survives
+  // responsive scaling. `labels` disambiguates when a node id is later removed
+  // by a diagram revision (the comment must NOT vanish — see check-feedback).
+  region: external_exports.object({
+    x: external_exports.number(),
+    y: external_exports.number(),
+    w: external_exports.number(),
+    h: external_exports.number(),
+    elementIds: external_exports.array(external_exports.string()).optional().describe('Hit-tested g.node ids, e.g. ["flowchart-AuthGate-1"]'),
+    labels: external_exports.array(external_exports.string()).optional().describe('Hit-tested node labels, e.g. ["AuthGate"]')
+  }).optional().describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -24293,7 +24308,15 @@ var FileStore = class _FileStore {
       // to prevent).
       "requirementId",
       "questionIndex"
-    ].map((f) => `${f}=${t[f] ?? ""}`).join("|");
+    ].map((f) => `${f}=${t[f] ?? ""}`).join("|") + `|region=${_FileStore.regionKey(t.region)}`;
+  }
+  static regionKey(region) {
+    if (!region || typeof region !== "object") return "";
+    const r = region;
+    const labels = Array.isArray(r.labels) ? r.labels.filter((l) => typeof l === "string").map((l) => l.trim().replace(/\s+/g, " ").toLowerCase()) : [];
+    if (labels.length > 0) return [...labels].sort().join(",");
+    const round = (n) => typeof n === "number" && Number.isFinite(n) ? Math.round(n * 100) : "";
+    return `rect:${round(r.x)},${round(r.y)},${round(r.w)},${round(r.h)}`;
   }
   addComment(params) {
     const now = Date.now();

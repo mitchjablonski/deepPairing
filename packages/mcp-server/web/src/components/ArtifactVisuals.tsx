@@ -109,7 +109,13 @@ export function VisualBody({
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
     return typeof visual.source === "string" && visual.source.trim() ? (
-      <MermaidDiagram source={visual.source} />
+      <MermaidDiagram
+        source={visual.source}
+        // #140 — region-comment the diagram ONLY in the live artifact view.
+        // readOnly (decision-option preview, revision diff) omits it, so those
+        // diagrams render exactly as before and offer no drag affordance.
+        region={readOnly ? undefined : { artifactId, visualId: visual.id }}
+      />
     ) : (
       <div className="text-2xs text-text-muted">No diagram source provided.</div>
     );

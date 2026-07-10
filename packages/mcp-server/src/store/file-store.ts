@@ -605,7 +605,23 @@ export class FileStore implements IStore {
       // dedupe window collapsed into one (the exact F3 class this key exists
       // to prevent).
       "requirementId", "questionIndex",
-    ].map((f) => `${f}=${t[f] ?? ""}`).join("|");
+    ].map((f) => `${f}=${t[f] ?? ""}`).join("|")
+      // #140 — two same-text comments on DIFFERENT regions of the same visualId
+      // must NOT collapse. Key off the region's labels (the stable anchor; ids
+      // are render-unique). A label-less region falls back to its rounded rect
+      // so distinct blank-area drags still stay distinct.
+      + `|region=${FileStore.regionKey(t.region)}`;
+  }
+
+  private static regionKey(region: unknown): string {
+    if (!region || typeof region !== "object") return "";
+    const r = region as { x?: number; y?: number; w?: number; h?: number; labels?: unknown };
+    const labels = Array.isArray(r.labels)
+      ? r.labels.filter((l): l is string => typeof l === "string").map((l) => l.trim().replace(/\s+/g, " ").toLowerCase())
+      : [];
+    if (labels.length > 0) return [...labels].sort().join(",");
+    const round = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Math.round(n * 100) : "");
+    return `rect:${round(r.x)},${round(r.y)},${round(r.w)},${round(r.h)}`;
   }
 
   addComment(params: {

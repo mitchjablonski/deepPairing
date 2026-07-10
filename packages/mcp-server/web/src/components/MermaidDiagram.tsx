@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useModal } from "../hooks/useModal";
+import { DiagramRegionLayer, RegionCommentsFallback } from "./DiagramRegionLayer";
 
 /**
  * Renders agent-authored Mermaid source to an SVG. Lazy-loads the (sizable)
@@ -62,8 +63,18 @@ export function repairMermaidSource(src: string): string {
   return s;
 }
 
-export function MermaidDiagram({ source }: { source: string }) {
+export function MermaidDiagram({
+  source,
+  region,
+}: {
+  source: string;
+  // #140 — when present, the diagram becomes region-commentable (drag a rect /
+  // pick a node). Passed ONLY for the interactive artifact view; a decision
+  // preview or revision diff omits it and the diagram behaves exactly as before.
+  region?: { artifactId: string; visualId: string };
+}) {
   const [svg, setSvg] = useState<string | null>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
   // True when the raw source failed but repairMermaidSource made it render.
@@ -126,6 +137,10 @@ export function MermaidDiagram({ source }: { source: string }) {
         <pre className="text-2xs font-mono bg-surface-code rounded p-2 overflow-x-auto whitespace-pre text-text-secondary">
           {source}
         </pre>
+        {/* Degradation: the diagram fell back to source, so there's nothing to
+            drag over — but any region comments posted on an earlier (rendered)
+            version must still be visible as text, never lost or crashed. */}
+        {region && <RegionCommentsFallback artifactId={region.artifactId} visualId={region.visualId} />}
       </div>
     );
   }
@@ -136,11 +151,22 @@ export function MermaidDiagram({ source }: { source: string }) {
 
   return (
     <div className="space-y-1">
-      <div
-        className="dp-mermaid overflow-x-auto flex justify-center [&_svg]:max-w-full [&_svg]:h-auto"
-        // mermaid output is sanitized at securityLevel "strict".
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
+      <div className="relative">
+        <div
+          ref={hostRef}
+          className="dp-mermaid overflow-x-auto flex justify-center [&_svg]:max-w-full [&_svg]:h-auto"
+          // mermaid output is sanitized at securityLevel "strict".
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+        {region && (
+          <DiagramRegionLayer
+            artifactId={region.artifactId}
+            visualId={region.visualId}
+            svg={svg}
+            hostRef={hostRef}
+          />
+        )}
+      </div>
       <div className="flex items-center gap-2">
         <button
           onClick={() => setFullscreen(true)}
