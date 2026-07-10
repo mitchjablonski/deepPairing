@@ -375,7 +375,13 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/artifacts/status-changes/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { ids } = await c.req.json();
+    // NIT — a non-JSON/null body used to make c.req.json() throw → 500. Return
+    // a clean 400 instead.
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body as { ids?: unknown };
     r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
     return c.json({ status: "acknowledged" });
   });
@@ -470,8 +476,13 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/comments/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { ids } = await c.req.json();
-    r.store.acknowledgeComments(ids);
+    // NIT — clean 400 on a malformed/null body instead of a 500 from json().
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body as { ids?: unknown };
+    r.store.acknowledgeComments(Array.isArray(ids) ? ids : []);
     return c.json({ status: "acknowledged" });
   });
 
@@ -594,8 +605,13 @@ export function createDaemonRoutes(
   app.post("/api/internal/sessions/:sessionId/decisions/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const { ids } = await c.req.json();
-    r.store.acknowledgeDecisions(ids);
+    // NIT — clean 400 on a malformed/null body instead of a 500 from json().
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body as { ids?: unknown };
+    r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
     // C2 — this is the exact moment the agent CONSUMES the human's decision
     // (check_feedback drains resolved decisions then acks them). Broadcast it
     // so the resolved DecisionCard can show a receipt ("Claude picked this

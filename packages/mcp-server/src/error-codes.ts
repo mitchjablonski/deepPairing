@@ -78,6 +78,14 @@ export const TOOL_ERROR_CODES = {
   INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
   /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
   REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
+  /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
+   *  should trim/split the input and retry. */
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
+  /** H1-6 — a tool handler threw (e.g. daemon down/restarting). Usually
+   *  transient; the agent can re-check state and retry. Distinct from a clean
+   *  validation refusal — this is an unexpected error mapped to a clean
+   *  isError result instead of a raw JSON-RPC protocol error. */
+  TOOL_EXECUTION_FAILED: "TOOL_EXECUTION_FAILED",
 } as const;
 
 export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CODES];
@@ -86,4 +94,6 @@ export type ToolErrorCode = (typeof TOOL_ERROR_CODES)[keyof typeof TOOL_ERROR_CO
 export const TOOL_ERROR_RETRYABLE: Record<ToolErrorCode, boolean> = {
   [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
   [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
+  [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
+  [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true,
 };

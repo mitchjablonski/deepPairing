@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
+import { salvageLog } from "./salvage.js";
 import { normalizeConceptKey } from "@deeppairing/shared";
 
 /**
@@ -111,8 +112,28 @@ export function deriveStance(entry: PhilosophyEntry): PhilosophyStance {
   return "mixed";
 }
 
+// H1-5 — the `.corrupt-<ts>` snapshot taken for the CURRENT corruption of each
+// ledger path THIS process. Value = the actual backup file path (H1-5 R4 —
+// honesty: the write-refusal message prints the real snapshot, not a stale
+// reassurance). Dedup keeps read-only callers (query/get/size) from spraying a
+// fresh snapshot per call at a persistently corrupt file. Cleared whenever the
+// file is next read clean or written successfully, so a repair→re-corrupt
+// cycle re-snapshots instead of pointing at bytes that no longer exist.
+const corruptSnapshots = new Map<string, string>();
+
 export class GlobalStore {
   private ledgerPath: string;
+  // H1-5 — set by read() when the on-disk ledger couldn't be trusted at all
+  // (unreadable / unparseable / wrong top-level shape). write() consults this to
+  // REFUSE overwriting — silently persisting the empty shape would permanently
+  // destroy all cross-project history.
+  private lastReadCorrupt = false;
+  // H1-5 R1 — set by read() when per-entry salvage had to DROP ≥1 unsalvageable
+  // entry (zero recoverable instances). The top-level shape is valid so writes
+  // stay allowed, but write() must snapshot the pre-drop bytes before it shrinks
+  // the on-disk ledger — losing an entry is not the catastrophic reset, but we
+  // never destroy an entry with no copy on disk.
+  private lastReadDroppedEntries = false;
 
   constructor(ledgerPath?: string) {
     this.ledgerPath = ledgerPath ?? defaultLedgerPath();
@@ -122,6 +143,83 @@ export class GlobalStore {
     return this.ledgerPath;
   }
 
+  /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
+   *  backup path on success, or null if the copy failed. */
+  private snapshotLedger(): string | null {
+    const backup = `${this.ledgerPath}.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      fs.copyFileSync(this.ledgerPath, backup);
+      return backup;
+    } catch {
+      return null; // best-effort — caller decides how to degrade
+    }
+  }
+
+  /**
+   * H1-5 — whole-file corruption path: back the on-disk copy up to
+   * `<path>.corrupt-<ts>` BEFORE we fall back to empty, and log LOUDLY. Mirrors
+   * FileStore.loadJsonFile (which already does copy-then-fallback) — GlobalStore
+   * was the one store that silently reset to empty with no backup, so the next
+   * write() destroyed the ledger. Snapshot once per path per current corruption
+   * so read-only callers hitting a persistently bad file don't storm snapshots.
+   */
+  private markCorrupt(err: unknown): void {
+    this.lastReadCorrupt = true;
+    const existing = corruptSnapshots.get(this.ledgerPath);
+    if (existing) return; // this corruption is already snapshotted + logged
+    const msg = (err as { message?: string })?.message ?? String(err);
+    const backup = this.snapshotLedger();
+    if (backup) corruptSnapshots.set(this.ledgerPath, backup);
+    console.error(
+      `[deepPairing] GlobalStore: the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable (${msg}). ` +
+        (backup
+          ? `Backed the on-disk copy up to ${backup} before falling back — your cross-project history is preserved there and can be hand-repaired. ` +
+            `deepPairing will NOT overwrite the current file until you fix or remove it (writes are refused so the ledger isn't reset to empty).`
+          : `WARNING: could NOT back it up either — refusing all writes so the only copy survives. Fix or remove the file to restore the ledger.`),
+    );
+  }
+
+  /**
+   * H1-5 R1 — per-entry salvage on read with RECONSTRUCTION. An entry is only
+   * worthless if it carries ZERO recoverable instances (the instance log is the
+   * irreplaceable data). If ≥1 instance survives, keep the entry and rebuild any
+   * malformed scalar rather than dropping months of history over a bad
+   * timestamp: `key`/`concept` fall back to the map key (always available),
+   * `firstSeenAt`/`lastSeenAt` to the min/max of the surviving instance
+   * timestamps. Returns `{ entry: null }` ONLY when nothing is salvageable.
+   */
+  private static salvageEntry(mapKey: string, raw: unknown): { entry: PhilosophyEntry | null; reconstructed: boolean } {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { entry: null, reconstructed: false };
+    const e = raw as Partial<PhilosophyEntry>;
+    // Salvage the instance log FIRST — a hostile/hand-edited `instances`
+    // (scalar, null, object) is the exact shape that 500s deriveStance/query.
+    const rawInstances = Array.isArray(e.instances) ? e.instances : [];
+    const instances = rawInstances.filter((i): i is PhilosophyInstance => {
+      if (!i || typeof i !== "object") return false;
+      const inst = i as Partial<PhilosophyInstance>;
+      return (
+        typeof inst.project === "string" &&
+        typeof inst.sessionId === "string" &&
+        (inst.verdict === "approved" || inst.verdict === "rejected") &&
+        typeof inst.at === "string"
+      );
+    });
+    // Nothing to lose — safe to drop silently.
+    if (instances.length === 0) return { entry: null, reconstructed: false };
+
+    let reconstructed = false;
+    const key = typeof e.key === "string" && e.key.length > 0 ? e.key : mapKey;
+    if (key !== e.key) reconstructed = true;
+    const concept = typeof e.concept === "string" && e.concept.length > 0 ? e.concept : key;
+    if (concept !== e.concept) reconstructed = true;
+    const ats = instances.map((i) => i.at).sort();
+    const firstSeenAt = typeof e.firstSeenAt === "string" && e.firstSeenAt.length > 0 ? e.firstSeenAt : ats[0]!;
+    if (firstSeenAt !== e.firstSeenAt) reconstructed = true;
+    const lastSeenAt = typeof e.lastSeenAt === "string" && e.lastSeenAt.length > 0 ? e.lastSeenAt : ats[ats.length - 1]!;
+    if (lastSeenAt !== e.lastSeenAt) reconstructed = true;
+    return { entry: { key, concept, instances, firstSeenAt, lastSeenAt }, reconstructed };
+  }
+
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
   private read(): LedgerFile {
     // SEC1 — the concepts map is keyed by user/agent-supplied concept names.
@@ -129,24 +227,107 @@ export class GlobalStore {
     // own property (not Object.prototype / the constructor), which otherwise made
     // `concepts[key]` truthy-but-malformed and 500'd recordInstance.
     const emptyConcepts = (): Record<string, PhilosophyEntry> => Object.create(null);
-    try {
-      if (!fs.existsSync(this.ledgerPath)) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      const raw = fs.readFileSync(this.ledgerPath, "utf-8");
-      const parsed = JSON.parse(raw) as Partial<LedgerFile>;
-      if (parsed.version !== LEDGER_VERSION || typeof parsed.concepts !== "object" || !parsed.concepts) {
-        return { version: LEDGER_VERSION, concepts: emptyConcepts() };
-      }
-      // JSON.parse yields an Object.prototype-backed map; reparent to null.
-      return { version: LEDGER_VERSION, concepts: Object.assign(emptyConcepts(), parsed.concepts) };
-    } catch {
-      // Corrupted or unreadable — return empty rather than crash.
+    this.lastReadCorrupt = false;
+    this.lastReadDroppedEntries = false;
+
+    // Truly fresh — no file. Writes allowed; forget any stale snapshot record.
+    if (!fs.existsSync(this.ledgerPath)) {
+      corruptSnapshots.delete(this.ledgerPath);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
+    let raw: string;
+    try {
+      raw = fs.readFileSync(this.ledgerPath, "utf-8");
+    } catch (err) {
+      // Unreadable (EACCES/EBUSY/…) — can't trust it; treat as corrupt so a
+      // later write() doesn't reset the file we simply couldn't open.
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    // H1-5 R3 — a 0-byte / whitespace-only file is FIRST RUN, not corruption.
+    // It's exactly what an interrupted pre-atomic write or an ext4
+    // delayed-allocation crash leaves behind; freezing writes on it would
+    // preserve nothing (no history) yet silently stop the ledger from ever
+    // learning again. Treat like the absent-file branch (writes allowed, no
+    // backup, no freeze) — but log ONCE per path so it isn't silent.
+    if (raw.trim() === "") {
+      salvageLog(`philosophy-ledger-empty:${this.ledgerPath}`, `philosophy ledger at ${this.ledgerPath} was empty; starting fresh`);
+      corruptSnapshots.delete(this.ledgerPath);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      // H1-5 — was `catch { return empty }` with NO backup, NO log; the next
+      // write() then persisted the empty shape over the ledger. Now: back up + log.
+      this.markCorrupt(err);
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    // H1-5 R2 — route null / arrays / non-objects through markCorrupt too.
+    // `JSON.parse("null")` succeeds and returns null; reading `parsed.version`
+    // on it would throw OUTSIDE the try/catch above (a regression vs main,
+    // which wrapped the whole body). Guard the root before dereferencing.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      const rootKind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
+      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`));
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    const top = parsed as Partial<LedgerFile>;
+    if (top.version !== LEDGER_VERSION || typeof top.concepts !== "object" || !top.concepts) {
+      // Parseable JSON but a wrong top-level shape — same treatment: preserve
+      // and refuse to overwrite rather than silently reset.
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`));
+      return { version: LEDGER_VERSION, concepts: emptyConcepts() };
+    }
+    // Top-level shape is sound (NOT corruption) — salvage per entry with
+    // reconstruction. Reconstructing a malformed scalar loses nothing; DROPPING
+    // an entry (only when it has zero recoverable instances) is real loss, so
+    // write() snapshots the pre-drop bytes before it commits the shrunk ledger.
+    const concepts = emptyConcepts();
+    let dropped = 0;
+    for (const [key, rawEntry] of Object.entries(top.concepts)) {
+      const { entry } = GlobalStore.salvageEntry(key, rawEntry);
+      if (entry) concepts[key] = entry;
+      else dropped++;
+    }
+    if (dropped > 0) {
+      salvageLog("philosophy-ledger", `dropped ${dropped} unsalvageable concept entry(ies) on read (no recoverable instances)`);
+      this.lastReadDroppedEntries = true;
+    } else {
+      // Fully readable (clean or only reconstructed — no data lost). Any prior
+      // corruption snapshot is stale now; forget it so future corruption of this
+      // path re-snapshots (H1-5 R4).
+      corruptSnapshots.delete(this.ledgerPath);
+    }
+    return { version: LEDGER_VERSION, concepts };
   }
 
   private write(ledger: LedgerFile): void {
+    // H1-5 — REFUSE to overwrite a ledger the most recent read couldn't trust.
+    // Writing the (empty) fallback shape here is exactly the permanent
+    // data-loss bug: recordInstance reads empty-on-corruption, appends one
+    // instance, and this write clobbers all cross-project history. The
+    // timestamped `.corrupt-<ts>` backup (made in read/markCorrupt) is the
+    // recovery copy; the file itself stays untouched until a human repairs it.
+    if (this.lastReadCorrupt) {
+      const snap = corruptSnapshots.get(this.ledgerPath);
+      console.error(
+        `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} — the current on-disk ledger is corrupt; ` +
+          `not overwriting it with a reset shape. ` +
+          (snap
+            ? `A backup of the corrupt file is at ${snap}. `
+            : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) +
+          `Fix or remove the file to resume recording.`,
+      );
+      return;
+    }
+    // H1-5 R1 — never shrink the on-disk ledger (a per-entry DROP happened this
+    // read) without first snapshotting the pre-drop bytes. writeJsonAtomic below
+    // is about to overwrite the file that still holds the dropped entry.
+    if (this.lastReadDroppedEntries) {
+      this.snapshotLedger();
+    }
     try {
       fs.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
       // II4 — was a fixed `.tmp` suffix; two daemons on two projects writing
@@ -154,6 +335,9 @@ export class GlobalStore {
       // other's tmp before its rename. Use writeJsonAtomic which appends
       // pid+ts+randomBytes so the temp filename is unique per write.
       writeJsonAtomic(this.ledgerPath, ledger);
+      // The file on disk is valid again; forget any stale corruption snapshot so
+      // a future corruption of this path is treated as new (H1-5 R4).
+      corruptSnapshots.delete(this.ledgerPath);
     } catch {
       // Silent — losing the ledger is non-fatal for the current session.
     }

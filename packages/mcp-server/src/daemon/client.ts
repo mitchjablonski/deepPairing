@@ -246,7 +246,14 @@ export class DaemonClient implements IStore {
     }
 
     const msg = body?.error ?? `request failed (${res.status})`;
-    throw new Error(`[deepPairing] ${msg}`);
+    // H1-6 — carry the HTTP status + the daemon's structured `code` on the
+    // thrown Error so the MCP handler wrapper can map a 413/body_too_large to a
+    // friendly, actionable "payload too large" tool result instead of leaking a
+    // raw JSON-RPC protocol error to the agent.
+    const err = new Error(`[deepPairing] ${msg}`) as Error & { status?: number; code?: string };
+    err.status = res.status;
+    if (typeof body?.code === "string") err.code = body.code;
+    throw err;
   }
 
   private async post<T = any>(path: string, body?: any): Promise<T> {
@@ -651,7 +658,14 @@ export class DaemonClient implements IStore {
     let body: any = {};
     try { body = await res.clone().json(); } catch {}
     const msg = body?.error ?? `request failed (${res.status})`;
-    throw new Error(`[deepPairing] ${msg}`);
+    // H1-6 — carry the HTTP status + the daemon's structured `code` on the
+    // thrown Error so the MCP handler wrapper can map a 413/body_too_large to a
+    // friendly, actionable "payload too large" tool result instead of leaking a
+    // raw JSON-RPC protocol error to the agent.
+    const err = new Error(`[deepPairing] ${msg}`) as Error & { status?: number; code?: string };
+    err.status = res.status;
+    if (typeof body?.code === "string") err.code = body.code;
+    throw err;
   }
 
   /** List past sessions for this project. Uses the daemon's public /api/sessions. */

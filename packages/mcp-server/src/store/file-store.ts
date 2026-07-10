@@ -1259,8 +1259,14 @@ export class FileStore implements IStore {
   /** Register a waiter that resolves when new feedback arrives */
   waitForFeedback(timeoutMs = 30000): Promise<void> {
     return new Promise((resolve) => {
+      // H1-1 — the array holds `wrappedResolve`, NOT `resolve`. Filtering on
+      // `resolve` never matched, so every timed-out 30s long-poll leaked its
+      // wrappedResolve closure into feedbackWaiters unbounded (a human who
+      // walks away while the agent keeps polling grows the array forever, and
+      // notifyFeedbackWaiters then fan-outs to thousands of dead waiters).
+      // Filter on the value actually pushed.
       const timer = setTimeout(() => {
-        this.feedbackWaiters = this.feedbackWaiters.filter((w) => w !== resolve);
+        this.feedbackWaiters = this.feedbackWaiters.filter((w) => w !== wrappedResolve);
         resolve();
       }, timeoutMs);
 

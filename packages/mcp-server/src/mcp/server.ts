@@ -29,7 +29,7 @@ import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handleRecall } from "./tools/recall.js";
-import type { ToolContext } from "./tools/types.js";
+import type { ToolContext, ToolResult } from "./tools/types.js";
 import { SERVER_VERSION } from "../version.js";
 
 /**
@@ -56,7 +56,7 @@ export { ELICIT_APPROVE_SCHEMA, decideElicitResponse } from "./elicit.js";
 // MCP harness. matchesGlob is re-exported from there for any caller
 // that imported it from this module historically.
 import { matchesGlob as _matchesGlob } from "./preflight-validator.js";
-import { TOOL_INPUT_SCHEMAS, toMcpInputSchema } from "./validate-tool-input.js";
+import { TOOL_INPUT_SCHEMAS, toMcpInputSchema, formatHandlerError } from "./validate-tool-input.js";
 export const matchesGlob = _matchesGlob;
 
 type BroadcastFn = (event: any) => void;
@@ -882,7 +882,16 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
       progressToken: request.params._meta?.progressToken,
     };
 
-    const result = await (async () => { switch (name) {
+    // H1-6 — wrap the dispatch in try/catch. Pre-fix the switch ran in a bare
+    // IIFE with NO try/catch, so any handler throw (classically:
+    // DaemonClient.request throwing on a 413/body-cap for an oversized-but-
+    // Zod-valid artifact, or a transient daemon 5xx) propagated to the SDK as a
+    // raw JSON-RPC protocol error instead of the clean `{content, isError:true}`
+    // tool contract. formatHandlerError maps it to an actionable, retryable
+    // isError result with a `_meta.code` and never leaks a stack.
+    let result: ToolResult;
+    try {
+      result = await (async () => { switch (name) {
       case "present_findings":
         return handlePresentFindings(ctx, args);
 
@@ -941,7 +950,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           content: [{ type: "text", text: `Unknown tool: ${name}` }],
           isError: true,
         };
-    } })();
+      } })();
+    } catch (err) {
+      // The throw already bypassed the isError contract; give the agent a
+      // clean, retryable tool result (413/body-cap → actionable trim guidance)
+      // rather than a raw protocol error. Never leak a stack.
+      result = formatHandlerError(name, err);
+    }
 
     // Y2 — gate firstCallHint to write tools only. Pre-Y2 the hint
     // appended to EVERY tool's first response, including reads. That meant:

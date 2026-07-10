@@ -22,6 +22,7 @@
  *     retry logic treats it the same way.
  */
 import { z } from "zod";
+import { ERROR_CODES, TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../error-codes.js";
 import {
   ResearchContentSchema,
   SpecContentSchema,
@@ -80,6 +81,53 @@ function formatValidationError(
     // INPUT_VALIDATION_FAILED that's in the text body, but lifted into
     // _meta so clients can branch without parsing prose.
     _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true },
+  };
+}
+
+/**
+ * H1-6 — turn an UNEXPECTED handler throw into a clean isError tool result,
+ * mirroring formatValidationError. The CallToolRequestSchema dispatch wraps the
+ * tool switch in a bare IIFE with no try/catch, so any throw (classically:
+ * DaemonClient.request throwing on a 413/body-cap for an oversized-but-Zod-
+ * valid artifact, or a transient daemon-down 5xx) propagated to the SDK as a
+ * raw JSON-RPC protocol error — the agent got no actionable, retryable
+ * guidance. This maps the throw to `{content, isError:true, _meta.code}` and
+ * NEVER leaks a stack (only the sanitized message).
+ */
+export function formatHandlerError(toolName: string, err: unknown): ToolErrorResponse {
+  const e = err as { message?: string; code?: string; status?: number } | undefined;
+  // Sanitize: use only the message (never err.stack), and strip our own
+  // "[deepPairing] " prefix so the agent sees a clean sentence.
+  const rawMsg = e?.message ?? String(err);
+  const msg = rawMsg.replace(/^\[deepPairing\]\s*/, "");
+
+  const isBodyCap =
+    e?.code === ERROR_CODES.body_too_large ||
+    e?.status === 413 ||
+    /body exceeds|too large/i.test(msg);
+
+  if (isBodyCap) {
+    const code = TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE;
+    const text =
+      `${code}: ${toolName} could not be recorded — the artifact payload is too large for the daemon (${msg}).\n\n` +
+      `Trim the input and retry: shorten long before/after or code snippets, split findings/steps across ` +
+      `multiple ${toolName} calls, or summarize verbose evidence. The artifact was NOT created.`;
+    return {
+      content: [{ type: "text", text }],
+      isError: true as const,
+      _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] },
+    };
+  }
+
+  const code = TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED;
+  const text =
+    `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
+    `This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been ` +
+    `created — call check_feedback to see the current state, then retry ${toolName} if needed.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true as const,
+    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] },
   };
 }
 

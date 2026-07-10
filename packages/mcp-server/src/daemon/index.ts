@@ -62,6 +62,7 @@ const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 // closing the stale-tab-after-port-recycling write hole.
 import { projectHashOf, preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { corsAllowedOrigin, isAllowedWsOrigin } from "../http/origin-policy.js";
+import { guardWatcher, safeHeartbeatTick } from "./watchdog.js";
 const daemonProjectHash = projectHashOf(projectRoot);
 // MP1 — the actual bound port, set once the bind loop succeeds. Module-scoped
 // so route handlers defined before the server starts can read it at call time
@@ -1032,7 +1033,11 @@ async function main() {
     // DaemonClient auth dies after days); (2) the VS Code extension picks the
     // daemon.json with the freshest mtime as the "active" project. Left as-is.
     writeDaemonInfo(port);
-    const heartbeat = setInterval(() => writeDaemonInfo(port), 30000);
+    // H1-3 — the periodic tick is wrapped (safeHeartbeatTick logs + continues)
+    // so a transient ENOSPC/EACCES/EBUSY at a 30s tick can't uncaughtException
+    // → exit(1) a healthy daemon. The STARTUP writeDaemonInfo(port) above stays
+    // UNWRAPPED on purpose: a boot-time failure is fatal/loud (main().catch).
+    const heartbeat = setInterval(() => safeHeartbeatTick(() => writeDaemonInfo(port), log), 30000);
     heartbeat.unref?.();
 
     // X7 — watch .deeppairing/hooks-state.json for new hook fires; broadcast
@@ -1074,11 +1079,17 @@ async function main() {
       // exist yet, and atomic-rename writes recreate the inode.
       const hooksDir = path.dirname(hooksStatePath);
       fs.mkdirSync(hooksDir, { recursive: true });
-      fs.watch(hooksDir, (_event, filename) => {
+      const watcher = fs.watch(hooksDir, (_event, filename) => {
         if (filename === "hooks-state.json" || filename === path.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
+      // H1-2 — the change callback above is try/caught, but the watcher's own
+      // 'error' channel was NOT: an emitted 'error' with no listener THROWS →
+      // uncaughtException → exit(1). Routine triggers on Linux/WSL2: inotify
+      // watch-limit exhaustion, or hooksDir being removed. guardWatcher logs
+      // once and degrades (closes the watcher, daemon lives on).
+      guardWatcher(watcher, log);
     } catch (err) {
       log(`Hook-state watcher failed to start: ${err}`);
     }
