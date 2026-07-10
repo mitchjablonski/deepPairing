@@ -836,4 +836,25 @@ describe("F11 (G6) — salvage-log suppression keys are session-scoped", () => {
       store.acknowledgeStatusChanges(["does_not_exist"]);
     });
   });
+
+  describe("H1-1 — waitForFeedback waiter leak", () => {
+    it("does NOT grow feedbackWaiters across repeated timed-out long-polls", async () => {
+      const store = createStore("h1_waiter_leak");
+      // Each waitForFeedback pushes a `wrappedResolve` closure and, on timeout,
+      // must remove THAT SAME closure. Pre-fix the timeout branch filtered on
+      // `resolve` (never in the array), so every timed-out poll leaked one
+      // dead closure — unbounded when a human walks away and the agent keeps
+      // polling. Fire many short-timeout waits and assert the array drains.
+      const waiters = () => (store as unknown as { feedbackWaiters: unknown[] }).feedbackWaiters;
+      await Promise.all(Array.from({ length: 25 }, () => store.waitForFeedback(1)));
+      expect(waiters()).toHaveLength(0);
+
+      // And a genuine notification still resolves + clears (the other exit path).
+      const pending = store.waitForFeedback(10_000);
+      expect(waiters()).toHaveLength(1);
+      (store as unknown as { notifyFeedbackWaiters: () => void }).notifyFeedbackWaiters();
+      await pending;
+      expect(waiters()).toHaveLength(0);
+    });
+  });
 });
