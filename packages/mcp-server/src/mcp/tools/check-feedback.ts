@@ -113,10 +113,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         }, 10000);
       }
 
-      // Long-poll: wait up to 30s for feedback to arrive
-      await store.waitForFeedback(30000);
-
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      // Long-poll: wait up to 30s for feedback to arrive.
+      // H1-4 — try/finally so the heartbeat interval is ALWAYS cleared.
+      // DaemonClient.waitForFeedback re-throws on network-down/5xx; if the
+      // daemon dies mid-poll the await throws, and without finally the
+      // clearInterval was skipped — the interval then fired server.notification
+      // on a dead progressToken every 10s forever. The throw still propagates
+      // (the handler's caller decides), but the timer never outlives the wait.
+      try {
+        await store.waitForFeedback(30000);
+      } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+      }
     }
   }
 
