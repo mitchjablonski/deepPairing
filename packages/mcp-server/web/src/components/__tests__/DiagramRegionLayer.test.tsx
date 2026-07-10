@@ -57,6 +57,21 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
     expect(screen.getByText(/comment on a node/i)).toBeInTheDocument();
   });
 
+  it("the capture overlay spans the WHOLE well, not just the SVG box (gutter drags work)", async () => {
+    // Field bug round 2: the well is flex-centered, so a narrow diagram has
+    // wide gutters inside the visible border. When the overlay was sized to
+    // the SVG box, those gutters LOOKED like capture zone but were dead —
+    // "I can't select left of the login form". The overlay must be inset-0
+    // (well-sized) with NO inline geometry pinning it to the SVG box;
+    // normalizeRect clamps gutter-started drags to the diagram's edge.
+    render(<MermaidDiagram source="graph TD; A-->B" region={{ artifactId: "a", visualId: "vis_1" }} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    const overlay = screen.getByTestId("dp-region-overlay");
+    expect(overlay.className).toContain("inset-0");
+    expect(overlay.style.left).toBe("");
+    expect(overlay.style.width).toBe("");
+  });
+
   // --- drag path (pointer capture — a stray drag must not end early) ---------
   //
   // Seam honesty: happy-dom's setPointerCapture is a stub — it does NOT
