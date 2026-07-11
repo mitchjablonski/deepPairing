@@ -18,8 +18,10 @@
  *      removes the handler thinking it's redundant").
  *   2. Behavioral: an EventEmitter with no error listener throws when
  *      'error' is emitted; with our handler shape it does not. The
- *      assertion is on the Node-level invariant, not on a private import
- *      of daemon.ts (which is a top-level script with no exports).
+ *      assertion is on the Node-level invariant. (#157 — the wiring now
+ *      lives in the importable daemon/create-daemon.ts factory, and
+ *      create-daemon.test.ts exercises the real handlers; these source
+ *      pins stay as the cheap belt.)
  */
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
@@ -28,7 +30,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const daemonSrc = fs.readFileSync(path.resolve(here, "../daemon/index.ts"), "utf-8");
+// #157 — the WS connection/upgrade wiring moved from daemon/index.ts (an
+// unimportable entry script) into the create-daemon.ts factory; pin the
+// source that actually contains the handlers.
+const daemonSrc = fs.readFileSync(path.resolve(here, "../daemon/create-daemon.ts"), "utf-8");
 
 describe("II5 — WS error handler wiring", () => {
   it("daemon.ts registers ws.on('error') on the session-client path", () => {

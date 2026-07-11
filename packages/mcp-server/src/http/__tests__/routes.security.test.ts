@@ -28,14 +28,14 @@ describe("HTTP Routes", () => {
   // state + mutations. Uses UNWRAPPED apps so no X-Project-Hash is injected.
   describe("II2.2 — bootstrap-surface gate exemption", () => {
     it("403s a hashless GET /api/state (session route stays gated)", async () => {
-      const bare = createHttpRoutes(store, tmpDir);
+      const bare = createHttpRoutes(store, tmpDir, () => {});
       const res = await bare.request("/api/state");
       expect(res.status).toBe(403);
       expect((await res.json()).code).toBe("project_hash_mismatch");
     });
 
     it("does NOT 403 a hashless GET /api/daemon-info (discovery endpoint is exempt)", async () => {
-      const bare = createHttpRoutes(store, tmpDir);
+      const bare = createHttpRoutes(store, tmpDir, () => {});
       const res = await bare.request("/api/daemon-info");
       // createHttpRoutes doesn't define /api/daemon-info (the daemon mounts it
       // top-level), so a 404 — not a 403 — proves the gate let it through.
@@ -44,7 +44,7 @@ describe("HTTP Routes", () => {
     });
 
     it("does NOT 403 a hashless non-/api GET (SPA document + /assets/*)", async () => {
-      const bare = createHttpRoutes(store, tmpDir);
+      const bare = createHttpRoutes(store, tmpDir, () => {});
       for (const p of ["/", "/assets/index-abc123.js", "/favicon.ico"]) {
         const res = await bare.request(p);
         expect(res.status, `path ${p} should not be gate-blocked`).not.toBe(403);
@@ -52,7 +52,7 @@ describe("HTTP Routes", () => {
     });
 
     it("still 403s a hashless POST mutation (mutations stay gated)", async () => {
-      const bare = createHttpRoutes(store, tmpDir);
+      const bare = createHttpRoutes(store, tmpDir, () => {});
       const res = await bare.request("/api/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -62,7 +62,7 @@ describe("HTTP Routes", () => {
     });
 
     it("does NOT 403 a hashless POST /api/demo/run (FD-2 — cold-clone demo entry point)", async () => {
-      const bare = createHttpRoutes(store, tmpDir);
+      const bare = createHttpRoutes(store, tmpDir, () => {});
       const res = await bare.request("/api/demo/run", { method: "POST" });
       // createHttpRoutes doesn't define /api/demo/run (the daemon mounts it
       // top-level), so a 404 — not a 403 — proves the gate let it through.
@@ -73,7 +73,7 @@ describe("HTTP Routes", () => {
     });
 
     it("serves GET /api/state when the correct X-Project-Hash is present", async () => {
-      const bare = createHttpRoutes(store, tmpDir);
+      const bare = createHttpRoutes(store, tmpDir, () => {});
       const res = await bare.request("/api/state", {
         headers: { "X-Project-Hash": projectHashOf(tmpDir) },
       });
@@ -95,7 +95,7 @@ describe("HTTP Routes", () => {
     });
 
     it("Bearer gate: /api/files 401s without the daemon token when one is configured", async () => {
-      const authed = withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-files"), tmpDir);
+      const authed = withHash(createHttpRoutes(store, tmpDir, () => {}, undefined, "tok-files"), tmpDir);
       const res = await authed.request("/api/files?path=hello.txt");
       expect(res.status).toBe(401);
       expect((await res.json()).code).toBe("daemon_auth_required");
@@ -103,7 +103,7 @@ describe("HTTP Routes", () => {
 
     it("Bearer gate: /api/files serves the file when the correct token is present", async () => {
       fs.writeFileSync(path.join(tmpDir, "hello.txt"), "hi there\n");
-      const authed = withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-files"), tmpDir);
+      const authed = withHash(createHttpRoutes(store, tmpDir, () => {}, undefined, "tok-files"), tmpDir);
       const res = await authed.request("/api/files?path=hello.txt", {
         headers: { Authorization: "Bearer tok-files" },
       });
@@ -114,7 +114,7 @@ describe("HTTP Routes", () => {
     it("S2 — a file over the size cap is rejected with 413, not buffered into memory", async () => {
       // 6 MiB > the 5 MiB ceiling
       fs.writeFileSync(path.join(tmpDir, "huge.txt"), Buffer.alloc(6 * 1024 * 1024, "x"));
-      const authed = withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-files"), tmpDir);
+      const authed = withHash(createHttpRoutes(store, tmpDir, () => {}, undefined, "tok-files"), tmpDir);
       const res = await authed.request("/api/files?path=huge.txt", {
         headers: { Authorization: "Bearer tok-files" },
       });
@@ -124,7 +124,7 @@ describe("HTTP Routes", () => {
   });
 
   describe("SP1 — public mutation routes require the bearer token", () => {
-    const authed = () => withHash(createHttpRoutes(store, tmpDir, undefined, undefined, "tok-mut"), tmpDir);
+    const authed = () => withHash(createHttpRoutes(store, tmpDir, () => {}, undefined, "tok-mut"), tmpDir);
 
     it("401s a status mutation with NO Authorization (the forge-an-approval vector)", async () => {
       const res = await authed().request("/api/artifacts/a1/status", {
@@ -187,7 +187,7 @@ describe("HTTP Routes", () => {
     function appWithProject(root: string) {
       // Use the same default store the outer harness uses; the hash
       // check fires before any store dispatch so the store doesn't matter.
-      return createHttpRoutes(store, root);
+      return createHttpRoutes(store, root, () => {});
     }
 
     it("403s with code project_hash_mismatch when X-Project-Hash differs from daemon's", async () => {
@@ -227,7 +227,7 @@ describe("HTTP Routes", () => {
       // The outer harness creates routes WITHOUT a projectRoot; this is
       // what every existing route test relies on. The hash check should
       // silently allow whatever the client sends in that case.
-      const noRootApp = createHttpRoutes(store);
+      const noRootApp = createHttpRoutes(store, undefined, () => {});
       const res = await noRootApp.request("/api/state", {
         headers: { "X-Project-Hash": "anything" },
       });

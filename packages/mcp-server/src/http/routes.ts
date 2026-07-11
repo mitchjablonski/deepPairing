@@ -8,7 +8,6 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore } from "../store/file-store.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
-import { broadcast as defaultBroadcast } from "./websocket.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import { getGlobalStore, isSeededEntry } from "../store/global-store.js";
 import { projectHashOf } from "../project-root.js";
@@ -126,8 +125,19 @@ const EMPTY_STATE = {
 
 export function createHttpRoutes(
   storeOrGetter: IStore | StoreGetter,
-  projectRoot?: string,
-  broadcastFn?: BroadcastFn,
+  // `string | undefined` (not `?:`) because broadcastFn below is required —
+  // TS forbids a required param after an optional one. Semantics unchanged:
+  // fixtures without a projectRoot pass undefined and skip the hash gate.
+  projectRoot: string | undefined,
+  /**
+   * #157 — REQUIRED. This was optional with a fallback to http/websocket.ts's
+   * module-level broadcast — which sent into a client set that NOTHING ever
+   * populated (addClient/removeClient had zero callers): a silent no-op
+   * dressed up as real wiring. That module is deleted; the daemon passes its
+   * real session-scoped broadcast, and tests must pass an explicit no-op
+   * (`() => {}`) when they don't assert on broadcasts.
+   */
+  broadcastFn: BroadcastFn,
   logFn?: LogFn,
   /**
    * III5 — daemon's shared secret (same value passed to createDaemonRoutes
@@ -164,7 +174,7 @@ export function createHttpRoutes(
     ? storeOrGetter as StoreGetter
     : () => storeOrGetter;
 
-  const broadcast: BroadcastFn = broadcastFn ?? ((event) => defaultBroadcast(event));
+  const broadcast: BroadcastFn = broadcastFn;
   // U0.6 — diagnostic log; routes call this on every status mutation so we
   // can correlate UI approval clicks with what actually lands on disk.
   // No-op when running in standalone (no daemon log file).

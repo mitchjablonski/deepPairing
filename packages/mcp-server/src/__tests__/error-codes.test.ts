@@ -99,6 +99,9 @@ describe("IV7 — ERROR_CODES drift protection", () => {
       "packages/mcp-server/src/http/routes.ts",
       "packages/mcp-server/src/daemon/routes.ts",
       "packages/mcp-server/src/daemon/index.ts",
+      // #157 — the daemon's route composition (incl. the evict route's
+      // evict_pid_mismatch) moved into the factory; keep it pinned too.
+      "packages/mcp-server/src/daemon/create-daemon.ts",
     ];
     for (const rel of targets) {
       const src = fs.readFileSync(path.join(repoRoot, rel), "utf-8");

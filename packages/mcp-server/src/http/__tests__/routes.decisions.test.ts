@@ -78,7 +78,7 @@ describe("GET /api/decisions", () => {
      *  snapshots the registered stores' in-memory state per request. */
     const appWithLive = (stores: Record<string, FileStore>) =>
       withHash(
-        createHttpRoutes(ctx.store, ctx.tmpDir, undefined, undefined, undefined, () =>
+        createHttpRoutes(ctx.store, ctx.tmpDir, () => {}, undefined, undefined, () =>
           Object.entries(stores).map(([sessionId, store]) => {
             const state = store.getFullState();
             return { sessionId, decisions: state.decisions, artifacts: state.artifacts };
@@ -141,7 +141,7 @@ describe("GET /api/decisions", () => {
 
     it("degrades to the disk scan when the live-sources getter throws", async () => {
       const app = withHash(
-        createHttpRoutes(ctx.store, ctx.tmpDir, undefined, undefined, undefined, () => {
+        createHttpRoutes(ctx.store, ctx.tmpDir, () => {}, undefined, undefined, () => {
           throw new Error("snapshot boom");
         }),
         ctx.tmpDir,
@@ -171,7 +171,7 @@ describe("GET /api/decisions", () => {
   it("is X-Project-Hash gated — no hash → 403 (unwrapped app)", async () => {
     // The harness app auto-injects the hash; construct a raw one to prove the
     // gate fires before the handler (no unauthenticated read of the list).
-    const raw = createHttpRoutes(ctx.store, ctx.tmpDir);
+    const raw = createHttpRoutes(ctx.store, ctx.tmpDir, () => {});
     const res = await raw.request("/api/decisions");
     expect(res.status).toBe(403);
   });

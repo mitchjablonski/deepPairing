@@ -425,6 +425,7 @@ describe("HTTP Routes", () => {
         createHttpRoutes(
           (sid?: string) => (sid === "other_session" ? storeOther : storeDefault),
           tmpDir,
+          () => {},
         ),
         tmpDir,
       );
