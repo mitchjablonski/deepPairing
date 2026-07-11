@@ -3,6 +3,7 @@ import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged } from "../tool-helpers.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { scanContentForSecrets } from "../../secret-scan.js";
 import {
   validatePresentFindingsInput,
   validatePresentSpecInput,
@@ -101,6 +102,12 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
         decisionContent.stakes = oldStakes;
       }
     }
+    // #158 — re-scan the REVISED content for secret shapes. Supersede creates
+    // a brand-new artifact, so without this a v2 would silently drop a v1's
+    // persisted secretWarnings (or miss a secret pasted into the revision).
+    // Generic string-leaf walk (not the present_* curated blob lists) because
+    // this path handles every artifact type.
+    const secretMatches = scanContentForSecrets(content);
     const newArtifact = await store.createArtifact({
       id: newId,
       type: old.type,
@@ -109,6 +116,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
+      ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
       // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
       // reference graph doesn't dangle at the SOURCE when v1 is superseded
       // (belt-and-suspenders with the client-side resolveToLiveId in the flow

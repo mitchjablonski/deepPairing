@@ -25458,6 +25458,12 @@ var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
   at: external_exports.string().datetime()
 });
+var SecretWarningSchema = external_exports.object({
+  /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
+  pattern: external_exports.string(),
+  /** Human-readable kind, e.g. "AWS access key id". */
+  label: external_exports.string()
+});
 var ArtifactSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -25482,6 +25488,13 @@ var ArtifactSchema = external_exports.object({
    * compatibility (project rule: all new fields optional).
    */
   statusChangeUnreported: external_exports.boolean().optional(),
+  /**
+   * V4/#158 — secret-scanner matches found in this artifact's content at
+   * creation/revision time (see SecretWarningSchema). Set only when the scan
+   * matched; omitted otherwise. Optional for backward compatibility (project
+   * rule: all new fields optional).
+   */
+  secretWarnings: external_exports.array(SecretWarningSchema).optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -28629,6 +28642,25 @@ function scanManyForSecrets(blobs) {
   }
   return out;
 }
+function scanContentForSecrets(content, maxDepth = 6) {
+  const blobs = [];
+  const walk = (value, depth) => {
+    if (depth > maxDepth || value == null) return;
+    if (typeof value === "string") {
+      blobs.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const v of value) walk(v, depth + 1);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const v of Object.values(value)) walk(v, depth + 1);
+    }
+  };
+  walk(content, 0);
+  return scanManyForSecrets(blobs);
+}
 
 // src/mcp/tools/present-findings.ts
 async function handlePresentFindings(ctx, args) {
@@ -28646,19 +28678,6 @@ async function handlePresentFindings(ctx, args) {
   );
   const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
-  const id = `art_${nanoid3(10)}`;
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "research",
-    title: args?.title ?? "Research Findings",
-    content: {
-      summary: validated.data.summary,
-      findings: validated.data.findings,
-      openQuestions: validated.data.openQuestions ?? []
-    }
-  });
-  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
-  ctx.broadcast({ type: "artifact_created", artifact });
   const secretBlobs = [
     validated.data.summary,
     ...findings.flatMap((f) => [
@@ -28669,6 +28688,20 @@ async function handlePresentFindings(ctx, args) {
     ])
   ];
   const secretMatches = scanManyForSecrets(secretBlobs);
+  const id = `art_${nanoid3(10)}`;
+  const artifact = await ctx.store.createArtifact({
+    id,
+    type: "research",
+    title: args?.title ?? "Research Findings",
+    content: {
+      summary: validated.data.summary,
+      findings: validated.data.findings,
+      openQuestions: validated.data.openQuestions ?? []
+    },
+    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+  });
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
       type: "secret_warning",
@@ -29150,7 +29183,7 @@ ${lines.join("\n")}`);
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
   if (draftArtifacts.length > 0) {
-    const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
+    const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type}${a.secretWarnings?.length ? " \u2014 \u26A0 possible secret detected" : ""})`).join(", ");
     parts.push(`\u23F3 WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}
 The human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
   }
@@ -29190,7 +29223,17 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
       newComments: totalComments,
       autonomy: autonomyLabel
     },
-    pendingArtifacts: pendingArts.map((a) => ({ id: a.id, type: a.type, title: a.title })),
+    // #158 — nest secretWarnings (labels only, never values) INSIDE the
+    // per-artifact entry, spread only when the scanner matched: the healthy
+    // payload's top-level key set — and the entry shape for clean artifacts —
+    // stays byte-for-byte as before (contract lock in
+    // check-feedback-ledger-health.test.ts).
+    pendingArtifacts: pendingArts.map((a) => ({
+      id: a.id,
+      type: a.type,
+      title: a.title,
+      ...a.secretWarnings?.length ? { secretWarnings: a.secretWarnings.map((w) => w.label) } : {}
+    })),
     questions: structuredQuestions,
     comments: structuredComments,
     decisions: structuredDecisions,
@@ -29372,6 +29415,7 @@ async function handleReviseArtifact(ctx, args) {
         decisionContent.stakes = oldStakes;
       }
     }
+    const secretMatches = scanContentForSecrets(content);
     const newArtifact = await store.createArtifact({
       id: newId,
       type: old.type,
@@ -29380,6 +29424,7 @@ async function handleReviseArtifact(ctx, args) {
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
+      ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {},
       // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
       // reference graph doesn't dangle at the SOURCE when v1 is superseded
       // (belt-and-suspenders with the client-side resolveToLiveId in the flow
@@ -29750,6 +29795,7 @@ async function handlePresentCodeChange(ctx, args) {
   const proposalConcepts = [concept?.name].filter((n) => Boolean(n && n.trim()));
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
+  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
   const id = `art_${nanoid3(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
@@ -29757,11 +29803,11 @@ async function handlePresentCodeChange(ctx, args) {
     title: `${effectiveChangeType} ${filePath}`,
     content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
     agentReasoning: reasoning,
-    relatedArtifactIds: args?.relatedFindings
+    relatedArtifactIds: args?.relatedFindings,
+    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
   });
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
-  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
   if (secretMatches.length > 0) {
     ctx.broadcast({
       type: "secret_warning",

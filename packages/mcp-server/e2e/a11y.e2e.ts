@@ -78,6 +78,11 @@ test.beforeAll(async () => {
           { id: "b", title: "In-proc", description: "d", pros: ["simple"], cons: ["cold"], effort: "low", risk: "low", recommendation: false },
         ],
       },
+      // #158 — persisted secret-scanner metadata (labels only, never values):
+      // puts the SecretWarningBanner + the sidebar ⚠ marker into BOTH session
+      // scans (dark + light) so the new role="alert" surface is axe-covered
+      // with the same zero-disabled-rules contract as everything else here.
+      secretWarnings: [{ pattern: "AKIA", label: "AWS access key id" }],
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed decision failed: ${r.status}`); });
   // #138 — the project-wide decisions view reads decisions.json (the RECORD),

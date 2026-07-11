@@ -71,6 +71,13 @@ export interface CreateArtifactParams {
   parentId?: string | null;
   /** Override the default version of 1; used when superseding. */
   version?: number;
+  /**
+   * V4/#158 — secret-scanner matches for this artifact's content, persisted
+   * on the artifact so the warning survives a reload (the fire-and-forget
+   * `secret_warning` broadcast alone never reached a daemon-mode browser).
+   * Carries pattern prefix + label only — never the matched value.
+   */
+  secretWarnings?: Array<{ pattern: string; label: string }>;
 }
 
 export interface AddCommentParams {

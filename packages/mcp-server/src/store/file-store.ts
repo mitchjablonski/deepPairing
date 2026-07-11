@@ -421,6 +421,7 @@ export class FileStore implements IStore {
     relatedArtifactIds?: string[];
     parentId?: string | null;
     version?: number;
+    secretWarnings?: Array<{ pattern: string; label: string }>;
   }): Artifact {
     const now = new Date().toISOString();
     const artifact: Artifact = {
@@ -434,6 +435,11 @@ export class FileStore implements IStore {
       content: params.content,
       agentReasoning: params.agentReasoning ?? null,
       relatedArtifactIds: params.relatedArtifactIds,
+      // V4/#158 — persist scanner matches ONLY when present so the stored
+      // JSON for clean artifacts stays byte-identical to before.
+      ...(params.secretWarnings && params.secretWarnings.length > 0
+        ? { secretWarnings: params.secretWarnings }
+        : {}),
       createdAt: now,
       updatedAt: now,
     };

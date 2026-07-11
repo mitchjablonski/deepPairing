@@ -26,31 +26,15 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
 
-  const id = `art_${nanoid(10)}`;
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "research",
-    title: args?.title ?? "Research Findings",
-    content: {
-      summary: validated.data.summary,
-      findings: validated.data.findings,
-      openQuestions: validated.data.openQuestions ?? [],
-    },
-  });
-  // AA6.3 — persist + broadcast the trace BEFORE artifact_created so the
-  // companion UI can render the breadcrumb populated on first paint
-  // instead of mounting it null and refetching when the trace event
-  // lands. Pre-AA6.3 there was a visible flash where the breadcrumb
-  // was missing on a freshly-created artifact.
-  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
-  ctx.broadcast({ type: "artifact_created", artifact });
   // V4 — non-blocking secret-shape scan. Flags vendor-prefixed API
   // keys + PEM blocks the agent may have pasted into evidence
   // snippets, detail text, or recommendations. Doesn't redact (the
   // user may have a legitimate reason to quote the key — e.g.,
-  // reviewing a secret-scanner finding); broadcasts a warning so the
-  // companion UI can surface a toast and the disk write is loud-not-
-  // silent.
+  // reviewing a secret-scanner finding).
+  // #158 — scan BEFORE creation so matches PERSIST on the artifact
+  // (secretWarnings) and the companion UI can render the warning after
+  // any reload; the broadcast below is fire-and-forget (and a no-op in
+  // daemon mode), so it alone never surfaced anything.
   const secretBlobs = [
     validated.data.summary,
     ...findings.flatMap((f) => [
@@ -63,6 +47,25 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
     ]),
   ];
   const secretMatches = scanManyForSecrets(secretBlobs);
+  const id = `art_${nanoid(10)}`;
+  const artifact = await ctx.store.createArtifact({
+    id,
+    type: "research",
+    title: args?.title ?? "Research Findings",
+    content: {
+      summary: validated.data.summary,
+      findings: validated.data.findings,
+      openQuestions: validated.data.openQuestions ?? [],
+    },
+    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
+  });
+  // AA6.3 — persist + broadcast the trace BEFORE artifact_created so the
+  // companion UI can render the breadcrumb populated on first paint
+  // instead of mounting it null and refetching when the trace event
+  // lands. Pre-AA6.3 there was a visible flash where the breadcrumb
+  // was missing on a freshly-created artifact.
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
       type: "secret_warning",

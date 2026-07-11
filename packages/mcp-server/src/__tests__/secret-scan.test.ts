@@ -5,7 +5,7 @@
  * trade-off, not silently expand it).
  */
 import { describe, it, expect } from "vitest";
-import { scanForSecrets, scanManyForSecrets } from "../secret-scan.js";
+import { scanForSecrets, scanManyForSecrets, scanContentForSecrets } from "../secret-scan.js";
 
 describe("V4 — secret-shape scan", () => {
   describe("patterns that should match (vendor-prefixed, deterministic shape)", () => {
@@ -78,6 +78,39 @@ describe("V4 — secret-shape scan", () => {
 
     it("returns [] when no blob contains a secret shape", () => {
       expect(scanManyForSecrets(["hello", "world", null, undefined, ""])).toEqual([]);
+    });
+  });
+
+  // #158 — generic string-leaf walk used by revise_artifact's supersede
+  // re-scan (arbitrary content shape for any artifact type).
+  describe("scanContentForSecrets walks nested content", () => {
+    it("finds a secret in a nested evidence snippet", () => {
+      const content = {
+        summary: "clean",
+        findings: [
+          { title: "t", evidence: [{ snippet: "key: AKIAIOSFODNN7EXAMPLE" }] },
+        ],
+      };
+      expect(scanContentForSecrets(content)).toEqual([
+        { pattern: "AKIA", label: "AWS access key id" },
+      ]);
+    });
+
+    it("returns [] for clean content and tolerates nulls / non-objects", () => {
+      expect(scanContentForSecrets({ a: 1, b: null, c: ["x", { d: "y" }] })).toEqual([]);
+      expect(scanContentForSecrets(null)).toEqual([]);
+      expect(scanContentForSecrets("AKIAIOSFODNN7EXAMPLE")).toEqual([
+        { pattern: "AKIA", label: "AWS access key id" },
+      ]);
+    });
+
+    it("stops at the depth bound instead of recursing forever", () => {
+      // Self-referential object: without the bound this would blow the stack.
+      const cyclic: Record<string, unknown> = { note: "AKIAIOSFODNN7EXAMPLE" };
+      cyclic.self = cyclic;
+      expect(scanContentForSecrets(cyclic)).toEqual([
+        { pattern: "AKIA", label: "AWS access key id" },
+      ]);
     });
   });
 });

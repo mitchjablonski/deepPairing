@@ -597,7 +597,13 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
   );
   if (draftArtifacts.length > 0) {
-    const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
+    // #158 — a draft the secret scanner flagged carries the warning inline so
+    // the agent knows the human is reviewing something that may contain a
+    // pasted credential. Labels only (e.g. "AWS access key id") — never the
+    // matched value.
+    const waiting = draftArtifacts
+      .map((a) => `"${a.title}" (${a.type}${a.secretWarnings?.length ? " — ⚠ possible secret detected" : ""})`)
+      .join(", ");
     parts.push(`⏳ WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
   }
 
@@ -672,7 +678,19 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       newComments: totalComments,
       autonomy: autonomyLabel,
     },
-    pendingArtifacts: pendingArts.map((a) => ({ id: a.id, type: a.type, title: a.title })),
+    // #158 — nest secretWarnings (labels only, never values) INSIDE the
+    // per-artifact entry, spread only when the scanner matched: the healthy
+    // payload's top-level key set — and the entry shape for clean artifacts —
+    // stays byte-for-byte as before (contract lock in
+    // check-feedback-ledger-health.test.ts).
+    pendingArtifacts: pendingArts.map((a) => ({
+      id: a.id,
+      type: a.type,
+      title: a.title,
+      ...(a.secretWarnings?.length
+        ? { secretWarnings: a.secretWarnings.map((w) => w.label) }
+        : {}),
+    })),
     questions: structuredQuestions,
     comments: structuredComments,
     decisions: structuredDecisions,

@@ -48,6 +48,15 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
 
+  // V4 — code-change before/after snippets are the highest-risk
+  // surface for leaked vendor-prefixed API keys; a refactor near
+  // auth code or a finding that quotes a config block is exactly
+  // where the agent might paste a real secret. See secret-scan.ts.
+  // #158 — scan BEFORE creation so the matches are PERSISTED on the
+  // artifact (secretWarnings): the broadcast below is fire-and-forget
+  // and, in daemon mode, a no-op — a warning that only lives on the
+  // wire never renders anywhere.
+  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
@@ -56,16 +65,12 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
+    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
   // AA6.3 — trace before broadcast so the breadcrumb is populated on
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
-  // V4 — code-change before/after snippets are the highest-risk
-  // surface for leaked vendor-prefixed API keys; a refactor near
-  // auth code or a finding that quotes a config block is exactly
-  // where the agent might paste a real secret. See secret-scan.ts.
-  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
   if (secretMatches.length > 0) {
     ctx.broadcast({
       type: "secret_warning",
