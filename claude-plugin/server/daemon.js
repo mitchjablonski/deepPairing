@@ -22025,6 +22025,12 @@ var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
   at: external_exports.string().datetime()
 });
+var SecretWarningSchema = external_exports.object({
+  /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
+  pattern: external_exports.string(),
+  /** Human-readable kind, e.g. "AWS access key id". */
+  label: external_exports.string()
+});
 var ArtifactSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -22049,6 +22055,13 @@ var ArtifactSchema = external_exports.object({
    * compatibility (project rule: all new fields optional).
    */
   statusChangeUnreported: external_exports.boolean().optional(),
+  /**
+   * V4/#158 — secret-scanner matches found in this artifact's content at
+   * creation/revision time (see SecretWarningSchema). Set only when the scan
+   * matched; omitted otherwise. Optional for backward compatibility (project
+   * rule: all new fields optional).
+   */
+  secretWarnings: external_exports.array(SecretWarningSchema).optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -24215,6 +24228,9 @@ var FileStore = class _FileStore {
       content: params.content,
       agentReasoning: params.agentReasoning ?? null,
       relatedArtifactIds: params.relatedArtifactIds,
+      // V4/#158 — persist scanner matches ONLY when present so the stored
+      // JSON for clean artifacts stays byte-identical to before.
+      ...params.secretWarnings && params.secretWarnings.length > 0 ? { secretWarnings: params.secretWarnings } : {},
       createdAt: now,
       updatedAt: now
     };

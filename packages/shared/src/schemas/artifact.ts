@@ -42,6 +42,23 @@ export const ArtifactStatusHistoryEntrySchema = z.object({
 });
 export type ArtifactStatusHistoryEntry = z.infer<typeof ArtifactStatusHistoryEntrySchema>;
 
+/**
+ * V4/#158 — one secret-shape scanner match, persisted on the artifact so the
+ * warning SURVIVES a reload (the old `secret_warning` WS broadcast was
+ * fire-and-forget — and in daemon mode, the only production wiring, the
+ * MCP-side broadcast is a no-op, so it never reached a browser at all).
+ * Deliberately carries only the pattern PREFIX ("AKIA") and a human label
+ * ("AWS access key id") — NEVER the matched value, so surfacing the warning
+ * can't itself re-echo the secret into the DOM / export / logs.
+ */
+export const SecretWarningSchema = z.object({
+  /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
+  pattern: z.string(),
+  /** Human-readable kind, e.g. "AWS access key id". */
+  label: z.string(),
+});
+export type SecretWarning = z.infer<typeof SecretWarningSchema>;
+
 export const ArtifactSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
@@ -66,6 +83,13 @@ export const ArtifactSchema = z.object({
    * compatibility (project rule: all new fields optional).
    */
   statusChangeUnreported: z.boolean().optional(),
+  /**
+   * V4/#158 — secret-scanner matches found in this artifact's content at
+   * creation/revision time (see SecretWarningSchema). Set only when the scan
+   * matched; omitted otherwise. Optional for backward compatibility (project
+   * rule: all new fields optional).
+   */
+  secretWarnings: z.array(SecretWarningSchema).optional(),
   content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),

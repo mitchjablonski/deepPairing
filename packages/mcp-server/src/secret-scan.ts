@@ -69,3 +69,31 @@ export function scanManyForSecrets(blobs: ReadonlyArray<string | undefined | nul
   }
   return out;
 }
+
+/**
+ * #158 — scan EVERY string leaf of an artifact-content object (depth-bounded).
+ * Used by revise_artifact, which supersedes any artifact type with arbitrary
+ * new content: without a re-scan, a v2 would silently DROP a v1 warning (the
+ * new artifact has no secretWarnings) — or miss a secret pasted into the
+ * revision. The present_* tools keep their curated blob lists; this is the
+ * generic fallback for the supersede path.
+ */
+export function scanContentForSecrets(content: unknown, maxDepth = 6): SecretMatch[] {
+  const blobs: string[] = [];
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > maxDepth || value == null) return;
+    if (typeof value === "string") {
+      blobs.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const v of value) walk(v, depth + 1);
+      return;
+    }
+    if (typeof value === "object") {
+      for (const v of Object.values(value as Record<string, unknown>)) walk(v, depth + 1);
+    }
+  };
+  walk(content, 0);
+  return scanManyForSecrets(blobs);
+}

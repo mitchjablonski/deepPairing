@@ -28,6 +28,7 @@ import { FirstRunWalkthrough } from "./WalkthroughCards";
 import { CausalChain } from "./CausalChain";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
+import { SecretWarningBanner } from "./SecretWarningBanner";
 
 const statusDots: Record<string, string> = {
   // B1 — draft is the one status that NEEDS the human, yet it was styled as the
@@ -163,7 +164,8 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
   );
 }
 
-function ArtifactDetail({ artifact }: { artifact: Artifact }) {
+// Exported for tests (#158 — the secret-warning banner renders here).
+export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
   // Bug2 — aggregate comments across the version chain so v1's general
   // comments render on v2 after a supersede auto-advance.
@@ -209,6 +211,12 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <p className="text-xs text-text-muted italic">{artifact.agentReasoning}</p>
         )}
       </div>
+
+      {/* #158 — secret-warning banner, directly under the header and OUTSIDE
+          the lazy Suspense boundary so it's visible on first paint, before
+          the type-specific renderer (which contains the flagged text) even
+          loads. Renders null unless the server-side scan matched. */}
+      <SecretWarningBanner artifact={artifact} />
 
       {/* D6 — lazy chunk boundary. MUST wrap every lazy component below
           (RevisionDiff included — review lesson: a suspension outside the
@@ -547,6 +555,17 @@ function ArtifactSidebar({
                     } ${a.status === "retracted" ? "line-through opacity-60" : ""}`}>
                       {a.title}
                     </span>
+                    {/* #158 — compact secret-scan marker so a flagged artifact
+                        is visible from the list, not only once opened. */}
+                    {a.secretWarnings && a.secretWarnings.length > 0 && (
+                      <span
+                        aria-label="Possible secret detected"
+                        title="Possible secret detected — review before approving"
+                        className="shrink-0 text-accent-amber text-[10px] leading-none"
+                      >
+                        ⚠
+                      </span>
+                    )}
                     <span
                       aria-label={statusLabels[a.status]}
                       title={statusLabels[a.status]}
