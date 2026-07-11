@@ -8,6 +8,7 @@ import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
+import { scanForSecrets } from "../secret-scan.js";
 import { listSessions, searchAll, findPastPredictions, addRetrospective, listAllDecisions } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
@@ -421,7 +422,7 @@ export class FileStore implements IStore {
     relatedArtifactIds?: string[];
     parentId?: string | null;
     version?: number;
-    secretWarnings?: Array<{ pattern: string; label: string }>;
+    secretWarnings?: Array<{ pattern: string; label: string; field?: string; line?: number }>;
   }): Artifact {
     const now = new Date().toISOString();
     const artifact: Artifact = {
@@ -661,6 +662,14 @@ export class FileStore implements IStore {
       return dupe;
     }
 
+    // #160 — scan the comment body for secret shapes at the single choke-point
+    // every comment creator converges on (web POST /api/comments, verdict-
+    // feedback comments, agent comments via the daemon's internal route). The
+    // scanner's own threat model has named comment bodies since V4, but only
+    // artifacts were ever scanned — a key pasted into a comment landed on disk
+    // and flowed into agent context (check_feedback) with zero warning.
+    // Labels/pattern/line only, NEVER the matched value.
+    const secretWarnings = scanForSecrets(params.content);
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -669,6 +678,9 @@ export class FileStore implements IStore {
       author: params.author,
       content: params.content,
       intent: params.intent,
+      // #160 — spread so the field is simply absent on clean comments
+      // (back-compat: stored JSON for clean comments stays byte-identical).
+      ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
       // FN1 — persist attached code evidence (answer_question). Spread so the
       // field is simply absent when there's none (back-compat with stored data).
       ...(params.codeReferences && params.codeReferences.length > 0

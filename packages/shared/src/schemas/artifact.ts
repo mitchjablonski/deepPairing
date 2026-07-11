@@ -56,6 +56,17 @@ export const SecretWarningSchema = z.object({
   pattern: z.string(),
   /** Human-readable kind, e.g. "AWS access key id". */
   label: z.string(),
+  /**
+   * #160 — WHERE the pattern matched, so the banner can say
+   * "in `steps[2].preview` (line 4)" instead of leaving the human to hunt.
+   * `field` is the dotted/bracketed content path (omitted when the scanned
+   * text was a single unlabeled string, e.g. a comment body); `line` is
+   * 1-based within that field's text. Both derived from the match INDEX
+   * only — the matched value is never captured. Optional for backward
+   * compatibility: old artifacts without them still render.
+   */
+  field: z.string().optional(),
+  line: z.number().int().positive().optional(),
 });
 export type SecretWarning = z.infer<typeof SecretWarningSchema>;
 

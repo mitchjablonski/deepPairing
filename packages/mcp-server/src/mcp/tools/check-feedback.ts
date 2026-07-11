@@ -1,6 +1,6 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, Comment } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../../version.js";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -46,6 +46,18 @@ function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: st
  * (`dp-mmd-7-8-flowchart-A-0`) and mean nothing to the model. Returns "" when
  * the region names no node (a blank-area drag) — nothing useful to append.
  */
+/**
+ * #160 — a comment the create-time scanner flagged carries a short TEXT-ONLY
+ * marker on its rendered line, so the agent knows the human may have pasted a
+ * credential (which is now in its context and on disk). Deliberately NOT a new
+ * structuredContent key — the healthy-payload contract lock
+ * (check-feedback-ledger-health.test.ts) must pass unchanged. Never includes
+ * the matched value; the persisted warning itself is labels/pattern/line only.
+ */
+function commentSecretNote(c: Comment): string {
+  return c.secretWarnings?.length ? " ⚠ possible secret in this comment" : "";
+}
+
 type CommentRegion = { labels?: string[]; elementIds?: string[] } | undefined;
 function describeRegionRef(region: CommentRegion): string {
   if (!region) return "";
@@ -324,7 +336,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // Session-level directives (free-form messages from human)
   if (sessionMessages.length > 0) {
     await store.acknowledgeComments(sessionMessages.map((c) => c.id));
-    const formatted = sessionMessages.map((c) => `- ${c.content}`).join("\n");
+    const formatted = sessionMessages.map((c) => `- ${c.content}${commentSecretNote(c)}`).join("\n");
     parts.push(`🎯 Human directive:\n${formatted}\n\nAdjust your approach based on this guidance.`);
     for (const c of sessionMessages) {
       structuredComments.push({ id: c.id, artifactId: "__session__", kind: "directive", content: c.content });
@@ -373,7 +385,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
-          `- ❓ QUESTION [${loc}] ${c.content}\n    → Answer via answer_question with commentId="${c.id}"`,
+          `- ❓ QUESTION [${loc}] ${c.content}${commentSecretNote(c)}\n    → Answer via answer_question with commentId="${c.id}"`,
         );
         structuredQuestions.push({
           commentId: c.id,
@@ -395,7 +407,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       if (c.target.suggestion) {
         const filePath = c.target.filePath ?? "unknown";
         const line = c.target.lineStart ?? "?";
-        otherLines.push(`- [SUGGESTION for ${filePath}:${line}] Replace with:\n    ${c.target.suggestion}`);
+        otherLines.push(`- [SUGGESTION for ${filePath}:${line}]${commentSecretNote(c)} Replace with:\n    ${c.target.suggestion}`);
         structuredComments.push({
           id: c.id,
           artifactId: c.target.artifactId,
@@ -407,7 +419,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         });
         continue;
       }
-      otherLines.push(`- [${loc}] ${c.content}`);
+      otherLines.push(`- [${loc}] ${c.content}${commentSecretNote(c)}`);
       structuredComments.push({
         id: c.id,
         artifactId: c.target.artifactId,

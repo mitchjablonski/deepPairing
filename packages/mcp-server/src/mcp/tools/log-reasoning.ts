@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { validateLogReasoningInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { notifyResourcesListChanged } from "../tool-helpers.js";
+import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -9,24 +10,40 @@ export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<T
   if (!validated.ok) return validated.error;
   const id = `art_${nanoid(10)}`;
   const relatedIds = args?.relatesTo?.artifactId ? [args.relatesTo.artifactId] : undefined;
+  const content = {
+    action: args?.action,
+    reasoning: args?.reasoning,
+    concept: args?.concept,
+    evidence: args?.evidence,
+    relatesTo: args?.relatesTo,
+    alternativesConsidered: args?.alternativesConsidered ?? [],
+    alternativeDetails: args?.alternativeDetails,
+    confidence: args?.confidence,
+  };
+  // #160 — reasoning was a scanner GAP. log_reasoning creates a REAL artifact
+  // (type "reasoning"), so the "cheapest honest surface" is the same
+  // artifact-level warning every other present_* path persists: the reasoning
+  // card renders through ArtifactDetail, whose #158 banner reads
+  // artifact.secretWarnings. Labels+location only — never the value.
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "reasoning",
     title: args?.action ?? "Reasoning",
-    content: {
-      action: args?.action,
-      reasoning: args?.reasoning,
-      concept: args?.concept,
-      evidence: args?.evidence,
-      relatesTo: args?.relatesTo,
-      alternativesConsidered: args?.alternativesConsidered ?? [],
-      alternativeDetails: args?.alternativeDetails,
-      confidence: args?.confidence,
-    },
+    content,
     agentReasoning: args?.reasoning,
     relatedArtifactIds: relatedIds,
+    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label),
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   // Gentle nudge when the agent omits `concept` — the pairing value

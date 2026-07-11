@@ -85,6 +85,19 @@ test.beforeAll(async () => {
       secretWarnings: [{ pattern: "AKIA", label: "AWS access key id" }],
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed decision failed: ${r.status}`); });
+  // #160 — a comment whose body trips the create-time secret scan (AWS's
+  // documented EXAMPLE key, never a real credential). The daemon's addComment
+  // persists labels-only secretWarnings, so the inline ⚠ chip renders in the
+  // decision card's comment thread — putting the chip into BOTH session scans
+  // (dark + light) under the same zero-disabled-rules contract as the banner.
+  await fetch(`${baseURL}/api/internal/sessions/a11y/comments`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cmt_a11y_secret", artifactId: "dec_a11y",
+      content: "fwiw the key I use is AKIAIOSFODNN7EXAMPLE — does that change the pick?",
+      author: "human", target: { artifactId: "dec_a11y" },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed comment failed: ${r.status}`); });
   // #138 — the project-wide decisions view reads decisions.json (the RECORD),
   // not decision artifacts, so record one so the view has a row to render+scan.
   await fetch(`${baseURL}/api/internal/sessions/a11y/decisions`, {
