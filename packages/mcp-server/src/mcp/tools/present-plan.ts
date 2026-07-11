@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
+import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -27,18 +28,34 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
+  const content = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
+  // #160 — plans were a scanner GAP: step descriptions/reasoning (and visuals
+  // like a prototype's source) routinely quote config blocks, exactly where a
+  // pasted key hides. Scan BEFORE creation so matches PERSIST on the artifact
+  // (secretWarnings, labels+location only — never the value); the banner and
+  // check_feedback consumers from #158 then work for free.
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "plan",
     title,
-    content: { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) },
+    content,
     relatedArtifactIds: args?.relatedFindings,
+    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
   await ctx.store.recordPlanReview(id);
   // AA6.3 — trace before broadcast so the breadcrumb is populated on
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label),
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({ type: "plan_review_request", artifactId: id, title });

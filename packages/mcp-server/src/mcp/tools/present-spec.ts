@@ -2,6 +2,7 @@ import { nanoid } from "nanoid";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
+import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -21,24 +22,39 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
   if (!pre.ok) return pre.response;
 
   const id = `art_${nanoid(10)}`;
+  const content = {
+    objective,
+    context,
+    requirements: requirementsArr,
+    design,
+    tasks: tasksArr,
+    openQuestions: openQuestions ?? [],
+    ...(visuals ? { visuals } : {}),
+  };
+  // #160 — specs were a scanner GAP: design/context prose quotes configs and
+  // sample payloads, exactly where a pasted key hides. Scan BEFORE creation so
+  // matches PERSIST on the artifact (labels+location only — never the value);
+  // the #158 banner and check_feedback consumers then work for free.
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "spec",
     title,
-    content: {
-      objective,
-      context,
-      requirements: requirementsArr,
-      design,
-      tasks: tasksArr,
-      openQuestions: openQuestions ?? [],
-      ...(visuals ? { visuals } : {}),
-    },
+    content,
+    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
   // AA6.3 — trace before broadcast so the breadcrumb is populated on
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label),
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);

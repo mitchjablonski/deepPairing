@@ -67,6 +67,30 @@ describe("#158 — secret-warning banner on the artifact card", () => {
     expect(banner.textContent).not.toContain(FAKE_SECRET);
   });
 
+  // #160 — the scanner records WHERE it matched (field path + 1-based line);
+  // the banner renders the location so the human doesn't have to hunt.
+  it("shows the match location when the warning carries field + line", () => {
+    render(
+      <ArtifactDetail
+        artifact={mkArtifact({
+          secretWarnings: [
+            { pattern: "AKIA", label: "AWS access key id", field: "after", line: 4 },
+          ],
+        })}
+      />,
+    );
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveTextContent(/in `after` \(line 4\)/);
+    expect(banner.textContent).not.toContain(FAKE_SECRET);
+  });
+
+  it("still renders a pre-#160 warning that has no location (back-compat)", () => {
+    render(<ArtifactDetail artifact={flagged()} />);
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveTextContent(/AWS access key id/);
+    expect(banner.textContent).not.toMatch(/line /);
+  });
+
   it("survives a reload: a plain-JSON artifact hydrated into the store still shows the banner", () => {
     // Simulate the WS `connected` hydration path: the daemon replays stored
     // artifacts as plain JSON (JSON round-trip strips any live references).

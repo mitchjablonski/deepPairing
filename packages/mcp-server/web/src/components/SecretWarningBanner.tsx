@@ -26,7 +26,20 @@ export function SecretWarningBanner({ artifact }: { artifact: Artifact }) {
   const warnings = artifact.secretWarnings;
   if (!warnings || warnings.length === 0) return null;
 
-  const kinds = warnings.map((w) => `${w.label} (pattern “${w.pattern}…”)`).join(", ");
+  // #160 — the scanner now records WHERE it matched (field path + 1-based
+  // line, derived from the match index — never the value). Render it so the
+  // human doesn't have to hunt: "in `after` (line 4)". Both parts optional:
+  // warnings persisted before #160 have neither and still render as before.
+  const kinds = warnings
+    .map((w) => {
+      const where =
+        w.field && w.line ? ` in \`${w.field}\` (line ${w.line})`
+        : w.field ? ` in \`${w.field}\``
+        : w.line ? ` (line ${w.line})`
+        : "";
+      return `${w.label} (pattern “${w.pattern}…”)${where}`;
+    })
+    .join(", ");
 
   return (
     <div

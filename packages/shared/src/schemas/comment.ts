@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SecretWarningSchema } from "./artifact.js";
 
 /** A reference to specific lines in a file — used in comments to link to code */
 export const CodeReferenceSchema = z.object({
@@ -79,6 +80,16 @@ export const CommentSchema = z.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: z.string().datetime().nullable().optional(),
+  /**
+   * #160 — secret-scanner matches found in this comment's body at create
+   * time. A comment with a secret is HUMAN-authored (the risk is a key
+   * pasted into a comment that then flows into agent context and disk), so
+   * the daemon's comment-create path scans and persists the labels-only
+   * result here — pattern prefix + label (+ line), NEVER the matched value.
+   * Optional for backward compatibility (project rule: all new fields
+   * optional); old comments without it load unchanged.
+   */
+  secretWarnings: z.array(SecretWarningSchema).optional(),
   acknowledged: z.boolean(),
   createdAt: z.string().datetime(),
 });

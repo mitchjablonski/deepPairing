@@ -2,7 +2,7 @@ import { nanoid } from "nanoid";
 import { validatePresentCodeChangeInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
-import { scanManyForSecrets } from "../../secret-scan.js";
+import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -56,13 +56,17 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // artifact (secretWarnings): the broadcast below is fire-and-forget
   // and, in daemon mode, a no-op — a warning that only lives on the
   // wire never renders anywhere.
-  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
+  // #160 — scan the WHOLE content object (was a flat [before, after,
+  // reasoning] blob list) so each match carries its field path + line and
+  // the banner can say WHERE ("in `after` (line 4)").
+  const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
+  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
     type: "code_change",
     title: `${effectiveChangeType} ${filePath}`,
-    content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
+    content,
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
     ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),

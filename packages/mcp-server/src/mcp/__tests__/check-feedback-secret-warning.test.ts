@@ -99,3 +99,93 @@ describe("#158 — check_feedback surfaces persisted secret warnings on pending 
     expect((res.content[0] as { text: string }).text).not.toMatch(/possible secret/);
   });
 });
+
+/**
+ * #160 — a COMMENT the create-time scan flagged gains a short marker on its
+ * rendered check_feedback line: the human's pasted key is now in the agent's
+ * context and on disk, and the agent should know. TEXT ONLY — no new
+ * structuredContent key (the healthy-payload contract lock in
+ * check-feedback-ledger-health.test.ts must pass unchanged), and never the
+ * matched value.
+ */
+describe("#160 — check_feedback marks scanner-flagged comments (text only)", () => {
+  const FAKE_AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
+
+  it("appends the ⚠ note to a flagged comment's line — and adds NO structured key", async () => {
+    const store = new FileStore(tmpDir, "s3");
+    store.createArtifact({
+      id: "art_1",
+      type: "code_change",
+      title: "modify src/config.ts",
+      content: { filePath: "src/config.ts", changeType: "modify", before: "x", after: "y", reasoning: "r" },
+    });
+    // Real FileStore path — addComment itself runs the scan (fake, not mock).
+    store.addComment({
+      id: "cmt_hot",
+      artifactId: "art_1",
+      content: `should I keep using ${FAKE_AWS_KEY} here?`,
+      author: "human",
+      target: { artifactId: "art_1" },
+    });
+    store.addComment({
+      id: "cmt_ok",
+      artifactId: "art_1",
+      content: "and please rename the helper",
+      author: "human",
+      target: { artifactId: "art_1" },
+    });
+
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = (res.content[0] as { text: string }).text;
+    // The flagged line carries the note; the clean one doesn't.
+    expect(text).toContain("here? ⚠ possible secret in this comment");
+    expect(text).toContain("- [art_1] and please rename the helper\n");
+    expect(text).not.toContain("rename the helper ⚠");
+
+    // TEXT ONLY: the structured payload's top-level key set is the locked
+    // healthy set — no secretWarnings / per-comment warning key appears.
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(Object.keys(sc).sort()).toEqual(
+      [
+        "comments",
+        "companionUrl",
+        "decisions",
+        "pendingArtifacts",
+        "questions",
+        "rejected",
+        "serverVersion",
+        "statusChanges",
+        "status",
+        "suggestedAction",
+        "summary",
+      ].sort(),
+    );
+    expect(JSON.stringify(sc)).not.toMatch(/possible secret/);
+  });
+
+  it("marks a flagged QUESTION line too, and never echoes the value anywhere", async () => {
+    const store = new FileStore(tmpDir, "s4");
+    store.createArtifact({
+      id: "art_q",
+      type: "research",
+      title: "Audit",
+      content: { summary: "s", findings: [] },
+    });
+    store.addComment({
+      id: "cmt_q",
+      artifactId: "art_q",
+      content: `why does the scanner dislike ghp_abcdefghijklmnopqrst1234?`,
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_q" },
+    });
+
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toMatch(/❓ QUESTION \[art_q\].*⚠ possible secret in this comment/);
+    // The note itself must never carry labels-with-values or the match: the
+    // comment CONTENT is (necessarily) echoed for the agent to act on, but
+    // the warning text is the fixed phrase only.
+    expect(text).not.toContain("GitHub personal access token");
+  });
+});

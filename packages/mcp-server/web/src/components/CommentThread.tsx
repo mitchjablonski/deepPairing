@@ -58,6 +58,23 @@ function CommentBubble({ comment, fromVersion }: { comment: Comment; fromVersion
                 ? `-${comment.target.lineEnd}` : ""}
             </span>
           )}
+          {/* #160 — the daemon's comment-create scan flagged a secret shape in
+              this body. Inline chip (labels only — NEVER the matched value),
+              reusing the SecretWarningBanner's amber tokens rather than a
+              second banner: a comment is a small surface, the banner is the
+              artifact's. The title carries the kind(s) + line for detail. */}
+          {comment.secretWarnings && comment.secretWarnings.length > 0 && (
+            <span
+              data-testid="comment-secret-chip"
+              title={comment.secretWarnings
+                .map((w) => `${w.label}${w.line ? ` (line ${w.line})` : ""}`)
+                .join(", ")}
+              className="inline-flex items-center gap-0.5 px-1 py-px rounded border border-accent-amber/40 bg-accent-amber-dim/50 text-2xs text-accent-amber shrink-0"
+            >
+              <span aria-hidden="true">⚠</span>
+              <span>possible secret</span>
+            </span>
+          )}
           {/* Bug2 — this comment was posted on an EARLIER version of the
               artifact (aggregated onto the current version via the chain). Tag
               it subtly so the merged thread stays legible. */}

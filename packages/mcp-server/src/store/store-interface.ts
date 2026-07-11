@@ -75,9 +75,10 @@ export interface CreateArtifactParams {
    * V4/#158 — secret-scanner matches for this artifact's content, persisted
    * on the artifact so the warning survives a reload (the fire-and-forget
    * `secret_warning` broadcast alone never reached a daemon-mode browser).
-   * Carries pattern prefix + label only — never the matched value.
+   * Carries pattern prefix + label (+ #160 field/line location) only —
+   * never the matched value.
    */
-  secretWarnings?: Array<{ pattern: string; label: string }>;
+  secretWarnings?: Array<{ pattern: string; label: string; field?: string; line?: number }>;
 }
 
 export interface AddCommentParams {
