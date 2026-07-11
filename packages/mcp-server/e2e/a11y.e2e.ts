@@ -276,6 +276,24 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
       { timeout: 15_000 },
     )
     .toBe(true);
+  // #159 run — the phantom fired again and the target is NOW captured (per the
+  // note above): the amber "● Draft, awaiting review" status chip, fg #2f291a
+  // on #161617 at 1.25:1. That fg is steady-state amber blended at low opacity
+  // — axe sampled the chip's ENTRANCE FADE frame (the session-view scans prove
+  // the settled chip passes AA). Mechanism confirmed ⇒ adjust the wait, not
+  // the rules: wait for the post-connect chrome (the chip) to mount, then for
+  // every FINITE animation/transition to finish. Infinite ones (animate-pulse)
+  // are excluded — awaiting those would never resolve — and axe blends
+  // steady-state pulse opacity correctly already.
+  await page.getByText("Draft, awaiting review").first().waitFor({ timeout: 15_000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
     // F1 — no disabled rules: the axe net is fully live

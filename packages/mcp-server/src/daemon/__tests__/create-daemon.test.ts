@@ -216,6 +216,53 @@ describe("H1-3 — the heartbeat runs through safeHeartbeatTick", () => {
   });
 });
 
+describe("dispose() — the test-teardown seam actually clears every factory handle", () => {
+  class FakeWatcher extends EventEmitter {
+    closed = false;
+    close(): void {
+      this.closed = true;
+    }
+  }
+
+  it("timers, the hooks watcher, and the wss are all released after dispose", async () => {
+    // Mirrors the FileStore.dispose lesson (#151 flake): a dispose that leaves
+    // a live timer/watcher/socket behind makes every suite that uses the
+    // factory leak handles — and vitest only reports it as a hang much later.
+    vi.useFakeTimers();
+    let fake: FakeWatcher | undefined;
+    const { daemon } = makeDaemon({
+      watch: () => {
+        fake = new FakeWatcher();
+        return fake;
+      },
+      // Double opt-in so scheduleInstallHealthPing arms its 60s timer.
+      env: { DEEPPAIRING_PING: "1", DEEPPAIRING_PING_URL: "http://127.0.0.1:9/ping" },
+      heartbeatIntervalMs: 15,
+    });
+    daemon.startHeartbeat(0); // heartbeat interval
+    daemon.startHooksWatcher(); // fs watcher
+    daemon.scheduleInstallHealthPing(); // 60s ping timeout
+    daemon.checkAutoShutdown(); // no sessions/clients → arms the 60s idle timer
+    expect(vi.getTimerCount()).toBe(3);
+    expect(fake).toBeDefined();
+
+    let wssClosed = false;
+    daemon.wss.on("close", () => {
+      wssClosed = true;
+    });
+
+    daemon.dispose();
+
+    // Every timer cleared — a no-op dispose leaves 3 live handles here.
+    expect(vi.getTimerCount()).toBe(0);
+    // The watcher was closed…
+    expect(fake!.closed).toBe(true);
+    // …and the WS server emitted 'close' (ws defers it a nextTick).
+    await new Promise<void>((r) => process.nextTick(r));
+    expect(wssClosed).toBe(true);
+  });
+});
+
 describe("#152 / R4 — the auto-open and install-health-ping guard call sites", () => {
   it("DEEPPAIRING_NO_OPEN=1 suppresses the browser open; default env opens", () => {
     const opened: string[] = [];

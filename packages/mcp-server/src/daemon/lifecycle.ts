@@ -175,7 +175,22 @@ export async function evictDaemon(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(`http://localhost:${port}/api/evict`, {
       method: "POST",
-      headers: { "X-DeepPairing-Confirm-Pid": String(expectedPid) },
+      // #161 — /api/evict is registered on the daemon's ROOT app AFTER the
+      // public sub-app mount, and that sub-app's `use("*")` middleware (the
+      // AA4 X-Project-Hash gate + SP1 bearer gate) matches root routes
+      // registered after the mount. The confirm-pid header alone therefore
+      // 403'd (project_hash_mismatch) against every current daemon — the
+      // doctor's cooperative evict silently degraded to its SIGTERM fallback,
+      // always. The daemon just told us its projectRoot via /api/daemon-info,
+      // and the caller runs as the same uid, so it can resolve the SQUATTER
+      // daemon's own hash + bearer token exactly the way DaemonClient does:
+      // daemonAuthHeaders → projectHashOf(root) + readDaemonInfo (daemon.json,
+      // III9 sidecar-aware). A daemon that still 403s (or predates the route)
+      // keeps returning "refused" → the caller's SIGTERM fallback is unchanged.
+      headers: {
+        ...daemonAuthHeaders(id.projectRoot),
+        "X-DeepPairing-Confirm-Pid": String(expectedPid),
+      },
       signal: controller.signal,
     });
     clearTimeout(timer);
