@@ -238,7 +238,8 @@ const MINIMAL_PROTOCOL = `# deepPairing Collaboration Protocol (minimal)
 When deepPairing's MCP server is loaded, use it as the single review
 surface for findings, options, plans, code changes, and reasoning. Do
 NOT duplicate the same content as prose in chat — the human is reviewing
-in the companion UI at http://localhost:3847.
+in the companion UI (per-project port; the exact URL is in your first
+tool call response — quote it, never guess it).
 
 After every \`present_*\` call, expect to receive feedback via
 \`check_feedback\` rather than continuing immediately. Re-run preflight
@@ -420,13 +421,8 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
   // dry-run, --yes, or non-TTY runs.
   if (!dryRun && !opts.yes && process.stdin.isTTY) {
     try {
-      const { FileStore } = await import("../store/file-store.js");
-      const crypto = await import("node:crypto");
       const projectName = path.basename(cwd);
-      const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
-      const projectHash = crypto.createHash("sha256").update(cwd).digest("hex").slice(0, 8);
-      const seedSessionId = `session_${safeProjectName}_${projectHash}`;
-      const seedStore = new FileStore(cwd, seedSessionId);
+      const seedStore = await openSeedStore(cwd);
       const current = seedStore.getGlobalLedgerPublish();
       if (!current) {
         console.log(`\n  ${dim("Cross-project ledger:")} deepPairing keeps a per-machine philosophy ledger at`);
@@ -1169,12 +1165,61 @@ async function exportCmd(format: string, sessionId?: string) {
 }
 
 /**
- * P5 — `deeppairing philosophy {export|import}`. The Philosophy Ledger at
- * `~/.deeppairing/philosophy/v1.json` compounds across every deepPairing
- * project; these commands make it portable so the "your taste travels
- * with you" claim survives moving machines.
+ * Open the per-project preferences store under the SAME deterministic seed
+ * session id `init` uses (`session_<name>_<hash>`), so CLI reads/writes of
+ * .deeppairing/preferences.json never mint stray session directories.
+ */
+async function openSeedStore(projectRoot: string): Promise<import("../store/file-store.js").FileStore> {
+  const { FileStore } = await import("../store/file-store.js");
+  const crypto = await import("node:crypto");
+  const projectName = path.basename(projectRoot);
+  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  return new FileStore(projectRoot, `session_${safeProjectName}_${projectHash}`);
+}
+
+/**
+ * P5 — `deeppairing philosophy {export|import|publish}`. The Philosophy
+ * Ledger at `~/.deeppairing/philosophy/v1.json` compounds across every
+ * deepPairing project; export/import make it portable so the "your taste
+ * travels with you" claim survives moving machines. `publish on|off` flips
+ * THIS project's write opt-in (III8) — the flag init's one-time prompt sets
+ * in .deeppairing/preferences.json.
  */
 async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<void> {
+  if (sub === "publish") {
+    // III8 — the runtime copy in `init` has promised "flip this later:
+    // `deeppairing philosophy publish on|off`" since the opt-in shipped;
+    // this honors it. Per-project (reads cwd), NOT the global ledger:
+    // it toggles `globalLedgerPublish` in <project>/.deeppairing/preferences.json.
+    const arg = rest.find((a) => !a.startsWith("-"));
+    if (arg !== undefined && arg !== "on" && arg !== "off") {
+      console.error(`  ${red("✗")} philosophy publish takes "on" or "off" (got "${arg}").`);
+      process.exit(1);
+    }
+    const projectName = path.basename(cwd);
+    const seedStore = await openSeedStore(cwd);
+    if (arg === undefined) {
+      // Bare `philosophy publish` reports the current state.
+      const current = seedStore.getGlobalLedgerPublish();
+      console.log(`\n  Cross-project ledger publish for ${bold(projectName)}: ${bold(current ? "on" : "off")}`);
+      console.log(`  ${dim("Flip it: npx deeppairing philosophy publish on|off")}\n`);
+      seedStore.forceFlush();
+      return;
+    }
+    seedStore.setGlobalLedgerPublish(arg === "on");
+    seedStore.forceFlush();
+    console.log(`\n  ${green("✓")} Cross-project ledger publish for ${bold(projectName)}: ${bold(arg)}`);
+    if (arg === "on") {
+      console.log(`  ${dim("This project's rejections/approvals now mirror into ~/.deeppairing/philosophy/v1.json,")}`);
+      console.log(`  ${dim("where every other deepPairing project on this machine can cite them.")}\n`);
+    } else {
+      console.log(`  ${dim("New rejections/approvals stay local to this project. Reads from the global")}`);
+      console.log(`  ${dim("ledger are unaffected (they are always on).")}\n`);
+    }
+    return;
+  }
+
   const { GlobalStore } = await import("../store/global-store.js");
   const store = new GlobalStore();
 
@@ -1218,7 +1263,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     return;
   }
 
-  console.error(`  ${red("✗")} Unknown philosophy subcommand: ${sub ?? "(none)"}. Try: export | import <file> --merge`);
+  console.error(`  ${red("✗")} Unknown philosophy subcommand: ${sub ?? "(none)"}. Try: export | import <file> --merge | publish on|off`);
   process.exit(1);
 }
 
@@ -1690,6 +1735,8 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     dp team init [--force]                 Scaffold .deeppairing/team.json with example team conventions
     dp philosophy export                   Print your cross-project Philosophy Ledger as JSON to stdout
     dp philosophy import <f> --merge       Merge an exported ledger into your current one (idempotent)
+    dp philosophy publish [on|off]         Flip THIS project's opt-in to publish rejections/approvals
+                                           into the cross-project ledger (bare = show current state)
     dp doctor [--fix] [--yes]              Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     dp sessions [list|prune]               List sessions for this project; prune removes empty stale ones
     dp sessions merge <from> <into> [-y]   Merge two sessions (rescues data split by old non-deterministic ids)

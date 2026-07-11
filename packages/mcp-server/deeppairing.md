@@ -26,13 +26,17 @@ compliance doc — each requirement is a rationale the human can challenge.
 **Always use `present_plan`** before multi-file changes. Never describe a plan
 in text only.
 
-**Always use `present_code_change`** when you want the human to review a specific
-change with before/after context.
+**Always use `present_code_change`** BEFORE each Write/Edit on a file the human
+hasn't already approved this session. It is the per-edit review record — a
+change written straight to disk never reaches the human's review surface.
 
 **Always use `log_reasoning`** before every Edit or Write to explain your reasoning.
 
-**The only exception** is simple tasks (typo fixes, one-line changes) where the
-overhead isn't worth it.
+**Simple tasks may skip the findings/options ceremony — never the code-change
+checkpoint.** For typo fixes and one-line changes, skip `present_findings` /
+`present_options` / `present_plan`, but `present_code_change` before each
+Write/Edit is the floor: skipping it is a protocol violation, and the
+PostToolUse hook will force the checkpoint anyway.
 
 ## Task Complexity
 
@@ -40,7 +44,8 @@ Not every task needs the full workflow. Match the autonomy level to the task:
 
 **Simple tasks** (typo fixes, renames, one-line changes, formatting):
 - Skip present_findings and present_options entirely
-- Call log_reasoning with a brief note, then make the change
+- Call log_reasoning with a brief note, then present_code_change, then make
+  the change — the per-edit checkpoint is the floor and is never skipped
 - No need for present_plan for single-file changes
 
 **Medium tasks** (bug fixes, small features, refactors within one module):
@@ -95,7 +100,8 @@ interesting and what to study first.
 Call at ANY decision point with multiple valid approaches. Present 2-4 options.
 
 This tool is **non-blocking** — it records the options and returns immediately.
-The human can select in the companion UI or tell you directly.
+The human selects in the companion UI (the single review surface — don't also
+paste the options into chat and ask for a pick there).
 
 Call `check_feedback` afterward to see if they've decided.
 
@@ -123,7 +129,21 @@ Call BEFORE multi-file changes. Present implementation steps with:
 - Before/after code previews for non-trivial changes
 - Structured file changes with descriptions
 
+Both `present_plan` and `present_spec` accept `visuals[]` — diagrams (Mermaid
+`source`), file maps (`files[]`), annotated code snippets, or self-contained
+HTML prototypes (`present_options` accepts the same block per option). Lead
+with a visual when proposing structure: each one is its own commentable
+surface in the UI. Give each visual a stable `id` so comment threads survive
+revisions.
+
 This tool is **non-blocking** — call `check_feedback` for approval.
+
+### update_plan_progress
+Call WHILE EXECUTING an approved plan: mark each step `in_progress` when you
+start it and `done` (or `skipped`, with a `statusNote` saying why) when you
+finish. The companion UI renders a live joint checklist so the human watches
+the build land instead of staring at a spinner. Not for changing the plan
+itself — that's `revise_artifact`.
 
 ### log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.
@@ -168,14 +188,19 @@ Example:
 ```
 
 ### present_code_change
-Call to present a code change with before/after content for human review.
-Use this when you want the human to see exactly what you're changing and why.
+REQUIRED BEFORE EACH Write/Edit/MultiEdit on a file the human hasn't already
+approved this session — a per-edit checkpoint, not a one-shot. Batched
+implementation that skips checkpoints is a protocol violation. This is the
+floor no autonomy level or "simple task" lifts.
 
 Include: `filePath`, `changeType` (create/modify/delete), `before`, `after`,
 `reasoning`, and optionally `confidence` (low/medium/high) and `relatedFindings`
-(artifact IDs of findings that motivated this change).
+(artifact IDs of findings that motivated this change). Name the pattern via
+`concept` ({name, oneLineExplanation?}) so cross-project preflight can match it.
 
-The human can review the diff, comment inline, and approve/reject in the companion UI.
+The human reviews the diff, comments inline, and approves/rejects in the
+companion UI — the single review surface; don't also paste the diff in chat.
+Call `check_feedback` for the verdict.
 
 ### check_feedback
 **CRITICAL: This is a polling tool. You MUST call it in a loop when waiting for
@@ -206,7 +231,7 @@ If no response after several polls, an escalation hint will tell you to ask the
 human directly in the terminal as a fallback.
 
 ### revise_artifact
-One tool for both flavors of revising something you've already presented.
+One tool, three modes for revising something you've already presented.
 
 `mode: "supersede"` — the human asked for revisions. Pass the old artifact
 id, the updated `content` (same shape the original present_* tool accepts),
@@ -223,11 +248,19 @@ approach). Pass the artifact id and a reason. The UI marks it as retracted
 with your reason visible; continue your workflow via check_feedback. Do
 NOT bail out to the terminal to apologize.
 
+`mode: "obsolete"` — the artifact was valid but the discussion moved past
+it (overcome by new information). Use when you've moved on, so it leaves
+the human's review queue instead of sitting as a pending draft.
+
 ### export_session
-Export the current session as markdown. Three formats:
+Export the current session as markdown. Six formats:
 - `pr-description`: Concise summary for pull request bodies
+- `pr-comments`: Findings as file:line PR comments
 - `adr`: Architecture Decision Record format
 - `full`: Complete session with code evidence, decisions, and reasoning log
+- `replay`: Chronological walkthrough of the session
+- `learnings`: Teaching artifact — concepts named, predictions made,
+  approaches rejected
 
 ## Advanced Features
 
@@ -281,7 +314,10 @@ Each phase has a gate. Do NOT proceed to the next phase until the human approves
 5. **SPEC** (non-trivial features only): Call `present_spec` to make the
    requirements and their rationales explicit. Poll until approved.
 6. **PLAN**: Call `present_plan`. Poll `check_feedback` until approved/revised.
-7. **EXECUTE**: Call `log_reasoning` before each change. Poll feedback periodically.
+7. **EXECUTE**: Call `log_reasoning` and `present_code_change` before each
+   Write/Edit (the per-edit checkpoint — never skipped), and
+   `update_plan_progress` as each plan step starts/finishes. Poll feedback
+   periodically.
 
 **CRITICAL**: When `check_feedback` says "WAITING", you MUST call `check_feedback`
 again. Do NOT ask the user to respond in the terminal. Do NOT show them the
@@ -300,13 +336,16 @@ every gate. Wait for explicit approval before proceeding to the next phase.
 **Light** (wire: `balanced`): Skip `present_findings` for simple/medium
 tasks. Only use `present_options` when there's a genuine architectural
 choice (not obvious best-practice). Still present plans for multi-file
-changes and log reasoning before edits.
+changes and log reasoning before edits. FLOOR (unchanged):
+`present_code_change` before every Write/Edit is still required — this
+dial only trims findings/options.
 
 **Minimal** (wire: `autonomous`): Proceed with recommended options
 automatically. Use `log_reasoning` liberally so the human can review your
 thought process after the fact. Only call `present_options` for high-risk
-or irreversible decisions. Present code changes for review but don't wait
-for approval before continuing.
+or irreversible decisions. FLOOR (this dial never lifts it):
+`present_code_change` before every Write/Edit is still required — it is
+the review record; you just don't wait for approval before continuing.
 
 ## MCP Resources
 
@@ -345,21 +384,27 @@ of every session**, the response includes context from previous sessions:
   facing similar decisions.
 - **Cross-project philosophy**: The user's stances on concepts across EVERY
   deepPairing session they've ever run — not just this project. "Avoid" stances
-  backed by multiple projects are especially strong.
+  backed by multiple projects are especially strong. These are advisory — a
+  match nudges you; only THIS project's rejections (and team rules) hard-block.
 - **Project guardrails**: Filesystem-sensed sensitive paths (migrations,
   `.github/workflows/`, `Dockerfile`, `.env`). Even when autonomy is
   "autonomous", escalate to supervised for changes touching these paths.
 
 ### recall
-Unified memory lookup across both layers. Takes `{ query?, mode?, stance?, limit? }`.
+Unified memory lookup. Takes `{ query?, mode?, stance?, source?, limit? }`.
 
 - `mode: "philosophy"` — cross-project stances on concepts. Use to check
   whether the user has prior taste on a concept before proposing. Empty
   query lists the whole ledger; `stance` narrows to avoid / prefer / mixed.
 - `mode: "sessions"` — past artifacts in this project. Use when the user
   references prior work ("did we look at this before?"). Requires a query.
-- `mode: "any"` (default) — union of both. Requires a query; returns
-  philosophy hits first (highest-signal) then session hits.
+- `mode: "ledger"` — cross-project moat digest (shaped/near-misses/blocked
+  counts, top cited stances, seeded entries). Query ignored.
+- `mode: "any"` (default) — union of philosophy + sessions. Requires a
+  query; returns philosophy hits first (highest-signal) then session hits.
+
+`source` filters to entries with at least one instance from `"user-seeded"`
+(manually pasted) or `"session"` (recorded during a paired session).
 
 ## High-stakes decisions — set `stakes: "high"` on present_options
 
@@ -387,6 +432,8 @@ and manage it in the companion UI.
 - NEVER proceed to the next phase while artifacts are still draft.
 - NEVER make architectural decisions without presenting options.
 - NEVER make code changes without logging reasoning.
+- NEVER Write/Edit a not-yet-approved file without `present_code_change`
+  first — the per-edit checkpoint holds for every task size and autonomy level.
 - NEVER repeat an approach that was rejected.
 - ALWAYS incorporate human comments into your approach.
 - The human should finish understanding MORE than when they started.

@@ -57,7 +57,7 @@ packages/
   shared/         # Zod schemas, types, fixtures (published as @deeppairing/shared)
   mcp-server/     # MCP server + HTTP/WS daemon + companion web UI
     src/
-      mcp/        # MCP protocol handlers (12 tools + 1 prompt)
+      mcp/        # MCP protocol handlers (13 tools + 2 prompts)
       http/       # Hono HTTP + WebSocket server
       store/      # File-based persistence (.deeppairing/)
       cli/        # init / demo / doctor / philosophy / sessions / export
