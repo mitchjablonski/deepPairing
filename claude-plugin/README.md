@@ -99,9 +99,10 @@ Both run the self-contained bundles under `server/` via
 
 **MCP server** (bundled via `.mcp.json`)
 
-- 12 tools: `present_findings`, `present_spec`, `present_options`,
-  `present_plan`, `present_code_change`, `log_reasoning`,
-  `answer_question`, `revise_artifact` (mode: supersede | retract),
+- 13 tools: `present_findings`, `present_spec`, `present_options`,
+  `present_plan`, `present_code_change`, `update_plan_progress`,
+  `log_reasoning`, `answer_question`,
+  `revise_artifact` (mode: supersede | retract | obsolete),
   `recall` (mode: philosophy | sessions | ledger | any),
   `post_pr_review`, `export_session`, `check_feedback`.
 - MCP resources: `deeppairing://session/current`,
@@ -111,8 +112,9 @@ Both run the self-contained bundles under `server/` via
 
 **Companion web UI** — a deterministic per-project port in `3847-3974`,
 derived from a hash of the project path (check `.deeppairing/daemon.json`
-for this project's actual bound port). Auto-opens on first daemon start
-(unless `DEEPPAIRING_OPEN_BROWSER=0`).
+for this project's actual bound port). Auto-opens on first daemon start —
+opt out with `DEEPPAIRING_NO_OPEN=1` (the legacy
+`DEEPPAIRING_OPEN_BROWSER=0` also works).
 
 ## What the plugin sets up automatically
 

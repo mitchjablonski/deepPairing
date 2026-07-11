@@ -1,7 +1,7 @@
 # deepPairing Architecture
 
-> Last updated: 2026-05. For day-to-day project conventions see
-> [CLAUDE.md](CLAUDE.md). For research notes from project inception see
+> Last updated: 2026-07. For day-to-day project conventions see
+> [CLAUDE.md](../CLAUDE.md). For research notes from project inception see
 > [research-brief.md](research-brief.md) (historical, not current).
 
 ## One-paragraph summary
@@ -11,8 +11,11 @@ Claude Code. Claude Code IS the agent — deepPairing is the *protocol +
 review surface* that turns one-shot tool calls into pair-programming.
 Findings, decisions, plans, and code changes go through structured
 artifacts that the human reviews in a local web UI; every rejection
-becomes a typed entry in a cross-project Philosophy Ledger that future
-sessions match against before the agent can paraphrase past you.
+becomes a typed entry that this project's pre-flight gate hard-blocks
+before the agent can paraphrase past you. If the project has opted in
+to publish (one prompt at `init`, default OFF), the rejection also
+mirrors into a cross-project Philosophy Ledger — which other projects
+surface as an **advisory** nudge, never a hard block.
 
 ## Process model
 
@@ -45,12 +48,13 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 12 MCP tools (see below). Talks to the
+  session. Implements the 13 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
 - **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to
-  a deterministic per-project port in the `3847-3974` range (derived
-  from the project hash; the first project gets `3847`). Owns the
+  a deterministic per-project port in the `3847-3974` range (hash of the
+  project path, mod the span — not allocation-ordered; the actual bound
+  port is recorded in `.deeppairing/daemon.json`). Owns the
   HTTP+WebSocket server, the per-session FileStores, and the global
   Philosophy Ledger. Auto-shuts down ~60s after the last session
   unregisters and the last UI client disconnects.
@@ -62,7 +66,7 @@ with it and DaemonClient (`src/daemon/client.ts`) implements `IStore`
 over HTTP so the same code paths work in standalone or daemon mode. The
 companion UI can aggregate across several projects' daemons.
 
-## The MCP tool surface (12 tools)
+## The MCP tool surface (13 tools)
 
 Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
 in `src/mcp/server.ts`. The split:
@@ -79,19 +83,26 @@ in `src/mcp/server.ts`. The split:
   decision picks, plan verdicts. Optional `waitFor` enum scopes the
   wake condition.
 
+**Execution**:
+- `update_plan_progress` — mark plan steps in_progress / done / skipped
+  while executing an approved plan (live checklist in the UI)
+
 **Memory + memory queries**:
 - `recall` — search `mode='philosophy' | 'sessions' | 'ledger' | 'any'`
   with optional `stance` and `source` filters
 - `log_reasoning` — record agent reasoning (low-stakes journal entry)
-- `revise_artifact` — supersede or retract a prior artifact
+- `revise_artifact` — supersede, retract, or obsolete a prior artifact
 
 **Side-channel**:
 - `answer_question` — agent reply to a human question on an artifact
 - `post_pr_review` — push approved findings as inline comments to a PR
-- `export_session` — markdown / pr-comments / json dump
+- `export_session` — markdown export (`pr-description` / `pr-comments` /
+  `adr` / `full` / `replay` / `learnings`)
 
-Tool calls return text-only `content` (no `structuredContent` yet —
-deferred). The companion UI subscribes to WebSocket broadcasts for
+Tool calls return prose `content`; `check_feedback` additionally ships a
+machine-readable mirror (`outputSchema` + `structuredContent`) so clients
+can branch on `status` / `suggestedAction` instead of prose-parsing. The
+companion UI subscribes to WebSocket broadcasts for
 artifact_created / comment_added / decision_resolved / etc. so the
 review surface stays live without HTTP polling.
 
@@ -106,8 +117,12 @@ is created. The matcher reads:
   `getTeamPreferences`, with optional path-glob scope)
 
 A match returns `REJECTED_APPROACH_BLOCKED` from the tool — the
-artifact is never created. Near-misses (50%-100% token coverage) get
-recorded in a sidecar trace so the breadcrumb in the UI can render
+artifact is never created. These two local sources are the only
+hard-block authority: cross-project 'avoid' stances from the global
+ledger enter `runPreflight` as advisory-only input and surface as
+near-miss nudges ("you avoided this in `<project>` — still want it
+here?"), never a block. Near-misses (≥50% token coverage, short of a
+full match) get recorded in a sidecar trace so the breadcrumb in the UI can render
 "Almost flagged this — your past stance on X is adjacent."
 
 This used to be voluntary: the gate only fired when the agent
@@ -165,6 +180,13 @@ The ledger is the only structurally cross-project surface. Every
 session can query it via `recall(mode='philosophy' | 'ledger')` and
 the daemon's `/api/ledger/digest` aggregates it for the UI.
 
+Writes are **opt-in per project** (`globalLedgerPublish` in
+`.deeppairing/preferences.json`, default OFF — one prompt at `init`,
+flip later via `deeppairing philosophy publish on|off`); reads are
+always on. Cross-project matches are advisory nudges in preflight,
+never hard blocks — only the local project's rejections and team
+rules block.
+
 ## Companion UI
 
 ```
@@ -189,7 +211,7 @@ no artifacts exist yet.
 
 ## Security model
 
-See [SECURITY.md](SECURITY.md). Short version: the daemon binds
+See [SECURITY.md](../SECURITY.md). Short version: the daemon binds
 `127.0.0.1` only, the WS upgrade enforces Origin + project-hash, and
 all HTTP routes go through the AA4 X-Project-Hash middleware. The
 threat model assumes the host machine is trusted — malicious npm
@@ -202,7 +224,7 @@ directly off disk.
   for fast tests; full HTTP integration tests for the daemon-routes
   surface.
 - **Atomic suite**: `pnpm --filter @deeppairing/mcp-server test`
-  (~1,300 tests, ~70s on a modern laptop).
+  (1,800+ tests).
 - **Component tests** in `web/src/components/__tests__/` use happy-dom
   via the workspace vitest config; pure tests run in node.
 

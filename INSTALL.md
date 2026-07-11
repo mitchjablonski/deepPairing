@@ -33,7 +33,8 @@ GitHub SSH keys. The `owner/repo` shorthand can resolve to SSH and fail with
 
 <!-- Marketplace install VERIFIED end-to-end in a real Claude Code client
      (2026-07-04): marketplace add + install + reload registered the MCP
-     server, 5 skills, and 6 agents. -->
+     server, the pairing-protocol skill, the 5 slash commands, and the
+     plugin hooks. -->
 
 This adds the slash commands (`/deeppairing:start`, `:review`, `:stance`,
 `:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and

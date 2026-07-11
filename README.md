@@ -41,6 +41,14 @@ Node 22+, pnpm 10+. Then, to use it in your own project:
   a cross-project ledger you can inspect and export.
 - **Live plan checklists.** Plans render as checklists that tick off as the
   work lands, so "what's left" never lies.
+- **Comment on the diagram itself.** Drag a rectangle on a plan or spec's
+  Mermaid diagram and your comment anchors to the nodes it covers — and
+  survives the agent redrawing the diagram.
+- **Every decision, one place.** A project-wide decisions view lists what was
+  chosen and why across all your sessions, searchable, with a jump back into
+  the session where you made the call.
+- **A Detail dial.** Rich or Terse — how much text rides inside each artifact.
+  Terse trims the prose; the artifacts and evidence stay.
 - **Session replay.** Reopen any past session from the command palette →
   **Browse past sessions (replay)** and step back through its artifacts,
   comments, and decisions in order.
@@ -203,10 +211,11 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), the
   `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
-12 MCP tools: `present_findings`, `present_options`, `present_spec`,
-`present_plan`, `present_code_change`, `log_reasoning`, `recall`,
-`revise_artifact`, `answer_question`, `post_pr_review`, `export_session`,
-`check_feedback` — plus a `recall` MCP prompt for slash-style queries.
+13 MCP tools: `present_findings`, `present_options`, `present_spec`,
+`present_plan`, `present_code_change`, `update_plan_progress`, `log_reasoning`,
+`recall`, `revise_artifact`, `answer_question`, `post_pr_review`,
+`export_session`, `check_feedback` — plus two MCP prompts (`recall` and `seed`)
+for slash-style queries.
 
 ### CLI
 
@@ -218,7 +227,7 @@ deeppairing demo                          # fire the hero flow
 deeppairing init                          # set up in this project (interactive)
 deeppairing doctor [--fix]                # diagnose / heal install issues
 deeppairing team init                     # scaffold .deeppairing/team.json
-deeppairing philosophy export | import f --merge
+deeppairing philosophy export | import f --merge | publish on|off
 deeppairing post-pr-review <pr>           # post pair findings as PR comments
 deeppairing export <full|pr-comments|adr|replay|learnings>
 ```

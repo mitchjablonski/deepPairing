@@ -16,7 +16,7 @@ packages/
   shared/         # Zod schemas, types, fixtures
   mcp-server/     # Standalone MCP server + HTTP server + companion web UI
     src/
-      mcp/        # MCP server (stdio transport, 12 tools)
+      mcp/        # MCP server (stdio transport, 13 tools)
       http/       # Hono HTTP + WebSocket server
       store/      # File-based persistence (.deeppairing/)
     web/          # Companion React app (Vite build → dist/web/)
@@ -26,7 +26,7 @@ packages/
 ### Key Architecture Decisions
 
 - **MCP server running inside Claude Code** — not a separate agent harness. Claude Code IS the agent.
-- **Non-blocking MCP tools** — `present_options` and `present_plan` record and return immediately. Human responds via companion UI or terminal. Agent calls `check_feedback` to get responses.
+- **Non-blocking MCP tools** — `present_options` and `present_plan` record and return immediately. The companion UI is the review surface — the human responds there, not in the terminal. Agent calls `check_feedback` to get responses.
 - **File-based persistence** — `.deeppairing/sessions/{id}/` stores artifacts, comments, decisions as JSON.
 - **Dual transport** — stdio for MCP protocol; HTTP on a deterministic per-project port in `3847-3974`, derived from a hash of the project path (not first-come — check `.deeppairing/daemon.json` for the actual bound port), for the companion web UI + WebSocket.
 - **Fakes not mocks** for testing.
@@ -59,6 +59,8 @@ pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 > **ANY PR touching bundled source (`packages/*/src`, web UI) and EVERY release version bump must run `pnpm build:clean` and commit `claude-plugin/server/`** — never a warm `pnpm build`, never `--filter @deeppairing/mcp-server build` alone.
 
 `pnpm build:clean` wipes the turbo/vite/tsc caches (`.turbo`, `node_modules/.vite`, `dist/`) then runs the full root build — the only path guaranteed to match CI.
+
+Release version bumps must update all four version sources in one commit — `src/version.ts` (`SERVER_VERSION`), `packages/mcp-server/package.json`, `packages/shared/package.json`, `claude-plugin/.claude-plugin/plugin.json` — enforced by `packages/mcp-server/src/__tests__/version-lockstep.test.ts`.
 
 ## Testing with Claude Code
 
@@ -103,4 +105,4 @@ Open the companion UI at the daemon's port — a deterministic per-project port 
 - `Evidence` — filePath, lineStart, lineEnd, snippet, explanation, relatedPaths
 - `Finding` — category, title, detail, evidence (string | Evidence[]), impact, recommendation
 - `Artifact` — id, type, version, parentId, status, content (type-specific)
-- `Comment` — target (artifactId + optional line/finding/evidence/step), codeReferences[]
+- `Comment` — target (artifactId + optional line/finding/evidence/step/`region` (diagram rect)/`optionId`/`visualId`/`requirementId`/`questionIndex`/`sectionId`), codeReferences[]

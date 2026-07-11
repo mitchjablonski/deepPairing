@@ -10,7 +10,7 @@ isn't here.
 Partially yes, and that's the point. The mechanic is intentionally
 simple: every `present_*` MCP tool call gets matched against a JSON
 ledger of stances you've rejected, using concept-token + scope-glob
-rules from [`runPreflight`](packages/mcp-server/src/mcp/preflight-validator.ts).
+rules from [`runPreflight`](../packages/mcp-server/src/mcp/preflight-validator.ts).
 What makes it work isn't ML magic; it's that the match happens
 **before** the artifact is created and the tool returns an error the
 agent has to react to. Cursor's canvases let the agent ship the
@@ -69,19 +69,26 @@ surface; the web UI is read + steer.
 ## "How is the Philosophy Ledger different from Claude Code's auto-memory?"
 
 Auto-memory is a **recall** the model is encouraged to consult.
-Philosophy Ledger is a **gate** the model has to pass through. Same
-underlying data shape (stored decisions), different semantics:
+deepPairing turns a past decision into **a gate here, a flag on the
+next project**. Same underlying data shape (stored decisions),
+different semantics:
 
 - Auto-memory: model sees "you previously rejected Railway" → might
   factor it in → might not. No commitment.
-- Philosophy Ledger: agent tries to propose Railway → `runPreflight`
-  matches → tool returns `REJECTED_APPROACH_BLOCKED` → artifact is
-  never created. The agent has to revise or escalate; it cannot
-  silently proceed.
+- deepPairing, in the project where you rejected Railway: the agent
+  tries to re-propose it → `runPreflight` matches **this project's**
+  rejections (or a committed `team.json` rule) → the tool returns
+  `REJECTED_APPROACH_BLOCKED` → the artifact is never created. The
+  agent has to revise or escalate; it cannot silently proceed.
+- deepPairing, on your *other* projects: the cross-project Philosophy
+  Ledger is **advisory** — a match surfaces as a nudge ("you avoided
+  this in `<project>` — still want it here?"), never a hard block.
+  Reject the concept locally and it becomes a hard block there too.
 
 Both surfaces have a place; deepPairing's bet is that for
 architectural taste decisions you've already made, gating beats
-recall.
+recall — with the hard block scoped to the project where you actually
+made the call, and an active flag everywhere else.
 
 ## "Why per-project opt-in for cross-project publish? Doesn't that dilute the moat?"
 
@@ -95,7 +102,8 @@ input", "use parameterized queries") that every other project then
 cites in preflight. Without opt-in, the project where the malicious
 dep lives could poison the global ledger for every other project on
 your machine. Default off, one prompt at `init`, flip later via
-`deeppairing philosophy publish on`.
+`deeppairing philosophy publish on|off` (bare `philosophy publish`
+shows the current state).
 
 The narrative trade-off: the moat is real, but it's now an opt-in
 moat. We think honesty about the trust model beats a frictionless
@@ -117,7 +125,7 @@ Nothing leaves your machine that you didn't already send to Anthropic.
 
 The only network egress deepPairing performs is what your MCP client
 (Claude Code) does anyway — sending tool results to Anthropic's API.
-See [SECURITY.md](SECURITY.md) for the threat model in full.
+See [SECURITY.md](../SECURITY.md) for the threat model in full.
 
 ## "What's the install size? Cold-clone time?"
 
@@ -136,7 +144,7 @@ desktop. Slower hardware (or first-time `pnpm setup`) adds maybe
 ## "Is it stable enough for daily use?"
 
 Pre-1.0 honest answer: it works for the team that built it on real
-projects, but it's not battle-tested. ~1,300 tests, an explicit threat
+projects, but it's not battle-tested. Over 1,800 tests, an explicit threat
 model in SECURITY.md, atomic writes on the data plane, structured
 error codes — the foundations are solid. The next ~weeks are about
 real-user signals telling us where the false-positive rate, the
@@ -171,6 +179,6 @@ artifacts and broadcasts events normally.
 
 ## "I want to contribute. Where do I start?"
 
-[CONTRIBUTING.md](CONTRIBUTING.md). TL;DR: `good-first-issue` label
+[CONTRIBUTING.md](../CONTRIBUTING.md). TL;DR: `good-first-issue` label
 on the issue tracker; design discussions in Discussions before
 large refactors; fakes over mocks for tests; one concept per commit.

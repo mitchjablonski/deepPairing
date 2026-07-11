@@ -110,7 +110,7 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   concept** in the `concept` field (e.g. "dependency inversion",
   "optimistic UI"). This is the pairing-learning lever — surface the
   pattern so the human learns it, not just the fix.
-- **`revise_artifact`** — one tool for both flavors of taking something back:
+- **`revise_artifact`** — one tool, three modes for taking something back:
   - `mode: "supersede"` + new `content` → creates a v(N+1) draft linked via
     parentId; the old one flips to "superseded". **Default to this whenever you
     update an artifact you already presented** — after the human's feedback OR
@@ -123,13 +123,19 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   - `mode: "retract"` → marks the artifact retracted with your reason. Use
     when you realize mid-flight you shouldn't have presented something.
     Graceful exit without breaking the polling loop.
-- **`recall`** — unified memory lookup across two layers:
+  - `mode: "obsolete"` → marks it overcome by new information — it was valid
+    but the discussion moved past it. Use when you've moved on, so it leaves
+    the human's review queue.
+- **`recall`** — unified memory lookup:
   - `mode: "philosophy"` — the user's cross-project stances on concepts
     (avoid / prefer / mixed). Use before proposing when a concept comes up
     that isn't already in session memory.
   - `mode: "sessions"` — past artifacts in THIS project. Use when the user
     references prior work ("did we look at this before?").
-  - `mode: "any"` — union of both. Default when you're not sure.
+  - `mode: "ledger"` — cross-project digest (counts, top cited stances,
+    seeded entries).
+  - `mode: "any"` — union of philosophy + sessions. Default when you're not
+    sure.
 - **`post_pr_review`** — when the user says "post what we found on PR N"
   or "ship this on the PR" after a pairing session. The PR is a *surface
   to share what you paired on*, not a code-review pass run from the
