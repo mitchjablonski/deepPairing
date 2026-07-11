@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.1.11 — 2026-07-10
+
+The review-round release: everything found by a six-lens project audit
+(security ×2, test-suite health, docs-vs-reality, debt, competitive landscape),
+fixed. No breaking changes.
+
+### Added
+- **Secret warnings you can actually see.** The scanner's matches were being
+  emitted and dropped — never rendered anywhere. Now: a prominent warning
+  banner on any artifact containing a possible secret (with the field and line,
+  never the value itself), an inline ⚠ chip on flagged comments, and the agent
+  is told too. Coverage extended to every artifact type and to comments — and
+  new high-precision patterns (Stripe, Slack, npm, GitHub fine-grained, GCP
+  service-account, signed JWTs), each shipped with a near-miss test so the
+  banner stays trustworthy instead of crying wolf.
+- **`deeppairing philosophy publish on|off` now exists.** Init has been telling
+  every user about this command; it was never implemented. It is now — flip
+  cross-project ledger publishing without re-running init.
+- **First real interaction e2e suite**: the full review loop (select → approve →
+  supersede → verify persisted), region-drag against real rendered diagram
+  geometry (including the gutter-start gesture from live field testing), and
+  hostile WebSocket upgrades against a real daemon.
+
+### Fixed
+- **The doctor's graceful eviction works for the first time.** Its cooperative
+  evict request was rejected by the daemon's own auth gate on every attempt
+  (silently falling back to SIGTERM). The doctor now authenticates the way any
+  client does; the gate itself is unchanged.
+- **The docs tell the truth again.** The agent-facing protocol no longer
+  licenses skipping the per-edit code-change checkpoint for "simple tasks"
+  (the floor is stated plainly: no setting and no task size lifts it); the FAQ
+  no longer claims cross-project rejections hard-block (they advise; local
+  rejections block); tool counts, schema summaries, and the README's feature
+  list match the shipped product.
+
+### Internal
+- **The daemon's composition root is finally under test.** Its wiring was a
+  1,209-line script no test could import — a test audit proved four real
+  regressions (including disabling the update-detection gate entirely) shipped
+  green. It's now an importable factory, and each of those four mutations is
+  pinned by a test that fails if the wiring is disconnected.
+- Dead code removed (an unused animation module, a parked schema alias, a
+  vestigial WebSocket fallback that broadcast into an empty set).
+
 ## v0.1.10 — 2026-07-10
 
 Region-comment ergonomics, shaped by two rounds of live field testing.
