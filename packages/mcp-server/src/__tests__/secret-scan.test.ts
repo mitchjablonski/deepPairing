@@ -76,9 +76,20 @@ describe("V4 — secret-shape scan", () => {
 
   // #160 — the conservative expansion. One match + one near-miss per pattern;
   // the near-miss is the noise case that would train users to ignore the banner.
+  //
+  // MATCH fixtures are built at RUNTIME (join / base64url) so this file's
+  // SOURCE never contains a token-shaped literal: the original literals
+  // tripped GitGuardian's own scanner (a JWT-shaped test string is JWT-shaped
+  // to every OTHER scanner too), and a repo that cries wolf in security
+  // dashboards teaches the exact bad lesson these near-miss tests exist to
+  // prevent. The runtime strings are byte-identical to the old literals —
+  // scanForSecrets sees the same input; only the source text is unmatchable.
   describe("#160 — expanded pattern set (match + near-miss pairs)", () => {
+    const tok = (...parts: string[]) => parts.join("");
+    const b64url = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+
     it("Stripe live secret key (sk_live_) — matches a key-length fake", () => {
-      const m = scanForSecrets("STRIPE_KEY=sk_live_EXAMPLEabcdef1234567890");
+      const m = scanForSecrets(tok("STRIPE_KEY=sk_", "live_", "EXAMPLEabcdef1234567890"));
       expect(m.map((x) => x.label)).toContain("Stripe live secret key");
     });
 
@@ -90,9 +101,9 @@ describe("V4 — secret-shape scan", () => {
     });
 
     it("Slack token (xoxb-/xoxp-/xoxa-/xoxr-/xoxs-) — matches a token-length fake", () => {
-      const m = scanForSecrets("SLACK_BOT_TOKEN=xoxb-0000000000-EXAMPLE0000");
+      const m = scanForSecrets(tok("SLACK_BOT_TOKEN=xox", "b-0000000000-EXAMPLE0000"));
       expect(m.map((x) => x.label)).toContain("Slack token");
-      expect(scanForSecrets("xoxp-1111111111-fakeFAKEfake").map((x) => x.pattern)).toContain("xox");
+      expect(scanForSecrets(tok("xox", "p-1111111111-fakeFAKEfake")).map((x) => x.pattern)).toContain("xox");
     });
 
     it("Slack near-miss — prose naming the prefix or a short fragment never matches", () => {
@@ -101,7 +112,7 @@ describe("V4 — secret-shape scan", () => {
     });
 
     it("npm access token (npm_) — matches a token-length fake", () => {
-      const m = scanForSecrets("//registry.npmjs.org/:_authToken=npm_EXAMPLEabcdefghij1234567890FAKE00");
+      const m = scanForSecrets(tok("//registry.npmjs.org/:_authToken=npm", "_EXAMPLEabcdefghij1234567890FAKE00"));
       expect(m.map((x) => x.label)).toContain("npm access token");
     });
 
@@ -115,7 +126,7 @@ describe("V4 — secret-shape scan", () => {
 
     it("GitHub fine-grained PAT (github_pat_) — matches the 22+_+long shape", () => {
       const m = scanForSecrets(
-        "GH_TOKEN=github_pat_11AAAAAAA0EXAMPLEFAKE0_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789EXAMPLE",
+        tok("GH_TOKEN=github_", "pat_", "11AAAAAAA0EXAMPLEFAKE0_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789EXAMPLE"),
       );
       expect(m.map((x) => x.label)).toContain("GitHub fine-grained personal access token");
     });
@@ -128,7 +139,9 @@ describe("V4 — secret-shape scan", () => {
     });
 
     it('GCP service-account key — matches the "private_key" field with a PEM value', () => {
-      const m = scanForSecrets('{ "type": "service_account", "private_key": "-----BEGIN PRIVATE KEY-----\\nFAKE" }');
+      const m = scanForSecrets(
+        tok('{ "type": "service_account", "private_key": "-----BEGIN ', 'PRIVATE KEY-----\\nFAKE" }'),
+      );
       expect(m.map((x) => x.label)).toContain("GCP service-account key (JSON)");
     });
 
@@ -140,20 +153,22 @@ describe("V4 — secret-shape scan", () => {
     });
 
     it("JWT — matches only when header AND payload carry the eyJ marker", () => {
-      const m = scanForSecrets(
-        "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.FAKESIGNATUREFAKESIGNATURE",
-      );
+      // Runtime-built: b64url({alg,typ}) + b64url({sub}) reproduce the exact
+      // segments the old literal carried — this is the fixture that fired a
+      // real GitGuardian incident on the repo.
+      const signedJwt = [b64url({ alg: "HS256", typ: "JWT" }), b64url({ sub: "1234567890" }), "FAKESIGNATUREFAKESIGNATURE"].join(".");
+      const m = scanForSecrets(`Authorization: Bearer ${signedJwt}`);
       expect(m.map((x) => x.label)).toContain("JWT (signed)");
     });
 
     it("JWT near-miss — the collision cases the eyJ+eyJ requirement exists for", () => {
       // Payload segment without the eyJ JSON-object marker (any dotted
       // base64ish triple, e.g. a minified-module path or a version string).
-      expect(scanForSecrets("eyJhbGciOiJIUzI1NiJ9.notAJsonObjectPayload.FAKESIGNATUREFAKESIGNATURE")).toEqual([]);
+      expect(scanForSecrets([b64url({ alg: "HS256" }), "notAJsonObjectPayload", "FAKESIGNATUREFAKESIGNATURE"].join("."))).toEqual([]);
       // Unsigned / two-segment example (jwt.io prints these in docs).
-      expect(scanForSecrets("eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjM0In0.")).toEqual([]);
+      expect(scanForSecrets([b64url({ alg: "none" }), b64url({ sub: "1234" }), ""].join("."))).toEqual([]);
       // Dotted prose that merely contains eyJ once.
-      expect(scanForSecrets("the header decodes from eyJhbGciOiJIUzI1NiJ9 alone")).toEqual([]);
+      expect(scanForSecrets(`the header decodes from ${b64url({ alg: "HS256" })} alone`)).toEqual([]);
     });
   });
 
