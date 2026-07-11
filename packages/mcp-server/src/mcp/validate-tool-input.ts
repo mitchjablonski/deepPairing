@@ -27,7 +27,6 @@ import {
   ResearchContentSchema,
   SpecContentSchema,
   PlanContentSchema,
-  DecisionContentSchema,
   CodeChangeContentSchema,
   ReasoningContentSchema,
   PlanVisualSchema,
@@ -380,13 +379,6 @@ export function validateLogReasoningInput(args: any): ValidationResult<z.infer<t
   if (result.success) return { ok: true, data: result.data };
   return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING) };
 }
-
-// `decision` artifacts are constructed server-side from present_options
-// args; the validator above already enforces the option shape, so a
-// separate decision-content validator isn't needed at the tool boundary.
-// Kept here for completeness if a future tool persists decision content
-// directly.
-export const _decisionContentSchemaForReference = DecisionContentSchema;
 
 // ---------------------------------------------------------------------------
 // D4 — ADVERTISED input schemas, derived from the SAME zod shapes the
