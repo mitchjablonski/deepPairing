@@ -22737,7 +22737,18 @@ var SecretWarningSchema = external_exports.object({
   /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
   pattern: external_exports.string(),
   /** Human-readable kind, e.g. "AWS access key id". */
-  label: external_exports.string()
+  label: external_exports.string(),
+  /**
+   * #160 — WHERE the pattern matched, so the banner can say
+   * "in `steps[2].preview` (line 4)" instead of leaving the human to hunt.
+   * `field` is the dotted/bracketed content path (omitted when the scanned
+   * text was a single unlabeled string, e.g. a comment body); `line` is
+   * 1-based within that field's text. Both derived from the match INDEX
+   * only — the matched value is never captured. Optional for backward
+   * compatibility: old artifacts without them still render.
+   */
+  field: external_exports.string().optional(),
+  line: external_exports.number().int().positive().optional()
 });
 var ArtifactSchema = external_exports.object({
   id: external_exports.string(),
@@ -22869,6 +22880,16 @@ var CommentSchema = external_exports.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  /**
+   * #160 — secret-scanner matches found in this comment's body at create
+   * time. A comment with a secret is HUMAN-authored (the risk is a key
+   * pasted into a comment that then flows into agent context and disk), so
+   * the daemon's comment-create path scans and persists the labels-only
+   * result here — pattern prefix + label (+ line), NEVER the matched value.
+   * Optional for backward compatibility (project rule: all new fields
+   * optional); old comments without it load unchanged.
+   */
+  secretWarnings: external_exports.array(SecretWarningSchema).optional(),
   acknowledged: external_exports.boolean(),
   createdAt: external_exports.string().datetime()
 });
@@ -23948,6 +23969,60 @@ function computeEngagementMetrics(state) {
   };
 }
 
+// src/secret-scan.ts
+var PATTERNS = [
+  { re: /\bsk-[A-Za-z0-9_-]{16,}/, pattern: "sk-", label: "OpenAI / Anthropic-shape API key" },
+  { re: /\bAKIA[0-9A-Z]{12,20}\b/, pattern: "AKIA", label: "AWS access key id" },
+  { re: /\bghp_[A-Za-z0-9]{20,}/, pattern: "ghp_", label: "GitHub personal access token" },
+  { re: /\bgho_[A-Za-z0-9]{20,}/, pattern: "gho_", label: "GitHub OAuth token" },
+  { re: /\bglpat-[A-Za-z0-9_-]{20,}/, pattern: "glpat-", label: "GitLab personal access token" },
+  { re: /\bya29\.[A-Za-z0-9_-]{20,}/, pattern: "ya29.", label: "Google OAuth access token" },
+  { re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, pattern: "PEM", label: "Private key (PEM)" },
+  // #160 — conservative expansion (see the noise-tradeoff note above).
+  // Stripe LIVE mode only: sk_test_ is deliberately out (docs/test snippets
+  // quote it constantly; a leaked test key is not the launch-day tweet).
+  { re: /\bsk_live_[A-Za-z0-9]{16,}/, pattern: "sk_live_", label: "Stripe live secret key" },
+  // Slack token families: bot (xoxb), user (xoxp), app (xoxa), refresh (xoxr),
+  // signing/session (xoxs). Requires token-length payload after the dash so
+  // prose like "tokens start with xoxb-" never trips it.
+  { re: /\bxox[bpars]-[A-Za-z0-9][A-Za-z0-9-]{9,}/, pattern: "xox", label: "Slack token" },
+  // npm automation tokens: npm_ + 36 base62 chars, NO underscores — which is
+  // exactly what keeps npm_config_registry / npm_package_name (real env vars
+  // in every npm lifecycle script) out.
+  { re: /\bnpm_[A-Za-z0-9]{30,}/, pattern: "npm_", label: "npm access token" },
+  // GitHub fine-grained PAT: github_pat_ + 22 base62 + "_" + 59 base62.
+  // The exact 22-char first segment is required so a prose placeholder like
+  // "github_pat_your_token_here" can't match.
+  { re: /\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{30,}/, pattern: "github_pat_", label: "GitHub fine-grained personal access token" },
+  // GCP service-account JSON: the "private_key" field whose VALUE is a PEM
+  // opener. `"private_key_id"` (sibling field, non-secret hex) can't match —
+  // the field name must end exactly at the closing quote.
+  { re: /"private_key"\s*:\s*"-----BEGIN/, pattern: '"private_key"', label: "GCP service-account key (JSON)" },
+  // Signed JWT: three base64url segments. Collision-prone as a bare
+  // three-dotted-segments shape, so BOTH the header and payload segments must
+  // start with `eyJ` (base64url of `{"`) and the signature must be present
+  // and token-length — an unsigned/two-segment example never matches.
+  { re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}/, pattern: "eyJ", label: "JWT (signed)" }
+];
+function lineOfIndex(text, index) {
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    if (text.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+function scanForSecrets(text) {
+  if (typeof text !== "string" || text.length === 0) return [];
+  const matches = [];
+  for (const { re, pattern, label } of PATTERNS) {
+    const m = re.exec(text);
+    if (m) {
+      matches.push({ pattern, label, line: lineOfIndex(text, m.index) });
+    }
+  }
+  return matches;
+}
+
 // src/store/session-scan.ts
 import fs6 from "node:fs";
 import path5 from "node:path";
@@ -24947,6 +25022,7 @@ var FileStore = class _FileStore {
     if (dupe) {
       return dupe;
     }
+    const secretWarnings = scanForSecrets(params.content);
     const comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -24955,6 +25031,9 @@ var FileStore = class _FileStore {
       author: params.author,
       content: params.content,
       intent: params.intent,
+      // #160 — spread so the field is simply absent on clean comments
+      // (back-compat: stored JSON for clean comments stays byte-identical).
+      ...secretWarnings.length > 0 ? { secretWarnings } : {},
       // FN1 — persist attached code evidence (answer_question). Spread so the
       // field is simply absent when there's none (back-compat with stored data).
       ...params.codeReferences && params.codeReferences.length > 0 ? { codeReferences: params.codeReferences } : {},

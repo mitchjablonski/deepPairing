@@ -25477,7 +25477,18 @@ var SecretWarningSchema = external_exports.object({
   /** The pattern prefix that matched, e.g. "AKIA", "sk-", "PEM". */
   pattern: external_exports.string(),
   /** Human-readable kind, e.g. "AWS access key id". */
-  label: external_exports.string()
+  label: external_exports.string(),
+  /**
+   * #160 — WHERE the pattern matched, so the banner can say
+   * "in `steps[2].preview` (line 4)" instead of leaving the human to hunt.
+   * `field` is the dotted/bracketed content path (omitted when the scanned
+   * text was a single unlabeled string, e.g. a comment body); `line` is
+   * 1-based within that field's text. Both derived from the match INDEX
+   * only — the matched value is never captured. Optional for backward
+   * compatibility: old artifacts without them still render.
+   */
+  field: external_exports.string().optional(),
+  line: external_exports.number().int().positive().optional()
 });
 var ArtifactSchema = external_exports.object({
   id: external_exports.string(),
@@ -25609,6 +25620,16 @@ var CommentSchema = external_exports.object({
    * human-driven; does not touch the agent's `acknowledged` queue.
    */
   humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  /**
+   * #160 — secret-scanner matches found in this comment's body at create
+   * time. A comment with a secret is HUMAN-authored (the risk is a key
+   * pasted into a comment that then flows into agent context and disk), so
+   * the daemon's comment-create path scans and persists the labels-only
+   * result here — pattern prefix + label (+ line), NEVER the matched value.
+   * Optional for backward compatibility (project rule: all new fields
+   * optional); old comments without it load unchanged.
+   */
+  secretWarnings: external_exports.array(SecretWarningSchema).optional(),
   acknowledged: external_exports.boolean(),
   createdAt: external_exports.string().datetime()
 });
@@ -27916,30 +27937,121 @@ async function maybeUpdateTaskStatus(_server, _artifactId, _store) {
   void taskHandleForArtifact;
 }
 
+// src/secret-scan.ts
+var PATTERNS = [
+  { re: /\bsk-[A-Za-z0-9_-]{16,}/, pattern: "sk-", label: "OpenAI / Anthropic-shape API key" },
+  { re: /\bAKIA[0-9A-Z]{12,20}\b/, pattern: "AKIA", label: "AWS access key id" },
+  { re: /\bghp_[A-Za-z0-9]{20,}/, pattern: "ghp_", label: "GitHub personal access token" },
+  { re: /\bgho_[A-Za-z0-9]{20,}/, pattern: "gho_", label: "GitHub OAuth token" },
+  { re: /\bglpat-[A-Za-z0-9_-]{20,}/, pattern: "glpat-", label: "GitLab personal access token" },
+  { re: /\bya29\.[A-Za-z0-9_-]{20,}/, pattern: "ya29.", label: "Google OAuth access token" },
+  { re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, pattern: "PEM", label: "Private key (PEM)" },
+  // #160 — conservative expansion (see the noise-tradeoff note above).
+  // Stripe LIVE mode only: sk_test_ is deliberately out (docs/test snippets
+  // quote it constantly; a leaked test key is not the launch-day tweet).
+  { re: /\bsk_live_[A-Za-z0-9]{16,}/, pattern: "sk_live_", label: "Stripe live secret key" },
+  // Slack token families: bot (xoxb), user (xoxp), app (xoxa), refresh (xoxr),
+  // signing/session (xoxs). Requires token-length payload after the dash so
+  // prose like "tokens start with xoxb-" never trips it.
+  { re: /\bxox[bpars]-[A-Za-z0-9][A-Za-z0-9-]{9,}/, pattern: "xox", label: "Slack token" },
+  // npm automation tokens: npm_ + 36 base62 chars, NO underscores — which is
+  // exactly what keeps npm_config_registry / npm_package_name (real env vars
+  // in every npm lifecycle script) out.
+  { re: /\bnpm_[A-Za-z0-9]{30,}/, pattern: "npm_", label: "npm access token" },
+  // GitHub fine-grained PAT: github_pat_ + 22 base62 + "_" + 59 base62.
+  // The exact 22-char first segment is required so a prose placeholder like
+  // "github_pat_your_token_here" can't match.
+  { re: /\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{30,}/, pattern: "github_pat_", label: "GitHub fine-grained personal access token" },
+  // GCP service-account JSON: the "private_key" field whose VALUE is a PEM
+  // opener. `"private_key_id"` (sibling field, non-secret hex) can't match —
+  // the field name must end exactly at the closing quote.
+  { re: /"private_key"\s*:\s*"-----BEGIN/, pattern: '"private_key"', label: "GCP service-account key (JSON)" },
+  // Signed JWT: three base64url segments. Collision-prone as a bare
+  // three-dotted-segments shape, so BOTH the header and payload segments must
+  // start with `eyJ` (base64url of `{"`) and the signature must be present
+  // and token-length — an unsigned/two-segment example never matches.
+  { re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}/, pattern: "eyJ", label: "JWT (signed)" }
+];
+function lineOfIndex(text, index) {
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    if (text.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+function scanForSecrets(text) {
+  if (typeof text !== "string" || text.length === 0) return [];
+  const matches = [];
+  for (const { re, pattern, label } of PATTERNS) {
+    const m = re.exec(text);
+    if (m) {
+      matches.push({ pattern, label, line: lineOfIndex(text, m.index) });
+    }
+  }
+  return matches;
+}
+function scanContentForSecrets(content, maxDepth = 6) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const walk = (value, fieldPath, depth) => {
+    if (depth > maxDepth || value == null) return;
+    if (typeof value === "string") {
+      for (const m of scanForSecrets(value)) {
+        if (seen.has(m.pattern)) continue;
+        seen.add(m.pattern);
+        out.push(fieldPath ? { ...m, field: fieldPath } : m);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => walk(v, `${fieldPath}[${i}]`, depth + 1));
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        walk(v, fieldPath ? `${fieldPath}.${k}` : k, depth + 1);
+      }
+    }
+  };
+  walk(content, "", 0);
+  return out;
+}
+
 // src/mcp/tools/log-reasoning.ts
 async function handleLogReasoning(ctx, args) {
   const validated = validateLogReasoningInput(args);
   if (!validated.ok) return validated.error;
   const id = `art_${nanoid3(10)}`;
   const relatedIds = args?.relatesTo?.artifactId ? [args.relatesTo.artifactId] : void 0;
+  const content = {
+    action: args?.action,
+    reasoning: args?.reasoning,
+    concept: args?.concept,
+    evidence: args?.evidence,
+    relatesTo: args?.relatesTo,
+    alternativesConsidered: args?.alternativesConsidered ?? [],
+    alternativeDetails: args?.alternativeDetails,
+    confidence: args?.confidence
+  };
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "reasoning",
     title: args?.action ?? "Reasoning",
-    content: {
-      action: args?.action,
-      reasoning: args?.reasoning,
-      concept: args?.concept,
-      evidence: args?.evidence,
-      relatesTo: args?.relatesTo,
-      alternativesConsidered: args?.alternativesConsidered ?? [],
-      alternativeDetails: args?.alternativeDetails,
-      confidence: args?.confidence
-    },
+    content,
     agentReasoning: args?.reasoning,
-    relatedArtifactIds: relatedIds
+    relatedArtifactIds: relatedIds,
+    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
   });
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   const nudge = args?.concept?.name ? "" : "\n(Pairing nudge: name the underlying concept via `concept` so the human learns the pattern, not just the fix.)";
@@ -28625,58 +28737,6 @@ async function handleExportSession(ctx, args) {
   };
 }
 
-// src/secret-scan.ts
-var PATTERNS = [
-  { re: /\bsk-[A-Za-z0-9_-]{16,}/, pattern: "sk-", label: "OpenAI / Anthropic-shape API key" },
-  { re: /\bAKIA[0-9A-Z]{12,20}\b/, pattern: "AKIA", label: "AWS access key id" },
-  { re: /\bghp_[A-Za-z0-9]{20,}/, pattern: "ghp_", label: "GitHub personal access token" },
-  { re: /\bgho_[A-Za-z0-9]{20,}/, pattern: "gho_", label: "GitHub OAuth token" },
-  { re: /\bglpat-[A-Za-z0-9_-]{20,}/, pattern: "glpat-", label: "GitLab personal access token" },
-  { re: /\bya29\.[A-Za-z0-9_-]{20,}/, pattern: "ya29.", label: "Google OAuth access token" },
-  { re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, pattern: "PEM", label: "Private key (PEM)" }
-];
-function scanForSecrets(text) {
-  if (typeof text !== "string" || text.length === 0) return [];
-  const matches = [];
-  for (const { re, pattern, label } of PATTERNS) {
-    if (re.test(text)) {
-      matches.push({ pattern, label });
-    }
-  }
-  return matches;
-}
-function scanManyForSecrets(blobs) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const blob of blobs) {
-    for (const m of scanForSecrets(blob)) {
-      if (seen.has(m.pattern)) continue;
-      seen.add(m.pattern);
-      out.push(m);
-    }
-  }
-  return out;
-}
-function scanContentForSecrets(content, maxDepth = 6) {
-  const blobs = [];
-  const walk = (value, depth) => {
-    if (depth > maxDepth || value == null) return;
-    if (typeof value === "string") {
-      blobs.push(value);
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const v of value) walk(v, depth + 1);
-      return;
-    }
-    if (typeof value === "object") {
-      for (const v of Object.values(value)) walk(v, depth + 1);
-    }
-  };
-  walk(content, 0);
-  return scanManyForSecrets(blobs);
-}
-
 // src/mcp/tools/present-findings.ts
 async function handlePresentFindings(ctx, args) {
   const validated = validatePresentFindingsInput(args);
@@ -28693,26 +28753,18 @@ async function handlePresentFindings(ctx, args) {
   );
   const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
-  const secretBlobs = [
-    validated.data.summary,
-    ...findings.flatMap((f) => [
-      f?.title ?? "",
-      f?.detail ?? "",
-      f?.recommendation ?? "",
-      ...Array.isArray(f?.evidence) ? f.evidence.map((e) => typeof e === "object" && e?.snippet || "") : []
-    ])
-  ];
-  const secretMatches = scanManyForSecrets(secretBlobs);
+  const content = {
+    summary: validated.data.summary,
+    findings: validated.data.findings,
+    openQuestions: validated.data.openQuestions ?? []
+  };
+  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid3(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
     type: "research",
     title: args?.title ?? "Research Findings",
-    content: {
-      summary: validated.data.summary,
-      findings: validated.data.findings,
-      openQuestions: validated.data.openQuestions ?? []
-    },
+    content,
     ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
   });
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
@@ -28765,12 +28817,15 @@ async function handlePresentOptions(ctx, args) {
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
+  const content = { context, options: proposedOptions, decisionId, stakes };
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "decision",
     title: context,
-    content: { context, options: proposedOptions, decisionId, stakes },
-    relatedArtifactIds: args?.relatedFindings
+    content,
+    relatedArtifactIds: args?.relatedFindings,
+    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
   });
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
   await ctx.store.recordDecisionRequest({
@@ -28781,6 +28836,14 @@ async function handlePresentOptions(ctx, args) {
     stakes
   });
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({
@@ -28820,6 +28883,9 @@ function ledgerHealthField() {
   } catch {
     return {};
   }
+}
+function commentSecretNote(c) {
+  return c.secretWarnings?.length ? " \u26A0 possible secret in this comment" : "";
 }
 function describeRegionRef(region) {
   if (!region) return "";
@@ -28993,7 +29059,7 @@ Suggested action: ${suggestedAction}`);
   const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
   if (sessionMessages.length > 0) {
     await store.acknowledgeComments(sessionMessages.map((c) => c.id));
-    const formatted = sessionMessages.map((c) => `- ${c.content}`).join("\n");
+    const formatted = sessionMessages.map((c) => `- ${c.content}${commentSecretNote(c)}`).join("\n");
     parts.push(`\u{1F3AF} Human directive:
 ${formatted}
 
@@ -29027,7 +29093,7 @@ Adjust your approach based on this guidance.`);
       if (regionRef) loc += ` \u2014 on region ${regionRef}`;
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
-          `- \u2753 QUESTION [${loc}] ${c.content}
+          `- \u2753 QUESTION [${loc}] ${c.content}${commentSecretNote(c)}
     \u2192 Answer via answer_question with commentId="${c.id}"`
         );
         structuredQuestions.push({
@@ -29050,7 +29116,7 @@ Adjust your approach based on this guidance.`);
       if (c.target.suggestion) {
         const filePath = c.target.filePath ?? "unknown";
         const line = c.target.lineStart ?? "?";
-        otherLines.push(`- [SUGGESTION for ${filePath}:${line}] Replace with:
+        otherLines.push(`- [SUGGESTION for ${filePath}:${line}]${commentSecretNote(c)} Replace with:
     ${c.target.suggestion}`);
         structuredComments.push({
           id: c.id,
@@ -29063,7 +29129,7 @@ Adjust your approach based on this guidance.`);
         });
         continue;
       }
-      otherLines.push(`- [${loc}] ${c.content}`);
+      otherLines.push(`- [${loc}] ${c.content}${commentSecretNote(c)}`);
       structuredComments.push({
         id: c.id,
         artifactId: c.target.artifactId,
@@ -29694,22 +29760,33 @@ async function handlePresentSpec(ctx, args) {
   const pre = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
+  const content = {
+    objective,
+    context,
+    requirements: requirementsArr,
+    design,
+    tasks: tasksArr,
+    openQuestions: openQuestions ?? [],
+    ...visuals ? { visuals } : {}
+  };
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "spec",
     title,
-    content: {
-      objective,
-      context,
-      requirements: requirementsArr,
-      design,
-      tasks: tasksArr,
-      openQuestions: openQuestions ?? [],
-      ...visuals ? { visuals } : {}
-    }
+    content,
+    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
   });
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
@@ -29752,16 +29829,27 @@ async function handlePresentPlan(ctx, args) {
   const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
+  const content = { steps: planSteps, estimatedChanges, ...visuals ? { visuals } : {} };
+  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "plan",
     title,
-    content: { steps: planSteps, estimatedChanges, ...visuals ? { visuals } : {} },
-    relatedArtifactIds: args?.relatedFindings
+    content,
+    relatedArtifactIds: args?.relatedFindings,
+    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
   });
   await ctx.store.recordPlanReview(id);
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   ctx.broadcast({ type: "plan_review_request", artifactId: id, title });
@@ -29810,13 +29898,14 @@ async function handlePresentCodeChange(ctx, args) {
   const proposalConcepts = [concept?.name].filter((n) => Boolean(n && n.trim()));
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
-  const secretMatches = scanManyForSecrets([effectiveBefore, after, reasoning]);
+  const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
+  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid3(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
     type: "code_change",
     title: `${effectiveChangeType} ${filePath}`,
-    content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
+    content,
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
     ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
