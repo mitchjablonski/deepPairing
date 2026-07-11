@@ -48,6 +48,23 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/project-root.ts
+import crypto2 from "node:crypto";
+function projectHashOf(projectRoot2) {
+  return crypto2.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
+}
+function preferredPortFor(projectRoot2) {
+  return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
+}
+var BASE_PORT, PORT_SPAN;
+var init_project_root = __esm({
+  "src/project-root.ts"() {
+    "use strict";
+    BASE_PORT = 3847;
+    PORT_SPAN = 128;
+  }
+});
+
 // ../../node_modules/.pnpm/ws@8.21.0/node_modules/ws/lib/constants.js
 var require_constants = __commonJS({
   "../../node_modules/.pnpm/ws@8.21.0/node_modules/ws/lib/constants.js"(exports, module) {
@@ -3727,23 +3744,6 @@ var require_websocket_server = __commonJS({
   }
 });
 
-// src/project-root.ts
-import crypto3 from "node:crypto";
-function projectHashOf(projectRoot2) {
-  return crypto3.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
-}
-function preferredPortFor(projectRoot2) {
-  return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
-}
-var BASE_PORT, PORT_SPAN;
-var init_project_root = __esm({
-  "src/project-root.ts"() {
-    "use strict";
-    BASE_PORT = 3847;
-    PORT_SPAN = 128;
-  }
-});
-
 // src/version.ts
 function parseSemver(v) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v);
@@ -4250,6 +4250,1376 @@ var init_lifecycle = __esm({
   }
 });
 
+// ../../node_modules/.pnpm/@hono+node-server@1.19.14_hono@4.12.27/node_modules/@hono/node-server/dist/index.mjs
+import { createServer as createServerHTTP } from "http";
+import { Http2ServerRequest as Http2ServerRequest2, constants as h2constants } from "http2";
+import { Http2ServerRequest } from "http2";
+import { Readable } from "stream";
+import crypto from "crypto";
+var RequestError = class extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "RequestError";
+  }
+};
+var toRequestError = (e) => {
+  if (e instanceof RequestError) {
+    return e;
+  }
+  return new RequestError(e.message, { cause: e });
+};
+var GlobalRequest = global.Request;
+var Request2 = class extends GlobalRequest {
+  constructor(input, options) {
+    if (typeof input === "object" && getRequestCache in input) {
+      input = input[getRequestCache]();
+    }
+    if (typeof options?.body?.getReader !== "undefined") {
+      ;
+      options.duplex ??= "half";
+    }
+    super(input, options);
+  }
+};
+var newHeadersFromIncoming = (incoming) => {
+  const headerRecord = [];
+  const rawHeaders = incoming.rawHeaders;
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    const { [i]: key, [i + 1]: value } = rawHeaders;
+    if (key.charCodeAt(0) !== /*:*/
+    58) {
+      headerRecord.push([key, value]);
+    }
+  }
+  return new Headers(headerRecord);
+};
+var wrapBodyStream = /* @__PURE__ */ Symbol("wrapBodyStream");
+var newRequestFromIncoming = (method, url2, headers, incoming, abortController) => {
+  const init = {
+    method,
+    headers,
+    signal: abortController.signal
+  };
+  if (method === "TRACE") {
+    init.method = "GET";
+    const req = new Request2(url2, init);
+    Object.defineProperty(req, "method", {
+      get() {
+        return "TRACE";
+      }
+    });
+    return req;
+  }
+  if (!(method === "GET" || method === "HEAD")) {
+    if ("rawBody" in incoming && incoming.rawBody instanceof Buffer) {
+      init.body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(incoming.rawBody);
+          controller.close();
+        }
+      });
+    } else if (incoming[wrapBodyStream]) {
+      let reader;
+      init.body = new ReadableStream({
+        async pull(controller) {
+          try {
+            reader ||= Readable.toWeb(incoming).getReader();
+            const { done, value } = await reader.read();
+            if (done) {
+              controller.close();
+            } else {
+              controller.enqueue(value);
+            }
+          } catch (error51) {
+            controller.error(error51);
+          }
+        }
+      });
+    } else {
+      init.body = Readable.toWeb(incoming);
+    }
+  }
+  return new Request2(url2, init);
+};
+var getRequestCache = /* @__PURE__ */ Symbol("getRequestCache");
+var requestCache = /* @__PURE__ */ Symbol("requestCache");
+var incomingKey = /* @__PURE__ */ Symbol("incomingKey");
+var urlKey = /* @__PURE__ */ Symbol("urlKey");
+var headersKey = /* @__PURE__ */ Symbol("headersKey");
+var abortControllerKey = /* @__PURE__ */ Symbol("abortControllerKey");
+var getAbortController = /* @__PURE__ */ Symbol("getAbortController");
+var requestPrototype = {
+  get method() {
+    return this[incomingKey].method || "GET";
+  },
+  get url() {
+    return this[urlKey];
+  },
+  get headers() {
+    return this[headersKey] ||= newHeadersFromIncoming(this[incomingKey]);
+  },
+  [getAbortController]() {
+    this[getRequestCache]();
+    return this[abortControllerKey];
+  },
+  [getRequestCache]() {
+    this[abortControllerKey] ||= new AbortController();
+    return this[requestCache] ||= newRequestFromIncoming(
+      this.method,
+      this[urlKey],
+      this.headers,
+      this[incomingKey],
+      this[abortControllerKey]
+    );
+  }
+};
+[
+  "body",
+  "bodyUsed",
+  "cache",
+  "credentials",
+  "destination",
+  "integrity",
+  "mode",
+  "redirect",
+  "referrer",
+  "referrerPolicy",
+  "signal",
+  "keepalive"
+].forEach((k) => {
+  Object.defineProperty(requestPrototype, k, {
+    get() {
+      return this[getRequestCache]()[k];
+    }
+  });
+});
+["arrayBuffer", "blob", "clone", "formData", "json", "text"].forEach((k) => {
+  Object.defineProperty(requestPrototype, k, {
+    value: function() {
+      return this[getRequestCache]()[k]();
+    }
+  });
+});
+Object.defineProperty(requestPrototype, /* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom"), {
+  value: function(depth, options, inspectFn) {
+    const props = {
+      method: this.method,
+      url: this.url,
+      headers: this.headers,
+      nativeRequest: this[requestCache]
+    };
+    return `Request (lightweight) ${inspectFn(props, { ...options, depth: depth == null ? null : depth - 1 })}`;
+  }
+});
+Object.setPrototypeOf(requestPrototype, Request2.prototype);
+var newRequest = (incoming, defaultHostname) => {
+  const req = Object.create(requestPrototype);
+  req[incomingKey] = incoming;
+  const incomingUrl = incoming.url || "";
+  if (incomingUrl[0] !== "/" && // short-circuit for performance. most requests are relative URL.
+  (incomingUrl.startsWith("http://") || incomingUrl.startsWith("https://"))) {
+    if (incoming instanceof Http2ServerRequest) {
+      throw new RequestError("Absolute URL for :path is not allowed in HTTP/2");
+    }
+    try {
+      const url22 = new URL(incomingUrl);
+      req[urlKey] = url22.href;
+    } catch (e) {
+      throw new RequestError("Invalid absolute URL", { cause: e });
+    }
+    return req;
+  }
+  const host = (incoming instanceof Http2ServerRequest ? incoming.authority : incoming.headers.host) || defaultHostname;
+  if (!host) {
+    throw new RequestError("Missing host header");
+  }
+  let scheme;
+  if (incoming instanceof Http2ServerRequest) {
+    scheme = incoming.scheme;
+    if (!(scheme === "http" || scheme === "https")) {
+      throw new RequestError("Unsupported scheme");
+    }
+  } else {
+    scheme = incoming.socket && incoming.socket.encrypted ? "https" : "http";
+  }
+  const url2 = new URL(`${scheme}://${host}${incomingUrl}`);
+  if (url2.hostname.length !== host.length && url2.hostname !== host.replace(/:\d+$/, "")) {
+    throw new RequestError("Invalid host header");
+  }
+  req[urlKey] = url2.href;
+  return req;
+};
+var responseCache = /* @__PURE__ */ Symbol("responseCache");
+var getResponseCache = /* @__PURE__ */ Symbol("getResponseCache");
+var cacheKey = /* @__PURE__ */ Symbol("cache");
+var GlobalResponse = global.Response;
+var Response2 = class _Response {
+  #body;
+  #init;
+  [getResponseCache]() {
+    delete this[cacheKey];
+    return this[responseCache] ||= new GlobalResponse(this.#body, this.#init);
+  }
+  constructor(body, init) {
+    let headers;
+    this.#body = body;
+    if (init instanceof _Response) {
+      const cachedGlobalResponse = init[responseCache];
+      if (cachedGlobalResponse) {
+        this.#init = cachedGlobalResponse;
+        this[getResponseCache]();
+        return;
+      } else {
+        this.#init = init.#init;
+        headers = new Headers(init.#init.headers);
+      }
+    } else {
+      this.#init = init;
+    }
+    if (typeof body === "string" || typeof body?.getReader !== "undefined" || body instanceof Blob || body instanceof Uint8Array) {
+      ;
+      this[cacheKey] = [init?.status || 200, body, headers || init?.headers];
+    }
+  }
+  get headers() {
+    const cache = this[cacheKey];
+    if (cache) {
+      if (!(cache[2] instanceof Headers)) {
+        cache[2] = new Headers(
+          cache[2] || { "content-type": "text/plain; charset=UTF-8" }
+        );
+      }
+      return cache[2];
+    }
+    return this[getResponseCache]().headers;
+  }
+  get status() {
+    return this[cacheKey]?.[0] ?? this[getResponseCache]().status;
+  }
+  get ok() {
+    const status = this.status;
+    return status >= 200 && status < 300;
+  }
+};
+["body", "bodyUsed", "redirected", "statusText", "trailers", "type", "url"].forEach((k) => {
+  Object.defineProperty(Response2.prototype, k, {
+    get() {
+      return this[getResponseCache]()[k];
+    }
+  });
+});
+["arrayBuffer", "blob", "clone", "formData", "json", "text"].forEach((k) => {
+  Object.defineProperty(Response2.prototype, k, {
+    value: function() {
+      return this[getResponseCache]()[k]();
+    }
+  });
+});
+Object.defineProperty(Response2.prototype, /* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom"), {
+  value: function(depth, options, inspectFn) {
+    const props = {
+      status: this.status,
+      headers: this.headers,
+      ok: this.ok,
+      nativeResponse: this[responseCache]
+    };
+    return `Response (lightweight) ${inspectFn(props, { ...options, depth: depth == null ? null : depth - 1 })}`;
+  }
+});
+Object.setPrototypeOf(Response2, GlobalResponse);
+Object.setPrototypeOf(Response2.prototype, GlobalResponse.prototype);
+async function readWithoutBlocking(readPromise) {
+  return Promise.race([readPromise, Promise.resolve().then(() => Promise.resolve(void 0))]);
+}
+function writeFromReadableStreamDefaultReader(reader, writable, currentReadPromise) {
+  const cancel = (error51) => {
+    reader.cancel(error51).catch(() => {
+    });
+  };
+  writable.on("close", cancel);
+  writable.on("error", cancel);
+  (currentReadPromise ?? reader.read()).then(flow, handleStreamError);
+  return reader.closed.finally(() => {
+    writable.off("close", cancel);
+    writable.off("error", cancel);
+  });
+  function handleStreamError(error51) {
+    if (error51) {
+      writable.destroy(error51);
+    }
+  }
+  function onDrain() {
+    reader.read().then(flow, handleStreamError);
+  }
+  function flow({ done, value }) {
+    try {
+      if (done) {
+        writable.end();
+      } else if (!writable.write(value)) {
+        writable.once("drain", onDrain);
+      } else {
+        return reader.read().then(flow, handleStreamError);
+      }
+    } catch (e) {
+      handleStreamError(e);
+    }
+  }
+}
+function writeFromReadableStream(stream, writable) {
+  if (stream.locked) {
+    throw new TypeError("ReadableStream is locked.");
+  } else if (writable.destroyed) {
+    return;
+  }
+  return writeFromReadableStreamDefaultReader(stream.getReader(), writable);
+}
+var buildOutgoingHttpHeaders = (headers) => {
+  const res = {};
+  if (!(headers instanceof Headers)) {
+    headers = new Headers(headers ?? void 0);
+  }
+  const cookies = [];
+  for (const [k, v] of headers) {
+    if (k === "set-cookie") {
+      cookies.push(v);
+    } else {
+      res[k] = v;
+    }
+  }
+  if (cookies.length > 0) {
+    res["set-cookie"] = cookies;
+  }
+  res["content-type"] ??= "text/plain; charset=UTF-8";
+  return res;
+};
+var X_ALREADY_SENT = "x-hono-already-sent";
+if (typeof global.crypto === "undefined") {
+  global.crypto = crypto;
+}
+var outgoingEnded = /* @__PURE__ */ Symbol("outgoingEnded");
+var incomingDraining = /* @__PURE__ */ Symbol("incomingDraining");
+var DRAIN_TIMEOUT_MS = 500;
+var MAX_DRAIN_BYTES = 64 * 1024 * 1024;
+var drainIncoming = (incoming) => {
+  const incomingWithDrainState = incoming;
+  if (incoming.destroyed || incomingWithDrainState[incomingDraining]) {
+    return;
+  }
+  incomingWithDrainState[incomingDraining] = true;
+  if (incoming instanceof Http2ServerRequest2) {
+    try {
+      ;
+      incoming.stream?.close?.(h2constants.NGHTTP2_NO_ERROR);
+    } catch {
+    }
+    return;
+  }
+  let bytesRead = 0;
+  const cleanup = () => {
+    clearTimeout(timer);
+    incoming.off("data", onData);
+    incoming.off("end", cleanup);
+    incoming.off("error", cleanup);
+  };
+  const forceClose = () => {
+    cleanup();
+    const socket = incoming.socket;
+    if (socket && !socket.destroyed) {
+      socket.destroySoon();
+    }
+  };
+  const timer = setTimeout(forceClose, DRAIN_TIMEOUT_MS);
+  timer.unref?.();
+  const onData = (chunk) => {
+    bytesRead += chunk.length;
+    if (bytesRead > MAX_DRAIN_BYTES) {
+      forceClose();
+    }
+  };
+  incoming.on("data", onData);
+  incoming.on("end", cleanup);
+  incoming.on("error", cleanup);
+  incoming.resume();
+};
+var handleRequestError = () => new Response(null, {
+  status: 400
+});
+var handleFetchError = (e) => new Response(null, {
+  status: e instanceof Error && (e.name === "TimeoutError" || e.constructor.name === "TimeoutError") ? 504 : 500
+});
+var handleResponseError = (e, outgoing) => {
+  const err = e instanceof Error ? e : new Error("unknown error", { cause: e });
+  if (err.code === "ERR_STREAM_PREMATURE_CLOSE") {
+    console.info("The user aborted a request.");
+  } else {
+    console.error(e);
+    if (!outgoing.headersSent) {
+      outgoing.writeHead(500, { "Content-Type": "text/plain" });
+    }
+    outgoing.end(`Error: ${err.message}`);
+    outgoing.destroy(err);
+  }
+};
+var flushHeaders = (outgoing) => {
+  if ("flushHeaders" in outgoing && outgoing.writable) {
+    outgoing.flushHeaders();
+  }
+};
+var responseViaCache = async (res, outgoing) => {
+  let [status, body, header] = res[cacheKey];
+  let hasContentLength = false;
+  if (!header) {
+    header = { "content-type": "text/plain; charset=UTF-8" };
+  } else if (header instanceof Headers) {
+    hasContentLength = header.has("content-length");
+    header = buildOutgoingHttpHeaders(header);
+  } else if (Array.isArray(header)) {
+    const headerObj = new Headers(header);
+    hasContentLength = headerObj.has("content-length");
+    header = buildOutgoingHttpHeaders(headerObj);
+  } else {
+    for (const key in header) {
+      if (key.length === 14 && key.toLowerCase() === "content-length") {
+        hasContentLength = true;
+        break;
+      }
+    }
+  }
+  if (!hasContentLength) {
+    if (typeof body === "string") {
+      header["Content-Length"] = Buffer.byteLength(body);
+    } else if (body instanceof Uint8Array) {
+      header["Content-Length"] = body.byteLength;
+    } else if (body instanceof Blob) {
+      header["Content-Length"] = body.size;
+    }
+  }
+  outgoing.writeHead(status, header);
+  if (typeof body === "string" || body instanceof Uint8Array) {
+    outgoing.end(body);
+  } else if (body instanceof Blob) {
+    outgoing.end(new Uint8Array(await body.arrayBuffer()));
+  } else {
+    flushHeaders(outgoing);
+    await writeFromReadableStream(body, outgoing)?.catch(
+      (e) => handleResponseError(e, outgoing)
+    );
+  }
+  ;
+  outgoing[outgoingEnded]?.();
+};
+var isPromise = (res) => typeof res.then === "function";
+var responseViaResponseObject = async (res, outgoing, options = {}) => {
+  if (isPromise(res)) {
+    if (options.errorHandler) {
+      try {
+        res = await res;
+      } catch (err) {
+        const errRes = await options.errorHandler(err);
+        if (!errRes) {
+          return;
+        }
+        res = errRes;
+      }
+    } else {
+      res = await res.catch(handleFetchError);
+    }
+  }
+  if (cacheKey in res) {
+    return responseViaCache(res, outgoing);
+  }
+  const resHeaderRecord = buildOutgoingHttpHeaders(res.headers);
+  if (res.body) {
+    const reader = res.body.getReader();
+    const values = [];
+    let done = false;
+    let currentReadPromise = void 0;
+    if (resHeaderRecord["transfer-encoding"] !== "chunked") {
+      let maxReadCount = 2;
+      for (let i = 0; i < maxReadCount; i++) {
+        currentReadPromise ||= reader.read();
+        const chunk = await readWithoutBlocking(currentReadPromise).catch((e) => {
+          console.error(e);
+          done = true;
+        });
+        if (!chunk) {
+          if (i === 1) {
+            await new Promise((resolve) => setTimeout(resolve));
+            maxReadCount = 3;
+            continue;
+          }
+          break;
+        }
+        currentReadPromise = void 0;
+        if (chunk.value) {
+          values.push(chunk.value);
+        }
+        if (chunk.done) {
+          done = true;
+          break;
+        }
+      }
+      if (done && !("content-length" in resHeaderRecord)) {
+        resHeaderRecord["content-length"] = values.reduce((acc, value) => acc + value.length, 0);
+      }
+    }
+    outgoing.writeHead(res.status, resHeaderRecord);
+    values.forEach((value) => {
+      ;
+      outgoing.write(value);
+    });
+    if (done) {
+      outgoing.end();
+    } else {
+      if (values.length === 0) {
+        flushHeaders(outgoing);
+      }
+      await writeFromReadableStreamDefaultReader(reader, outgoing, currentReadPromise);
+    }
+  } else if (resHeaderRecord[X_ALREADY_SENT]) {
+  } else {
+    outgoing.writeHead(res.status, resHeaderRecord);
+    outgoing.end();
+  }
+  ;
+  outgoing[outgoingEnded]?.();
+};
+var getRequestListener = (fetchCallback, options = {}) => {
+  const autoCleanupIncoming = options.autoCleanupIncoming ?? true;
+  if (options.overrideGlobalObjects !== false && global.Request !== Request2) {
+    Object.defineProperty(global, "Request", {
+      value: Request2
+    });
+    Object.defineProperty(global, "Response", {
+      value: Response2
+    });
+  }
+  return async (incoming, outgoing) => {
+    let res, req;
+    try {
+      req = newRequest(incoming, options.hostname);
+      let incomingEnded = !autoCleanupIncoming || incoming.method === "GET" || incoming.method === "HEAD";
+      if (!incomingEnded) {
+        ;
+        incoming[wrapBodyStream] = true;
+        incoming.on("end", () => {
+          incomingEnded = true;
+        });
+        if (incoming instanceof Http2ServerRequest2) {
+          ;
+          outgoing[outgoingEnded] = () => {
+            if (!incomingEnded) {
+              setTimeout(() => {
+                if (!incomingEnded) {
+                  setTimeout(() => {
+                    drainIncoming(incoming);
+                  });
+                }
+              });
+            }
+          };
+        }
+        outgoing.on("finish", () => {
+          if (!incomingEnded) {
+            drainIncoming(incoming);
+          }
+        });
+      }
+      outgoing.on("close", () => {
+        const abortController = req[abortControllerKey];
+        if (abortController) {
+          if (incoming.errored) {
+            req[abortControllerKey].abort(incoming.errored.toString());
+          } else if (!outgoing.writableFinished) {
+            req[abortControllerKey].abort("Client connection prematurely closed.");
+          }
+        }
+        if (!incomingEnded) {
+          setTimeout(() => {
+            if (!incomingEnded) {
+              setTimeout(() => {
+                drainIncoming(incoming);
+              });
+            }
+          });
+        }
+      });
+      res = fetchCallback(req, { incoming, outgoing });
+      if (cacheKey in res) {
+        return responseViaCache(res, outgoing);
+      }
+    } catch (e) {
+      if (!res) {
+        if (options.errorHandler) {
+          res = await options.errorHandler(req ? e : toRequestError(e));
+          if (!res) {
+            return;
+          }
+        } else if (!req) {
+          res = handleRequestError();
+        } else {
+          res = handleFetchError(e);
+        }
+      } else {
+        return handleResponseError(e, outgoing);
+      }
+    }
+    try {
+      return await responseViaResponseObject(res, outgoing, options);
+    } catch (e) {
+      return handleResponseError(e, outgoing);
+    }
+  };
+};
+var createAdaptorServer = (options) => {
+  const fetchCallback = options.fetch;
+  const requestListener = getRequestListener(fetchCallback, {
+    hostname: options.hostname,
+    overrideGlobalObjects: options.overrideGlobalObjects,
+    autoCleanupIncoming: options.autoCleanupIncoming
+  });
+  const createServer = options.createServer || createServerHTTP;
+  const server = createServer(options.serverOptions || {}, requestListener);
+  return server;
+};
+var serve = (options, listeningListener) => {
+  const server = createAdaptorServer(options);
+  server.listen(options?.port ?? 3e3, options.hostname, () => {
+    const serverInfo = server.address();
+    listeningListener && listeningListener(serverInfo);
+  });
+  return server;
+};
+
+// src/daemon/index.ts
+import crypto4 from "node:crypto";
+import fs15 from "node:fs";
+import path14 from "node:path";
+
+// src/cli/setup-tasks.ts
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+function scopeFiles(projectRoot2) {
+  return [
+    { scope: "user", path: path.join(os.homedir(), ".claude", "settings.json") },
+    { scope: "project-shared", path: path.join(projectRoot2, ".claude", "settings.json") },
+    { scope: "project-local", path: path.join(projectRoot2, ".claude", "settings.local.json") }
+  ];
+}
+function readJsonOrNull(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function countDpEntries(settings, hookKey, marker) {
+  const entries = settings?.hooks?.[hookKey];
+  if (!Array.isArray(entries)) return 0;
+  let n = 0;
+  for (const e of entries) {
+    if (typeof e?.command === "string" && marker(e.command)) {
+      n++;
+      continue;
+    }
+    if (Array.isArray(e?.hooks) && e.hooks.some((h) => typeof h?.command === "string" && marker(h.command))) {
+      n++;
+      continue;
+    }
+  }
+  return n;
+}
+function detectCrossScopeDpEntries(projectRoot2, hookKey, marker) {
+  const out = [];
+  for (const { scope, path: p } of scopeFiles(projectRoot2)) {
+    const settings = readJsonOrNull(p);
+    if (settings === null) continue;
+    out.push({ scope, path: p, count: countDpEntries(settings, hookKey, marker) });
+  }
+  return out;
+}
+var STOP_HOOK_MARKER = (cmd) => cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
+var CHECKPOINT_HOOK_MARKER = (cmd) => cmd.includes("checkpoint.mjs");
+var PREFLIGHT_HOOK_MARKER = (cmd) => cmd.includes("preflight.mjs");
+function ensureDeepPairingDir(projectRoot2) {
+  const dpDir2 = path.join(projectRoot2, ".deeppairing");
+  try {
+    if (fs.existsSync(dpDir2)) {
+      return { ok: true, changed: false, message: ".deeppairing/ already exists" };
+    }
+    fs.mkdirSync(dpDir2, { recursive: true });
+    return { ok: true, changed: true, message: "Created .deeppairing/" };
+  } catch (err) {
+    return { ok: false, message: `Could not create .deeppairing/: ${err?.message ?? err}` };
+  }
+}
+function ensureGitignoreEntry(projectRoot2) {
+  const gitignorePath = path.join(projectRoot2, ".gitignore");
+  try {
+    if (!fs.existsSync(gitignorePath)) {
+      return { ok: true, changed: false, message: "No .gitignore present (skipped)" };
+    }
+    const content = fs.readFileSync(gitignorePath, "utf-8");
+    if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
+      return { ok: true, changed: false, message: ".gitignore already lists .deeppairing/" };
+    }
+    const sep = content.endsWith("\n") ? "" : "\n";
+    fs.appendFileSync(gitignorePath, `${sep}.deeppairing/
+`);
+    return { ok: true, changed: true, message: "Added .deeppairing/ to .gitignore" };
+  } catch (err) {
+    return { ok: false, message: `Could not update .gitignore: ${err?.message ?? err}` };
+  }
+}
+var STOP_HOOK_SCRIPT = `#!/usr/bin/env node
+// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).
+// ESM (.mjs).
+import fs from "node:fs";
+import path from "node:path";
+
+const HOOK_NAME = "stop";
+const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
+const STATE_CAP = 50;
+function recordFire(exitCode, reason) {
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
+    state.version = 1;
+    state.fires = Array.isArray(state.fires) ? state.fires : [];
+    state.fires.push({
+      at: new Date().toISOString(),
+      hook: HOOK_NAME,
+      exitCode,
+      reason,
+    });
+    if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+  } catch {
+    // Recording must never fail the hook itself.
+  }
+}
+function exit(code, reason) {
+  recordFire(code, reason);
+  process.exit(code);
+}
+
+try {
+  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "sessions");
+  if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
+
+  const MAX_AGE_MS = 30 * 60 * 1000;
+  const now = Date.now();
+  for (const id of fs.readdirSync(sessionsDir)) {
+    const af = path.join(sessionsDir, id, "artifacts.json");
+    if (!fs.existsSync(af)) continue;
+    let arr;
+    try { arr = JSON.parse(fs.readFileSync(af, "utf-8")); } catch { continue; }
+    const blocking = arr.some((x) => {
+      if (x.status !== "draft") return false;
+      if (!["research", "spec", "plan", "decision", "code_change"].includes(x.type)) return false;
+      const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
+      if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
+      return true;
+    });
+    if (blocking) {
+      process.stderr.write("deepPairing: pending artifacts need review \u2014 call check_feedback\\n");
+      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
+      // exit 2 showed Claude only an empty-stderr "Stop hook error".
+      exit(0, "pending artifacts in " + id);
+    }
+  }
+  exit(0, "pass: no blocking drafts");
+} catch (err) {
+  exit(0, "error: " + (err?.message ?? err));
+}
+`;
+var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
+var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
+function ensureStopHook(projectRoot2) {
+  const claudeDir = path.join(projectRoot2, ".claude");
+  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const scriptPath = path.join(projectRoot2, STOP_SCRIPT_REL_PATH);
+  try {
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
+    fs.chmodSync(scriptPath, 493);
+    let settings = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+      }
+    }
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.Stop = settings.hooks.Stop ?? [];
+    const matchesDpStopCmd = (cmd) => cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
+    const isDpStopEntry = (entry) => {
+      if (typeof entry?.command === "string" && matchesDpStopCmd(entry.command)) return true;
+      if (Array.isArray(entry?.hooks)) {
+        return entry.hooks.some((h) => typeof h?.command === "string" && matchesDpStopCmd(h.command));
+      }
+      return false;
+    };
+    const isLegacyFlatDp = (entry) => typeof entry?.command === "string" && matchesDpStopCmd(entry.command) && !Array.isArray(entry?.hooks);
+    const isCurrentCanonicalDp = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === STOP_HOOK_COMMAND && entry?.matcher === "";
+    const beforeDpCount = settings.hooks.Stop.filter(isDpStopEntry).length;
+    const hadLegacy = settings.hooks.Stop.some(isLegacyFlatDp);
+    const hasExactlyOneCanonical = beforeDpCount === 1 && settings.hooks.Stop.some(isCurrentCanonicalDp);
+    if (hasExactlyOneCanonical) {
+      return { ok: true, changed: false, message: "Stop hook already configured" };
+    }
+    settings.hooks.Stop = settings.hooks.Stop.filter((entry) => !isDpStopEntry(entry));
+    settings.hooks.Stop.push({
+      matcher: "",
+      hooks: [{ type: "command", command: STOP_HOOK_COMMAND }]
+    });
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
+    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", STOP_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
+    const [firstScope] = otherScopes;
+    if (firstScope) {
+      const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+    }
+    return { ok: true, changed: true, message: msg };
+  } catch (err) {
+    return { ok: false, message: `Could not configure Stop hook: ${err?.message ?? err}` };
+  }
+}
+var CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
+// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.
+// ESM (.mjs): use import, not require.
+import fs from "node:fs";
+import path from "node:path";
+
+// V2.1 \u2014 skip-list for files that are unambiguously NOT worth a per-edit
+// checkpoint. Scope is deliberately narrow: only generated/vendored paths
+// and auto-generated lockfiles. Config / policy files (.gitignore,
+// package.json, .npmrc, .prettierrc) DO get nagged \u2014 those represent real
+// decisions a paired human should react to.
+//
+// Categories:
+//   - Lockfiles: regenerated from a manifest, reviewing them is busy-work
+//     (the manifest change is the real decision; deps are mechanical).
+//   - Generated / vendored paths: outputs of a build, not human-authored.
+//   - IDE-only dirs: editor settings; not the project's code.
+//
+// If a team wants stricter checkpointing they can edit this file directly
+// (.deeppairing/hooks/checkpoint.mjs). To LOOSEN it (e.g. also auto-skip
+// .gitignore), add the basename / prefix here.
+const SKIP_BASENAMES = new Set([
+  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are
+  // policy and should still nag.
+  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
+  "uv.lock", "poetry.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
+  "composer.lock",
+]);
+const SKIP_PATH_PREFIXES = [
+  // Generated / vendored output \u2014 not human-authored source.
+  "dist/", "build/", "node_modules/", ".deeppairing/", ".next/",
+  ".turbo/", ".cache/", "coverage/", ".nyc_output/",
+  // IDE-local config \u2014 workspace settings, not project decisions.
+  ".vscode/", ".idea/",
+];
+
+function isTrivialFile(filePath) {
+  if (!filePath || filePath === "(unknown)") return false;
+  const norm = filePath.replace(/\\\\/g, "/");
+  const base = norm.split("/").pop() || "";
+  if (SKIP_BASENAMES.has(base)) return true;
+  // Match prefixes either at the start of the path or after the project root.
+  for (const prefix of SKIP_PATH_PREFIXES) {
+    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+// X7 \u2014 record every fire to .deeppairing/hooks-state.json so the
+// companion UI's HookStatus can show "hook stack working" feedback.
+const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
+function recordFire(exitCode, reason) {
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
+    state.version = 1;
+    state.fires = Array.isArray(state.fires) ? state.fires : [];
+    state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
+    if (state.fires.length > 50) state.fires = state.fires.slice(-50);
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+  } catch { /* recording must never fail the hook itself */ }
+}
+function exit(code, reason) {
+  recordFire(code, reason);
+  process.exit(code);
+}
+
+let stdin = "";
+process.stdin.setEncoding("utf-8");
+process.stdin.on("data", (c) => { stdin += c; });
+process.stdin.on("end", () => {
+  try {
+    const ev = stdin ? JSON.parse(stdin) : {};
+    const tool = ev.tool_name || ev.toolName || "";
+    if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
+    const filePath =
+      (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
+      (ev.input && ev.input.file_path) ||
+      "(unknown)";
+
+    // V2.1 \u2014 trivial files (gitignore, lockfiles, generated paths) auto-pass.
+    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
+
+    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing");
+    if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
+
+    // PP1 \u2014 read the most-recent code_change timestamp from a tiny marker the
+    // store writes on each present_code_change, instead of readdir-ing +
+    // JSON.parsing every session's (multi-MB, diff-bearing) artifacts.json on
+    // every Write/Edit. Absent marker \u2192 0 \u2192 falls through to the nag (safe).
+    let mostRecentCheckpoint = 0;
+    try {
+      const m = JSON.parse(fs.readFileSync(path.join(dpDir, "last-code-change.json"), "utf-8"));
+      const t = new Date(m.at).getTime();
+      if (Number.isFinite(t)) mostRecentCheckpoint = t;
+    } catch { /* no marker yet \u2014 treat as no recent checkpoint */ }
+
+    // Threshold rule: every Write needs a code_change artifact created in
+    // the last FRESH_MS window.
+    const FRESH_MS = 60 * 1000;
+    const ageMs = Date.now() - mostRecentCheckpoint;
+    if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
+      process.stderr.write(
+        "deepPairing: " + tool + " on " + filePath +
+        " with no present_code_change for it. Present EVERY code change BEFORE " +
+        "the Write/Edit \u2014 including small follow-on edits, new files (tests, " +
+        "configs), and each file of a multi-file change, not just the 'main' " +
+        "one. A write straight to disk never reaches the human's review surface; " +
+        "they can't see or comment on it. If you skipped this for prior edits " +
+        "this session, backfill them now with present_code_change. " +
+        "(Per-Edit Checkpoint rule. Config / generated files like .gitignore are auto-skipped.)\\n"
+      );
+      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
+      // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
+      exit(0, "nag: " + tool + " on " + filePath);
+    }
+    exit(0, "pass: fresh checkpoint covers " + filePath);
+  } catch (err) {
+    // Never block the agent on a hook bug. Exit 0 on any unexpected error.
+    exit(0, "error: " + (err?.message ?? err));
+  }
+});
+`;
+var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
+function ensureCheckpointHook(projectRoot2) {
+  const claudeDir = path.join(projectRoot2, ".claude");
+  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const scriptPath = path.join(projectRoot2, CHECKPOINT_SCRIPT_REL_PATH);
+  try {
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
+    fs.chmodSync(scriptPath, 493);
+    let settings = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+      }
+    }
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
+    const CANONICAL_CMD = `node "$CLAUDE_PROJECT_DIR/${CHECKPOINT_SCRIPT_REL_PATH}"`;
+    const isDpCheckpointEntry = (entry) => {
+      if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
+      if (Array.isArray(entry?.hooks)) {
+        return entry.hooks.some((h) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
+      }
+      return false;
+    };
+    const isCurrentCanonicalDp = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === CANONICAL_CMD && entry?.matcher === "Write|Edit|MultiEdit";
+    const beforeDpCount = settings.hooks.PostToolUse.filter(isDpCheckpointEntry).length;
+    const hasExactlyOneCanonical = beforeDpCount === 1 && settings.hooks.PostToolUse.some(isCurrentCanonicalDp);
+    if (hasExactlyOneCanonical) {
+      return { ok: true, changed: false, message: "Checkpoint hook already configured" };
+    }
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter((entry) => !isDpCheckpointEntry(entry));
+    settings.hooks.PostToolUse.push({
+      matcher: "Write|Edit|MultiEdit",
+      hooks: [{ type: "command", command: CANONICAL_CMD }]
+    });
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
+    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", CHECKPOINT_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
+    const [firstScope] = otherScopes;
+    if (firstScope) {
+      const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+    }
+    return { ok: true, changed: true, message: msg };
+  } catch (err) {
+    return { ok: false, message: `Could not configure checkpoint hook: ${err?.message ?? err}` };
+  }
+}
+var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
+var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
+var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
+function resolvePreflightCoreUrl() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const distCandidate = path.join(here, "preflight-hook-core.js");
+  const candidates = [
+    distCandidate,
+    path.join(here, "../../dist/cli/preflight-hook-core.js")
+    // src/cli via tsx, after a build
+  ];
+  const found = candidates.find((c) => fs.existsSync(c));
+  return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
+}
+function preflightHookScript(coreUrl) {
+  return `#!/usr/bin/env node
+// deepPairing PreToolUse preflight hook \u2014 installed by ensurePreflightHook.
+// GENERATED, do not edit. ESM (.mjs): use import, not require.
+// Runs the SAME rejected-approach matcher the MCP-side preflight uses, against
+// the agent's actual Edit/Write/MultiEdit, so a direct edit that matches a
+// previously-rejected approach can't silently bypass the gate. It surfaces the
+// match to the HUMAN (permissionDecision: "ask") rather than hard-denying:
+// matching raw file content is noisier than the agent's reasoning prose, and a
+// change the human already approved in the UI must not be auto-blocked when
+// applied. "ask" keeps the human in the loop (pairing) and is recoverable.
+import fs from "node:fs";
+import path from "node:path";
+
+// Built matcher core, stamped at install time (see resolvePreflightCoreUrl).
+const CORE_URL = ${JSON.stringify(coreUrl)};
+
+function recordFire(projectRoot, reason) {
+  try {
+    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
+    let s = { version: 1, fires: [] };
+    if (fs.existsSync(sp)) { try { s = JSON.parse(fs.readFileSync(sp, "utf-8")); } catch {} }
+    const fires = Array.isArray(s.fires) ? s.fires : [];
+    fires.push({ at: new Date().toISOString(), hook: "preflight", reason: reason });
+    s.fires = fires.slice(-50);
+    s.version = 1;
+    fs.writeFileSync(sp, JSON.stringify(s));
+  } catch {}
+}
+
+// PP1 \u2014 cheap pre-check so the common case (no rejections seeded, no team.json)
+// skips the ~40ms dynamic import of the matcher core entirely. Reading the small
+// preferences.json is ms; the import is the cost. If there's nothing to match
+// against, exit before importing.
+function ledgersPresent(projectRoot) {
+  try {
+    const prefs = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), "utf-8"));
+    if (Array.isArray(prefs && prefs.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
+  } catch {}
+  try {
+    if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
+  } catch {}
+  return false;
+}
+
+let input = "";
+process.stdin.setEncoding("utf-8");
+process.stdin.on("data", (d) => { input += d; });
+process.stdin.on("end", async () => {
+  try {
+    const ev = JSON.parse(input || "{}");
+    const toolName = ev.tool_name || "";
+    const toolInput = ev.tool_input || ev.input || {};
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+      process.exit(0);
+    }
+    if (!ledgersPresent(projectRoot)) {
+      process.exit(0); // nothing to match against \u2014 skip the matcher import
+    }
+    const mod = await import(CORE_URL);
+    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
+    if (decision && decision.deny) {
+      recordFire(projectRoot, decision.source || "blocked");
+      process.stdout.write(JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "ask",
+          permissionDecisionReason: decision.reason || "This change matches a previously-rejected approach.",
+        },
+      }));
+    }
+    // no match = exit 0 with no decision JSON (tool proceeds)
+    process.exit(0);
+  } catch (err) {
+    // FAIL OPEN \u2014 a broken hook must never block the user's edits.
+    try { process.stderr.write("[deepPairing] preflight hook error: " + String((err && err.message) || err) + "\\n"); } catch {}
+    process.exit(0);
+  }
+});
+`;
+}
+function ensurePreflightHook(projectRoot2) {
+  const claudeDir = path.join(projectRoot2, ".claude");
+  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const scriptPath = path.join(projectRoot2, PREFLIGHT_SCRIPT_REL_PATH);
+  try {
+    const core = resolvePreflightCoreUrl();
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, preflightHookScript(core.url));
+    fs.chmodSync(scriptPath, 493);
+    const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
+    let settings = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+      }
+    }
+    settings.hooks = settings.hooks ?? {};
+    settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
+    const isDpEntry = (entry) => {
+      if (typeof entry?.command === "string" && PREFLIGHT_HOOK_MARKER(entry.command)) return true;
+      if (Array.isArray(entry?.hooks)) {
+        return entry.hooks.some((h) => typeof h?.command === "string" && PREFLIGHT_HOOK_MARKER(h.command));
+      }
+      return false;
+    };
+    const isCanonical = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND && entry?.matcher === PREFLIGHT_MATCHER;
+    const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
+    if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
+      return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
+    }
+    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e) => !isDpEntry(e));
+    settings.hooks.PreToolUse.push({
+      matcher: PREFLIGHT_MATCHER,
+      hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }]
+    });
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
+  } catch (err) {
+    return { ok: false, message: `Failed to install preflight hook: ${err}` };
+  }
+}
+function isPluginManaged() {
+  if (process.env.CLAUDE_PLUGIN_ROOT) return true;
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return fs.existsSync(path.join(here, "..", ".claude-plugin", "plugin.json"));
+  } catch {
+    return false;
+  }
+}
+function runDaemonStartupSetup(projectRoot2) {
+  const results = [ensureDeepPairingDir(projectRoot2), ensureGitignoreEntry(projectRoot2)];
+  if (isPluginManaged()) {
+    results.push({
+      ok: true,
+      changed: false,
+      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)"
+    });
+    results.push(ensureCheckpointHook(projectRoot2));
+  } else {
+    results.push(ensureStopHook(projectRoot2));
+    results.push(ensureCheckpointHook(projectRoot2));
+    results.push(ensurePreflightHook(projectRoot2));
+  }
+  return results;
+}
+
+// src/store/metrics-store.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+
+// src/store/atomic-write.ts
+import fs2 from "node:fs";
+import { randomBytes } from "node:crypto";
+function writeJsonAtomic(filePath, value, indent = 2, opts) {
+  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
+}
+function writeStringAtomic(filePath, data, opts) {
+  const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
+  try {
+    if (opts?.mode !== void 0) {
+      const O_NOFOLLOW = fs2.constants.O_NOFOLLOW ?? 0;
+      const fd = fs2.openSync(
+        tmp,
+        fs2.constants.O_WRONLY | fs2.constants.O_CREAT | fs2.constants.O_EXCL | O_NOFOLLOW,
+        opts.mode
+      );
+      try {
+        fs2.fchmodSync(fd, opts.mode);
+        fs2.writeFileSync(fd, data);
+      } finally {
+        fs2.closeSync(fd);
+      }
+    } else {
+      fs2.writeFileSync(tmp, data);
+    }
+    fs2.renameSync(tmp, filePath);
+  } catch (err) {
+    try {
+      fs2.unlinkSync(tmp);
+    } catch {
+    }
+    throw err;
+  }
+}
+
+// src/store/metrics-store.ts
+var VERSION = 1;
+function emptyCounts() {
+  return {
+    preflightBlocks: { total: 0, bySource: { session: 0, team: 0 } },
+    preflightNearMisses: 0,
+    gateEscapes: 0,
+    ledgerWrites: { total: 0, rejected: 0, approved: 0 },
+    retrospectives: { total: 0, right: 0, wrong: 0, mixed: 0 },
+    horizonChecksRequested: 0,
+    questions: { asked: 0, answered: 0 },
+    artifacts: { total: 0, byType: {} },
+    visuals: { total: 0, byKind: {} },
+    comments: 0
+  };
+}
+function metricsPath(projectRoot2) {
+  return path2.join(projectRoot2, ".deeppairing", "metrics.json");
+}
+function readMetricsFromDisk(projectRoot2) {
+  const file2 = metricsPath(projectRoot2);
+  try {
+    if (!fs3.existsSync(file2)) {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
+    }
+    const parsed = JSON.parse(fs3.readFileSync(file2, "utf-8"));
+    if (parsed.version !== VERSION || !parsed.counts) {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
+    }
+    return {
+      version: VERSION,
+      firstSeenAt: parsed.firstSeenAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      lastActivityAt: parsed.lastActivityAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      sessions: parsed.sessions ?? 0,
+      counts: {
+        ...emptyCounts(),
+        ...parsed.counts,
+        preflightBlocks: { ...emptyCounts().preflightBlocks, ...parsed.counts?.preflightBlocks ?? {} },
+        ledgerWrites: { ...emptyCounts().ledgerWrites, ...parsed.counts?.ledgerWrites ?? {} },
+        retrospectives: { ...emptyCounts().retrospectives, ...parsed.counts?.retrospectives ?? {} },
+        questions: { ...emptyCounts().questions, ...parsed.counts?.questions ?? {} },
+        artifacts: { ...emptyCounts().artifacts, ...parsed.counts?.artifacts ?? {} },
+        visuals: { ...emptyCounts().visuals, ...parsed.counts?.visuals ?? {} }
+      }
+    };
+  } catch {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
+  }
+}
+function writeMetrics(projectRoot2, data) {
+  const file2 = metricsPath(projectRoot2);
+  try {
+    fs3.mkdirSync(path2.dirname(file2), { recursive: true });
+    writeJsonAtomic(file2, data);
+  } catch {
+  }
+}
+var FLUSH_DEBOUNCE_MS = 1e3;
+var metricsCache = /* @__PURE__ */ new Map();
+function loadEntry(projectRoot2) {
+  let entry = metricsCache.get(projectRoot2);
+  if (!entry) {
+    entry = { data: readMetricsFromDisk(projectRoot2), dirty: false, timer: null };
+    metricsCache.set(projectRoot2, entry);
+  }
+  return entry;
+}
+function flushEntry(projectRoot2, entry) {
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+  if (!entry.dirty) return;
+  entry.dirty = false;
+  writeMetrics(projectRoot2, entry.data);
+}
+function scheduleFlush(projectRoot2, entry) {
+  if (entry.timer) return;
+  entry.timer = setTimeout(() => flushEntry(projectRoot2, entry), FLUSH_DEBOUNCE_MS);
+  entry.timer.unref?.();
+}
+function flushAllMetrics() {
+  for (const [projectRoot2, entry] of metricsCache) {
+    flushEntry(projectRoot2, entry);
+  }
+}
+function readMetrics(projectRoot2) {
+  return loadEntry(projectRoot2).data;
+}
+function recordMetricEvent(projectRoot2, event) {
+  const entry = loadEntry(projectRoot2);
+  const data = entry.data;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  data.lastActivityAt = now;
+  switch (event.kind) {
+    case "session_started":
+      data.sessions += 1;
+      break;
+    case "preflight_block":
+      data.counts.preflightBlocks.total += 1;
+      data.counts.preflightBlocks.bySource[event.source] += 1;
+      break;
+    case "preflight_near_miss":
+      data.counts.preflightNearMisses += 1;
+      break;
+    case "gate_escape":
+      data.counts.gateEscapes += 1;
+      break;
+    case "ledger_write":
+      data.counts.ledgerWrites.total += 1;
+      data.counts.ledgerWrites[event.verdict] += 1;
+      break;
+    case "retrospective":
+      data.counts.retrospectives.total += 1;
+      data.counts.retrospectives[event.verdict] += 1;
+      break;
+    case "horizon_check_requested":
+      data.counts.horizonChecksRequested += 1;
+      break;
+    case "question_asked":
+      data.counts.questions.asked += 1;
+      break;
+    case "question_answered":
+      data.counts.questions.answered += 1;
+      break;
+    case "artifact_created":
+      data.counts.artifacts.total += 1;
+      data.counts.artifacts.byType[event.artifactType] = (data.counts.artifacts.byType[event.artifactType] ?? 0) + 1;
+      break;
+    case "visual_attached":
+      data.counts.visuals.total += 1;
+      data.counts.visuals.byKind[event.visualKind] = (data.counts.visuals.byKind[event.visualKind] ?? 0) + 1;
+      break;
+    case "comment_added":
+      data.counts.comments += 1;
+      break;
+  }
+  entry.dirty = true;
+  scheduleFlush(projectRoot2, entry);
+}
+
+// src/daemon/index.ts
+init_project_root();
+
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/compose.js
 var compose = (middleware, onError, onNotFound) => {
   return (context, next) => {
@@ -4403,26 +5773,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path14) => {
-  const paths = path14.split("/");
+var splitPath = (path15) => {
+  const paths = path15.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path14 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path14);
+  const { groups, path: path15 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path15);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path14) => {
+var extractGroupsFromPath = (path15) => {
   const groups = [];
-  path14 = path14.replace(/\{[^}]+\}/g, (match2, index) => {
+  path15 = path15.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path14 };
+  return { groups, path: path15 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -4479,8 +5849,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path14 = url2.slice(start, end);
-      return tryDecodeURI(path14.includes("%25") ? path14.replace(/%25/g, "%2525") : path14);
+      const path15 = url2.slice(start, end);
+      return tryDecodeURI(path15.includes("%25") ? path15.replace(/%25/g, "%2525") : path15);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -4497,11 +5867,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path14) => {
-  if (path14.charCodeAt(path14.length - 1) !== 63 || !path14.includes(":")) {
+var checkOptionalParameter = (path15) => {
+  if (path15.charCodeAt(path15.length - 1) !== 63 || !path15.includes(":")) {
     return null;
   }
-  const segments = path14.split("/");
+  const segments = path15.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -4642,9 +6012,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path14 = "/", matchResult = [[]]) {
+  constructor(request, path15 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path14;
+    this.path = path15;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -5396,8 +6766,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path14, ...handlers) => {
-      for (const p of [path14].flat()) {
+    this.on = (method, path15, ...handlers) => {
+      for (const p of [path15].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -5454,14 +6824,14 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path14, app2) {
-    const subApp = this.basePath(path14);
-    app2.routes.map((r) => {
+  route(path15, app) {
+    const subApp = this.basePath(path15);
+    app.routes.map((r) => {
       let handler;
-      if (app2.errorHandler === errorHandler) {
+      if (app.errorHandler === errorHandler) {
         handler = r.handler;
       } else {
-        handler = async (c, next) => (await compose([], app2.errorHandler)(c, () => r.handler(c, next))).res;
+        handler = async (c, next) => (await compose([], app.errorHandler)(c, () => r.handler(c, next))).res;
         handler[COMPOSED_HANDLER] = r.handler;
       }
       subApp.#addRoute(r.method, r.path, handler, r.basePath);
@@ -5481,9 +6851,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path14) {
+  basePath(path15) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path14);
+    subApp._basePath = mergePath(this._basePath, path15);
     return subApp;
   }
   /**
@@ -5557,7 +6927,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path14, applicationHandler, options) {
+  mount(path15, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -5584,7 +6954,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path14);
+      const mergedPath = mergePath(this._basePath, path15);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -5599,19 +6969,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path14, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path15, "*"), handler);
     return this;
   }
-  #addRoute(method, path14, handler, baseRoutePath) {
+  #addRoute(method, path15, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path14 = mergePath(this._basePath, path14);
+    path15 = mergePath(this._basePath, path15);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path14,
+      path: path15,
       method,
       handler
     };
-    this.router.add(method, path14, [handler, r]);
+    this.router.add(method, path15, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -5624,10 +6994,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path14 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path14);
+    const path15 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path15);
     const c = new Context(request, {
-      path: path14,
+      path: path15,
       matchResult,
       env,
       executionCtx,
@@ -5727,7 +7097,7 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path14) {
+function match(method, path15) {
   const matchers = this.buildAllMatchers();
   const match2 = ((method2, path22) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
@@ -5743,7 +7113,7 @@ function match(method, path14) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path14);
+  return match2(method, path15);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -5858,12 +7228,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path14, index, pathErrorCheckOnly) {
+  insert(path15, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path14 = path14.replace(/\{[^}]+\}/g, (m) => {
+      path15 = path15.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -5874,7 +7244,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path14.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path15.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -5913,9 +7283,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path14) {
-  return wildcardRegExpCache[path14] ??= new RegExp(
-    path14 === "*" ? "" : `^${path14.replace(
+function buildWildcardRegExp(path15) {
+  return wildcardRegExpCache[path15] ??= new RegExp(
+    path15 === "*" ? "" : `^${path15.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -5937,17 +7307,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path14, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path15, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path14] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path15] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path14, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path15, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path14) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path15) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -5981,12 +7351,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path14) {
+function findMiddleware(middleware, path15) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path14)) {
+    if (buildWildcardRegExp(k).test(path15)) {
       return [...middleware[k]];
     }
   }
@@ -6000,7 +7370,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path14, handler) {
+  add(method, path15, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -6015,18 +7385,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path14 === "/*") {
-      path14 = "*";
+    if (path15 === "/*") {
+      path15 = "*";
     }
-    const paramCount = (path14.match(/\/:/g) || []).length;
-    if (/\*$/.test(path14)) {
-      const re = buildWildcardRegExp(path14);
+    const paramCount = (path15.match(/\/:/g) || []).length;
+    if (/\*$/.test(path15)) {
+      const re = buildWildcardRegExp(path15);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path14] ||= findMiddleware(middleware[m], path14) || findMiddleware(middleware[METHOD_NAME_ALL], path14) || [];
+          middleware[m][path15] ||= findMiddleware(middleware[m], path15) || findMiddleware(middleware[METHOD_NAME_ALL], path15) || [];
         });
       } else {
-        middleware[method][path14] ||= findMiddleware(middleware[method], path14) || findMiddleware(middleware[METHOD_NAME_ALL], path14) || [];
+        middleware[method][path15] ||= findMiddleware(middleware[method], path15) || findMiddleware(middleware[METHOD_NAME_ALL], path15) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -6044,7 +7414,7 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path14) || [path14];
+    const paths = checkOptionalParameter(path15) || [path15];
     for (let i = 0, len = paths.length; i < len; i++) {
       const path22 = paths[i];
       Object.keys(routes).forEach((m) => {
@@ -6071,13 +7441,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path14) => [path14, r[method][path14]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path15) => [path15, r[method][path15]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path14) => [path14, r[METHOD_NAME_ALL][path14]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path15) => [path15, r[METHOD_NAME_ALL][path15]])
         );
       }
     });
@@ -6097,13 +7467,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path14, handler) {
+  add(method, path15, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path14, handler]);
+    this.#routes.push([method, path15, handler]);
   }
-  match(method, path14) {
+  match(method, path15) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -6118,7 +7488,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path14);
+        res = router.match(method, path15);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -6168,10 +7538,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path14, handler) {
+  insert(method, path15, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path14);
+    const parts = splitRoutingPath(path15);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -6220,12 +7590,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path14) {
+  search(method, path15) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path14);
+    const parts = splitPath(path15);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -6267,13 +7637,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path14[0] === "/" ? 1 : 0;
+              let offset = path15[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path14.substring(partOffsets[i]);
+            const restPathString = path15.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -6326,18 +7696,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path14, handler) {
-    const results = checkOptionalParameter(path14);
+  add(method, path15, handler) {
+    const results = checkOptionalParameter(path15);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path14, handler);
+    this.#node.insert(method, path15, handler);
   }
-  match(method, path14) {
-    return this.#node.search(method, path14);
+  match(method, path15) {
+    return this.#node.search(method, path15);
   }
 };
 
@@ -6438,647 +7808,6 @@ var cors = (options) => {
   };
 };
 
-// ../../node_modules/.pnpm/@hono+node-server@1.19.14_hono@4.12.27/node_modules/@hono/node-server/dist/index.mjs
-import { createServer as createServerHTTP } from "http";
-import { Http2ServerRequest as Http2ServerRequest2, constants as h2constants } from "http2";
-import { Http2ServerRequest } from "http2";
-import { Readable } from "stream";
-import crypto from "crypto";
-var RequestError = class extends Error {
-  constructor(message, options) {
-    super(message, options);
-    this.name = "RequestError";
-  }
-};
-var toRequestError = (e) => {
-  if (e instanceof RequestError) {
-    return e;
-  }
-  return new RequestError(e.message, { cause: e });
-};
-var GlobalRequest = global.Request;
-var Request2 = class extends GlobalRequest {
-  constructor(input, options) {
-    if (typeof input === "object" && getRequestCache in input) {
-      input = input[getRequestCache]();
-    }
-    if (typeof options?.body?.getReader !== "undefined") {
-      ;
-      options.duplex ??= "half";
-    }
-    super(input, options);
-  }
-};
-var newHeadersFromIncoming = (incoming) => {
-  const headerRecord = [];
-  const rawHeaders = incoming.rawHeaders;
-  for (let i = 0; i < rawHeaders.length; i += 2) {
-    const { [i]: key, [i + 1]: value } = rawHeaders;
-    if (key.charCodeAt(0) !== /*:*/
-    58) {
-      headerRecord.push([key, value]);
-    }
-  }
-  return new Headers(headerRecord);
-};
-var wrapBodyStream = /* @__PURE__ */ Symbol("wrapBodyStream");
-var newRequestFromIncoming = (method, url2, headers, incoming, abortController) => {
-  const init = {
-    method,
-    headers,
-    signal: abortController.signal
-  };
-  if (method === "TRACE") {
-    init.method = "GET";
-    const req = new Request2(url2, init);
-    Object.defineProperty(req, "method", {
-      get() {
-        return "TRACE";
-      }
-    });
-    return req;
-  }
-  if (!(method === "GET" || method === "HEAD")) {
-    if ("rawBody" in incoming && incoming.rawBody instanceof Buffer) {
-      init.body = new ReadableStream({
-        start(controller) {
-          controller.enqueue(incoming.rawBody);
-          controller.close();
-        }
-      });
-    } else if (incoming[wrapBodyStream]) {
-      let reader;
-      init.body = new ReadableStream({
-        async pull(controller) {
-          try {
-            reader ||= Readable.toWeb(incoming).getReader();
-            const { done, value } = await reader.read();
-            if (done) {
-              controller.close();
-            } else {
-              controller.enqueue(value);
-            }
-          } catch (error51) {
-            controller.error(error51);
-          }
-        }
-      });
-    } else {
-      init.body = Readable.toWeb(incoming);
-    }
-  }
-  return new Request2(url2, init);
-};
-var getRequestCache = /* @__PURE__ */ Symbol("getRequestCache");
-var requestCache = /* @__PURE__ */ Symbol("requestCache");
-var incomingKey = /* @__PURE__ */ Symbol("incomingKey");
-var urlKey = /* @__PURE__ */ Symbol("urlKey");
-var headersKey = /* @__PURE__ */ Symbol("headersKey");
-var abortControllerKey = /* @__PURE__ */ Symbol("abortControllerKey");
-var getAbortController = /* @__PURE__ */ Symbol("getAbortController");
-var requestPrototype = {
-  get method() {
-    return this[incomingKey].method || "GET";
-  },
-  get url() {
-    return this[urlKey];
-  },
-  get headers() {
-    return this[headersKey] ||= newHeadersFromIncoming(this[incomingKey]);
-  },
-  [getAbortController]() {
-    this[getRequestCache]();
-    return this[abortControllerKey];
-  },
-  [getRequestCache]() {
-    this[abortControllerKey] ||= new AbortController();
-    return this[requestCache] ||= newRequestFromIncoming(
-      this.method,
-      this[urlKey],
-      this.headers,
-      this[incomingKey],
-      this[abortControllerKey]
-    );
-  }
-};
-[
-  "body",
-  "bodyUsed",
-  "cache",
-  "credentials",
-  "destination",
-  "integrity",
-  "mode",
-  "redirect",
-  "referrer",
-  "referrerPolicy",
-  "signal",
-  "keepalive"
-].forEach((k) => {
-  Object.defineProperty(requestPrototype, k, {
-    get() {
-      return this[getRequestCache]()[k];
-    }
-  });
-});
-["arrayBuffer", "blob", "clone", "formData", "json", "text"].forEach((k) => {
-  Object.defineProperty(requestPrototype, k, {
-    value: function() {
-      return this[getRequestCache]()[k]();
-    }
-  });
-});
-Object.defineProperty(requestPrototype, /* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom"), {
-  value: function(depth, options, inspectFn) {
-    const props = {
-      method: this.method,
-      url: this.url,
-      headers: this.headers,
-      nativeRequest: this[requestCache]
-    };
-    return `Request (lightweight) ${inspectFn(props, { ...options, depth: depth == null ? null : depth - 1 })}`;
-  }
-});
-Object.setPrototypeOf(requestPrototype, Request2.prototype);
-var newRequest = (incoming, defaultHostname) => {
-  const req = Object.create(requestPrototype);
-  req[incomingKey] = incoming;
-  const incomingUrl = incoming.url || "";
-  if (incomingUrl[0] !== "/" && // short-circuit for performance. most requests are relative URL.
-  (incomingUrl.startsWith("http://") || incomingUrl.startsWith("https://"))) {
-    if (incoming instanceof Http2ServerRequest) {
-      throw new RequestError("Absolute URL for :path is not allowed in HTTP/2");
-    }
-    try {
-      const url22 = new URL(incomingUrl);
-      req[urlKey] = url22.href;
-    } catch (e) {
-      throw new RequestError("Invalid absolute URL", { cause: e });
-    }
-    return req;
-  }
-  const host = (incoming instanceof Http2ServerRequest ? incoming.authority : incoming.headers.host) || defaultHostname;
-  if (!host) {
-    throw new RequestError("Missing host header");
-  }
-  let scheme;
-  if (incoming instanceof Http2ServerRequest) {
-    scheme = incoming.scheme;
-    if (!(scheme === "http" || scheme === "https")) {
-      throw new RequestError("Unsupported scheme");
-    }
-  } else {
-    scheme = incoming.socket && incoming.socket.encrypted ? "https" : "http";
-  }
-  const url2 = new URL(`${scheme}://${host}${incomingUrl}`);
-  if (url2.hostname.length !== host.length && url2.hostname !== host.replace(/:\d+$/, "")) {
-    throw new RequestError("Invalid host header");
-  }
-  req[urlKey] = url2.href;
-  return req;
-};
-var responseCache = /* @__PURE__ */ Symbol("responseCache");
-var getResponseCache = /* @__PURE__ */ Symbol("getResponseCache");
-var cacheKey = /* @__PURE__ */ Symbol("cache");
-var GlobalResponse = global.Response;
-var Response2 = class _Response {
-  #body;
-  #init;
-  [getResponseCache]() {
-    delete this[cacheKey];
-    return this[responseCache] ||= new GlobalResponse(this.#body, this.#init);
-  }
-  constructor(body, init) {
-    let headers;
-    this.#body = body;
-    if (init instanceof _Response) {
-      const cachedGlobalResponse = init[responseCache];
-      if (cachedGlobalResponse) {
-        this.#init = cachedGlobalResponse;
-        this[getResponseCache]();
-        return;
-      } else {
-        this.#init = init.#init;
-        headers = new Headers(init.#init.headers);
-      }
-    } else {
-      this.#init = init;
-    }
-    if (typeof body === "string" || typeof body?.getReader !== "undefined" || body instanceof Blob || body instanceof Uint8Array) {
-      ;
-      this[cacheKey] = [init?.status || 200, body, headers || init?.headers];
-    }
-  }
-  get headers() {
-    const cache = this[cacheKey];
-    if (cache) {
-      if (!(cache[2] instanceof Headers)) {
-        cache[2] = new Headers(
-          cache[2] || { "content-type": "text/plain; charset=UTF-8" }
-        );
-      }
-      return cache[2];
-    }
-    return this[getResponseCache]().headers;
-  }
-  get status() {
-    return this[cacheKey]?.[0] ?? this[getResponseCache]().status;
-  }
-  get ok() {
-    const status = this.status;
-    return status >= 200 && status < 300;
-  }
-};
-["body", "bodyUsed", "redirected", "statusText", "trailers", "type", "url"].forEach((k) => {
-  Object.defineProperty(Response2.prototype, k, {
-    get() {
-      return this[getResponseCache]()[k];
-    }
-  });
-});
-["arrayBuffer", "blob", "clone", "formData", "json", "text"].forEach((k) => {
-  Object.defineProperty(Response2.prototype, k, {
-    value: function() {
-      return this[getResponseCache]()[k]();
-    }
-  });
-});
-Object.defineProperty(Response2.prototype, /* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom"), {
-  value: function(depth, options, inspectFn) {
-    const props = {
-      status: this.status,
-      headers: this.headers,
-      ok: this.ok,
-      nativeResponse: this[responseCache]
-    };
-    return `Response (lightweight) ${inspectFn(props, { ...options, depth: depth == null ? null : depth - 1 })}`;
-  }
-});
-Object.setPrototypeOf(Response2, GlobalResponse);
-Object.setPrototypeOf(Response2.prototype, GlobalResponse.prototype);
-async function readWithoutBlocking(readPromise) {
-  return Promise.race([readPromise, Promise.resolve().then(() => Promise.resolve(void 0))]);
-}
-function writeFromReadableStreamDefaultReader(reader, writable, currentReadPromise) {
-  const cancel = (error51) => {
-    reader.cancel(error51).catch(() => {
-    });
-  };
-  writable.on("close", cancel);
-  writable.on("error", cancel);
-  (currentReadPromise ?? reader.read()).then(flow, handleStreamError);
-  return reader.closed.finally(() => {
-    writable.off("close", cancel);
-    writable.off("error", cancel);
-  });
-  function handleStreamError(error51) {
-    if (error51) {
-      writable.destroy(error51);
-    }
-  }
-  function onDrain() {
-    reader.read().then(flow, handleStreamError);
-  }
-  function flow({ done, value }) {
-    try {
-      if (done) {
-        writable.end();
-      } else if (!writable.write(value)) {
-        writable.once("drain", onDrain);
-      } else {
-        return reader.read().then(flow, handleStreamError);
-      }
-    } catch (e) {
-      handleStreamError(e);
-    }
-  }
-}
-function writeFromReadableStream(stream, writable) {
-  if (stream.locked) {
-    throw new TypeError("ReadableStream is locked.");
-  } else if (writable.destroyed) {
-    return;
-  }
-  return writeFromReadableStreamDefaultReader(stream.getReader(), writable);
-}
-var buildOutgoingHttpHeaders = (headers) => {
-  const res = {};
-  if (!(headers instanceof Headers)) {
-    headers = new Headers(headers ?? void 0);
-  }
-  const cookies = [];
-  for (const [k, v] of headers) {
-    if (k === "set-cookie") {
-      cookies.push(v);
-    } else {
-      res[k] = v;
-    }
-  }
-  if (cookies.length > 0) {
-    res["set-cookie"] = cookies;
-  }
-  res["content-type"] ??= "text/plain; charset=UTF-8";
-  return res;
-};
-var X_ALREADY_SENT = "x-hono-already-sent";
-if (typeof global.crypto === "undefined") {
-  global.crypto = crypto;
-}
-var outgoingEnded = /* @__PURE__ */ Symbol("outgoingEnded");
-var incomingDraining = /* @__PURE__ */ Symbol("incomingDraining");
-var DRAIN_TIMEOUT_MS = 500;
-var MAX_DRAIN_BYTES = 64 * 1024 * 1024;
-var drainIncoming = (incoming) => {
-  const incomingWithDrainState = incoming;
-  if (incoming.destroyed || incomingWithDrainState[incomingDraining]) {
-    return;
-  }
-  incomingWithDrainState[incomingDraining] = true;
-  if (incoming instanceof Http2ServerRequest2) {
-    try {
-      ;
-      incoming.stream?.close?.(h2constants.NGHTTP2_NO_ERROR);
-    } catch {
-    }
-    return;
-  }
-  let bytesRead = 0;
-  const cleanup2 = () => {
-    clearTimeout(timer);
-    incoming.off("data", onData);
-    incoming.off("end", cleanup2);
-    incoming.off("error", cleanup2);
-  };
-  const forceClose = () => {
-    cleanup2();
-    const socket = incoming.socket;
-    if (socket && !socket.destroyed) {
-      socket.destroySoon();
-    }
-  };
-  const timer = setTimeout(forceClose, DRAIN_TIMEOUT_MS);
-  timer.unref?.();
-  const onData = (chunk) => {
-    bytesRead += chunk.length;
-    if (bytesRead > MAX_DRAIN_BYTES) {
-      forceClose();
-    }
-  };
-  incoming.on("data", onData);
-  incoming.on("end", cleanup2);
-  incoming.on("error", cleanup2);
-  incoming.resume();
-};
-var handleRequestError = () => new Response(null, {
-  status: 400
-});
-var handleFetchError = (e) => new Response(null, {
-  status: e instanceof Error && (e.name === "TimeoutError" || e.constructor.name === "TimeoutError") ? 504 : 500
-});
-var handleResponseError = (e, outgoing) => {
-  const err = e instanceof Error ? e : new Error("unknown error", { cause: e });
-  if (err.code === "ERR_STREAM_PREMATURE_CLOSE") {
-    console.info("The user aborted a request.");
-  } else {
-    console.error(e);
-    if (!outgoing.headersSent) {
-      outgoing.writeHead(500, { "Content-Type": "text/plain" });
-    }
-    outgoing.end(`Error: ${err.message}`);
-    outgoing.destroy(err);
-  }
-};
-var flushHeaders = (outgoing) => {
-  if ("flushHeaders" in outgoing && outgoing.writable) {
-    outgoing.flushHeaders();
-  }
-};
-var responseViaCache = async (res, outgoing) => {
-  let [status, body, header] = res[cacheKey];
-  let hasContentLength = false;
-  if (!header) {
-    header = { "content-type": "text/plain; charset=UTF-8" };
-  } else if (header instanceof Headers) {
-    hasContentLength = header.has("content-length");
-    header = buildOutgoingHttpHeaders(header);
-  } else if (Array.isArray(header)) {
-    const headerObj = new Headers(header);
-    hasContentLength = headerObj.has("content-length");
-    header = buildOutgoingHttpHeaders(headerObj);
-  } else {
-    for (const key in header) {
-      if (key.length === 14 && key.toLowerCase() === "content-length") {
-        hasContentLength = true;
-        break;
-      }
-    }
-  }
-  if (!hasContentLength) {
-    if (typeof body === "string") {
-      header["Content-Length"] = Buffer.byteLength(body);
-    } else if (body instanceof Uint8Array) {
-      header["Content-Length"] = body.byteLength;
-    } else if (body instanceof Blob) {
-      header["Content-Length"] = body.size;
-    }
-  }
-  outgoing.writeHead(status, header);
-  if (typeof body === "string" || body instanceof Uint8Array) {
-    outgoing.end(body);
-  } else if (body instanceof Blob) {
-    outgoing.end(new Uint8Array(await body.arrayBuffer()));
-  } else {
-    flushHeaders(outgoing);
-    await writeFromReadableStream(body, outgoing)?.catch(
-      (e) => handleResponseError(e, outgoing)
-    );
-  }
-  ;
-  outgoing[outgoingEnded]?.();
-};
-var isPromise = (res) => typeof res.then === "function";
-var responseViaResponseObject = async (res, outgoing, options = {}) => {
-  if (isPromise(res)) {
-    if (options.errorHandler) {
-      try {
-        res = await res;
-      } catch (err) {
-        const errRes = await options.errorHandler(err);
-        if (!errRes) {
-          return;
-        }
-        res = errRes;
-      }
-    } else {
-      res = await res.catch(handleFetchError);
-    }
-  }
-  if (cacheKey in res) {
-    return responseViaCache(res, outgoing);
-  }
-  const resHeaderRecord = buildOutgoingHttpHeaders(res.headers);
-  if (res.body) {
-    const reader = res.body.getReader();
-    const values = [];
-    let done = false;
-    let currentReadPromise = void 0;
-    if (resHeaderRecord["transfer-encoding"] !== "chunked") {
-      let maxReadCount = 2;
-      for (let i = 0; i < maxReadCount; i++) {
-        currentReadPromise ||= reader.read();
-        const chunk = await readWithoutBlocking(currentReadPromise).catch((e) => {
-          console.error(e);
-          done = true;
-        });
-        if (!chunk) {
-          if (i === 1) {
-            await new Promise((resolve) => setTimeout(resolve));
-            maxReadCount = 3;
-            continue;
-          }
-          break;
-        }
-        currentReadPromise = void 0;
-        if (chunk.value) {
-          values.push(chunk.value);
-        }
-        if (chunk.done) {
-          done = true;
-          break;
-        }
-      }
-      if (done && !("content-length" in resHeaderRecord)) {
-        resHeaderRecord["content-length"] = values.reduce((acc, value) => acc + value.length, 0);
-      }
-    }
-    outgoing.writeHead(res.status, resHeaderRecord);
-    values.forEach((value) => {
-      ;
-      outgoing.write(value);
-    });
-    if (done) {
-      outgoing.end();
-    } else {
-      if (values.length === 0) {
-        flushHeaders(outgoing);
-      }
-      await writeFromReadableStreamDefaultReader(reader, outgoing, currentReadPromise);
-    }
-  } else if (resHeaderRecord[X_ALREADY_SENT]) {
-  } else {
-    outgoing.writeHead(res.status, resHeaderRecord);
-    outgoing.end();
-  }
-  ;
-  outgoing[outgoingEnded]?.();
-};
-var getRequestListener = (fetchCallback, options = {}) => {
-  const autoCleanupIncoming = options.autoCleanupIncoming ?? true;
-  if (options.overrideGlobalObjects !== false && global.Request !== Request2) {
-    Object.defineProperty(global, "Request", {
-      value: Request2
-    });
-    Object.defineProperty(global, "Response", {
-      value: Response2
-    });
-  }
-  return async (incoming, outgoing) => {
-    let res, req;
-    try {
-      req = newRequest(incoming, options.hostname);
-      let incomingEnded = !autoCleanupIncoming || incoming.method === "GET" || incoming.method === "HEAD";
-      if (!incomingEnded) {
-        ;
-        incoming[wrapBodyStream] = true;
-        incoming.on("end", () => {
-          incomingEnded = true;
-        });
-        if (incoming instanceof Http2ServerRequest2) {
-          ;
-          outgoing[outgoingEnded] = () => {
-            if (!incomingEnded) {
-              setTimeout(() => {
-                if (!incomingEnded) {
-                  setTimeout(() => {
-                    drainIncoming(incoming);
-                  });
-                }
-              });
-            }
-          };
-        }
-        outgoing.on("finish", () => {
-          if (!incomingEnded) {
-            drainIncoming(incoming);
-          }
-        });
-      }
-      outgoing.on("close", () => {
-        const abortController = req[abortControllerKey];
-        if (abortController) {
-          if (incoming.errored) {
-            req[abortControllerKey].abort(incoming.errored.toString());
-          } else if (!outgoing.writableFinished) {
-            req[abortControllerKey].abort("Client connection prematurely closed.");
-          }
-        }
-        if (!incomingEnded) {
-          setTimeout(() => {
-            if (!incomingEnded) {
-              setTimeout(() => {
-                drainIncoming(incoming);
-              });
-            }
-          });
-        }
-      });
-      res = fetchCallback(req, { incoming, outgoing });
-      if (cacheKey in res) {
-        return responseViaCache(res, outgoing);
-      }
-    } catch (e) {
-      if (!res) {
-        if (options.errorHandler) {
-          res = await options.errorHandler(req ? e : toRequestError(e));
-          if (!res) {
-            return;
-          }
-        } else if (!req) {
-          res = handleRequestError();
-        } else {
-          res = handleFetchError(e);
-        }
-      } else {
-        return handleResponseError(e, outgoing);
-      }
-    }
-    try {
-      return await responseViaResponseObject(res, outgoing, options);
-    } catch (e) {
-      return handleResponseError(e, outgoing);
-    }
-  };
-};
-var createAdaptorServer = (options) => {
-  const fetchCallback = options.fetch;
-  const requestListener = getRequestListener(fetchCallback, {
-    hostname: options.hostname,
-    overrideGlobalObjects: options.overrideGlobalObjects,
-    autoCleanupIncoming: options.autoCleanupIncoming
-  });
-  const createServer = options.createServer || createServerHTTP;
-  const server = createServer(options.serverOptions || {}, requestListener);
-  return server;
-};
-var serve = (options, listeningListener) => {
-  const server = createAdaptorServer(options);
-  server.listen(options?.port ?? 3e3, options.hostname, () => {
-    const serverInfo = server.address();
-    listeningListener && listeningListener(serverInfo);
-  });
-  return server;
-};
-
 // ../../node_modules/.pnpm/ws@8.21.0/node_modules/ws/wrapper.mjs
 var import_stream2 = __toESM(require_stream(), 1);
 var import_extension = __toESM(require_extension(), 1);
@@ -7089,9 +7818,8 @@ var import_subprotocol = __toESM(require_subprotocol(), 1);
 var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 
-// src/daemon/index.ts
+// src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import crypto4 from "node:crypto";
 import fs14 from "node:fs";
 import path13 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
@@ -7150,11 +7878,11 @@ var TOOL_ERROR_RETRYABLE = {
 };
 
 // src/store/file-store.ts
-import fs8 from "node:fs";
-import path7 from "node:path";
+import fs9 from "node:fs";
+import path8 from "node:path";
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
-import { webcrypto as crypto2 } from "node:crypto";
+import { webcrypto as crypto3 } from "node:crypto";
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/url-alphabet/index.js
 var urlAlphabet = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
@@ -7166,10 +7894,10 @@ var poolOffset;
 function fillPool(bytes) {
   if (!pool || pool.length < bytes) {
     pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER);
-    crypto2.getRandomValues(pool);
+    crypto3.getRandomValues(pool);
     poolOffset = 0;
   } else if (poolOffset + bytes > pool.length) {
-    crypto2.getRandomValues(pool);
+    crypto3.getRandomValues(pool);
     poolOffset = 0;
   }
   poolOffset += bytes;
@@ -7184,44 +7912,9 @@ function nanoid(size = 21) {
 }
 
 // src/store/global-store.ts
-import fs2 from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-// src/store/atomic-write.ts
-import fs from "node:fs";
-import { randomBytes } from "node:crypto";
-function writeJsonAtomic(filePath, value, indent = 2, opts) {
-  writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
-}
-function writeStringAtomic(filePath, data, opts) {
-  const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
-  try {
-    if (opts?.mode !== void 0) {
-      const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
-      const fd = fs.openSync(
-        tmp,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
-        opts.mode
-      );
-      try {
-        fs.fchmodSync(fd, opts.mode);
-        fs.writeFileSync(fd, data);
-      } finally {
-        fs.closeSync(fd);
-      }
-    } else {
-      fs.writeFileSync(tmp, data);
-    }
-    fs.renameSync(tmp, filePath);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-    }
-    throw err;
-  }
-}
+import fs4 from "node:fs";
+import os2 from "node:os";
+import path3 from "node:path";
 
 // src/store/salvage.ts
 var salvageLogged = /* @__PURE__ */ new Set();
@@ -8015,10 +8708,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path14) {
-  if (!path14)
+function getElementAtPath(obj2, path15) {
+  if (!path15)
     return obj2;
-  return path14.reduce((acc, key) => acc?.[key], obj2);
+  return path15.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -8427,11 +9120,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path14, issues) {
+function prefixIssues(path15, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path14);
+    iss.path.unshift(path15);
     return iss;
   });
 }
@@ -8578,16 +9271,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path14 = []) => {
+  const processError = (error52, path15 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path15, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
       } else {
-        const fullpath = [...path14, ...issue2.path];
+        const fullpath = [...path15, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -8614,17 +9307,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path14 = []) => {
+  const processError = (error52, path15 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path15, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
       } else {
-        const fullpath = [...path14, ...issue2.path];
+        const fullpath = [...path15, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -8656,8 +9349,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path14 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path14) {
+  const path15 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path15) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -21349,13 +22042,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path14 = ref.slice(1).split("/").filter(Boolean);
-  if (path14.length === 0) {
+  const path15 = ref.slice(1).split("/").filter(Boolean);
+  if (path15.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path14[0] === defsKey) {
-    const key = path14[1];
+  if (path15[0] === defsKey) {
+    const key = path15[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -22750,7 +23443,7 @@ function normalizeConceptKey(name) {
 // src/store/global-store.ts
 var LEDGER_VERSION = 1;
 function realHomeLedgerPath() {
-  return path.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+  return path3.join(os2.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
 }
 function defaultLedgerPath() {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -22830,7 +23523,7 @@ var GlobalStore = class _GlobalStore {
   snapshotLedger() {
     const backup = `${this.ledgerPath}.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      fs2.copyFileSync(this.ledgerPath, backup);
+      fs4.copyFileSync(this.ledgerPath, backup);
       return backup;
     } catch {
       return null;
@@ -22893,13 +23586,13 @@ var GlobalStore = class _GlobalStore {
     this.lastReadCorrupt = false;
     this.lastReadCorruptReason = void 0;
     this.lastReadDroppedEntries = false;
-    if (!fs2.existsSync(this.ledgerPath)) {
+    if (!fs4.existsSync(this.ledgerPath)) {
       corruptSnapshots.delete(this.ledgerPath);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     let raw2;
     try {
-      raw2 = fs2.readFileSync(this.ledgerPath, "utf-8");
+      raw2 = fs4.readFileSync(this.ledgerPath, "utf-8");
     } catch (err) {
       this.markCorrupt(err);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
@@ -22953,7 +23646,7 @@ var GlobalStore = class _GlobalStore {
       this.snapshotLedger();
     }
     try {
-      fs2.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
+      fs4.mkdirSync(path3.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
     } catch {
@@ -23137,13 +23830,13 @@ function getGlobalStore() {
 }
 
 // src/store/project-signals.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs5 from "node:fs";
+import path4 from "node:path";
 function senseProjectGuardrails(projectRoot2) {
   const guardrails = [];
   const exists = (rel) => {
     try {
-      return fs3.existsSync(path2.join(projectRoot2, rel));
+      return fs5.existsSync(path4.join(projectRoot2, rel));
     } catch {
       return false;
     }
@@ -23186,10 +23879,10 @@ function stripJsoncComments(src) {
   return src.split("\n").map((line) => /^\s*\/\//.test(line) ? "" : line).join("\n");
 }
 function loadTeamPreferences(basePath) {
-  const filePath = path2.join(basePath, "team.json");
+  const filePath = path4.join(basePath, "team.json");
   try {
-    if (!fs3.existsSync(filePath)) return [];
-    const raw2 = JSON.parse(stripJsoncComments(fs3.readFileSync(filePath, "utf-8")));
+    if (!fs5.existsSync(filePath)) return [];
+    const raw2 = JSON.parse(stripJsoncComments(fs5.readFileSync(filePath, "utf-8")));
     const parsed = parseTeamPreferencesFile(raw2);
     if (!parsed) {
       console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
@@ -23241,33 +23934,33 @@ function computeEngagementMetrics(state) {
 }
 
 // src/store/session-scan.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs6 from "node:fs";
+import path5 from "node:path";
 function listSessions(projectRoot2) {
-  const sessionsDir = path3.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs4.existsSync(sessionsDir)) return [];
-  const entries = fs4.readdirSync(sessionsDir, { withFileTypes: true });
-  const sessions2 = [];
+  const sessionsDir = path5.join(projectRoot2, ".deeppairing", "sessions");
+  if (!fs6.existsSync(sessionsDir)) return [];
+  const entries = fs6.readdirSync(sessionsDir, { withFileTypes: true });
+  const sessions = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const sessionDir = path3.join(sessionsDir, entry.name);
+    const sessionDir = path5.join(sessionsDir, entry.name);
     try {
-      const artFile = path3.join(sessionDir, "artifacts.json");
-      if (!fs4.existsSync(artFile)) continue;
+      const artFile = path5.join(sessionDir, "artifacts.json");
+      if (!fs6.existsSync(artFile)) continue;
       const artifacts = salvageArray(
         `${entry.name}/artifacts.json`,
-        JSON.parse(fs4.readFileSync(artFile, "utf-8")),
+        JSON.parse(fs6.readFileSync(artFile, "utf-8")),
         "id"
       );
       if (artifacts.length === 0) continue;
-      const decFile = path3.join(sessionDir, "decisions.json");
-      const decRaw = fs4.existsSync(decFile) ? JSON.parse(fs4.readFileSync(decFile, "utf-8")) : [];
+      const decFile = path5.join(sessionDir, "decisions.json");
+      const decRaw = fs6.existsSync(decFile) ? JSON.parse(fs6.readFileSync(decFile, "utf-8")) : [];
       const hasDecisions = Array.isArray(decRaw) && decRaw.length > 0;
       const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       const firstArtifact = sorted[0];
       const lastArtifact = sorted.at(-1);
       if (!firstArtifact || !lastArtifact) continue;
-      sessions2.push({
+      sessions.push({
         id: entry.name,
         createdAt: firstArtifact.createdAt,
         lastActivity: lastArtifact.updatedAt ?? lastArtifact.createdAt,
@@ -23278,28 +23971,28 @@ function listSessions(projectRoot2) {
     } catch {
     }
   }
-  return sessions2.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+  return sessions.sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 }
 function searchAll(projectRoot2, query, limit = 50) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const results = [];
-  const sessions2 = listSessions(projectRoot2);
-  for (const session of sessions2) {
-    const sessionDir = path3.join(projectRoot2, ".deeppairing", "sessions", session.id);
-    const artFile = path3.join(sessionDir, "artifacts.json");
-    if (!fs4.existsSync(artFile)) continue;
+  const sessions = listSessions(projectRoot2);
+  for (const session of sessions) {
+    const sessionDir = path5.join(projectRoot2, ".deeppairing", "sessions", session.id);
+    const artFile = path5.join(sessionDir, "artifacts.json");
+    if (!fs6.existsSync(artFile)) continue;
     let artifacts;
     try {
-      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs4.readFileSync(artFile, "utf-8")), "id");
+      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs6.readFileSync(artFile, "utf-8")), "id");
     } catch {
       continue;
     }
-    const prefsFile = path3.join(projectRoot2, ".deeppairing", "preferences.json");
+    const prefsFile = path5.join(projectRoot2, ".deeppairing", "preferences.json");
     let rejected = [];
     try {
-      if (fs4.existsSync(prefsFile)) {
-        const prefs = JSON.parse(fs4.readFileSync(prefsFile, "utf-8"));
+      if (fs6.existsSync(prefsFile)) {
+        const prefs = JSON.parse(fs6.readFileSync(prefsFile, "utf-8"));
         const raw2 = prefs.rejectedApproaches ?? [];
         rejected = Array.isArray(raw2) ? raw2.map((r) => typeof r === "string" ? { description: r } : r) : [];
       }
@@ -23363,17 +24056,17 @@ function findPastPredictions(projectRoot2, query, opts = {}) {
   const limit = opts.limit ?? 3;
   const now = Date.now();
   const out = [];
-  const sessions2 = listSessions(projectRoot2);
-  for (const session of sessions2) {
-    const sessionDir = path3.join(projectRoot2, ".deeppairing", "sessions", session.id);
-    const artFile = path3.join(sessionDir, "artifacts.json");
-    const decFile = path3.join(sessionDir, "decisions.json");
-    if (!fs4.existsSync(artFile) || !fs4.existsSync(decFile)) continue;
+  const sessions = listSessions(projectRoot2);
+  for (const session of sessions) {
+    const sessionDir = path5.join(projectRoot2, ".deeppairing", "sessions", session.id);
+    const artFile = path5.join(sessionDir, "artifacts.json");
+    const decFile = path5.join(sessionDir, "decisions.json");
+    if (!fs6.existsSync(artFile) || !fs6.existsSync(decFile)) continue;
     let artifacts;
     let decisions;
     try {
-      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs4.readFileSync(artFile, "utf-8")), "id");
-      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs4.readFileSync(decFile, "utf-8")), "decisionId");
+      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs6.readFileSync(artFile, "utf-8")), "id");
+      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs6.readFileSync(decFile, "utf-8")), "decisionId");
     } catch {
       continue;
     }
@@ -23389,13 +24082,13 @@ function findPastPredictions(projectRoot2, query, opts = {}) {
       const chosen = (dec.options ?? []).find((o) => o.id === dec.response.optionId);
       const resolvedAt = dec.resolvedAt ?? dec.createdAt;
       const daysAgo = Math.max(0, Math.floor((now - new Date(resolvedAt).getTime()) / (24 * 60 * 60 * 1e3)));
-      const retrosPath = path3.join(sessionDir, "retrospectives.json");
+      const retrosPath = path5.join(sessionDir, "retrospectives.json");
       let retrospective;
       try {
-        if (fs4.existsSync(retrosPath)) {
+        if (fs6.existsSync(retrosPath)) {
           const retros = salvageArray(
             "retrospectives.json",
-            JSON.parse(fs4.readFileSync(retrosPath, "utf-8")),
+            JSON.parse(fs6.readFileSync(retrosPath, "utf-8")),
             "decisionId"
           );
           retrospective = retros.find((r) => r.decisionId === dec.decisionId);
@@ -23432,7 +24125,7 @@ function resolveLiveArtifact(artifacts, id) {
   return current;
 }
 function listAllDecisions(projectRoot2, liveSessions = []) {
-  const sessionsDir = path3.join(projectRoot2, ".deeppairing", "sessions");
+  const sessionsDir = path5.join(projectRoot2, ".deeppairing", "sessions");
   const decisions = [];
   const failedSessions = [];
   const pushSession = (sessionId, decRecords, artifacts) => {
@@ -23472,9 +24165,9 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   const consumedLive = /* @__PURE__ */ new Set();
   const sidecarSessions = [];
   let entries = [];
-  if (fs4.existsSync(sessionsDir)) {
+  if (fs6.existsSync(sessionsDir)) {
     try {
-      entries = fs4.readdirSync(sessionsDir, { withFileTypes: true });
+      entries = fs6.readdirSync(sessionsDir, { withFileTypes: true });
     } catch {
       entries = [];
     }
@@ -23482,10 +24175,10 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const sessionId = entry.name;
-    const sessionDir = path3.join(sessionsDir, sessionId);
-    const decFile = path3.join(sessionDir, "decisions.json");
+    const sessionDir = path5.join(sessionsDir, sessionId);
+    const decFile = path5.join(sessionDir, "decisions.json");
     try {
-      if (fs4.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
+      if (fs6.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
     } catch {
     }
     const liveSrc = liveById.get(sessionId);
@@ -23494,13 +24187,13 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       pushSession(sessionId, liveSrc.decisions, liveSrc.artifacts);
       continue;
     }
-    if (!fs4.existsSync(decFile)) continue;
+    if (!fs6.existsSync(decFile)) continue;
     let raw2;
     try {
-      raw2 = JSON.parse(fs4.readFileSync(decFile, "utf-8"));
+      raw2 = JSON.parse(fs6.readFileSync(decFile, "utf-8"));
     } catch (err) {
       try {
-        fs4.copyFileSync(decFile, decFile + ".corrupt");
+        fs6.copyFileSync(decFile, decFile + ".corrupt");
       } catch {
       }
       failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json", kind: "unreadable" });
@@ -23525,12 +24218,12 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       continue;
     }
     let artifacts = [];
-    const artFile = path3.join(sessionDir, "artifacts.json");
-    if (fs4.existsSync(artFile)) {
+    const artFile = path5.join(sessionDir, "artifacts.json");
+    if (fs6.existsSync(artFile)) {
       try {
         artifacts = salvageArray(
           `${sessionId}/artifacts.json`,
-          JSON.parse(fs4.readFileSync(artFile, "utf-8")),
+          JSON.parse(fs6.readFileSync(artFile, "utf-8")),
           "id"
         );
       } catch {
@@ -23556,14 +24249,14 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   return { decisions, failedSessions };
 }
 function addRetrospective(projectRoot2, params) {
-  const sessions2 = listSessions(projectRoot2);
-  for (const session of sessions2) {
-    const sessionDir = path3.join(projectRoot2, ".deeppairing", "sessions", session.id);
-    const decFile = path3.join(sessionDir, "decisions.json");
-    if (!fs4.existsSync(decFile)) continue;
+  const sessions = listSessions(projectRoot2);
+  for (const session of sessions) {
+    const sessionDir = path5.join(projectRoot2, ".deeppairing", "sessions", session.id);
+    const decFile = path5.join(sessionDir, "decisions.json");
+    if (!fs6.existsSync(decFile)) continue;
     let decisions;
     try {
-      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs4.readFileSync(decFile, "utf-8")), "decisionId");
+      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs6.readFileSync(decFile, "utf-8")), "decisionId");
     } catch {
       continue;
     }
@@ -23575,11 +24268,11 @@ function addRetrospective(projectRoot2, params) {
       note: params.note?.trim() || void 0,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    const retrosPath = path3.join(sessionDir, "retrospectives.json");
+    const retrosPath = path5.join(sessionDir, "retrospectives.json");
     let existing = [];
     try {
-      if (fs4.existsSync(retrosPath)) {
-        existing = salvageArray("retrospectives.json (write path)", JSON.parse(fs4.readFileSync(retrosPath, "utf-8")), "decisionId");
+      if (fs6.existsSync(retrosPath)) {
+        existing = salvageArray("retrospectives.json (write path)", JSON.parse(fs6.readFileSync(retrosPath, "utf-8")), "decisionId");
       }
     } catch {
     }
@@ -23592,8 +24285,8 @@ function addRetrospective(projectRoot2, params) {
 }
 
 // src/store/ledger-digest.ts
-import fs5 from "node:fs";
-import path4 from "node:path";
+import fs7 from "node:fs";
+import path6 from "node:path";
 var ledgerDigestCache = /* @__PURE__ */ new Map();
 var DIGEST_CACHE_TTL_MS = 2e3;
 function invalidateLedgerDigestCache(projectRoot2) {
@@ -23604,8 +24297,8 @@ function ledgerDigest(projectRoot2) {
   if (cached2 && Date.now() - cached2.computedAt < DIGEST_CACHE_TTL_MS) {
     return cached2.result;
   }
-  const sessionsDir = path4.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs5.existsSync(sessionsDir)) {
+  const sessionsDir = path6.join(projectRoot2, ".deeppairing", "sessions");
+  if (!fs7.existsSync(sessionsDir)) {
     const empty = {
       shapedThisProject: 0,
       nearMissesThisProject: 0,
@@ -23621,13 +24314,13 @@ function ledgerDigest(projectRoot2) {
   let blockedThisProject = 0;
   let sessionsTouched = 0;
   const cites = /* @__PURE__ */ new Map();
-  for (const entry of fs5.readdirSync(sessionsDir, { withFileTypes: true })) {
+  for (const entry of fs7.readdirSync(sessionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const tracesPath = path4.join(sessionsDir, entry.name, "preflight-traces.json");
-    if (!fs5.existsSync(tracesPath)) continue;
+    const tracesPath = path6.join(sessionsDir, entry.name, "preflight-traces.json");
+    if (!fs7.existsSync(tracesPath)) continue;
     let map2;
     try {
-      map2 = salvageRecord("preflight-traces.json", JSON.parse(fs5.readFileSync(tracesPath, "utf-8")), {});
+      map2 = salvageRecord("preflight-traces.json", JSON.parse(fs7.readFileSync(tracesPath, "utf-8")), {});
     } catch {
       continue;
     }
@@ -23675,8 +24368,8 @@ function ledgerDigest(projectRoot2) {
 }
 
 // src/store/preflight-residual.ts
-import fs7 from "node:fs";
-import path6 from "node:path";
+import fs8 from "node:fs";
+import path7 from "node:path";
 
 // src/mcp/preflight-validator.ts
 var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
@@ -23712,169 +24405,23 @@ function meaningfulTokens(s) {
   return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken);
 }
 
-// src/store/metrics-store.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
-var VERSION = 1;
-function emptyCounts() {
-  return {
-    preflightBlocks: { total: 0, bySource: { session: 0, team: 0 } },
-    preflightNearMisses: 0,
-    gateEscapes: 0,
-    ledgerWrites: { total: 0, rejected: 0, approved: 0 },
-    retrospectives: { total: 0, right: 0, wrong: 0, mixed: 0 },
-    horizonChecksRequested: 0,
-    questions: { asked: 0, answered: 0 },
-    artifacts: { total: 0, byType: {} },
-    visuals: { total: 0, byKind: {} },
-    comments: 0
-  };
-}
-function metricsPath(projectRoot2) {
-  return path5.join(projectRoot2, ".deeppairing", "metrics.json");
-}
-function readMetricsFromDisk(projectRoot2) {
-  const file2 = metricsPath(projectRoot2);
-  try {
-    if (!fs6.existsSync(file2)) {
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
-    }
-    const parsed = JSON.parse(fs6.readFileSync(file2, "utf-8"));
-    if (parsed.version !== VERSION || !parsed.counts) {
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
-    }
-    return {
-      version: VERSION,
-      firstSeenAt: parsed.firstSeenAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-      lastActivityAt: parsed.lastActivityAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-      sessions: parsed.sessions ?? 0,
-      counts: {
-        ...emptyCounts(),
-        ...parsed.counts,
-        preflightBlocks: { ...emptyCounts().preflightBlocks, ...parsed.counts?.preflightBlocks ?? {} },
-        ledgerWrites: { ...emptyCounts().ledgerWrites, ...parsed.counts?.ledgerWrites ?? {} },
-        retrospectives: { ...emptyCounts().retrospectives, ...parsed.counts?.retrospectives ?? {} },
-        questions: { ...emptyCounts().questions, ...parsed.counts?.questions ?? {} },
-        artifacts: { ...emptyCounts().artifacts, ...parsed.counts?.artifacts ?? {} },
-        visuals: { ...emptyCounts().visuals, ...parsed.counts?.visuals ?? {} }
-      }
-    };
-  } catch {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
-  }
-}
-function writeMetrics(projectRoot2, data) {
-  const file2 = metricsPath(projectRoot2);
-  try {
-    fs6.mkdirSync(path5.dirname(file2), { recursive: true });
-    writeJsonAtomic(file2, data);
-  } catch {
-  }
-}
-var FLUSH_DEBOUNCE_MS = 1e3;
-var metricsCache = /* @__PURE__ */ new Map();
-function loadEntry(projectRoot2) {
-  let entry = metricsCache.get(projectRoot2);
-  if (!entry) {
-    entry = { data: readMetricsFromDisk(projectRoot2), dirty: false, timer: null };
-    metricsCache.set(projectRoot2, entry);
-  }
-  return entry;
-}
-function flushEntry(projectRoot2, entry) {
-  if (entry.timer) {
-    clearTimeout(entry.timer);
-    entry.timer = null;
-  }
-  if (!entry.dirty) return;
-  entry.dirty = false;
-  writeMetrics(projectRoot2, entry.data);
-}
-function scheduleFlush(projectRoot2, entry) {
-  if (entry.timer) return;
-  entry.timer = setTimeout(() => flushEntry(projectRoot2, entry), FLUSH_DEBOUNCE_MS);
-  entry.timer.unref?.();
-}
-function flushAllMetrics() {
-  for (const [projectRoot2, entry] of metricsCache) {
-    flushEntry(projectRoot2, entry);
-  }
-}
-function readMetrics(projectRoot2) {
-  return loadEntry(projectRoot2).data;
-}
-function recordMetricEvent(projectRoot2, event) {
-  const entry = loadEntry(projectRoot2);
-  const data = entry.data;
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  data.lastActivityAt = now;
-  switch (event.kind) {
-    case "session_started":
-      data.sessions += 1;
-      break;
-    case "preflight_block":
-      data.counts.preflightBlocks.total += 1;
-      data.counts.preflightBlocks.bySource[event.source] += 1;
-      break;
-    case "preflight_near_miss":
-      data.counts.preflightNearMisses += 1;
-      break;
-    case "gate_escape":
-      data.counts.gateEscapes += 1;
-      break;
-    case "ledger_write":
-      data.counts.ledgerWrites.total += 1;
-      data.counts.ledgerWrites[event.verdict] += 1;
-      break;
-    case "retrospective":
-      data.counts.retrospectives.total += 1;
-      data.counts.retrospectives[event.verdict] += 1;
-      break;
-    case "horizon_check_requested":
-      data.counts.horizonChecksRequested += 1;
-      break;
-    case "question_asked":
-      data.counts.questions.asked += 1;
-      break;
-    case "question_answered":
-      data.counts.questions.answered += 1;
-      break;
-    case "artifact_created":
-      data.counts.artifacts.total += 1;
-      data.counts.artifacts.byType[event.artifactType] = (data.counts.artifacts.byType[event.artifactType] ?? 0) + 1;
-      break;
-    case "visual_attached":
-      data.counts.visuals.total += 1;
-      data.counts.visuals.byKind[event.visualKind] = (data.counts.visuals.byKind[event.visualKind] ?? 0) + 1;
-      break;
-    case "comment_added":
-      data.counts.comments += 1;
-      break;
-  }
-  entry.dirty = true;
-  scheduleFlush(projectRoot2, entry);
-}
-
 // src/store/preflight-residual.ts
 var RESIDUAL_CAP = 100;
 function residualPath(projectRoot2) {
-  return path6.join(projectRoot2, ".deeppairing", "preflight-residual.json");
+  return path7.join(projectRoot2, ".deeppairing", "preflight-residual.json");
 }
 function appendResidual(projectRoot2, entry) {
   const p = residualPath(projectRoot2);
   let file2 = { version: 1, escapes: [] };
   try {
-    const raw2 = JSON.parse(fs7.readFileSync(p, "utf-8"));
+    const raw2 = JSON.parse(fs8.readFileSync(p, "utf-8"));
     if (raw2?.version === 1 && Array.isArray(raw2.escapes)) file2 = raw2;
   } catch {
   }
   file2.escapes.push(entry);
   file2.escapes = file2.escapes.slice(-RESIDUAL_CAP);
   try {
-    fs7.mkdirSync(path6.dirname(p), { recursive: true });
+    fs8.mkdirSync(path7.dirname(p), { recursive: true });
     writeJsonAtomic(p, file2);
   } catch {
   }
@@ -23962,8 +24509,8 @@ var FileStore = class _FileStore {
   projectRoot;
   constructor(projectRoot2, sessionId) {
     this.projectRoot = projectRoot2;
-    this.basePath = path7.join(projectRoot2, ".deeppairing");
-    this.projectHint = path7.basename(projectRoot2);
+    this.basePath = path8.join(projectRoot2, ".deeppairing");
+    this.projectHint = path8.basename(projectRoot2);
     this.guardrails = senseProjectGuardrails(projectRoot2);
     this.teamPreferences = loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
@@ -23975,14 +24522,14 @@ var FileStore = class _FileStore {
     this.loadPreferences();
   }
   ensureDir() {
-    const sessionDir = path7.join(this.basePath, "sessions", this.sessionId);
-    fs8.mkdirSync(sessionDir, { recursive: true });
+    const sessionDir = path8.join(this.basePath, "sessions", this.sessionId);
+    fs9.mkdirSync(sessionDir, { recursive: true });
   }
   sessionDir() {
-    return path7.join(this.basePath, "sessions", this.sessionId);
+    return path8.join(this.basePath, "sessions", this.sessionId);
   }
   loadPreferences() {
-    const prefsPath = path7.join(this.basePath, "preferences.json");
+    const prefsPath = path8.join(this.basePath, "preferences.json");
     const prefs = _FileStore.salvageRecord(
       // G6 — labels are the once-per-process suppression KEY: session-scope
       // them (F10's sid:file format) so a second corrupt session still logs.
@@ -24001,27 +24548,27 @@ var FileStore = class _FileStore {
     const dir = this.sessionDir();
     this.artifacts = _FileStore.salvageArray(
       `${this.sessionId}:artifacts.json`,
-      this.loadJsonFile(path7.join(dir, "artifacts.json"), []),
+      this.loadJsonFile(path8.join(dir, "artifacts.json"), []),
       "id"
     );
     this.comments = _FileStore.salvageArray(
       `${this.sessionId}:comments.json`,
-      this.loadJsonFile(path7.join(dir, "comments.json"), []),
+      this.loadJsonFile(path8.join(dir, "comments.json"), []),
       "id"
     );
     const decArr = _FileStore.salvageArray(
       `${this.sessionId}:decisions.json`,
-      this.loadJsonFile(path7.join(dir, "decisions.json"), []),
+      this.loadJsonFile(path8.join(dir, "decisions.json"), []),
       "decisionId"
     );
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = _FileStore.salvageArray(
       `${this.sessionId}:plan-reviews.json`,
-      this.loadJsonFile(path7.join(dir, "plan-reviews.json"), []),
+      this.loadJsonFile(path8.join(dir, "plan-reviews.json"), []),
       "artifactId"
     );
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
-    const rawMetrics = this.loadJsonFile(path7.join(dir, "metrics.json"), []);
+    const rawMetrics = this.loadJsonFile(path8.join(dir, "metrics.json"), []);
     if (Array.isArray(rawMetrics)) {
       const kept = rawMetrics.filter(
         (e) => !!e && typeof e === "object" && typeof e.type === "string" && typeof e.latencyMs === "number" && Number.isFinite(e.latencyMs)
@@ -24047,15 +24594,15 @@ var FileStore = class _FileStore {
    *  later flush can detect external writes and merge instead of clobber. */
   loadJsonFile(filePath, fallback) {
     try {
-      if (!fs8.existsSync(filePath)) {
+      if (!fs9.existsSync(filePath)) {
         delete this.fileMtimeMs[filePath];
         delete this.fileSizes[filePath];
         return fallback;
       }
-      const stat = fs8.statSync(filePath);
+      const stat = fs9.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
-      return JSON.parse(fs8.readFileSync(filePath, "utf-8"));
+      return JSON.parse(fs9.readFileSync(filePath, "utf-8"));
     } catch (err) {
       if (err?.code === "ENOENT") {
         delete this.fileMtimeMs[filePath];
@@ -24064,7 +24611,7 @@ var FileStore = class _FileStore {
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${err.message}`);
       try {
-        fs8.copyFileSync(filePath, filePath + ".corrupt");
+        fs9.copyFileSync(filePath, filePath + ".corrupt");
       } catch {
       }
       return fallback;
@@ -24082,15 +24629,15 @@ var FileStore = class _FileStore {
    */
   readIfChanged(filePath) {
     try {
-      if (!fs8.existsSync(filePath)) return null;
-      const stat = fs8.statSync(filePath);
+      if (!fs9.existsSync(filePath)) return null;
+      const stat = fs9.statSync(filePath);
       const lastMtime = this.fileMtimeMs[filePath] ?? 0;
       const lastSize = this.fileSizes[filePath];
       const mtimeAdvanced = stat.mtimeMs > lastMtime;
       const sizeChanged = lastSize !== void 0 && stat.size !== lastSize;
       const sizeFirstSeen = lastSize === void 0;
       if (!mtimeAdvanced && !sizeChanged && !sizeFirstSeen) return null;
-      const parsed = JSON.parse(fs8.readFileSync(filePath, "utf-8"));
+      const parsed = JSON.parse(fs9.readFileSync(filePath, "utf-8"));
       return parsed;
     } catch {
       return null;
@@ -24123,7 +24670,7 @@ var FileStore = class _FileStore {
     writeStringAtomic(filePath, serialized);
     this.lastSerialized[filePath] = serialized;
     try {
-      const stat = fs8.statSync(filePath);
+      const stat = fs9.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
     } catch {
@@ -24145,10 +24692,10 @@ var FileStore = class _FileStore {
   }
   flush() {
     const dir = this.sessionDir();
-    const artifactsPath = path7.join(dir, "artifacts.json");
-    const commentsPath = path7.join(dir, "comments.json");
-    const decisionsPath = path7.join(dir, "decisions.json");
-    const plansPath = path7.join(dir, "plan-reviews.json");
+    const artifactsPath = path8.join(dir, "artifacts.json");
+    const commentsPath = path8.join(dir, "comments.json");
+    const decisionsPath = path8.join(dir, "decisions.json");
+    const plansPath = path8.join(dir, "plan-reviews.json");
     const diskArtifacts = this.readIfChanged(artifactsPath);
     if (diskArtifacts) {
       this.artifacts = this.mergeArrayById(
@@ -24190,7 +24737,7 @@ var FileStore = class _FileStore {
     this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
     this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
     if (this.reviewLatencies.length > 0) {
-      this.atomicWrite(path7.join(dir, "metrics.json"), this.reviewLatencies);
+      this.atomicWrite(path8.join(dir, "metrics.json"), this.reviewLatencies);
     }
   }
   /** Force an immediate flush — call before process exit */
@@ -24249,7 +24796,7 @@ var FileStore = class _FileStore {
    */
   touchCodeChangeMarker(at) {
     try {
-      writeJsonAtomic(path7.join(this.basePath, "last-code-change.json"), { at });
+      writeJsonAtomic(path8.join(this.basePath, "last-code-change.json"), { at });
     } catch {
     }
   }
@@ -24778,11 +25325,11 @@ var FileStore = class _FileStore {
     return this.teamPreferences;
   }
   readPreferences() {
-    const prefsPath = path7.join(this.basePath, "preferences.json");
+    const prefsPath = path8.join(this.basePath, "preferences.json");
     return _FileStore.salvageRecord("preferences.json", this.loadJsonFile(prefsPath, {}), {});
   }
   writePreferences(prefs) {
-    const prefsPath = path7.join(this.basePath, "preferences.json");
+    const prefsPath = path8.join(this.basePath, "preferences.json");
     writeJsonAtomic(prefsPath, prefs);
   }
   // --- Session annotations (learner's replay notes) ---
@@ -24793,7 +25340,7 @@ var FileStore = class _FileStore {
    * accidentally becoming agent context.
    */
   annotationsPath() {
-    return path7.join(this.sessionDir(), "annotations.json");
+    return path8.join(this.sessionDir(), "annotations.json");
   }
   getAnnotations() {
     return this.loadJsonFile(this.annotationsPath(), []);
@@ -24865,7 +25412,7 @@ var FileStore = class _FileStore {
    * evolves separately if needed).
    */
   preflightTracesPath() {
-    return path7.join(this.sessionDir(), "preflight-traces.json");
+    return path8.join(this.sessionDir(), "preflight-traces.json");
   }
   recordPreflightTrace(artifactId, trace) {
     const map2 = _FileStore.salvageRecord(
@@ -24967,23 +25514,8 @@ var FileStore = class _FileStore {
 };
 
 // src/http/routes.ts
-import fs9 from "node:fs";
-import path8 from "node:path";
-
-// src/http/websocket.ts
-var clients = /* @__PURE__ */ new Set();
-function broadcast(event) {
-  const data = JSON.stringify(event);
-  for (const client of clients) {
-    try {
-      if (client.readyState === 1) {
-        client.send(data);
-      }
-    } catch {
-      clients.delete(client);
-    }
-  }
-}
+import fs10 from "node:fs";
+import path9 from "node:path";
 
 // src/replay/timeline.ts
 function buildTimeline(state) {
@@ -25721,13 +26253,13 @@ var EMPTY_STATE = {
 };
 function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources) {
   const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
-  const broadcast3 = broadcastFn ?? ((event) => broadcast(event));
+  const broadcast = broadcastFn;
   const log2 = logFn ?? (() => {
   });
   const daemonHash = projectRoot2 ? projectHashOf(projectRoot2) : void 0;
-  const app2 = new Hono2();
+  const app = new Hono2();
   const MAX_BODY_BYTES = 64 * 1024;
-  app2.use("*", async (c, next) => {
+  app.use("*", async (c, next) => {
     if (c.req.method === "OPTIONS" || c.req.method === "GET" || c.req.method === "HEAD") {
       return next();
     }
@@ -25743,7 +26275,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return next();
   });
-  app2.use("*", async (c, next) => {
+  app.use("*", async (c, next) => {
     const host = c.req.header("host");
     if (host) {
       const hostname3 = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
@@ -25757,7 +26289,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return next();
   });
-  app2.use("*", async (c, next) => {
+  app.use("*", async (c, next) => {
     if (c.req.method === "OPTIONS") return next();
     const p = c.req.path;
     const isBootstrap = c.req.method === "GET" && (!p.startsWith("/api/") || p === "/api/daemon-info" || // MP1 — read-only cross-daemon discovery (project switcher). Returns no
@@ -25771,7 +26303,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (hashFail) return hashFail;
     return next();
   });
-  app2.use("*", async (c, next) => {
+  app.use("*", async (c, next) => {
     const method = c.req.method;
     if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
     if (c.req.path === "/api/demo/run") return next();
@@ -25785,13 +26317,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return next();
   });
-  app2.use("/*", cors({
+  app.use("/*", cors({
     // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
     // reflection let any local web page read responses cross-origin —
     // including the served HTML with the injected bearer token.
     origin: (origin) => corsAllowedOrigin(origin)
   }));
-  app2.onError((err, c) => {
+  app.onError((err, c) => {
     if (err instanceof SyntaxError) {
       return c.json({ error: "Invalid JSON" }, 400);
     }
@@ -25801,12 +26333,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
     code: ERROR_CODES.no_active_session
   };
-  app2.get("/api/state", async (c) => {
+  app.get("/api/state", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json(EMPTY_STATE);
     return c.json(await store.getFullState());
   });
-  app2.post("/api/comments", async (c) => {
+  app.post("/api/comments", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
@@ -25845,8 +26377,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     });
     const isNew = comment.id === newId;
     if (isNew) {
-      broadcast3({ type: "comment_added", comment }, sid);
-      broadcast3({
+      broadcast({ type: "comment_added", comment }, sid);
+      broadcast({
         type: "feedback_received",
         commentId: comment.id,
         artifactId,
@@ -25866,7 +26398,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return c.json({ comment });
   });
-  app2.post("/api/comments/:commentId/mark-resolved", async (c) => {
+  app.post("/api/comments/:commentId/mark-resolved", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
@@ -25885,11 +26417,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     await store.markCommentHumanResolved(commentId, resolvedAt);
     const comment = await store.getComment(commentId);
     if (comment) {
-      broadcast3({ type: "comment_updated", comment }, sid);
+      broadcast({ type: "comment_updated", comment }, sid);
     }
     return c.json({ status: "resolved", commentId, comment: comment ?? null });
   });
-  app2.post("/api/decisions/:decisionId", async (c) => {
+  app.post("/api/decisions/:decisionId", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
@@ -25934,7 +26466,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
       await maybeUpdateTaskStatus(null, targetArtifactId, store);
     }
-    broadcast3({
+    broadcast({
       type: "decision_resolved",
       decisionId,
       artifactId: targetArtifactId,
@@ -25943,7 +26475,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }, sid);
     return c.json({ status: "resolved", decisionId });
   });
-  app2.post("/api/artifacts/:artifactId/status", async (c) => {
+  app.post("/api/artifacts/:artifactId/status", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
@@ -25990,7 +26522,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         content: feedback,
         author: "human"
       });
-      broadcast3({ type: "comment_added", comment }, sid);
+      broadcast({ type: "comment_added", comment }, sid);
     }
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
@@ -26004,7 +26536,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
           sourceArtifactId: artifactId,
           concept
         });
-        broadcast3({
+        broadcast({
           type: "ledger_write",
           kind: "rejected",
           description: artifact.title,
@@ -26014,10 +26546,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         }, sid);
       }
     }
-    broadcast3({ type: "artifact_updated", artifactId, status }, sid);
+    broadcast({ type: "artifact_updated", artifactId, status }, sid);
     return c.json({ status: "updated", artifactId });
   });
-  app2.post("/api/artifacts/:artifactId/rename", async (c) => {
+  app.post("/api/artifacts/:artifactId/rename", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
@@ -26038,16 +26570,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       );
     }
     await store.renameArtifact(artifactId, title);
-    broadcast3({ type: "artifact_renamed", artifactId, title }, sid);
+    broadcast({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });
   });
-  app2.get("/api/artifacts/:artifactId/comments", async (c) => {
+  app.get("/api/artifacts/:artifactId/comments", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ comments: [] });
     const artifactId = c.req.param("artifactId");
     return c.json({ comments: await store.getCommentsForArtifact(artifactId) });
   });
-  app2.get("/api/artifacts/:artifactId/preflight-trace", async (c) => {
+  app.get("/api/artifacts/:artifactId/preflight-trace", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ trace: null });
     const artifactId = c.req.param("artifactId");
@@ -26055,7 +26587,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const trace = await store.getPreflightTrace(artifactId);
     return c.json({ trace: trace ?? null });
   });
-  app2.get("/api/philosophy", (c) => {
+  app.get("/api/philosophy", (c) => {
     const stance = c.req.query("stance");
     const concept = c.req.query("concept") ?? void 0;
     const limit = Number(c.req.query("limit") ?? 50);
@@ -26097,7 +26629,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     });
     return c.json({ entries: summary, total: summary.length });
   });
-  app2.post("/api/philosophy/seed", async (c) => {
+  app.post("/api/philosophy/seed", async (c) => {
     let body;
     try {
       body = await c.req.json();
@@ -26158,7 +26690,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       verdict
     });
   });
-  app2.post("/api/philosophy/override", async (c) => {
+  app.post("/api/philosophy/override", async (c) => {
     let body;
     try {
       body = await c.req.json();
@@ -26191,10 +26723,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       );
     }
     const result = await store.overrideRejectedApproach({ description, concept });
-    broadcast3({ type: "stance_overridden", concept: concept ?? description, retired: result.retired }, sid);
+    broadcast({ type: "stance_overridden", concept: concept ?? description, retired: result.retired }, sid);
     return c.json({ status: "overridden", concept: concept ?? description, ...result });
   });
-  app2.get("/api/philosophy/digest", (c) => {
+  app.get("/api/philosophy/digest", (c) => {
     const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
     const now = Date.now();
     const fromMs = now - sinceDays * 24 * 60 * 60 * 1e3;
@@ -26243,7 +26775,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       strengthenedThisPeriod
     });
   });
-  app2.get("/api/predictions", (c) => {
+  app.get("/api/predictions", (c) => {
     const concept = (c.req.query("concept") ?? "").trim();
     const excludeArtifactId = c.req.query("excludeArtifactId") ?? void 0;
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 3), 1), 10);
@@ -26256,7 +26788,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     });
     return c.json({ predictions });
   });
-  app2.get("/api/ledger/digest", (c) => {
+  app.get("/api/ledger/digest", (c) => {
     if (!projectRoot2) {
       return c.json({
         shapedThisProject: 0,
@@ -26347,17 +26879,17 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       }
     });
   });
-  app2.get("/api/metrics", (c) => {
+  app.get("/api/metrics", (c) => {
     if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
     return c.json(readMetrics(projectRoot2));
   });
-  app2.get("/api/team-preferences", async (c) => {
+  app.get("/api/team-preferences", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ preferences: [], exists: false });
     const preferences = await store.getTeamPreferences?.() ?? [];
     return c.json({ preferences, exists: preferences.length > 0 });
   });
-  app2.post("/api/retrospectives", async (c) => {
+  app.post("/api/retrospectives", async (c) => {
     if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
     const bodyVal = await readJsonValue(c);
     if (!bodyVal.ok) return bodyVal.res;
@@ -26368,7 +26900,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!result) {
       return c.json({ error: `no decision found with id "${decisionId}"` }, 404);
     }
-    broadcast3({
+    broadcast({
       type: "retrospective_recorded",
       decisionId,
       verdict,
@@ -26376,7 +26908,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }, result.sessionId);
     return c.json({ retrospective: result.retrospective, sessionId: result.sessionId });
   });
-  app2.get("/api/export", async (c) => {
+  app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const format = c.req.query("format") ?? "full";
@@ -26384,7 +26916,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
   });
-  app2.post("/api/preferences", async (c) => {
+  app.post("/api/preferences", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
@@ -26394,15 +26926,15 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     if (parsed.data.autonomyLevel) {
       await store.setAutonomyLevel(parsed.data.autonomyLevel);
-      broadcast3({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
+      broadcast({ type: "preference_changed", autonomyLevel: parsed.data.autonomyLevel }, sid);
     }
     if (parsed.data.detailDensity) {
       await store.setDetailDensity(parsed.data.detailDensity);
-      broadcast3({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
+      broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
     }
     return c.json({ status: "updated" });
   });
-  app2.get("/api/files", (c) => {
+  app.get("/api/files", (c) => {
     if (authToken) {
       const auth = c.req.header("Authorization");
       if (auth !== `Bearer ${authToken}`) {
@@ -26417,62 +26949,62 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!filePath || !projectRoot2) {
       return c.json({ error: "path parameter required" }, 400);
     }
-    const resolved = path8.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
-    const resolvedRoot = path8.resolve(projectRoot2);
-    if (!resolved.startsWith(resolvedRoot + path8.sep) && resolved !== resolvedRoot) {
+    const resolved = path9.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
+    const resolvedRoot = path9.resolve(projectRoot2);
+    if (!resolved.startsWith(resolvedRoot + path9.sep) && resolved !== resolvedRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     let realResolved;
     let realRoot;
     try {
-      realResolved = fs9.realpathSync(resolved);
-      realRoot = fs9.realpathSync(resolvedRoot);
+      realResolved = fs10.realpathSync(resolved);
+      realRoot = fs10.realpathSync(resolvedRoot);
     } catch (err) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
-    if (!realResolved.startsWith(realRoot + path8.sep) && realResolved !== realRoot) {
+    if (!realResolved.startsWith(realRoot + path9.sep) && realResolved !== realRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     try {
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const size = fs9.statSync(realResolved).size;
+      const size = fs10.statSync(realResolved).size;
       if (size > MAX_FILE_BYTES) {
         return c.json(
           { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
           413
         );
       }
-      const content = fs9.readFileSync(realResolved, "utf-8");
+      const content = fs10.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
   });
-  app2.get("/api/memory", async (c) => {
+  app.get("/api/memory", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ rejectedApproaches: [], approvedPatterns: [] });
     return c.json(await store.getSessionMemory());
   });
-  app2.get("/api/hook-state", (c) => {
+  app.get("/api/hook-state", (c) => {
     if (!projectRoot2) return c.json({ version: 1, fires: [] });
-    const statePath = path8.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    if (!fs9.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    const statePath = path9.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    if (!fs10.existsSync(statePath)) return c.json({ version: 1, fires: [] });
     try {
-      const raw2 = JSON.parse(fs9.readFileSync(statePath, "utf-8"));
+      const raw2 = JSON.parse(fs10.readFileSync(statePath, "utf-8"));
       const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25) : [];
       return c.json({ version: 1, fires });
     } catch {
       return c.json({ version: 1, fires: [] });
     }
   });
-  app2.get("/api/sessions", (c) => {
+  app.get("/api/sessions", (c) => {
     if (!projectRoot2) return c.json({ sessions: [] });
-    const sessions2 = FileStore.listSessions(projectRoot2);
-    return c.json({ sessions: sessions2 });
+    const sessions = FileStore.listSessions(projectRoot2);
+    return c.json({ sessions });
   });
-  app2.get("/api/decisions", (c) => {
+  app.get("/api/decisions", (c) => {
     if (!projectRoot2) return c.json({ decisions: [], failedSessions: [] });
     let live = [];
     try {
@@ -26487,7 +27019,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       return c.json({ decisions: [], failedSessions: [] });
     }
   });
-  app2.get("/api/search", (c) => {
+  app.get("/api/search", (c) => {
     if (!projectRoot2) return c.json({ results: [] });
     const q = c.req.query("q") ?? "";
     if (!q.trim()) return c.json({ results: [] });
@@ -26495,7 +27027,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const results = FileStore.searchAll(projectRoot2, q, limit);
     return c.json({ results });
   });
-  app2.get("/api/sessions/:sessionId", (c) => {
+  app.get("/api/sessions/:sessionId", (c) => {
     const sessionId = c.req.param("sessionId");
     if (!projectRoot2) return c.json({ error: "No project root" }, 500);
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
@@ -26508,7 +27040,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       return c.json({ error: "Session not found" }, 404);
     }
   });
-  app2.get("/api/sessions/:sessionId/annotations", (c) => {
+  app.get("/api/sessions/:sessionId/annotations", (c) => {
     const sessionId = c.req.param("sessionId");
     if (!projectRoot2) return c.json({ annotations: [] });
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
@@ -26521,7 +27053,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       return c.json({ annotations: [] });
     }
   });
-  app2.post("/api/sessions/:sessionId/annotations", async (c) => {
+  app.post("/api/sessions/:sessionId/annotations", async (c) => {
     const sessionId = c.req.param("sessionId");
     if (!projectRoot2) return c.json({ error: "No project root" }, 500);
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
@@ -26536,7 +27068,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const annotation = s.addAnnotation({ targetEventId, note, tags });
     return c.json({ annotation });
   });
-  app2.post("/api/prompts", async (c) => {
+  app.post("/api/prompts", async (c) => {
     if (!projectRoot2) return c.json({ error: "No project root" }, 500);
     if (authToken) {
       const auth = c.req.header("Authorization");
@@ -26556,34 +27088,34 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sessionTag = sanitize(body?.sessionId);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
-    const promptsDir = path8.join(projectRoot2, ".deeppairing", "prompts");
+    const promptsDir = path9.join(projectRoot2, ".deeppairing", "prompts");
     try {
-      fs9.mkdirSync(promptsDir, { recursive: true });
-      const fullPath = path8.join(promptsDir, filename);
-      const resolved = path8.resolve(fullPath);
-      const resolvedDir = path8.resolve(promptsDir);
-      if (!resolved.startsWith(resolvedDir + path8.sep)) {
+      fs10.mkdirSync(promptsDir, { recursive: true });
+      const fullPath = path9.join(promptsDir, filename);
+      const resolved = path9.resolve(fullPath);
+      const resolvedDir = path9.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path9.sep)) {
         return c.json({ error: "invalid path" }, 400);
       }
       try {
-        const stat = fs9.lstatSync(resolved);
+        const stat = fs10.lstatSync(resolved);
         if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
       } catch (err) {
         if (err?.code !== "ENOENT") throw err;
       }
-      const realDir = fs9.realpathSync(resolvedDir);
-      const realRoot = fs9.realpathSync(path8.resolve(projectRoot2));
-      if (!realDir.startsWith(realRoot + path8.sep) && realDir !== realRoot) {
+      const realDir = fs10.realpathSync(resolvedDir);
+      const realRoot = fs10.realpathSync(path9.resolve(projectRoot2));
+      if (!realDir.startsWith(realRoot + path9.sep) && realDir !== realRoot) {
         return c.json({ error: "invalid path" }, 400);
       }
-      fs9.writeFileSync(resolved, content, "utf-8");
-      const relPath = path8.relative(projectRoot2, resolved);
+      fs10.writeFileSync(resolved, content, "utf-8");
+      const relPath = path9.relative(projectRoot2, resolved);
       return c.json({ status: "saved", path: resolved, relPath });
     } catch (err) {
       return c.json({ error: err?.message ?? "Save failed" }, 500);
     }
   });
-  app2.delete("/api/sessions/:sessionId/annotations/:annotationId", (c) => {
+  app.delete("/api/sessions/:sessionId/annotations/:annotationId", (c) => {
     const sessionId = c.req.param("sessionId");
     const annotationId = c.req.param("annotationId");
     if (!projectRoot2) return c.json({ error: "No project root" }, 500);
@@ -26594,12 +27126,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const ok = s.deleteAnnotation(annotationId);
     return c.json({ deleted: ok });
   });
-  return app2;
+  return app;
 }
 
 // src/http/static-ui.ts
-import fs10 from "node:fs";
-import path9 from "node:path";
+import fs11 from "node:fs";
+import path10 from "node:path";
 var MIME_TYPES = {
   html: "text/html",
   js: "application/javascript",
@@ -26609,11 +27141,11 @@ var MIME_TYPES = {
   woff2: "font/woff2",
   png: "image/png"
 };
-function mountStaticUi(app2, opts) {
-  const { webDistPath: webDistPath2, authToken, projectHash, log: log2 } = opts;
-  if (!fs10.existsSync(webDistPath2)) return;
+function mountStaticUi(app, opts) {
+  const { webDistPath, authToken, projectHash, log: log2 } = opts;
+  if (!fs11.existsSync(webDistPath)) return;
   const serveInjectedIndex = (indexPath) => {
-    const html = fs10.readFileSync(indexPath, "utf-8");
+    const html = fs11.readFileSync(indexPath, "utf-8");
     const tokenJson = JSON.stringify(authToken);
     const hashJson = JSON.stringify(projectHash);
     const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
@@ -26632,25 +27164,25 @@ function mountStaticUi(app2, opts) {
       headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" }
     });
   };
-  app2.get("/*", async (c, next) => {
+  app.get("/*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) return next();
     const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path9.join(webDistPath2, filePath);
-    const resolvedPath = path9.resolve(fullPath);
-    const resolvedBase = path9.resolve(webDistPath2);
-    if (!resolvedPath.startsWith(resolvedBase + path9.sep) && resolvedPath !== resolvedBase) {
+    const fullPath = path10.join(webDistPath, filePath);
+    const resolvedPath = path10.resolve(fullPath);
+    const resolvedBase = path10.resolve(webDistPath);
+    if (!resolvedPath.startsWith(resolvedBase + path10.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
-    if (fs10.existsSync(fullPath)) {
-      const ext = path9.extname(filePath).slice(1);
+    if (fs11.existsSync(fullPath)) {
+      const ext = path10.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
-      const content = fs10.readFileSync(fullPath);
+      const content = fs11.readFileSync(fullPath);
       return new Response(content, {
         headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
       });
     }
-    const indexPath = path9.join(webDistPath2, "index.html");
-    if (fs10.existsSync(indexPath)) {
+    const indexPath = path10.join(webDistPath, "index.html");
+    if (fs11.existsSync(indexPath)) {
       return serveInjectedIndex(indexPath);
     }
     return c.notFound();
@@ -26725,8 +27257,8 @@ function isLoopbackHost(host) {
   const hostname3 = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
   return hostname3 === "localhost" || hostname3 === "127.0.0.1" || hostname3 === "::1";
 }
-function applyTopLevelGuards(app2, opts) {
-  app2.use(
+function applyTopLevelGuards(app, opts) {
+  app.use(
     "*",
     bodyLimit({
       maxSize: opts.maxBodyBytes,
@@ -26736,7 +27268,7 @@ function applyTopLevelGuards(app2, opts) {
       )
     })
   );
-  app2.use("*", async (c, next) => {
+  app.use("*", async (c, next) => {
     if (!isLoopbackHost(c.req.header("host"))) {
       return c.json(
         { error: "Forbidden host \u2014 the daemon only serves loopback origins.", code: ERROR_CODES.forbidden_host },
@@ -26806,14 +27338,14 @@ async function readJsonObject(c, opts) {
   }
   return { ok: true, body };
 }
-function createActiveSessionRoutes(sessions2, sessionMeta2, daemonHash, activeSessions2) {
-  const app2 = new Hono2();
+function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions) {
+  const app = new Hono2();
   const gate = projectHashGate(daemonHash);
-  app2.use("/api/active-sessions", gate);
-  app2.use("/api/live-session/*", gate);
-  app2.get("/api/active-sessions", (c) => {
-    const list = Array.from(sessions2.entries()).map(([id, store]) => {
-      const meta3 = sessionMeta2.get(id);
+  app.use("/api/active-sessions", gate);
+  app.use("/api/live-session/*", gate);
+  app.get("/api/active-sessions", (c) => {
+    const list = Array.from(sessions.entries()).map(([id, store]) => {
+      const meta3 = sessionMeta.get(id);
       return {
         sessionId: id,
         title: meta3?.title ?? id,
@@ -26824,24 +27356,24 @@ function createActiveSessionRoutes(sessions2, sessionMeta2, daemonHash, activeSe
         // which still have a REGISTERED wrapper so dead sessions stop
         // wearing a live green dot forever. Fixtures without the set report
         // live (matches old-daemon behavior the client also tolerates).
-        live: activeSessions2 ? activeSessions2.has(id) : true
+        live: activeSessions ? activeSessions.has(id) : true
       };
     });
     return c.json({ sessions: list });
   });
-  app2.get("/api/live-session/:sessionId", (c) => {
-    const store = sessions2.get(c.req.param("sessionId"));
+  app.get("/api/live-session/:sessionId", (c) => {
+    const store = sessions.get(c.req.param("sessionId"));
     if (!store) return c.json({ error: "unknown_session" }, 404);
     return c.json(store.getFullState());
   });
-  return app2;
+  return app;
 }
-function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3, logFn, daemonProjectRoot, authToken, activeSessions2) {
+function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions) {
   const log2 = logFn ?? (() => {
   });
-  const app2 = new Hono2();
+  const app = new Hono2();
   if (authToken) {
-    app2.use("/api/internal/*", async (c, next) => {
+    app.use("/api/internal/*", async (c, next) => {
       const auth = c.req.header("Authorization");
       const expected = `Bearer ${authToken}`;
       if (auth !== expected) {
@@ -26859,7 +27391,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
   }
   const lastActivityBroadcastAt = /* @__PURE__ */ new Map();
   const AGENT_ACTIVITY_THROTTLE_MS = 5e3;
-  app2.use("/api/internal/sessions/*", async (c, next) => {
+  app.use("/api/internal/sessions/*", async (c, next) => {
     await next();
     if (c.res.status >= 400) return;
     const m = c.req.path.match(/^\/api\/internal\/sessions\/([a-zA-Z0-9_-]+)(\/|$)/);
@@ -26868,10 +27400,10 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     const now = Date.now();
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);
-    broadcast3(sid, { type: "agent_activity", at: new Date(now).toISOString() });
+    broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
   });
   function requireStore(c, sessionId) {
-    const store = sessions2.get(sessionId);
+    const store = sessions.get(sessionId);
     if (!store) {
       log2(`[internal] 404 \u2014 session not registered: sid=${sessionId} path=${c.req.path}`);
       return {
@@ -26887,7 +27419,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     }
     return { ok: true, store };
   }
-  app2.post("/api/internal/sessions/:sessionId/register", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/register", async (c) => {
     const sessionId = c.req.param("sessionId");
     const parsedReg = await readJsonObject(c, { allowEmpty: true });
     if (!parsedReg.ok) return parsedReg.res;
@@ -26905,17 +27437,17 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
         403
       );
     }
-    let store = sessions2.get(sessionId);
+    let store = sessions.get(sessionId);
     if (!store) {
-      store = createSession2(sessionId);
-      sessions2.set(sessionId, store);
+      store = createSession(sessionId);
+      sessions.set(sessionId, store);
     }
-    sessionMeta2.set(sessionId, {
+    sessionMeta.set(sessionId, {
       title: body.title ?? sessionId,
       project: body.project ?? "",
       registeredAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    activeSessions2?.add(sessionId);
+    activeSessions?.add(sessionId);
     return c.json({
       status: "registered",
       sessionId,
@@ -26923,50 +27455,50 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
       state: store.getFullState()
     });
   });
-  app2.post("/api/internal/sessions/:sessionId/rename", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
     const parsed = await readJsonObject(c);
     if (!parsed.ok) return parsed.res;
     const { title } = parsed.body;
-    const meta3 = sessionMeta2.get(sessionId);
+    const meta3 = sessionMeta.get(sessionId);
     if (meta3) meta3.title = title;
-    broadcast3(sessionId, { type: "session_renamed", sessionId, title });
+    broadcast(sessionId, { type: "session_renamed", sessionId, title });
     return c.json({ status: "renamed" });
   });
-  app2.post("/api/internal/sessions/:sessionId/unregister", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/unregister", async (c) => {
     const sessionId = c.req.param("sessionId");
-    const store = sessions2.get(sessionId);
+    const store = sessions.get(sessionId);
     if (store) store.forceFlush();
-    activeSessions2?.delete(sessionId);
+    activeSessions?.delete(sessionId);
     return c.json({ status: "unregistered" });
   });
-  app2.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
     const sessionId = c.req.param("sessionId");
     log2(`[recovered] sid=${sessionId} \u2014 wrapper auto-re-registered after a 404`);
-    broadcast3(sessionId, { type: "daemon_resumed", sessionId });
+    broadcast(sessionId, { type: "daemon_resumed", sessionId });
     return c.json({ status: "broadcast" });
   });
-  app2.post("/api/internal/sessions/:sessionId/artifacts", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/artifacts", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, CreateArtifactBody);
     if (!parsed.ok) return parsed.res;
     const artifact = r.store.createArtifact(parsed.data);
-    broadcast3(sessionId, { type: "artifact_created", artifact });
+    broadcast(sessionId, { type: "artifact_created", artifact });
     return c.json({ artifact });
   });
-  app2.get("/api/internal/sessions/:sessionId/artifacts", (c) => {
+  app.get("/api/internal/sessions/:sessionId/artifacts", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ artifacts: r.store.getArtifacts() });
   });
-  app2.get("/api/internal/sessions/:sessionId/artifacts/status-changes", (c) => {
+  app.get("/api/internal/sessions/:sessionId/artifacts/status-changes", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ artifacts: r.store.getUnacknowledgedStatusChanges() });
   });
-  app2.post("/api/internal/sessions/:sessionId/artifacts/status-changes/acknowledge", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/artifacts/status-changes/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => null);
@@ -26977,7 +27509,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
     return c.json({ status: "acknowledged" });
   });
-  app2.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");
     const r = requireStore(c, sessionId);
@@ -26991,10 +27523,10 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     );
     r.store.updateArtifactStatus(artifactId, status, reason);
     r.store.forceFlush();
-    broadcast3(sessionId, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
+    broadcast(sessionId, { type: "artifact_updated", artifactId, status, reason: reason ?? "unspecified" });
     return c.json({ status: "updated" });
   });
-  app2.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/plan-progress", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/plan-progress", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");
     const r = requireStore(c, sessionId);
@@ -27009,10 +27541,10 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     );
     const artifact = r.store.updatePlanProgress(artifactId, clean);
     if (!artifact) return c.json({ artifact: null });
-    broadcast3(sessionId, { type: "plan_progress_updated", artifact });
+    broadcast(sessionId, { type: "plan_progress_updated", artifact });
     return c.json({ artifact });
   });
-  app2.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/rename", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/rename", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
@@ -27020,10 +27552,10 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     if (!parsed.ok) return parsed.res;
     const { title } = parsed.body;
     r.store.renameArtifact(c.req.param("artifactId"), title);
-    broadcast3(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
+    broadcast(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
     return c.json({ status: "renamed" });
   });
-  app2.post("/api/internal/sessions/:sessionId/comments", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
@@ -27033,16 +27565,16 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     const requestedId = params.id;
     const comment = r.store.addComment(params);
     if (comment.id === requestedId) {
-      broadcast3(sessionId, { type: "comment_added", comment });
+      broadcast(sessionId, { type: "comment_added", comment });
     }
     return c.json({ comment });
   });
-  app2.get("/api/internal/sessions/:sessionId/comments/unacknowledged", (c) => {
+  app.get("/api/internal/sessions/:sessionId/comments/unacknowledged", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ comments: r.store.getUnacknowledgedComments() });
   });
-  app2.post("/api/internal/sessions/:sessionId/comments/acknowledge", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/comments/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => null);
@@ -27053,18 +27585,18 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.acknowledgeComments(Array.isArray(ids) ? ids : []);
     return c.json({ status: "acknowledged" });
   });
-  app2.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
+  app.get("/api/internal/sessions/:sessionId/artifacts/:artifactId/comments", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ comments: r.store.getCommentsForArtifact(c.req.param("artifactId")) });
   });
-  app2.get("/api/internal/sessions/:sessionId/comments/:commentId", (c) => {
+  app.get("/api/internal/sessions/:sessionId/comments/:commentId", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const comment = r.store.getComment(c.req.param("commentId"));
     return c.json({ comment: comment ?? null });
   });
-  app2.post("/api/internal/sessions/:sessionId/comments/:commentId/answered", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/answered", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
@@ -27079,7 +27611,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     }
     return c.json({ status: "marked" });
   });
-  app2.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => null);
@@ -27103,7 +27635,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     }
     return c.json({ ok: true });
   });
-  app2.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
@@ -27112,7 +27644,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.markCommentHumanResolved(c.req.param("commentId"), resolvedAt);
     return c.json({ status: "resolved" });
   });
-  app2.post("/api/internal/sessions/:sessionId/decisions", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/decisions", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, RecordDecisionBody);
@@ -27120,7 +27652,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.recordDecisionRequest(parsed.data);
     return c.json({ status: "recorded" });
   });
-  app2.post("/api/internal/sessions/:sessionId/decisions/:decisionId/resolve", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/decisions/:decisionId/resolve", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
     if (!r.ok) return r.response;
@@ -27136,20 +27668,20 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     if (r.store.getDecision(decisionId) && r.store.getDecisionResponse(decisionId)?.optionId !== optionId) {
       return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
     }
-    broadcast3(sessionId, { type: "decision_resolved", decisionId, optionId, reasoning, confidence, predictedOutcome });
+    broadcast(sessionId, { type: "decision_resolved", decisionId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
-  app2.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {
+  app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ decisions: r.store.getPendingDecisions() });
   });
-  app2.get("/api/internal/sessions/:sessionId/decisions/resolved", (c) => {
+  app.get("/api/internal/sessions/:sessionId/decisions/resolved", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ decisions: r.store.getResolvedDecisions() });
   });
-  app2.post("/api/internal/sessions/:sessionId/decisions/acknowledge", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/decisions/acknowledge", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => null);
@@ -27160,21 +27692,21 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.acknowledgeDecisions(Array.isArray(ids) ? ids : []);
     const known = (Array.isArray(ids) ? ids : []).filter((id) => r.store.getDecision(id));
     if (known.length > 0) {
-      broadcast3(c.req.param("sessionId"), { type: "decisions_acknowledged", decisionIds: known });
+      broadcast(c.req.param("sessionId"), { type: "decisions_acknowledged", decisionIds: known });
     }
     return c.json({ status: "acknowledged" });
   });
-  app2.get("/api/internal/sessions/:sessionId/decisions/:decisionId", (c) => {
+  app.get("/api/internal/sessions/:sessionId/decisions/:decisionId", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ decision: r.store.getDecision(c.req.param("decisionId")) });
   });
-  app2.get("/api/internal/sessions/:sessionId/decisions/:decisionId/response", (c) => {
+  app.get("/api/internal/sessions/:sessionId/decisions/:decisionId/response", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ response: r.store.getDecisionResponse(c.req.param("decisionId")) });
   });
-  app2.post("/api/internal/sessions/:sessionId/plan-reviews", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/plan-reviews", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
@@ -27183,7 +27715,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.recordPlanReview(artifactId);
     return c.json({ status: "recorded" });
   });
-  app2.post("/api/internal/sessions/:sessionId/plan-reviews/:artifactId/resolve", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/plan-reviews/:artifactId/resolve", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
@@ -27192,45 +27724,45 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.resolvePlanReview(c.req.param("artifactId"), verdict, feedback);
     return c.json({ status: "resolved" });
   });
-  app2.get("/api/internal/sessions/:sessionId/plan-reviews/pending", (c) => {
+  app.get("/api/internal/sessions/:sessionId/plan-reviews/pending", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ reviews: r.store.getPendingPlanReviews() });
   });
-  app2.get("/api/internal/sessions/:sessionId/plan-reviews/:artifactId/verdict", (c) => {
+  app.get("/api/internal/sessions/:sessionId/plan-reviews/:artifactId/verdict", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getPlanReviewVerdict(c.req.param("artifactId")));
   });
-  app2.get("/api/internal/sessions/:sessionId/wait-feedback", async (c) => {
+  app.get("/api/internal/sessions/:sessionId/wait-feedback", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const timeout = parseInt(c.req.query("timeout") ?? "30000", 10);
     await r.store.waitForFeedback(timeout);
     return c.json({ status: "complete" });
   });
-  app2.get("/api/internal/sessions/:sessionId/state", (c) => {
+  app.get("/api/internal/sessions/:sessionId/state", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getFullState());
   });
-  app2.get("/api/internal/sessions/:sessionId/metrics", (c) => {
+  app.get("/api/internal/sessions/:sessionId/metrics", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getEngagementMetrics());
   });
-  app2.post("/api/internal/sessions/:sessionId/flush", (c) => {
+  app.post("/api/internal/sessions/:sessionId/flush", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     r.store.forceFlush();
     return c.json({ status: "flushed" });
   });
-  app2.get("/api/internal/sessions/:sessionId/memory", (c) => {
+  app.get("/api/internal/sessions/:sessionId/memory", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getSessionMemory());
   });
-  app2.post("/api/internal/sessions/:sessionId/memory/rejected", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/memory/rejected", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     let parsed;
@@ -27249,7 +27781,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     }
     return c.json({ status: "recorded" });
   });
-  app2.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/memory/approved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     let parsed;
@@ -27268,7 +27800,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     }
     return c.json({ status: "recorded" });
   });
-  app2.post("/api/internal/sessions/:sessionId/memory/override", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/memory/override", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => ({}));
@@ -27278,7 +27810,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     });
     return c.json({ status: "overridden", ...result });
   });
-  app2.post("/api/internal/sessions/:sessionId/memory/global-publish", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/memory/global-publish", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const body = await c.req.json().catch(() => ({}));
@@ -27286,13 +27818,13 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.setGlobalLedgerPublish?.(enabled);
     return c.json({ status: "set", enabled });
   });
-  app2.get("/api/internal/sessions/:sessionId/memory/global-publish", (c) => {
+  app.get("/api/internal/sessions/:sessionId/memory/global-publish", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const enabled = r.store.getGlobalLedgerPublish?.() ?? false;
     return c.json({ enabled });
   });
-  app2.post("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await readJsonObject(c);
@@ -27301,30 +27833,30 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.recordPreflightTrace?.(c.req.param("artifactId"), trace);
     return c.json({ status: "recorded" });
   });
-  app2.get("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", (c) => {
+  app.get("/api/internal/sessions/:sessionId/preflight-traces/:artifactId", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const trace = r.store.getPreflightTrace?.(c.req.param("artifactId")) ?? null;
     return c.json({ trace });
   });
-  app2.get("/api/internal/sessions/:sessionId/guardrails", async (c) => {
+  app.get("/api/internal/sessions/:sessionId/guardrails", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const guardrails = await r.store.getProjectGuardrails?.() ?? [];
     return c.json({ guardrails });
   });
-  app2.get("/api/internal/sessions/:sessionId/team-preferences", async (c) => {
+  app.get("/api/internal/sessions/:sessionId/team-preferences", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const preferences = await r.store.getTeamPreferences?.() ?? [];
     return c.json({ preferences });
   });
-  app2.get("/api/internal/sessions/:sessionId/autonomy", (c) => {
+  app.get("/api/internal/sessions/:sessionId/autonomy", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ level: r.store.getAutonomyLevel() });
   });
-  app2.post("/api/internal/sessions/:sessionId/autonomy", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/autonomy", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, AutonomyPostBody);
@@ -27332,12 +27864,12 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.setAutonomyLevel(parsed.data.level);
     return c.json({ status: "updated" });
   });
-  app2.get("/api/internal/sessions/:sessionId/detail-density", (c) => {
+  app.get("/api/internal/sessions/:sessionId/detail-density", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json({ density: r.store.getDetailDensity() });
   });
-  app2.post("/api/internal/sessions/:sessionId/detail-density", async (c) => {
+  app.post("/api/internal/sessions/:sessionId/detail-density", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     const parsed = await parseJsonBody(c, DetailDensityPostBody);
@@ -27345,9 +27877,9 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     r.store.setDetailDensity(parsed.data.density);
     return c.json({ status: "updated" });
   });
-  app2.get("/api/internal/sessions", (c) => {
-    const list = Array.from(sessions2.entries()).map(([id, store]) => {
-      const meta3 = sessionMeta2.get(id);
+  app.get("/api/internal/sessions", (c) => {
+    const list = Array.from(sessions.entries()).map(([id, store]) => {
+      const meta3 = sessionMeta.get(id);
       return {
         sessionId: id,
         title: meta3?.title ?? id,
@@ -27358,545 +27890,7 @@ function createDaemonRoutes(sessions2, sessionMeta2, createSession2, broadcast3,
     });
     return c.json({ sessions: list });
   });
-  return app2;
-}
-
-// src/cli/setup-tasks.ts
-import fs11 from "node:fs";
-import os2 from "node:os";
-import path10 from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-function scopeFiles(projectRoot2) {
-  return [
-    { scope: "user", path: path10.join(os2.homedir(), ".claude", "settings.json") },
-    { scope: "project-shared", path: path10.join(projectRoot2, ".claude", "settings.json") },
-    { scope: "project-local", path: path10.join(projectRoot2, ".claude", "settings.local.json") }
-  ];
-}
-function readJsonOrNull(filePath) {
-  try {
-    if (!fs11.existsSync(filePath)) return null;
-    return JSON.parse(fs11.readFileSync(filePath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-function countDpEntries(settings, hookKey, marker) {
-  const entries = settings?.hooks?.[hookKey];
-  if (!Array.isArray(entries)) return 0;
-  let n = 0;
-  for (const e of entries) {
-    if (typeof e?.command === "string" && marker(e.command)) {
-      n++;
-      continue;
-    }
-    if (Array.isArray(e?.hooks) && e.hooks.some((h) => typeof h?.command === "string" && marker(h.command))) {
-      n++;
-      continue;
-    }
-  }
-  return n;
-}
-function detectCrossScopeDpEntries(projectRoot2, hookKey, marker) {
-  const out = [];
-  for (const { scope, path: p } of scopeFiles(projectRoot2)) {
-    const settings = readJsonOrNull(p);
-    if (settings === null) continue;
-    out.push({ scope, path: p, count: countDpEntries(settings, hookKey, marker) });
-  }
-  return out;
-}
-var STOP_HOOK_MARKER = (cmd) => cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
-var CHECKPOINT_HOOK_MARKER = (cmd) => cmd.includes("checkpoint.mjs");
-var PREFLIGHT_HOOK_MARKER = (cmd) => cmd.includes("preflight.mjs");
-function ensureDeepPairingDir(projectRoot2) {
-  const dpDir2 = path10.join(projectRoot2, ".deeppairing");
-  try {
-    if (fs11.existsSync(dpDir2)) {
-      return { ok: true, changed: false, message: ".deeppairing/ already exists" };
-    }
-    fs11.mkdirSync(dpDir2, { recursive: true });
-    return { ok: true, changed: true, message: "Created .deeppairing/" };
-  } catch (err) {
-    return { ok: false, message: `Could not create .deeppairing/: ${err?.message ?? err}` };
-  }
-}
-function ensureGitignoreEntry(projectRoot2) {
-  const gitignorePath = path10.join(projectRoot2, ".gitignore");
-  try {
-    if (!fs11.existsSync(gitignorePath)) {
-      return { ok: true, changed: false, message: "No .gitignore present (skipped)" };
-    }
-    const content = fs11.readFileSync(gitignorePath, "utf-8");
-    if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
-      return { ok: true, changed: false, message: ".gitignore already lists .deeppairing/" };
-    }
-    const sep = content.endsWith("\n") ? "" : "\n";
-    fs11.appendFileSync(gitignorePath, `${sep}.deeppairing/
-`);
-    return { ok: true, changed: true, message: "Added .deeppairing/ to .gitignore" };
-  } catch (err) {
-    return { ok: false, message: `Could not update .gitignore: ${err?.message ?? err}` };
-  }
-}
-var STOP_HOOK_SCRIPT = `#!/usr/bin/env node
-// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).
-// ESM (.mjs).
-import fs from "node:fs";
-import path from "node:path";
-
-const HOOK_NAME = "stop";
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
-const STATE_CAP = 50;
-function recordFire(exitCode, reason) {
-  try {
-    let state = {};
-    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
-    state.version = 1;
-    state.fires = Array.isArray(state.fires) ? state.fires : [];
-    state.fires.push({
-      at: new Date().toISOString(),
-      hook: HOOK_NAME,
-      exitCode,
-      reason,
-    });
-    if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
-  } catch {
-    // Recording must never fail the hook itself.
-  }
-}
-function exit(code, reason) {
-  recordFire(code, reason);
-  process.exit(code);
-}
-
-try {
-  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "sessions");
-  if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
-
-  const MAX_AGE_MS = 30 * 60 * 1000;
-  const now = Date.now();
-  for (const id of fs.readdirSync(sessionsDir)) {
-    const af = path.join(sessionsDir, id, "artifacts.json");
-    if (!fs.existsSync(af)) continue;
-    let arr;
-    try { arr = JSON.parse(fs.readFileSync(af, "utf-8")); } catch { continue; }
-    const blocking = arr.some((x) => {
-      if (x.status !== "draft") return false;
-      if (!["research", "spec", "plan", "decision", "code_change"].includes(x.type)) return false;
-      const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
-      if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
-      return true;
-    });
-    if (blocking) {
-      process.stderr.write("deepPairing: pending artifacts need review \u2014 call check_feedback\\n");
-      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
-      // exit 2 showed Claude only an empty-stderr "Stop hook error".
-      exit(0, "pending artifacts in " + id);
-    }
-  }
-  exit(0, "pass: no blocking drafts");
-} catch (err) {
-  exit(0, "error: " + (err?.message ?? err));
-}
-`;
-var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
-var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
-function ensureStopHook(projectRoot2) {
-  const claudeDir = path10.join(projectRoot2, ".claude");
-  const settingsPath = path10.join(claudeDir, "settings.local.json");
-  const scriptPath = path10.join(projectRoot2, STOP_SCRIPT_REL_PATH);
-  try {
-    fs11.mkdirSync(path10.dirname(scriptPath), { recursive: true });
-    fs11.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
-    fs11.chmodSync(scriptPath, 493);
-    let settings = {};
-    if (fs11.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs11.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.Stop = settings.hooks.Stop ?? [];
-    const matchesDpStopCmd = (cmd) => cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
-    const isDpStopEntry = (entry) => {
-      if (typeof entry?.command === "string" && matchesDpStopCmd(entry.command)) return true;
-      if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && matchesDpStopCmd(h.command));
-      }
-      return false;
-    };
-    const isLegacyFlatDp = (entry) => typeof entry?.command === "string" && matchesDpStopCmd(entry.command) && !Array.isArray(entry?.hooks);
-    const isCurrentCanonicalDp = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === STOP_HOOK_COMMAND && entry?.matcher === "";
-    const beforeDpCount = settings.hooks.Stop.filter(isDpStopEntry).length;
-    const hadLegacy = settings.hooks.Stop.some(isLegacyFlatDp);
-    const hasExactlyOneCanonical = beforeDpCount === 1 && settings.hooks.Stop.some(isCurrentCanonicalDp);
-    if (hasExactlyOneCanonical) {
-      return { ok: true, changed: false, message: "Stop hook already configured" };
-    }
-    settings.hooks.Stop = settings.hooks.Stop.filter((entry) => !isDpStopEntry(entry));
-    settings.hooks.Stop.push({
-      matcher: "",
-      hooks: [{ type: "command", command: STOP_HOOK_COMMAND }]
-    });
-    fs11.mkdirSync(claudeDir, { recursive: true });
-    fs11.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
-    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", STOP_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
-    const [firstScope] = otherScopes;
-    if (firstScope) {
-      const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
-    }
-    return { ok: true, changed: true, message: msg };
-  } catch (err) {
-    return { ok: false, message: `Could not configure Stop hook: ${err?.message ?? err}` };
-  }
-}
-var CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
-// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.
-// ESM (.mjs): use import, not require.
-import fs from "node:fs";
-import path from "node:path";
-
-// V2.1 \u2014 skip-list for files that are unambiguously NOT worth a per-edit
-// checkpoint. Scope is deliberately narrow: only generated/vendored paths
-// and auto-generated lockfiles. Config / policy files (.gitignore,
-// package.json, .npmrc, .prettierrc) DO get nagged \u2014 those represent real
-// decisions a paired human should react to.
-//
-// Categories:
-//   - Lockfiles: regenerated from a manifest, reviewing them is busy-work
-//     (the manifest change is the real decision; deps are mechanical).
-//   - Generated / vendored paths: outputs of a build, not human-authored.
-//   - IDE-only dirs: editor settings; not the project's code.
-//
-// If a team wants stricter checkpointing they can edit this file directly
-// (.deeppairing/hooks/checkpoint.mjs). To LOOSEN it (e.g. also auto-skip
-// .gitignore), add the basename / prefix here.
-const SKIP_BASENAMES = new Set([
-  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are
-  // policy and should still nag.
-  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
-  "uv.lock", "poetry.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
-  "composer.lock",
-]);
-const SKIP_PATH_PREFIXES = [
-  // Generated / vendored output \u2014 not human-authored source.
-  "dist/", "build/", "node_modules/", ".deeppairing/", ".next/",
-  ".turbo/", ".cache/", "coverage/", ".nyc_output/",
-  // IDE-local config \u2014 workspace settings, not project decisions.
-  ".vscode/", ".idea/",
-];
-
-function isTrivialFile(filePath) {
-  if (!filePath || filePath === "(unknown)") return false;
-  const norm = filePath.replace(/\\\\/g, "/");
-  const base = norm.split("/").pop() || "";
-  if (SKIP_BASENAMES.has(base)) return true;
-  // Match prefixes either at the start of the path or after the project root.
-  for (const prefix of SKIP_PATH_PREFIXES) {
-    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-// X7 \u2014 record every fire to .deeppairing/hooks-state.json so the
-// companion UI's HookStatus can show "hook stack working" feedback.
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
-function recordFire(exitCode, reason) {
-  try {
-    let state = {};
-    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
-    state.version = 1;
-    state.fires = Array.isArray(state.fires) ? state.fires : [];
-    state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
-    if (state.fires.length > 50) state.fires = state.fires.slice(-50);
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
-  } catch { /* recording must never fail the hook itself */ }
-}
-function exit(code, reason) {
-  recordFire(code, reason);
-  process.exit(code);
-}
-
-let stdin = "";
-process.stdin.setEncoding("utf-8");
-process.stdin.on("data", (c) => { stdin += c; });
-process.stdin.on("end", () => {
-  try {
-    const ev = stdin ? JSON.parse(stdin) : {};
-    const tool = ev.tool_name || ev.toolName || "";
-    if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
-    const filePath =
-      (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
-      (ev.input && ev.input.file_path) ||
-      "(unknown)";
-
-    // V2.1 \u2014 trivial files (gitignore, lockfiles, generated paths) auto-pass.
-    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
-
-    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing");
-    if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
-
-    // PP1 \u2014 read the most-recent code_change timestamp from a tiny marker the
-    // store writes on each present_code_change, instead of readdir-ing +
-    // JSON.parsing every session's (multi-MB, diff-bearing) artifacts.json on
-    // every Write/Edit. Absent marker \u2192 0 \u2192 falls through to the nag (safe).
-    let mostRecentCheckpoint = 0;
-    try {
-      const m = JSON.parse(fs.readFileSync(path.join(dpDir, "last-code-change.json"), "utf-8"));
-      const t = new Date(m.at).getTime();
-      if (Number.isFinite(t)) mostRecentCheckpoint = t;
-    } catch { /* no marker yet \u2014 treat as no recent checkpoint */ }
-
-    // Threshold rule: every Write needs a code_change artifact created in
-    // the last FRESH_MS window.
-    const FRESH_MS = 60 * 1000;
-    const ageMs = Date.now() - mostRecentCheckpoint;
-    if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
-      process.stderr.write(
-        "deepPairing: " + tool + " on " + filePath +
-        " with no present_code_change for it. Present EVERY code change BEFORE " +
-        "the Write/Edit \u2014 including small follow-on edits, new files (tests, " +
-        "configs), and each file of a multi-file change, not just the 'main' " +
-        "one. A write straight to disk never reaches the human's review surface; " +
-        "they can't see or comment on it. If you skipped this for prior edits " +
-        "this session, backfill them now with present_code_change. " +
-        "(Per-Edit Checkpoint rule. Config / generated files like .gitignore are auto-skipped.)\\n"
-      );
-      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
-      // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
-      exit(0, "nag: " + tool + " on " + filePath);
-    }
-    exit(0, "pass: fresh checkpoint covers " + filePath);
-  } catch (err) {
-    // Never block the agent on a hook bug. Exit 0 on any unexpected error.
-    exit(0, "error: " + (err?.message ?? err));
-  }
-});
-`;
-var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
-function ensureCheckpointHook(projectRoot2) {
-  const claudeDir = path10.join(projectRoot2, ".claude");
-  const settingsPath = path10.join(claudeDir, "settings.local.json");
-  const scriptPath = path10.join(projectRoot2, CHECKPOINT_SCRIPT_REL_PATH);
-  try {
-    fs11.mkdirSync(path10.dirname(scriptPath), { recursive: true });
-    fs11.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
-    fs11.chmodSync(scriptPath, 493);
-    let settings = {};
-    if (fs11.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs11.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
-    const CANONICAL_CMD = `node "$CLAUDE_PROJECT_DIR/${CHECKPOINT_SCRIPT_REL_PATH}"`;
-    const isDpCheckpointEntry = (entry) => {
-      if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
-      if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
-      }
-      return false;
-    };
-    const isCurrentCanonicalDp = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === CANONICAL_CMD && entry?.matcher === "Write|Edit|MultiEdit";
-    const beforeDpCount = settings.hooks.PostToolUse.filter(isDpCheckpointEntry).length;
-    const hasExactlyOneCanonical = beforeDpCount === 1 && settings.hooks.PostToolUse.some(isCurrentCanonicalDp);
-    if (hasExactlyOneCanonical) {
-      return { ok: true, changed: false, message: "Checkpoint hook already configured" };
-    }
-    settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter((entry) => !isDpCheckpointEntry(entry));
-    settings.hooks.PostToolUse.push({
-      matcher: "Write|Edit|MultiEdit",
-      hooks: [{ type: "command", command: CANONICAL_CMD }]
-    });
-    fs11.mkdirSync(claudeDir, { recursive: true });
-    fs11.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
-    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", CHECKPOINT_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
-    const [firstScope] = otherScopes;
-    if (firstScope) {
-      const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
-    }
-    return { ok: true, changed: true, message: msg };
-  } catch (err) {
-    return { ok: false, message: `Could not configure checkpoint hook: ${err?.message ?? err}` };
-  }
-}
-var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
-var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
-var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
-function resolvePreflightCoreUrl() {
-  const here = path10.dirname(fileURLToPath(import.meta.url));
-  const distCandidate = path10.join(here, "preflight-hook-core.js");
-  const candidates = [
-    distCandidate,
-    path10.join(here, "../../dist/cli/preflight-hook-core.js")
-    // src/cli via tsx, after a build
-  ];
-  const found = candidates.find((c) => fs11.existsSync(c));
-  return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
-}
-function preflightHookScript(coreUrl) {
-  return `#!/usr/bin/env node
-// deepPairing PreToolUse preflight hook \u2014 installed by ensurePreflightHook.
-// GENERATED, do not edit. ESM (.mjs): use import, not require.
-// Runs the SAME rejected-approach matcher the MCP-side preflight uses, against
-// the agent's actual Edit/Write/MultiEdit, so a direct edit that matches a
-// previously-rejected approach can't silently bypass the gate. It surfaces the
-// match to the HUMAN (permissionDecision: "ask") rather than hard-denying:
-// matching raw file content is noisier than the agent's reasoning prose, and a
-// change the human already approved in the UI must not be auto-blocked when
-// applied. "ask" keeps the human in the loop (pairing) and is recoverable.
-import fs from "node:fs";
-import path from "node:path";
-
-// Built matcher core, stamped at install time (see resolvePreflightCoreUrl).
-const CORE_URL = ${JSON.stringify(coreUrl)};
-
-function recordFire(projectRoot, reason) {
-  try {
-    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    let s = { version: 1, fires: [] };
-    if (fs.existsSync(sp)) { try { s = JSON.parse(fs.readFileSync(sp, "utf-8")); } catch {} }
-    const fires = Array.isArray(s.fires) ? s.fires : [];
-    fires.push({ at: new Date().toISOString(), hook: "preflight", reason: reason });
-    s.fires = fires.slice(-50);
-    s.version = 1;
-    fs.writeFileSync(sp, JSON.stringify(s));
-  } catch {}
-}
-
-// PP1 \u2014 cheap pre-check so the common case (no rejections seeded, no team.json)
-// skips the ~40ms dynamic import of the matcher core entirely. Reading the small
-// preferences.json is ms; the import is the cost. If there's nothing to match
-// against, exit before importing.
-function ledgersPresent(projectRoot) {
-  try {
-    const prefs = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), "utf-8"));
-    if (Array.isArray(prefs && prefs.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
-  } catch {}
-  try {
-    if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
-  } catch {}
-  return false;
-}
-
-let input = "";
-process.stdin.setEncoding("utf-8");
-process.stdin.on("data", (d) => { input += d; });
-process.stdin.on("end", async () => {
-  try {
-    const ev = JSON.parse(input || "{}");
-    const toolName = ev.tool_name || "";
-    const toolInput = ev.tool_input || ev.input || {};
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
-      process.exit(0);
-    }
-    if (!ledgersPresent(projectRoot)) {
-      process.exit(0); // nothing to match against \u2014 skip the matcher import
-    }
-    const mod = await import(CORE_URL);
-    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
-    if (decision && decision.deny) {
-      recordFire(projectRoot, decision.source || "blocked");
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "ask",
-          permissionDecisionReason: decision.reason || "This change matches a previously-rejected approach.",
-        },
-      }));
-    }
-    // no match = exit 0 with no decision JSON (tool proceeds)
-    process.exit(0);
-  } catch (err) {
-    // FAIL OPEN \u2014 a broken hook must never block the user's edits.
-    try { process.stderr.write("[deepPairing] preflight hook error: " + String((err && err.message) || err) + "\\n"); } catch {}
-    process.exit(0);
-  }
-});
-`;
-}
-function ensurePreflightHook(projectRoot2) {
-  const claudeDir = path10.join(projectRoot2, ".claude");
-  const settingsPath = path10.join(claudeDir, "settings.local.json");
-  const scriptPath = path10.join(projectRoot2, PREFLIGHT_SCRIPT_REL_PATH);
-  try {
-    const core = resolvePreflightCoreUrl();
-    fs11.mkdirSync(path10.dirname(scriptPath), { recursive: true });
-    fs11.writeFileSync(scriptPath, preflightHookScript(core.url));
-    fs11.chmodSync(scriptPath, 493);
-    const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
-    let settings = {};
-    if (fs11.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs11.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
-    const isDpEntry = (entry) => {
-      if (typeof entry?.command === "string" && PREFLIGHT_HOOK_MARKER(entry.command)) return true;
-      if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && PREFLIGHT_HOOK_MARKER(h.command));
-      }
-      return false;
-    };
-    const isCanonical = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND && entry?.matcher === PREFLIGHT_MATCHER;
-    const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
-    if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
-      return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
-    }
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e) => !isDpEntry(e));
-    settings.hooks.PreToolUse.push({
-      matcher: PREFLIGHT_MATCHER,
-      hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }]
-    });
-    fs11.mkdirSync(claudeDir, { recursive: true });
-    fs11.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
-  } catch (err) {
-    return { ok: false, message: `Failed to install preflight hook: ${err}` };
-  }
-}
-function isPluginManaged() {
-  if (process.env.CLAUDE_PLUGIN_ROOT) return true;
-  try {
-    const here = path10.dirname(fileURLToPath(import.meta.url));
-    return fs11.existsSync(path10.join(here, "..", ".claude-plugin", "plugin.json"));
-  } catch {
-    return false;
-  }
-}
-function runDaemonStartupSetup(projectRoot2) {
-  const results = [ensureDeepPairingDir(projectRoot2), ensureGitignoreEntry(projectRoot2)];
-  if (isPluginManaged()) {
-    results.push({
-      ok: true,
-      changed: false,
-      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)"
-    });
-    results.push(ensureCheckpointHook(projectRoot2));
-  } else {
-    results.push(ensureStopHook(projectRoot2));
-    results.push(ensureCheckpointHook(projectRoot2));
-    results.push(ensurePreflightHook(projectRoot2));
-  }
-  return results;
+  return app;
 }
 
 // src/demo-script.ts
@@ -27907,7 +27901,7 @@ var DEFAULT_REPROPOSAL = "Add a global mutable state singleton to hold config";
 function runDemoScript({
   sessionId,
   store,
-  broadcast: broadcast3,
+  broadcast,
   schedule = defaultSchedule,
   makeArtifactId = defaultArtifactId
 }) {
@@ -27929,7 +27923,7 @@ function runDemoScript({
         }]
       }
     });
-    broadcast3(sessionId, { type: "artifact_created", artifact });
+    broadcast(sessionId, { type: "artifact_created", artifact });
   });
   schedule(2500, async () => {
     await store.updateArtifactStatus(findingsArtifactId, "rejected", "demo_script");
@@ -27939,8 +27933,8 @@ function runDemoScript({
       sourceArtifactId: findingsArtifactId,
       concept: DEFAULT_REJECTION_CONCEPT
     });
-    broadcast3(sessionId, { type: "artifact_updated", artifactId: findingsArtifactId, status: "rejected" });
-    broadcast3(sessionId, {
+    broadcast(sessionId, { type: "artifact_updated", artifactId: findingsArtifactId, status: "rejected" });
+    broadcast(sessionId, {
       type: "ledger_write",
       kind: "rejected",
       description: DEFAULT_REJECTION_DESCRIPTION,
@@ -27950,7 +27944,7 @@ function runDemoScript({
     });
   });
   schedule(5e3, () => {
-    broadcast3(sessionId, {
+    broadcast(sessionId, {
       type: "preflight_blocked",
       toolName: "present_findings",
       source: "session",
@@ -28064,7 +28058,7 @@ async function sendPing(url2, payload) {
   }
 }
 
-// src/daemon/index.ts
+// src/daemon/create-daemon.ts
 init_version();
 init_token();
 init_project_root();
@@ -28115,8 +28109,8 @@ function shouldAutoOpenBrowser(env) {
   return openFlag !== "0" && openFlag !== "false" && openFlag !== "no";
 }
 
-// src/daemon/index.ts
-async function openBrowser(url2) {
+// src/daemon/create-daemon.ts
+async function defaultOpenBrowser(url2) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url2] : [url2];
   const child = spawn2(cmd, args, { stdio: "ignore", detached: true });
@@ -28124,26 +28118,625 @@ async function openBrowser(url2) {
   });
   child.unref();
 }
+function createDaemon(deps) {
+  const {
+    projectRoot: projectRoot2,
+    authToken: daemonAuthToken2,
+    log: log2,
+    exitProcess,
+    releaseListenSocket: releaseListenSocket2,
+    startedAt: startedAt2 = (/* @__PURE__ */ new Date()).toISOString(),
+    env = process.env,
+    version: version2 = SERVER_VERSION,
+    openBrowser = defaultOpenBrowser,
+    watch = (dir, listener) => fs14.watch(dir, listener),
+    heartbeatIntervalMs = 3e4
+  } = deps;
+  const daemonProjectHash = projectHashOf(projectRoot2);
+  let boundPort = 0;
+  const dpDir2 = path13.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path13.join(dpDir2, "daemon.json");
+  const sessions = /* @__PURE__ */ new Map();
+  const sessionMeta = /* @__PURE__ */ new Map();
+  const activeSessions = /* @__PURE__ */ new Set();
+  function createSession(sessionId) {
+    log2(`Creating session: ${sessionId}`);
+    const store = new FileStore(projectRoot2, sessionId);
+    sessions.set(sessionId, store);
+    if (!sessionId.startsWith("demo_")) {
+      try {
+        recordMetricEvent(projectRoot2, { kind: "session_started" });
+      } catch {
+      }
+    }
+    return store;
+  }
+  function getDefaultStoreOrNull() {
+    const first = sessions.values().next().value;
+    return first ?? null;
+  }
+  const wsClients = /* @__PURE__ */ new Map();
+  const globalClients = /* @__PURE__ */ new Set();
+  function broadcast(sessionId, event) {
+    const data = JSON.stringify({ ...event, sessionId });
+    const sessionClients = wsClients.get(sessionId);
+    if (sessionClients) {
+      for (const ws of sessionClients) {
+        try {
+          ws.send(data);
+        } catch {
+          sessionClients.delete(ws);
+        }
+      }
+    }
+    for (const ws of globalClients) {
+      try {
+        ws.send(data);
+      } catch {
+        globalClients.delete(ws);
+      }
+    }
+    try {
+      recordBroadcastMetric(projectRoot2, sessionId, event);
+    } catch {
+    }
+  }
+  function broadcastAll(event) {
+    for (const [sid, sessionClients] of wsClients) {
+      const data = JSON.stringify({ ...event, sessionId: sid });
+      for (const ws of sessionClients) {
+        try {
+          ws.send(data);
+        } catch {
+          sessionClients.delete(ws);
+        }
+      }
+    }
+    const globalData = JSON.stringify({ ...event, sessionId: null });
+    for (const ws of globalClients) {
+      try {
+        ws.send(globalData);
+      } catch {
+        globalClients.delete(ws);
+      }
+    }
+    try {
+      recordBroadcastMetric(projectRoot2, "__all__", event);
+    } catch {
+    }
+  }
+  function getClientCount() {
+    let count = globalClients.size;
+    for (const clients of wsClients.values()) count += clients.size;
+    return count;
+  }
+  let shutdownTimer = null;
+  function checkAutoShutdown() {
+    if (activeSessions.size === 0 && getClientCount() === 0) {
+      if (!shutdownTimer) {
+        log2("No active sessions or clients \u2014 will shut down in 60s if still idle");
+        shutdownTimer = setTimeout(() => {
+          if (activeSessions.size === 0 && getClientCount() === 0) {
+            log2("Auto-shutting down (idle)");
+            releaseListenSocket2();
+            cleanup();
+            exitProcess(0);
+          }
+          shutdownTimer = null;
+        }, 6e4);
+      }
+    } else if (shutdownTimer) {
+      clearTimeout(shutdownTimer);
+      shutdownTimer = null;
+    }
+  }
+  const app = new Hono2();
+  app.use("/*", cors({
+    // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
+    // reflection let any local web page read responses cross-origin —
+    // including the served HTML with the injected bearer token.
+    origin: (origin) => corsAllowedOrigin(origin)
+  }));
+  applyTopLevelGuards(app, { maxBodyBytes: 64 * 1024 });
+  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log2, projectRoot2, daemonAuthToken2, activeSessions);
+  app.route("/", daemonRoutes);
+  const publicRoutes = createHttpRoutes(
+    (sessionId) => {
+      if (sessionId) {
+        const store = sessions.get(sessionId);
+        return store ?? null;
+      }
+      return getDefaultStoreOrNull();
+    },
+    projectRoot2,
+    (event, sessionId) => {
+      if (sessionId) {
+        broadcast(sessionId, event);
+      } else {
+        broadcastAll(event);
+      }
+    },
+    log2,
+    // III5 — pass the daemon's bearer token so /api/prompts requires
+    // Authorization. The browser receives this token via the
+    // window.__deepPairingToken injection in the index.html serve path
+    // (see static-serve block below).
+    daemonAuthToken2,
+    // #151 — snapshot every registered session's IN-MEMORY decisions +
+    // artifacts so GET /api/decisions reflects a decision the instant it is
+    // recorded/resolved, not after the debounced flush lands on disk. The
+    // `sessions` map deliberately retains stores after /unregister — those
+    // in-memory copies are still at least as fresh as their files, so live-
+    // wins-by-sessionId stays correct for them too. A single failing store is
+    // skipped (that session falls back to the disk scan) rather than losing
+    // the live view for every other session.
+    () => {
+      const out = [];
+      for (const [sessionId, store] of sessions.entries()) {
+        try {
+          const state = store.getFullState();
+          out.push({ sessionId, decisions: state.decisions, artifacts: state.artifacts });
+        } catch (err) {
+          log2(`[decisions] live snapshot failed for ${sessionId}, using disk: ${err}`);
+        }
+      }
+      return out;
+    }
+  );
+  app.route("/", publicRoutes);
+  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change"]);
+  function computeDaemonPendingCount() {
+    let n = 0;
+    for (const store of sessions.values()) {
+      try {
+        for (const a of store.getArtifacts()) {
+          if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
+        }
+      } catch {
+      }
+    }
+    return n;
+  }
+  app.get("/api/daemon-info", (c) => {
+    return c.json({ pid: process.pid, projectRoot: projectRoot2, projectHash: daemonProjectHash, startedAt: startedAt2, version: version2, pendingCount: computeDaemonPendingCount() });
+  });
+  const PROJECTS_SWEEP_TTL_MS = 35e3;
+  let projectsSweepCache = null;
+  let projectsSweepInFlight = null;
+  app.get("/api/projects", async (c) => {
+    const fresh = c.req.query("fresh") === "1";
+    const maxAge = fresh ? 2e3 : PROJECTS_SWEEP_TTL_MS;
+    if (projectsSweepCache && Date.now() - projectsSweepCache.at < maxAge) {
+      return c.json(projectsSweepCache.payload);
+    }
+    if (!projectsSweepInFlight) {
+      projectsSweepInFlight = sweepProjects().finally(() => {
+        projectsSweepInFlight = null;
+      });
+    }
+    const payload = await projectsSweepInFlight;
+    return c.json(payload);
+  });
+  async function sweepProjects() {
+    const { probeDaemonIdentity: probeDaemonIdentity2 } = await Promise.resolve().then(() => (init_lifecycle(), lifecycle_exports));
+    const probes = [];
+    for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
+      probes.push(probeDaemonIdentity2(port, 300).then((identity) => ({ port, identity })));
+    }
+    const results = await Promise.all(probes);
+    const projects = results.filter((r) => r.identity !== null).map((r) => {
+      const root = r.identity.projectRoot;
+      const segs = root.split(/[\\/]/).filter(Boolean);
+      return {
+        projectRoot: root,
+        projectHash: projectHashOf(root),
+        port: r.port,
+        label: segs[segs.length - 1] ?? root,
+        isSelf: r.port === boundPort,
+        // MP1 — per-project "agent waiting" count (from each peer's
+        // /api/daemon-info). Drives the switcher badge + global indicator.
+        pendingCount: typeof r.identity.pendingCount === "number" ? r.identity.pendingCount : 0
+      };
+    }).sort((a, b) => a.label.localeCompare(b.label));
+    const payload = { projects, selfPort: boundPort, selfHash: daemonProjectHash };
+    projectsSweepCache = { at: Date.now(), payload };
+    return payload;
+  }
+  app.post("/api/evict", async (c) => {
+    const confirmPid = c.req.header("X-DeepPairing-Confirm-Pid");
+    if (confirmPid !== String(process.pid)) {
+      return c.json(
+        { error: `Confirm-pid ${confirmPid ?? "(none)"} does not match daemon pid ${process.pid}`, code: ERROR_CODES.evict_pid_mismatch },
+        403
+      );
+    }
+    log2(`[evict] requested for pid=${process.pid} project=${projectRoot2} \u2014 flushing + broadcasting + exiting`);
+    for (const sid of sessions.keys()) {
+      broadcast(sid, { type: "daemon_evicting", reason: "evicted_by_doctor", projectRoot: projectRoot2, pid: process.pid });
+    }
+    releaseListenSocket2({ closeWs: false });
+    cleanup();
+    evictTimer = setTimeout(() => exitProcess(0), 250);
+    return c.json({ status: "evicting", pid: process.pid });
+  });
+  app.get("/api/skill-status", (c) => {
+    const claudeMdPath = path13.join(projectRoot2, "CLAUDE.md");
+    let claudeMdHasMarker = false;
+    try {
+      if (fs14.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs14.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      }
+    } catch {
+    }
+    const RECENT_WINDOW_MS = 10 * 60 * 1e3;
+    const now = Date.now();
+    let recentArtifactActivity = false;
+    let latestArtifactAt = null;
+    for (const store of sessions.values()) {
+      const artifacts = store.getArtifacts();
+      for (const a of artifacts) {
+        const t = new Date(a.createdAt).getTime();
+        if (!Number.isFinite(t)) continue;
+        if (!latestArtifactAt || t > new Date(latestArtifactAt).getTime()) {
+          latestArtifactAt = a.createdAt;
+        }
+        if (now - t < RECENT_WINDOW_MS) {
+          recentArtifactActivity = true;
+        }
+      }
+    }
+    const likely = claudeMdHasMarker || recentArtifactActivity;
+    const evidence = likely ? claudeMdHasMarker ? recentArtifactActivity ? "CLAUDE.md carries the deepPairing marker AND the agent has created an artifact in the last 10 min" : "CLAUDE.md carries the deepPairing marker" : "the agent has created an artifact in the last 10 min (skill appears active)" : "no CLAUDE.md marker AND no artifact created in the last 10 min";
+    return c.json({
+      claudeMdHasMarker,
+      recentArtifactActivity,
+      latestArtifactAt,
+      pairingProtocolSkillLikelyLoaded: likely,
+      evidence
+    });
+  });
+  app.post("/api/demo/run", (c) => {
+    const MAX_DEMO_SESSIONS = 5;
+    const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
+    while (demoIds.length >= MAX_DEMO_SESSIONS) {
+      const oldest = demoIds.shift();
+      sessions.delete(oldest);
+      sessionMeta.delete(oldest);
+      activeSessions.delete(oldest);
+    }
+    const sessionId = `demo_${Date.now()}`;
+    const store = createSession(sessionId);
+    sessionMeta.set(sessionId, {
+      title: "deepPairing demo",
+      project: "demo",
+      registeredAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    runDemoScript({ sessionId, store, broadcast });
+    return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
+  });
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
+  const __thisDir2 = path13.dirname(fileURLToPath3(import.meta.url));
+  const monorepoWebDist = path13.join(__thisDir2, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path13.join(__thisDir2, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs14.existsSync(p)) ?? monorepoWebDist;
+  mountStaticUi(app, {
+    webDistPath,
+    authToken: daemonAuthToken2,
+    projectHash: daemonProjectHash,
+    log: log2
+  });
+  function cleanup() {
+    for (const store of sessions.values()) {
+      store.forceFlush();
+    }
+    try {
+      if (fs14.existsSync(daemonInfoFile)) fs14.unlinkSync(daemonInfoFile);
+    } catch {
+    }
+    try {
+      unlinkTokenSidecar(projectRoot2);
+    } catch {
+    }
+  }
+  function writeFile0600(file2, obj2) {
+    writeJsonAtomic(file2, obj2, 2, { mode: 384 });
+  }
+  let tokenPlacementCached = null;
+  function resolveTokenPlacement() {
+    if (tokenPlacementCached) return tokenPlacementCached;
+    tokenPlacementCached = tokenPlacement({
+      platform: process.platform,
+      // Windows mode bits are advisory; skip the probe and treat as in-repo.
+      dirHonorsMode: process.platform === "win32" ? true : fsHonorsPosixMode(dpDir2)
+    });
+    return tokenPlacementCached;
+  }
+  function writeDaemonInfo(port) {
+    const discovery = { pid: process.pid, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
+    try {
+      fs14.mkdirSync(dpDir2, { recursive: true });
+      if (resolveTokenPlacement() === "in-repo") {
+        writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
+        return;
+      }
+      writeFile0600(daemonInfoFile, discovery);
+      const sidecar = writeTokenSidecar(projectRoot2, { authToken: daemonAuthToken2, pid: process.pid, port });
+      if (sidecar.refused) {
+        log2(`[token] SECURITY: refused to write the bearer token to ${sidecar.path} \u2014 the sidecar path is a symlink or owned by another user (possible token-capture attempt). Sidecar auth is unavailable until this is cleared.`);
+        process.stderr.write(`[deepPairing daemon] SECURITY: token sidecar path ${sidecar.path} is unsafe (symlink/foreign-owned); refused to write.
+`);
+      } else if (sidecar.honored) {
+        log2(`[token] .deeppairing is non-POSIX (chmod 0600 ignored) \u2014 bearer token relocated to ${sidecar.path} (mode 0600). Discovery (pid/port) stays in .deeppairing/daemon.json.`);
+      } else {
+        log2(`[token] WARN: no filesystem here honors 0600 (token file ${sidecar.path} = mode ${sidecar.mode.toString(8)}). Continuing \u2014 the bearer token is readable by same-uid processes on this machine.`);
+      }
+    } catch (err) {
+      const msg = err?.message ?? String(err);
+      log2(`FATAL: writeDaemonInfo failed: ${msg}`);
+      process.stderr.write(`[deepPairing daemon] FATAL: ${msg}
+`);
+      throw err;
+    }
+  }
+  const wss = new import_websocket_server.default({ noServer: true });
+  function attachUpgradeHandler(server) {
+    server.on?.("upgrade", (request, socket, head) => {
+      if (!request.url?.startsWith("/ws")) {
+        socket.destroy();
+        return;
+      }
+      const origin = request.headers?.origin;
+      if (!isAllowedWsOrigin(origin, request.headers?.host)) {
+        log2(`[ws-upgrade] reject: disallowed Origin "${origin ?? "<none>"}" (host=${request.headers?.host ?? "<none>"})`);
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      if (daemonProjectHash) {
+        const url2 = new URL(request.url, "http://localhost");
+        const sentHash = url2.searchParams.get("projectHash") || request.headers?.["x-project-hash"];
+        if (!sentHash || sentHash !== daemonProjectHash) {
+          log2(`[ws-upgrade] reject: project-hash ${sentHash ? "mismatch" : "missing"} (sent=${sentHash ?? "<none>"} daemon=${daemonProjectHash})`);
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+      }
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    });
+  }
+  wss.on("connection", (ws, request) => {
+    const url2 = new URL(request.url ?? "/ws", "http://localhost");
+    const sessionId = url2.searchParams.get("sessionId");
+    if (sessionId) {
+      let clients = wsClients.get(sessionId);
+      if (!clients) {
+        clients = /* @__PURE__ */ new Set();
+        wsClients.set(sessionId, clients);
+      }
+      clients.add(ws);
+      const store = sessions.get(sessionId);
+      if (store) {
+        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+      }
+      ws.on("error", (err) => {
+        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
+        try {
+          ws.terminate();
+        } catch {
+        }
+      });
+      ws.on("close", () => {
+        clients.delete(ws);
+        if (clients.size === 0) wsClients.delete(sessionId);
+        checkAutoShutdown();
+      });
+    } else {
+      globalClients.add(ws);
+      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
+        sessionId: id,
+        artifactCount: store.getArtifacts().length
+      }));
+      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+      ws.on("error", (err) => {
+        log2(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
+        try {
+          ws.terminate();
+        } catch {
+        }
+      });
+      ws.on("close", () => {
+        globalClients.delete(ws);
+        checkAutoShutdown();
+      });
+    }
+    log2(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
+  });
+  wss.on("error", (err) => {
+    log2(`[wss] server error: ${err?.code ?? err?.message ?? err}`);
+  });
+  let heartbeatTimer = null;
+  function startHeartbeat(port) {
+    const heartbeatState = { consecutiveFailures: 0 };
+    const heartbeat = setInterval(
+      () => safeHeartbeatTick(
+        () => writeDaemonInfo(port),
+        log2,
+        heartbeatState,
+        (msg) => process.stderr.write(msg + "\n")
+      ),
+      heartbeatIntervalMs
+    );
+    heartbeat.unref?.();
+    heartbeatTimer = heartbeat;
+    return heartbeat;
+  }
+  let hooksWatcher = null;
+  function startHooksWatcher() {
+    let lastFireSeen = 0;
+    const hooksStatePath = path13.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const broadcastNewFires = () => {
+      try {
+        if (!fs14.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs14.readFileSync(hooksStatePath, "utf-8"));
+        const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
+        for (const f of fires) {
+          const t = new Date(f.at).getTime();
+          if (!Number.isFinite(t) || t <= lastFireSeen) continue;
+          lastFireSeen = t;
+          broadcastAll({ type: "hook_fired", fire: f });
+        }
+      } catch {
+      }
+    };
+    try {
+      if (fs14.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs14.readFileSync(hooksStatePath, "utf-8"));
+        const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
+        for (const f of fires) {
+          const t = new Date(f.at).getTime();
+          if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
+        }
+      }
+    } catch {
+    }
+    try {
+      const hooksDir = path13.dirname(hooksStatePath);
+      fs14.mkdirSync(hooksDir, { recursive: true });
+      const watcher = watch(hooksDir, (_event, filename) => {
+        if (filename === "hooks-state.json" || filename === path13.basename(hooksStatePath)) {
+          broadcastNewFires();
+        }
+      });
+      guardWatcher(watcher, log2);
+      hooksWatcher = watcher;
+    } catch (err) {
+      log2(`Hook-state watcher failed to start: ${err}`);
+    }
+  }
+  function maybeAutoOpenBrowser(port) {
+    if (shouldAutoOpenBrowser(env)) {
+      openBrowser(`http://localhost:${port}`).catch((err) => {
+        log2(`Failed to auto-open browser: ${err}`);
+      });
+    }
+  }
+  let pingTimer = null;
+  let evictTimer = null;
+  function scheduleInstallHealthPing() {
+    const pingDecision = decidePing(env);
+    if (pingDecision.shouldSend) {
+      pingTimer = setTimeout(() => {
+        const claudeMdPath = path13.join(projectRoot2, "CLAUDE.md");
+        let claudeMdHasMarker = false;
+        try {
+          if (fs14.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs14.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          }
+        } catch {
+        }
+        const now = Date.now();
+        const RECENT_WINDOW_MS = 10 * 60 * 1e3;
+        let recentArtifactActivity = false;
+        for (const store of sessions.values()) {
+          for (const a of store.getArtifacts()) {
+            const t = new Date(a.createdAt).getTime();
+            if (Number.isFinite(t) && now - t < RECENT_WINDOW_MS) {
+              recentArtifactActivity = true;
+              break;
+            }
+          }
+          if (recentArtifactActivity) break;
+        }
+        const payload = buildPingPayload({
+          // V-fix — was a stale hardcoded "0.1.0" (never bumped); the
+          // install-health ping now reports the real running app version
+          // from the single SERVER_VERSION constant.
+          version: version2,
+          skillLikelyLoaded: claudeMdHasMarker || recentArtifactActivity,
+          recentArtifactActivity
+        });
+        void sendPing(pingDecision.url, payload).then((r) => {
+          log2(`Install-health ping: ${r.ok ? "ok" : `failed (${r.error ?? r.status})`}`);
+        });
+      }, 6e4);
+      pingTimer.unref?.();
+    } else {
+      log2(`Install-health ping: skipped (${pingDecision.reason})`);
+    }
+  }
+  function dispose() {
+    if (shutdownTimer) {
+      clearTimeout(shutdownTimer);
+      shutdownTimer = null;
+    }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    if (pingTimer) {
+      clearTimeout(pingTimer);
+      pingTimer = null;
+    }
+    if (evictTimer) {
+      clearTimeout(evictTimer);
+      evictTimer = null;
+    }
+    try {
+      hooksWatcher?.close?.();
+    } catch {
+    }
+    hooksWatcher = null;
+    try {
+      wss.close();
+    } catch {
+    }
+  }
+  return {
+    app,
+    wss,
+    attachUpgradeHandler,
+    setBoundPort: (port) => {
+      boundPort = port;
+    },
+    createSession,
+    sessions,
+    sessionMeta,
+    activeSessions,
+    broadcast,
+    broadcastAll,
+    getClientCount,
+    checkAutoShutdown,
+    writeDaemonInfo,
+    startHeartbeat,
+    startHooksWatcher,
+    maybeAutoOpenBrowser,
+    scheduleInstallHealthPing,
+    cleanup,
+    dispose
+  };
+}
+
+// src/daemon/index.ts
 var MAX_PORT_ATTEMPTS2 = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
-var daemonProjectHash = projectHashOf(projectRoot);
-var boundPort = 0;
-var dpDir = path13.join(projectRoot, ".deeppairing");
-var logFile = path13.join(dpDir, "daemon.log");
-var daemonInfoFile = path13.join(dpDir, "daemon.json");
+var dpDir = path14.join(projectRoot, ".deeppairing");
+var logFile = path14.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var daemonAuthToken = crypto4.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs14.statSync(logFile);
+    const stat = fs15.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs14.existsSync(src)) fs14.renameSync(src, dst);
+        if (fs15.existsSync(src)) fs15.renameSync(src, dst);
       } catch {
       }
     }
@@ -28154,85 +28747,11 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs14.mkdirSync(path13.dirname(logFile), { recursive: true });
+    fs15.mkdirSync(path14.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs14.appendFileSync(logFile, line);
+    fs15.appendFileSync(logFile, line);
   } catch {
   }
-}
-var sessions = /* @__PURE__ */ new Map();
-var sessionMeta = /* @__PURE__ */ new Map();
-var activeSessions = /* @__PURE__ */ new Set();
-function createSession(sessionId) {
-  log(`Creating session: ${sessionId}`);
-  const store = new FileStore(projectRoot, sessionId);
-  sessions.set(sessionId, store);
-  if (!sessionId.startsWith("demo_")) {
-    try {
-      recordMetricEvent(projectRoot, { kind: "session_started" });
-    } catch {
-    }
-  }
-  return store;
-}
-function getDefaultStoreOrNull() {
-  const first = sessions.values().next().value;
-  return first ?? null;
-}
-var wsClients = /* @__PURE__ */ new Map();
-var globalClients = /* @__PURE__ */ new Set();
-function broadcast2(sessionId, event) {
-  const data = JSON.stringify({ ...event, sessionId });
-  const sessionClients = wsClients.get(sessionId);
-  if (sessionClients) {
-    for (const ws of sessionClients) {
-      try {
-        ws.send(data);
-      } catch {
-        sessionClients.delete(ws);
-      }
-    }
-  }
-  for (const ws of globalClients) {
-    try {
-      ws.send(data);
-    } catch {
-      globalClients.delete(ws);
-    }
-  }
-  try {
-    recordBroadcastMetric(projectRoot, sessionId, event);
-  } catch {
-  }
-}
-function broadcastAll(event) {
-  for (const [sid, sessionClients] of wsClients) {
-    const data = JSON.stringify({ ...event, sessionId: sid });
-    for (const ws of sessionClients) {
-      try {
-        ws.send(data);
-      } catch {
-        sessionClients.delete(ws);
-      }
-    }
-  }
-  const globalData = JSON.stringify({ ...event, sessionId: null });
-  for (const ws of globalClients) {
-    try {
-      ws.send(globalData);
-    } catch {
-      globalClients.delete(ws);
-    }
-  }
-  try {
-    recordBroadcastMetric(projectRoot, "__all__", event);
-  } catch {
-  }
-}
-function getClientCount() {
-  let count = globalClients.size;
-  for (const clients2 of wsClients.values()) count += clients2.size;
-  return count;
 }
 var httpServer = null;
 var wsServer = null;
@@ -28249,283 +28768,24 @@ function releaseListenSocket({ closeWs = true } = {}) {
     }
   }
 }
+var daemon = createDaemon({
+  projectRoot,
+  authToken: daemonAuthToken,
+  log,
+  startedAt,
+  exitProcess: (code) => process.exit(code),
+  releaseListenSocket
+});
+wsServer = daemon.wss;
 function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`Shutting down (${signal})`);
   releaseListenSocket();
-  cleanup();
+  daemon.cleanup();
   process.exit(0);
 }
-var shutdownTimer = null;
-function checkAutoShutdown() {
-  if (activeSessions.size === 0 && getClientCount() === 0) {
-    if (!shutdownTimer) {
-      log("No active sessions or clients \u2014 will shut down in 60s if still idle");
-      shutdownTimer = setTimeout(() => {
-        if (activeSessions.size === 0 && getClientCount() === 0) {
-          log("Auto-shutting down (idle)");
-          releaseListenSocket();
-          cleanup();
-          process.exit(0);
-        }
-        shutdownTimer = null;
-      }, 6e4);
-    }
-  } else if (shutdownTimer) {
-    clearTimeout(shutdownTimer);
-    shutdownTimer = null;
-  }
-}
-setInterval(checkAutoShutdown, 3e4);
-var app = new Hono2();
-app.use("/*", cors({
-  // D5 — vscode-webview:// ONLY (see origin-policy.ts). Loopback-origin
-  // reflection let any local web page read responses cross-origin —
-  // including the served HTML with the injected bearer token.
-  origin: (origin) => corsAllowedOrigin(origin)
-}));
-applyTopLevelGuards(app, { maxBodyBytes: 64 * 1024 });
-var daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast2, log, projectRoot, daemonAuthToken, activeSessions);
-app.route("/", daemonRoutes);
-var publicRoutes = createHttpRoutes(
-  (sessionId) => {
-    if (sessionId) {
-      const store = sessions.get(sessionId);
-      return store ?? null;
-    }
-    return getDefaultStoreOrNull();
-  },
-  projectRoot,
-  (event, sessionId) => {
-    if (sessionId) {
-      broadcast2(sessionId, event);
-    } else {
-      broadcastAll(event);
-    }
-  },
-  log,
-  // III5 — pass the daemon's bearer token so /api/prompts requires
-  // Authorization. The browser receives this token via the
-  // window.__deepPairingToken injection in the index.html serve path
-  // (see static-serve block below).
-  daemonAuthToken,
-  // #151 — snapshot every registered session's IN-MEMORY decisions +
-  // artifacts so GET /api/decisions reflects a decision the instant it is
-  // recorded/resolved, not after the debounced flush lands on disk. The
-  // `sessions` map deliberately retains stores after /unregister — those
-  // in-memory copies are still at least as fresh as their files, so live-
-  // wins-by-sessionId stays correct for them too. A single failing store is
-  // skipped (that session falls back to the disk scan) rather than losing
-  // the live view for every other session.
-  () => {
-    const out = [];
-    for (const [sessionId, store] of sessions.entries()) {
-      try {
-        const state = store.getFullState();
-        out.push({ sessionId, decisions: state.decisions, artifacts: state.artifacts });
-      } catch (err) {
-        log(`[decisions] live snapshot failed for ${sessionId}, using disk: ${err}`);
-      }
-    }
-    return out;
-  }
-);
-app.route("/", publicRoutes);
-var PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change"]);
-function computeDaemonPendingCount() {
-  let n = 0;
-  for (const store of sessions.values()) {
-    try {
-      for (const a of store.getArtifacts()) {
-        if (a.status === "draft" && PENDING_REVIEWABLE.has(a.type)) n++;
-      }
-    } catch {
-    }
-  }
-  return n;
-}
-app.get("/api/daemon-info", (c) => {
-  return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, version: SERVER_VERSION, pendingCount: computeDaemonPendingCount() });
-});
-var PROJECTS_SWEEP_TTL_MS = 35e3;
-var projectsSweepCache = null;
-var projectsSweepInFlight = null;
-app.get("/api/projects", async (c) => {
-  const fresh = c.req.query("fresh") === "1";
-  const maxAge = fresh ? 2e3 : PROJECTS_SWEEP_TTL_MS;
-  if (projectsSweepCache && Date.now() - projectsSweepCache.at < maxAge) {
-    return c.json(projectsSweepCache.payload);
-  }
-  if (!projectsSweepInFlight) {
-    projectsSweepInFlight = sweepProjects().finally(() => {
-      projectsSweepInFlight = null;
-    });
-  }
-  const payload = await projectsSweepInFlight;
-  return c.json(payload);
-});
-async function sweepProjects() {
-  const { probeDaemonIdentity: probeDaemonIdentity2 } = await Promise.resolve().then(() => (init_lifecycle(), lifecycle_exports));
-  const probes = [];
-  for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
-    probes.push(probeDaemonIdentity2(port, 300).then((identity) => ({ port, identity })));
-  }
-  const results = await Promise.all(probes);
-  const projects = results.filter((r) => r.identity !== null).map((r) => {
-    const root = r.identity.projectRoot;
-    const segs = root.split(/[\\/]/).filter(Boolean);
-    return {
-      projectRoot: root,
-      projectHash: projectHashOf(root),
-      port: r.port,
-      label: segs[segs.length - 1] ?? root,
-      isSelf: r.port === boundPort,
-      // MP1 — per-project "agent waiting" count (from each peer's
-      // /api/daemon-info). Drives the switcher badge + global indicator.
-      pendingCount: typeof r.identity.pendingCount === "number" ? r.identity.pendingCount : 0
-    };
-  }).sort((a, b) => a.label.localeCompare(b.label));
-  const payload = { projects, selfPort: boundPort, selfHash: daemonProjectHash };
-  projectsSweepCache = { at: Date.now(), payload };
-  return payload;
-}
-app.post("/api/evict", async (c) => {
-  const confirmPid = c.req.header("X-DeepPairing-Confirm-Pid");
-  if (confirmPid !== String(process.pid)) {
-    return c.json(
-      { error: `Confirm-pid ${confirmPid ?? "(none)"} does not match daemon pid ${process.pid}`, code: ERROR_CODES.evict_pid_mismatch },
-      403
-    );
-  }
-  log(`[evict] requested for pid=${process.pid} project=${projectRoot} \u2014 flushing + broadcasting + exiting`);
-  for (const sid of sessions.keys()) {
-    broadcast2(sid, { type: "daemon_evicting", reason: "evicted_by_doctor", projectRoot, pid: process.pid });
-  }
-  releaseListenSocket({ closeWs: false });
-  cleanup();
-  setTimeout(() => process.exit(0), 250);
-  return c.json({ status: "evicting", pid: process.pid });
-});
-app.get("/api/skill-status", (c) => {
-  const claudeMdPath = path13.join(projectRoot, "CLAUDE.md");
-  let claudeMdHasMarker = false;
-  try {
-    if (fs14.existsSync(claudeMdPath)) {
-      claudeMdHasMarker = fs14.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
-    }
-  } catch {
-  }
-  const RECENT_WINDOW_MS = 10 * 60 * 1e3;
-  const now = Date.now();
-  let recentArtifactActivity = false;
-  let latestArtifactAt = null;
-  for (const store of sessions.values()) {
-    const artifacts = store.getArtifacts();
-    for (const a of artifacts) {
-      const t = new Date(a.createdAt).getTime();
-      if (!Number.isFinite(t)) continue;
-      if (!latestArtifactAt || t > new Date(latestArtifactAt).getTime()) {
-        latestArtifactAt = a.createdAt;
-      }
-      if (now - t < RECENT_WINDOW_MS) {
-        recentArtifactActivity = true;
-      }
-    }
-  }
-  const likely = claudeMdHasMarker || recentArtifactActivity;
-  const evidence = likely ? claudeMdHasMarker ? recentArtifactActivity ? "CLAUDE.md carries the deepPairing marker AND the agent has created an artifact in the last 10 min" : "CLAUDE.md carries the deepPairing marker" : "the agent has created an artifact in the last 10 min (skill appears active)" : "no CLAUDE.md marker AND no artifact created in the last 10 min";
-  return c.json({
-    claudeMdHasMarker,
-    recentArtifactActivity,
-    latestArtifactAt,
-    pairingProtocolSkillLikelyLoaded: likely,
-    evidence
-  });
-});
-app.post("/api/demo/run", (c) => {
-  const MAX_DEMO_SESSIONS = 5;
-  const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
-  while (demoIds.length >= MAX_DEMO_SESSIONS) {
-    const oldest = demoIds.shift();
-    sessions.delete(oldest);
-    sessionMeta.delete(oldest);
-    activeSessions.delete(oldest);
-  }
-  const sessionId = `demo_${Date.now()}`;
-  const store = createSession(sessionId);
-  sessionMeta.set(sessionId, {
-    title: "deepPairing demo",
-    project: "demo",
-    registeredAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
-  runDemoScript({ sessionId, store, broadcast: broadcast2 });
-  return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
-});
-app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
-var __thisDir2 = path13.dirname(fileURLToPath3(import.meta.url));
-var monorepoWebDist = path13.join(__thisDir2, "../../dist/web");
-var webDistCandidates = [monorepoWebDist, path13.join(__thisDir2, "web")];
-var webDistPath = webDistCandidates.find((p) => fs14.existsSync(p)) ?? monorepoWebDist;
-mountStaticUi(app, {
-  webDistPath,
-  authToken: daemonAuthToken,
-  projectHash: daemonProjectHash,
-  log
-});
-function cleanup() {
-  for (const store of sessions.values()) {
-    store.forceFlush();
-  }
-  try {
-    if (fs14.existsSync(daemonInfoFile)) fs14.unlinkSync(daemonInfoFile);
-  } catch {
-  }
-  try {
-    unlinkTokenSidecar(projectRoot);
-  } catch {
-  }
-}
-function writeFile0600(file2, obj2) {
-  writeJsonAtomic(file2, obj2, 2, { mode: 384 });
-}
-var tokenPlacementCached = null;
-function resolveTokenPlacement() {
-  if (tokenPlacementCached) return tokenPlacementCached;
-  tokenPlacementCached = tokenPlacement({
-    platform: process.platform,
-    // Windows mode bits are advisory; skip the probe and treat as in-repo.
-    dirHonorsMode: process.platform === "win32" ? true : fsHonorsPosixMode(dpDir)
-  });
-  return tokenPlacementCached;
-}
-function writeDaemonInfo(port) {
-  const discovery = { pid: process.pid, port, startedAt, projectRoot, version: SERVER_VERSION };
-  try {
-    fs14.mkdirSync(dpDir, { recursive: true });
-    if (resolveTokenPlacement() === "in-repo") {
-      writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken });
-      return;
-    }
-    writeFile0600(daemonInfoFile, discovery);
-    const sidecar = writeTokenSidecar(projectRoot, { authToken: daemonAuthToken, pid: process.pid, port });
-    if (sidecar.refused) {
-      log(`[token] SECURITY: refused to write the bearer token to ${sidecar.path} \u2014 the sidecar path is a symlink or owned by another user (possible token-capture attempt). Sidecar auth is unavailable until this is cleared.`);
-      process.stderr.write(`[deepPairing daemon] SECURITY: token sidecar path ${sidecar.path} is unsafe (symlink/foreign-owned); refused to write.
-`);
-    } else if (sidecar.honored) {
-      log(`[token] .deeppairing is non-POSIX (chmod 0600 ignored) \u2014 bearer token relocated to ${sidecar.path} (mode 0600). Discovery (pid/port) stays in .deeppairing/daemon.json.`);
-    } else {
-      log(`[token] WARN: no filesystem here honors 0600 (token file ${sidecar.path} = mode ${sidecar.mode.toString(8)}). Continuing \u2014 the bearer token is readable by same-uid processes on this machine.`);
-    }
-  } catch (err) {
-    const msg = err?.message ?? String(err);
-    log(`FATAL: writeDaemonInfo failed: ${msg}`);
-    process.stderr.write(`[deepPairing daemon] FATAL: ${msg}
-`);
-    throw err;
-  }
-}
+setInterval(() => daemon.checkAutoShutdown(), 3e4);
 async function main() {
   log(`Daemon starting (PID ${process.pid})`);
   log(`Project root: ${projectRoot}`);
@@ -28568,7 +28828,7 @@ async function main() {
   let lastBindErr = null;
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS2; attempt++) {
     const candidate = BASE_PORT + (preferredPort - BASE_PORT + attempt) % PORT_SPAN;
-    const candidateServer = serve({ fetch: app.fetch, port: candidate, hostname: "127.0.0.1" });
+    const candidateServer = serve({ fetch: daemon.app.fetch, port: candidate, hostname: "127.0.0.1" });
     const result = await new Promise((resolve) => {
       const s = candidateServer;
       const onError = (err) => {
@@ -28590,7 +28850,7 @@ async function main() {
       server = candidateServer;
       httpServer = candidateServer;
       port = candidate;
-      boundPort = candidate;
+      daemon.setBoundPort(candidate);
       if (attempt > 0) log(`Preferred port ${preferredPort} busy \u2014 bound to ${candidate} instead (recorded in daemon.json).`);
       break;
     }
@@ -28616,182 +28876,14 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
 `);
     process.exit(2);
   }
-  const wss = new import_websocket_server.default({ noServer: true });
-  wsServer = wss;
-  server.on?.("upgrade", (request, socket, head) => {
-    if (!request.url?.startsWith("/ws")) {
-      socket.destroy();
-      return;
-    }
-    const origin = request.headers?.origin;
-    if (!isAllowedWsOrigin(origin, request.headers?.host)) {
-      log(`[ws-upgrade] reject: disallowed Origin "${origin ?? "<none>"}" (host=${request.headers?.host ?? "<none>"})`);
-      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    if (daemonProjectHash) {
-      const url2 = new URL(request.url, "http://localhost");
-      const sentHash = url2.searchParams.get("projectHash") || request.headers?.["x-project-hash"];
-      if (!sentHash || sentHash !== daemonProjectHash) {
-        log(`[ws-upgrade] reject: project-hash ${sentHash ? "mismatch" : "missing"} (sent=${sentHash ?? "<none>"} daemon=${daemonProjectHash})`);
-        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-    }
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit("connection", ws, request);
-    });
-  });
-  wss.on("connection", (ws, request) => {
-    const url2 = new URL(request.url ?? "/ws", "http://localhost");
-    const sessionId = url2.searchParams.get("sessionId");
-    if (sessionId) {
-      let clients2 = wsClients.get(sessionId);
-      if (!clients2) {
-        clients2 = /* @__PURE__ */ new Set();
-        wsClients.set(sessionId, clients2);
-      }
-      clients2.add(ws);
-      const store = sessions.get(sessionId);
-      if (store) {
-        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
-      }
-      ws.on("error", (err) => {
-        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
-        try {
-          ws.terminate();
-        } catch {
-        }
-      });
-      ws.on("close", () => {
-        clients2.delete(ws);
-        if (clients2.size === 0) wsClients.delete(sessionId);
-        checkAutoShutdown();
-      });
-    } else {
-      globalClients.add(ws);
-      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-        sessionId: id,
-        artifactCount: store.getArtifacts().length
-      }));
-      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
-      ws.on("error", (err) => {
-        log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
-        try {
-          ws.terminate();
-        } catch {
-        }
-      });
-      ws.on("close", () => {
-        globalClients.delete(ws);
-        checkAutoShutdown();
-      });
-    }
-    log(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
-  });
-  wss.on("error", (err) => {
-    log(`[wss] server error: ${err?.code ?? err?.message ?? err}`);
-  });
-  writeDaemonInfo(port);
-  const heartbeatState = { consecutiveFailures: 0 };
-  const heartbeat = setInterval(
-    () => safeHeartbeatTick(
-      () => writeDaemonInfo(port),
-      log,
-      heartbeatState,
-      (msg) => process.stderr.write(msg + "\n")
-    ),
-    3e4
-  );
-  heartbeat.unref?.();
-  let lastFireSeen = 0;
-  const hooksStatePath = path13.join(projectRoot, ".deeppairing", "hooks-state.json");
-  const broadcastNewFires = () => {
-    try {
-      if (!fs14.existsSync(hooksStatePath)) return;
-      const raw2 = JSON.parse(fs14.readFileSync(hooksStatePath, "utf-8"));
-      const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
-      for (const f of fires) {
-        const t = new Date(f.at).getTime();
-        if (!Number.isFinite(t) || t <= lastFireSeen) continue;
-        lastFireSeen = t;
-        broadcastAll({ type: "hook_fired", fire: f });
-      }
-    } catch {
-    }
-  };
-  try {
-    if (fs14.existsSync(hooksStatePath)) {
-      const raw2 = JSON.parse(fs14.readFileSync(hooksStatePath, "utf-8"));
-      const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
-      for (const f of fires) {
-        const t = new Date(f.at).getTime();
-        if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
-      }
-    }
-  } catch {
-  }
-  try {
-    const hooksDir = path13.dirname(hooksStatePath);
-    fs14.mkdirSync(hooksDir, { recursive: true });
-    const watcher = fs14.watch(hooksDir, (_event, filename) => {
-      if (filename === "hooks-state.json" || filename === path13.basename(hooksStatePath)) {
-        broadcastNewFires();
-      }
-    });
-    guardWatcher(watcher, log);
-  } catch (err) {
-    log(`Hook-state watcher failed to start: ${err}`);
-  }
+  daemon.attachUpgradeHandler(server);
+  daemon.writeDaemonInfo(port);
+  daemon.startHeartbeat(port);
+  daemon.startHooksWatcher();
   log(`Daemon running on http://localhost:${port}`);
-  if (shouldAutoOpenBrowser(process.env)) {
-    openBrowser(`http://localhost:${port}`).catch((err) => {
-      log(`Failed to auto-open browser: ${err}`);
-    });
-  }
-  const pingDecision = decidePing(process.env);
-  if (pingDecision.shouldSend) {
-    const pingTimer = setTimeout(() => {
-      const claudeMdPath = path13.join(projectRoot, "CLAUDE.md");
-      let claudeMdHasMarker = false;
-      try {
-        if (fs14.existsSync(claudeMdPath)) {
-          claudeMdHasMarker = fs14.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
-        }
-      } catch {
-      }
-      const now = Date.now();
-      const RECENT_WINDOW_MS = 10 * 60 * 1e3;
-      let recentArtifactActivity = false;
-      for (const store of sessions.values()) {
-        for (const a of store.getArtifacts()) {
-          const t = new Date(a.createdAt).getTime();
-          if (Number.isFinite(t) && now - t < RECENT_WINDOW_MS) {
-            recentArtifactActivity = true;
-            break;
-          }
-        }
-        if (recentArtifactActivity) break;
-      }
-      const payload = buildPingPayload({
-        // V-fix — was a stale hardcoded "0.1.0" (never bumped); the
-        // install-health ping now reports the real running app version
-        // from the single SERVER_VERSION constant.
-        version: SERVER_VERSION,
-        skillLikelyLoaded: claudeMdHasMarker || recentArtifactActivity,
-        recentArtifactActivity
-      });
-      void sendPing(pingDecision.url, payload).then((r) => {
-        log(`Install-health ping: ${r.ok ? "ok" : `failed (${r.error ?? r.status})`}`);
-      });
-    }, 6e4);
-    pingTimer.unref?.();
-  } else {
-    log(`Install-health ping: skipped (${pingDecision.reason})`);
-  }
-  process.on("exit", cleanup);
+  daemon.maybeAutoOpenBrowser(port);
+  daemon.scheduleInstallHealthPing();
+  process.on("exit", () => daemon.cleanup());
   process.on("SIGINT", () => gracefulShutdown("SIGINT"));
   process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 }

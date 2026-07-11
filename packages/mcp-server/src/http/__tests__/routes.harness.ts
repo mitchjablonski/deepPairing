@@ -39,7 +39,9 @@ export function createRoutesTestContext(): RoutesTestContext {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-route-test-"));
   setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
   const store = new FileStore(tmpDir, "test_session");
-  const app = withHash(createHttpRoutes(store, tmpDir), tmpDir);
+  // #157 — broadcastFn is required now (the silent defaultBroadcast fallback
+  // is gone); harness tests don't assert on broadcasts, so pass a no-op.
+  const app = withHash(createHttpRoutes(store, tmpDir, () => {}), tmpDir);
   return { tmpDir, store, app };
 }
 

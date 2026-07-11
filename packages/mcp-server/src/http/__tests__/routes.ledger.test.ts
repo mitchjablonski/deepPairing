@@ -320,7 +320,7 @@ describe("HTTP Routes", () => {
       );
       store.forceFlush();
       const freshStore = new FileStore(tmpDir, "refresh");
-      const freshApp = withHash(createHttpRoutes(freshStore, tmpDir), tmpDir);
+      const freshApp = withHash(createHttpRoutes(freshStore, tmpDir, () => {}), tmpDir);
       const res = await freshApp.request("/api/team-preferences");
       const body = await res.json();
       expect(body.exists).toBe(true);
