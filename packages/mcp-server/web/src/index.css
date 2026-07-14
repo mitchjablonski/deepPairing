@@ -171,6 +171,38 @@ html {
   border-radius: 4px;
 }
 
+/* New-item locator — a card that arrived LIVE (a store delta after first load,
+   never on hydration) gets a brief blue glow so an insertion the flow grouping
+   correctly lands mid-list is visible instead of fading in unseen. accent-blue
+   is #6b93f9 → rgb(107,147,249). The JS timeout (ARRIVAL_HIGHLIGHT_MS) drops the
+   id from the highlight set as this animation completes, so nothing lingers. */
+@keyframes dp-arrival-glow {
+  0% {
+    box-shadow: inset 0 0 0 1px rgba(107, 147, 249, 0.55), 0 0 10px 0 rgba(107, 147, 249, 0.30);
+    background-color: rgba(107, 147, 249, 0.10);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px rgba(107, 147, 249, 0);
+    background-color: transparent;
+  }
+}
+.dp-arrival-glow {
+  animation: dp-arrival-glow 4.5s ease-out forwards;
+}
+/* prefers-reduced-motion fallback: a STEADY ring (no animation) that the same JS
+   timeout removes — the arrival marker must not depend on motion. Applied via a
+   JS matchMedia branch, not this class alone, but the media query is a
+   belt-and-braces neutralizer for the animated variant too. */
+.dp-arrival-ring {
+  box-shadow: inset 0 0 0 1px rgba(107, 147, 249, 0.55);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dp-arrival-glow {
+    animation: none;
+    box-shadow: inset 0 0 0 1px rgba(107, 147, 249, 0.55);
+  }
+}
+
 /* Skeleton shimmer */
 @keyframes shimmer {
   0% { background-position: -200% 0; }

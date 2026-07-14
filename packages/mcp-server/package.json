@@ -68,6 +68,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
+    "axe-core": "^4.12.1",
     "esbuild": "^0.28.1",
     "happy-dom": "^20.9.0",
     "motion": "^12.38.0",
