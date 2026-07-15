@@ -11,7 +11,7 @@ advisory, on every other project.
 
 *MIT · no account · no telemetry · 1,500+ tests · everything stays on your disk.*
 
-![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
+![Select a region of a plan's Mermaid diagram and comment on it — the comment anchors to the nodes it covers (here, the AuthGate node) and survives the agent redrawing the diagram.](docs/assets/region-comment.png)
 
 **Who it's for:** engineers who don't trust an autonomous agent with the
 architecture, and want to stay in the loop at the *decision* level — not the
@@ -57,6 +57,12 @@ Node 22+, pnpm 10+. Then, to use it in your own project:
 - **Keyboard-first review.** Navigate artifacts, comment, pick options, and ask
   "why" without leaving the keyboard.
 
+![Drag a rectangle over a diagram to select the nodes it covers — the marquee mid-drag, over the same auth flow.](docs/assets/region-drag.png)
+
+![The project-wide decisions view — every choice made across every session of this project, what was chosen and why, searchable, with a jump back into the session where you made the call.](docs/assets/decisions-view.png)
+
+![The Autonomy dial with the Detail (Rich / Terse) toggle — how much prose rides inside each artifact, orthogonal to how much structured review the pair does.](docs/assets/detail-density.png)
+
 ## Why this exists
 
 Today's AI coding tools push you to two unhappy ends: full autonomy (review 500
@@ -87,6 +93,8 @@ PRESENT  → options, specs, and plans land in the companion UI for you to read
 DECIDE   → you comment inline, pick options, ask "why", request revisions
 BUILD    → only after you've shaped the direction; changes show as diffs
 ```
+
+![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
 
 The companion UI is where you review and steer; the terminal stays your primary
 chat surface. The MCP server runs *inside* Claude Code (it IS the agent — no

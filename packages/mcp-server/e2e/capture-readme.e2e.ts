@@ -16,7 +16,7 @@ const __dir = path.dirname(fileURLToPath(import.meta.url));
 const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
 const ASSETS = path.resolve(__dir, "../../../docs/assets");
 
-test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_README=1)", async ({ page }) => {
+test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_README=1)", async ({ browser }) => {
   // K4 — this ALWAYS runs in CI now, as a selector-integrity check: it drives
   // the real rendered app through every navigation the README shots depend on
   // and ASSERTS each target renders, so selector rot (e.g. the F2 "your taste"
@@ -25,6 +25,16 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
   // are gated on the flag, so a normal CI run never dirties docs/assets/. To
   // refresh the screenshots: `pnpm build && CAPTURE_README=1 npx playwright test capture-readme.e2e.ts`.
   const CAPTURE = !!process.env.CAPTURE_README;
+  // Own context (not the fixture page) so the README shots capture at 2x DPR —
+  // crisp in a high-density README — with a fixed dark theme + viewport, the
+  // look the existing docs/assets/*.png already use. deviceScaleFactor can only
+  // be set at context creation, hence the explicit newContext here.
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 2,
+    colorScheme: "dark",
+  });
+  const page = await context.newPage();
   const shot = async (name: string) => {
     if (CAPTURE) await page.screenshot({ path: path.join(ASSETS, name) });
   };
@@ -131,8 +141,7 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
       await post(`/api/philosophy/seed`, { concept: s.concept, verdict: "rejected", reason: s.reason });
     }
 
-    // Render + capture.
-    await page.setViewportSize({ width: 1440, height: 900 });
+    // Render + capture. (Viewport + DPR are fixed on the context above.)
     await page.goto(`${base}/?session=${sid}`);
     await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
     await page.waitForTimeout(1500); // syntax highlight + motion settle
@@ -175,6 +184,207 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
       await page.waitForTimeout(600); // let the hero card settle
       await page.screenshot({ path: path.join(ASSETS, "enforcement.png") });
     }
+
+    // ------------------------------------------------------------------
+    // #140 / #138 / #139 — the v0.1.7+ additions the README prose promises
+    // but the old shots never showed: region-anchored diagram comments (the
+    // HERO), the project-wide decisions view, and the detail-density dial.
+    // Seeded AFTER the shots above so those keep their single-session framing.
+    // ------------------------------------------------------------------
+    const planSid = "auth-plan";
+    const planArt = "plan_auth";
+    const visId = "vis_auth";
+    await post(`/api/internal/sessions/${planSid}/register`, { title: "Auth token refresh — plan", project: "acme-api" });
+
+    // A plan carrying a Mermaid diagram with recognizable node labels
+    // (Login → AuthGate → TokenStore) so a region anchored to "AuthGate" is
+    // self-explanatory.
+    await post(`/api/internal/sessions/${planSid}/artifacts`, {
+      id: planArt,
+      type: "plan",
+      title: "Single-flight the token refresh",
+      content: {
+        estimatedChanges: 3,
+        steps: [
+          { description: "Add an in-flight refresh promise in session.ts", reasoning: "Coalesce concurrent 401s behind one refresh." },
+          { description: "Route the response interceptor through it", reasoning: "Every 401 awaits the same refresh instead of starting its own." },
+          { description: "Add a concurrency test that fires N parallel 401s", reasoning: "Lock in the single-flight behavior." },
+        ],
+        visuals: [
+          {
+            id: visId,
+            kind: "diagram",
+            title: "Request path through the refresh gate",
+            caption:
+              "The auth flow: a request hits the AuthGate, which single-flights the token refresh before reaching the TokenStore.",
+            source:
+              "flowchart LR\n  Login[Login] --> AuthGate[AuthGate]\n  AuthGate --> TokenStore[TokenStore]\n  AuthGate --> Refresh[Refresh]\n  Refresh --> TokenStore",
+          },
+        ],
+      },
+    });
+
+    // A few resolved decisions across separate sessions, so the project-wide
+    // decisions view (#138) has real, distinct rows. Each decision session
+    // gets a leading investigation artifact so its sessionTitle reads as the
+    // topic (the view derives sessionTitle from the first artifact), not an
+    // echo of the decision question — the real gather→decide session shape.
+    const leadArtifacts: Record<string, { id: string; title: string; summary: string }> = {
+      "rate-limit": { id: "res_rate", title: "Rate limiter design", summary: "The public API needs per-tenant rate limiting; the question is where the counter lives across our 4 instances." },
+      "schema-mig": { id: "res_mig", title: "Orders schema migration", summary: "orders.status is nullable and half the rows are null; we want a non-null constraint without downtime on a 40M-row table." },
+    };
+    const decisionSeeds = [
+      {
+        sid: planSid, title: "Auth token refresh — plan", decId: "dec_coalesce",
+        context: "How should we coalesce the concurrent token refresh?", stakes: "high",
+        options: [
+          { id: "opt_single", title: "Single-flight promise", description: "One in-flight refresh; concurrent callers await it.", pros: ["Keeps unrelated requests parallel"], cons: ["Module-level state"], effort: "low", risk: "low", recommendation: true, concept: { name: "single-flight / request coalescing" } },
+          { id: "opt_mutex", title: "Mutex on all authed requests", description: "Serialize every authed request behind a lock.", pros: ["Simple mental model"], cons: ["Kills throughput under load"], effort: "medium", risk: "high", recommendation: false },
+        ],
+        chosen: "opt_single", reasoning: "Only coalesces the refresh; the rest stay parallel.", confidence: "high",
+      },
+      {
+        sid: "rate-limit", title: "Rate limiter design", decId: "dec_ratestore",
+        context: "Where should the rate-limit counter live?", stakes: "medium",
+        options: [
+          { id: "opt_redis", title: "Redis with a sliding window", description: "Shared counter across instances.", pros: ["Accurate across the fleet"], cons: ["New infra dependency"], effort: "medium", risk: "medium", recommendation: true },
+          { id: "opt_mem", title: "In-process token bucket", description: "Per-instance memory counter.", pros: ["Zero new infra"], cons: ["Inaccurate behind a load balancer"], effort: "low", risk: "medium", recommendation: false },
+        ],
+        chosen: "opt_redis", reasoning: "We run 4 instances behind the LB; per-process counters would let 4x through.",
+      },
+      {
+        sid: "schema-mig", title: "Orders schema migration", decId: "dec_migrate",
+        context: "How do we roll out the non-null constraint on orders.status?", stakes: "high",
+        options: [
+          { id: "opt_expand", title: "Expand / contract in two deploys", description: "Backfill, then add the constraint.", pros: ["Zero downtime"], cons: ["Two deploys"], effort: "medium", risk: "low", recommendation: true },
+          { id: "opt_direct", title: "Single ALTER with a default", description: "One migration, table lock.", pros: ["One step"], cons: ["Locks the table on a large row count"], effort: "low", risk: "high", recommendation: false },
+        ],
+        chosen: "opt_expand", reasoning: "orders is 40M rows; a direct ALTER would lock writes for minutes.",
+      },
+    ];
+    const seenSid = new Set<string>();
+    for (const d of decisionSeeds) {
+      if (!seenSid.has(d.sid)) {
+        if (d.sid !== planSid) await post(`/api/internal/sessions/${d.sid}/register`, { title: d.title, project: "acme-api" });
+        const lead = leadArtifacts[d.sid];
+        if (lead) await post(`/api/internal/sessions/${d.sid}/artifacts`, { id: lead.id, type: "research", title: lead.title, content: { summary: lead.summary, findings: [] } });
+        seenSid.add(d.sid);
+      }
+      const artId = `art_${d.decId}`;
+      await post(`/api/internal/sessions/${d.sid}/artifacts`, { id: artId, type: "decision", title: d.context, content: { context: d.context, options: d.options, decisionId: d.decId, stakes: d.stakes } });
+      await post(`/api/internal/sessions/${d.sid}/decisions`, { decisionId: d.decId, artifactId: artId, context: d.context, options: d.options, stakes: d.stakes });
+      await post(`/api/internal/sessions/${d.sid}/decisions/${d.decId}/resolve`, { optionId: d.chosen, reasoning: d.reasoning, ...(("confidence" in d && d.confidence) ? { confidence: d.confidence } : {}) });
+    }
+
+    // Select the plan and wait for the Mermaid diagram to render its nodes.
+    const selectPlan = async () => {
+      await page.getByText("Single-flight the token refresh").first().click();
+      await page.waitForSelector(".dp-mermaid svg g.node", { timeout: 20_000 });
+    };
+    await page.goto(`${base}/?session=${planSid}`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15_000 });
+    await selectPlan();
+    await page.waitForTimeout(1000); // let mermaid settle before measuring nodes
+
+    // HERO — post a region comment anchored to the "AuthGate" node. The region
+    // rect is computed from the ACTUAL rendered SVG (normalized to the SVG box,
+    // exactly as the DiagramRegionLayer does) so the highlight lands precisely
+    // on the node — no guessed coordinates.
+    const region = await page.evaluate(() => {
+      const svg = document.querySelector(".dp-mermaid svg");
+      if (!svg) return null;
+      const host = svg.getBoundingClientRect();
+      let hit: Element | null = null;
+      svg.querySelectorAll("g.node").forEach((g) => {
+        if ((g.textContent || "").trim().includes("AuthGate")) hit = g;
+      });
+      if (!hit) return null;
+      const r = (hit as Element).getBoundingClientRect();
+      return {
+        id: (hit as Element).id || "",
+        x: (r.left - host.left) / host.width,
+        y: (r.top - host.top) / host.height,
+        w: r.width / host.width,
+        h: r.height / host.height,
+      };
+    });
+    if (!region) throw new Error("AuthGate node not found in the rendered diagram");
+    await post(`/api/internal/sessions/${planSid}/comments`, {
+      id: "c_region",
+      artifactId: planArt,
+      author: "human",
+      content: "Does AuthGate short-circuit on an already-expired refresh token, or fall through to TokenStore and 401?",
+      target: {
+        artifactId: planArt,
+        visualId: visId,
+        region: { x: region.x, y: region.y, w: region.w, h: region.h, elementIds: region.id ? [region.id] : [], labels: ["AuthGate"] },
+      },
+    });
+
+    // Reload so the posted comment loads with the artifact, then assert the
+    // region highlight + its text mirror render (the #140 selector-integrity
+    // check), open the thread so the comment body shows, and capture a tight
+    // crop of the visual card — the required hero frame.
+    await page.reload();
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15_000 });
+    await selectPlan();
+    await page.waitForSelector('[data-testid="dp-region-highlight"]', { timeout: 10_000 });
+    await page.getByRole("button", { name: /on region \[AuthGate\]/ }).first().click();
+    await page.waitForTimeout(600);
+    const heroCard = page.locator(`[data-comment-anchor="visual:${visId}"]`);
+    await heroCard.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    if (CAPTURE) await heroCard.screenshot({ path: path.join(ASSETS, "region-comment.png") });
+
+    // Second (optional) hero frame — the interaction in progress: a mid-drag
+    // marquee over the well. CAPTURE-gated (like enforcement): it holds a mouse
+    // button down between moves, so it's a capture concern, not a selector one.
+    // The overlay selector itself is asserted here every CI pass.
+    await page.waitForSelector('[data-testid="dp-region-overlay"]', { timeout: 10_000 });
+    if (CAPTURE) {
+      const overlay = page.locator('[data-testid="dp-region-overlay"]');
+      const ob = await overlay.boundingBox();
+      if (ob) {
+        const sx = ob.x + ob.width * 0.30, sy = ob.y + ob.height * 0.28;
+        const ex = ob.x + ob.width * 0.62, ey = ob.y + ob.height * 0.80;
+        await page.mouse.move(sx, sy);
+        await page.mouse.down();
+        await page.mouse.move((sx + ex) / 2, (sy + ey) / 2, { steps: 4 });
+        await page.mouse.move(ex, ey, { steps: 6 });
+        await page.waitForTimeout(150);
+        await heroCard.screenshot({ path: path.join(ASSETS, "region-drag.png") });
+        await page.mouse.up();
+      }
+    }
+
+    // #138 — the project-wide decisions view (read-only, all sessions).
+    await page.goto(`${base}/?session=${planSid}`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15_000 });
+    await page.getByRole("button", { name: "Open project decisions" }).click();
+    await page.getByTestId("decisions-view").waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByText("Chose:").first().waitFor({ state: "visible", timeout: 10_000 });
+    await page.waitForTimeout(500);
+    await shot("decisions-view.png");
+
+    // #139 — the detail-density dial: the Autonomy popover open, showing the
+    // Rich/Terse toggle alongside the autonomy levels. Captured as a top-right
+    // clip (trigger button + popover) rather than the whole dimmed page.
+    await page.goto(`${base}/?session=${planSid}`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15_000 });
+    await page.getByRole("button", { name: /Autonomy:/ }).click();
+    await page.getByRole("radiogroup", { name: "Detail density" }).waitFor({ state: "visible", timeout: 8_000 });
+    await page.waitForTimeout(400);
+    if (CAPTURE) {
+      const panel = page.locator("div.shadow-xl").filter({ hasText: "How much structured review" });
+      const pb = await panel.boundingBox();
+      if (pb) {
+        const x = Math.max(0, pb.x - 16);
+        await page.screenshot({
+          path: path.join(ASSETS, "detail-density.png"),
+          clip: { x, y: 4, width: Math.min(1440 - x, pb.width + 40), height: pb.y + pb.height + 12 },
+        });
+      }
+    }
   } finally {
     // I1 — teardown BARRIER: block until the daemon is fully down (process
     // exited AND port released) before removing its dirs, so this opt-in spec
@@ -182,5 +392,6 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
     await teardownDaemon(proc, info?.port);
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(projectRoot, { recursive: true, force: true });
+    await context.close();
   }
 });
