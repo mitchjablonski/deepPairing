@@ -125,7 +125,7 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
         {...dialogProps}
         aria-label="Project decisions"
         data-testid="decisions-view"
-        className="w-full max-w-2xl max-h-[75vh] overflow-y-auto bg-surface-base border border-border-default rounded-lg p-4 focus:outline-none"
+        className="w-full max-w-2xl max-h-[75vh] overflow-y-auto bg-surface-elevated border border-border-default rounded-lg p-4 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-1">
