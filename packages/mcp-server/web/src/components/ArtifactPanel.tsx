@@ -380,17 +380,32 @@ const SIDEBAR_RECENT_LIMIT = 10;
  *  the animation completes exactly as the id drops out of the highlight set. */
 const ARRIVAL_HIGHLIGHT_MS = 4500;
 
+/** Quiet window after the store's population stops changing before we consider
+ *  the panel "hydrated" and start treating further additions as live arrivals.
+ *  Absorbs the initial batch AND the aggregator tab's async cross-session
+ *  backfill (MultiAgentSync fetches other sessions' HISTORY a few ticks after
+ *  the panel already mounted). Every localhost backfill settles well inside
+ *  this; a genuine arrival within it is only ever *missed* (no false glow). */
+const HYDRATION_SETTLE_MS = 750;
+
 /**
- * New-item locator — tracks which artifacts arrived LIVE (after the panel was
- * already showing something) so the sidebar can gently mark them. It never
- * moves scroll; it only decides *which ids are new*.
+ * New-item locator — tracks which artifacts arrived LIVE (after the panel had
+ * hydrated) so the sidebar can gently mark them. It never moves scroll; it only
+ * decides *which ids are new*.
  *
- * Why this can't fire on load: every artifact is "new" on the first render, and
- * glowing all of them is the failure mode. `seenRef` starts null; the FIRST
- * population is absorbed as already-seen (no highlight) and only later deltas
- * (an id present now that wasn't before) count as arrivals. Nothing is
- * persisted, so a page reload re-hydrates the full set as already-seen — a
- * reload never re-glows everything.
+ * Why this can't fire on load — the two-guard model:
+ *  1. Nothing highlights until `hydratedRef` is true. Hydration is a QUIESCENCE
+ *     signal, not "first effect run": every population change re-arms a
+ *     HYDRATION_SETTLE_MS debounce, and only a quiet gap flips hydrated true.
+ *     This is what defeats the aggregator repro — a tab that mounts with an
+ *     EMPTY store and then gets other sessions' history back-filled via async
+ *     `addArtifact` loops (MultiAgentSync) keeps re-arming the debounce, so
+ *     that whole historical batch is absorbed as already-seen, never glowed. It
+ *     also re-hydrates cleanly on a reconnect (the store resets to empty then
+ *     repopulates) instead of glowing the entire reloaded session.
+ *  2. Once hydrated, `seenRef` holds the known id set; only a delta (an id
+ *     present now that wasn't before) counts as an arrival. Nothing is
+ *     persisted, so a page reload re-hydrates the full set as already-seen.
  *
  * `enabled` is false during replay (the panel hides post-cursor artifacts, so
  * "new" is meaningless there): while disabled we silently absorb the current
@@ -405,9 +420,13 @@ function useArrivalHighlights(
   // one. A plain string[] keeps to the no-Set/Map-in-state convention.
   const [highlightedIds, setHighlightedIds] = useState<string[]>([]);
   const [announcement, setAnnouncement] = useState("");
-  // null until the first population is absorbed as "already seen".
-  const seenRef = useRef<Set<string> | null>(null);
+  const seenRef = useRef<Set<string>>(new Set());
   const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // false until the population quiesces (see HYDRATION_SETTLE_MS). A ref, not
+  // state: flipping it must NOT itself re-render — the next real arrival re-runs
+  // the effect and reads the current value.
+  const hydratedRef = useRef(false);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Stable key so the effect only re-runs when the id SET changes, not on every
   // parent render (`artifacts` is a fresh array identity each time).
@@ -416,10 +435,16 @@ function useArrivalHighlights(
   useEffect(() => {
     const current = new Set(artifacts.map((a) => a.id));
 
-    // First population (initial load OR a reload): absorb as already-seen so the
-    // whole list does NOT glow. This is the load-glow guard.
-    if (seenRef.current === null) {
+    // Empty store — initial mount OR a reset/reconnect re-hydration. Re-enter
+    // the hydrating window: absorb as seen, glow nothing, and DON'T arm settle
+    // (an empty tab shouldn't "hydrate" then glow its first back-filled card).
+    if (current.size === 0) {
       seenRef.current = current;
+      hydratedRef.current = false;
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
       return;
     }
 
@@ -430,6 +455,19 @@ function useArrivalHighlights(
       for (const t of Object.values(timersRef.current)) clearTimeout(t);
       timersRef.current = {};
       setHighlightedIds((prev) => (prev.length ? [] : prev));
+      return;
+    }
+
+    // Still hydrating: absorb this population as already-seen and (re)arm the
+    // quiesce debounce. No glow, no announcement — this is the load/backfill
+    // guard that makes the aggregator repro produce ZERO glow.
+    if (!hydratedRef.current) {
+      seenRef.current = current;
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = setTimeout(() => {
+        hydratedRef.current = true;
+        settleTimerRef.current = null;
+      }, HYDRATION_SETTLE_MS);
       return;
     }
 
@@ -467,10 +505,11 @@ function useArrivalHighlights(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idKey, enabled]);
 
-  // Clear any outstanding fade timers on unmount.
+  // Clear any outstanding fade + settle timers on unmount.
   useEffect(
     () => () => {
       for (const t of Object.values(timersRef.current)) clearTimeout(t);
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
     },
     [],
   );
