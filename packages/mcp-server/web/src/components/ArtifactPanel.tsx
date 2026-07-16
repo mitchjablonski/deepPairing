@@ -9,7 +9,7 @@ import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
-import { useIsNarrowViewport } from "../hooks/useMediaQuery";
+import { useIsNarrowViewport, useMediaQuery } from "../hooks/useMediaQuery";
 // D6 (P2) — the artifact renderers are LAZY: statically importing all seven
 // kept them (and, via their coerce*Content imports, the whole Zod runtime)
 // in the entry chunk. Each renderer now code-splits with its coercers; the
@@ -375,12 +375,155 @@ function flowGroupLabel(items: Artifact[], fallback: string): string {
  *  rest behind a "Show N older" toggle (keeps a deep session scannable). */
 const SIDEBAR_RECENT_LIMIT = 10;
 
+/** How long a just-arrived artifact card stays highlighted (glow / static ring)
+ *  before it fades back to normal. Matches the CSS `dp-arrival-glow` duration so
+ *  the animation completes exactly as the id drops out of the highlight set. */
+const ARRIVAL_HIGHLIGHT_MS = 4500;
+
+/** Quiet window after the store's population stops changing before we consider
+ *  the panel "hydrated" and start treating further additions as live arrivals.
+ *  Absorbs the initial batch AND the aggregator tab's async cross-session
+ *  backfill (MultiAgentSync fetches other sessions' HISTORY a few ticks after
+ *  the panel already mounted). Every localhost backfill settles well inside
+ *  this; a genuine arrival within it is only ever *missed* (no false glow). */
+const HYDRATION_SETTLE_MS = 750;
+
+/**
+ * New-item locator — tracks which artifacts arrived LIVE (after the panel had
+ * hydrated) so the sidebar can gently mark them. It never moves scroll; it only
+ * decides *which ids are new*.
+ *
+ * Why this can't fire on load — the two-guard model:
+ *  1. Nothing highlights until `hydratedRef` is true. Hydration is a QUIESCENCE
+ *     signal, not "first effect run": every population change re-arms a
+ *     HYDRATION_SETTLE_MS debounce, and only a quiet gap flips hydrated true.
+ *     This is what defeats the aggregator repro — a tab that mounts with an
+ *     EMPTY store and then gets other sessions' history back-filled via async
+ *     `addArtifact` loops (MultiAgentSync) keeps re-arming the debounce, so
+ *     that whole historical batch is absorbed as already-seen, never glowed. It
+ *     also re-hydrates cleanly on a reconnect (the store resets to empty then
+ *     repopulates) instead of glowing the entire reloaded session.
+ *  2. Once hydrated, `seenRef` holds the known id set; only a delta (an id
+ *     present now that wasn't before) counts as an arrival. Nothing is
+ *     persisted, so a page reload re-hydrates the full set as already-seen.
+ *
+ * `enabled` is false during replay (the panel hides post-cursor artifacts, so
+ * "new" is meaningless there): while disabled we silently absorb the current
+ * set as seen and clear any lingering highlight, so toggling replay off doesn't
+ * spuriously glow the re-revealed items.
+ */
+function useArrivalHighlights(
+  artifacts: Artifact[],
+  enabled: boolean,
+): { highlightedIds: string[]; announcement: string } {
+  // Ordered by arrival (append) so the pip can point at the NEWEST off-screen
+  // one. A plain string[] keeps to the no-Set/Map-in-state convention.
+  const [highlightedIds, setHighlightedIds] = useState<string[]>([]);
+  const [announcement, setAnnouncement] = useState("");
+  const seenRef = useRef<Set<string>>(new Set());
+  const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // false until the population quiesces (see HYDRATION_SETTLE_MS). A ref, not
+  // state: flipping it must NOT itself re-render — the next real arrival re-runs
+  // the effect and reads the current value.
+  const hydratedRef = useRef(false);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stable key so the effect only re-runs when the id SET changes, not on every
+  // parent render (`artifacts` is a fresh array identity each time).
+  const idKey = artifacts.map((a) => a.id).join("|");
+
+  useEffect(() => {
+    const current = new Set(artifacts.map((a) => a.id));
+
+    // Empty store — initial mount OR a reset/reconnect re-hydration. Re-enter
+    // the hydrating window: absorb as seen, glow nothing, and DON'T arm settle
+    // (an empty tab shouldn't "hydrate" then glow its first back-filled card).
+    if (current.size === 0) {
+      seenRef.current = current;
+      hydratedRef.current = false;
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (!enabled) {
+      // Replay (or any suppressed context): absorb silently, drop any glow +
+      // pending timers so nothing lingers when tracking resumes.
+      seenRef.current = current;
+      for (const t of Object.values(timersRef.current)) clearTimeout(t);
+      timersRef.current = {};
+      setHighlightedIds((prev) => (prev.length ? [] : prev));
+      return;
+    }
+
+    // Still hydrating: absorb this population as already-seen and (re)arm the
+    // quiesce debounce. No glow, no announcement — this is the load/backfill
+    // guard that makes the aggregator repro produce ZERO glow.
+    if (!hydratedRef.current) {
+      seenRef.current = current;
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = setTimeout(() => {
+        hydratedRef.current = true;
+        settleTimerRef.current = null;
+      }, HYDRATION_SETTLE_MS);
+      return;
+    }
+
+    const prevSeen = seenRef.current;
+    const arrived = artifacts.filter((a) => !prevSeen.has(a.id));
+    seenRef.current = current;
+    if (arrived.length === 0) return;
+
+    const arrivedIds = arrived.map((a) => a.id);
+    setHighlightedIds((prev) => {
+      const merged = prev.slice();
+      for (const id of arrivedIds) if (!merged.includes(id)) merged.push(id);
+      return merged;
+    });
+
+    // One announcement per arrival EVENT (a burst collapses to a single summary
+    // line), not a per-id stream — keeps the aria-live region polite.
+    setAnnouncement(
+      arrived.length === 1
+        ? `New artifact: ${arrived[0]!.title}`
+        : `${arrived.length} new artifacts`,
+    );
+
+    // Each id fades on its own timer (a later arrival doesn't cut an earlier
+    // card's highlight short).
+    for (const id of arrivedIds) {
+      if (timersRef.current[id]) clearTimeout(timersRef.current[id]);
+      timersRef.current[id] = setTimeout(() => {
+        setHighlightedIds((prev) => prev.filter((x) => x !== id));
+        delete timersRef.current[id];
+      }, ARRIVAL_HIGHLIGHT_MS);
+    }
+    // idKey drives re-runs; `artifacts` is read via closure. `enabled` included
+    // so a replay toggle re-evaluates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idKey, enabled]);
+
+  // Clear any outstanding fade + settle timers on unmount.
+  useEffect(
+    () => () => {
+      for (const t of Object.values(timersRef.current)) clearTimeout(t);
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    },
+    [],
+  );
+
+  return { highlightedIds, announcement };
+}
+
 /** Sidebar artifact list with grouping modes */
 function ArtifactSidebar({
   typeGroups,
   artifacts,
   selectedArtifactId,
   unreadIds,
+  highlightedIds,
   collapsed,
   width,
   onToggle,
@@ -389,11 +532,70 @@ function ArtifactSidebar({
   artifacts: Artifact[];
   selectedArtifactId: string | null;
   unreadIds: string[];
+  /** Ids of artifacts that arrived LIVE and should be gently marked + located.
+   *  Empty during initial load and replay (see useArrivalHighlights). */
+  highlightedIds: string[];
   collapsed: boolean;
   width: number;
   onToggle: () => void;
 }) {
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  // New-item locator plumbing. The scroll container + per-item nodes let the
+  // off-screen pip figure out whether a just-arrived card is above/below the
+  // viewport WITHOUT ever moving scroll on arrival.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // prefers-reduced-motion: swap the animated glow for a static ring (the
+  // marker must not depend on motion). Reactive so a live OS-setting change is
+  // honoured on the next arrival.
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  // The off-screen pip: which direction to point + how many new cards are out
+  // of view + the newest such card to scroll to on click. null = nothing to
+  // locate (all new items already in view, or none).
+  const [pip, setPip] = useState<{ dir: "up" | "down"; count: number; targetId: string } | null>(null);
+
+  // Recompute the pip whenever the highlight set changes or the user scrolls /
+  // resizes. Reads live geometry via getBoundingClientRect — never writes it,
+  // so arrival never moves scroll.
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container || highlightedIds.length === 0) {
+      setPip(null);
+      return;
+    }
+    const compute = () => {
+      const cRect = container.getBoundingClientRect();
+      // Degenerate/unlaid-out viewport (zero height) → nothing to locate.
+      if (cRect.bottom <= cRect.top) {
+        setPip(null);
+        return;
+      }
+      let count = 0;
+      let newest: { dir: "up" | "down"; targetId: string } | null = null;
+      // Arrival order → the LAST off-screen id is the newest one; the pip
+      // points there.
+      for (const id of highlightedIds) {
+        const el = itemRefs.current[id];
+        if (!el) continue;
+        const iRect = el.getBoundingClientRect();
+        let dir: "up" | "down" | null = null;
+        if (iRect.bottom <= cRect.top) dir = "up";
+        else if (iRect.top >= cRect.bottom) dir = "down";
+        if (dir) {
+          count++;
+          newest = { dir, targetId: id };
+        }
+      }
+      setPip(newest ? { ...newest, count } : null);
+    };
+    compute();
+    container.addEventListener("scroll", compute, { passive: true });
+    window.addEventListener("resize", compute);
+    return () => {
+      container.removeEventListener("scroll", compute);
+      window.removeEventListener("resize", compute);
+    };
+  }, [highlightedIds]);
   // Bug4 — the FULL artifact list (incl. superseded, filtered out of the
   // visible `artifacts` prop) so flow grouping can resolve a ref pointing at a
   // superseded v1 to its live v2 successor and keep the chain together.
@@ -442,11 +644,15 @@ function ArtifactSidebar({
 
   return (
     <div
-      className={`shrink-0 border-r border-border-default bg-surface-secondary overflow-y-auto transition-all duration-[180ms] ease-out ${
+      className={`relative shrink-0 border-r border-border-default bg-surface-secondary transition-all duration-[180ms] ease-out ${
         collapsed ? "w-12" : ""
       }`}
       style={collapsed ? undefined : { width }}
     >
+      {/* Inner scroll container — the new-item pip is positioned against the
+          OUTER (relative) box so it stays pinned to the visible edge instead of
+          scrolling away with the list. */}
+      <div ref={scrollRef} data-testid="sidebar-scroll" className="h-full overflow-y-auto">
       {/* Collapse toggle + grouping selector */}
       <div className="flex items-center justify-between">
         <button
@@ -517,10 +723,19 @@ function ArtifactSidebar({
           {items.map((a) => {
             const isSelected = a.id === selectedArtifactId;
             const isUnread = unreadIds.includes(a.id);
+            // Just-arrived (live) card → gentle marker. Animated glow by
+            // default; a static ring under prefers-reduced-motion. Both are
+            // decorative (the aria-live region carries the real announcement)
+            // and both clear when the id leaves highlightedIds after the
+            // timeout, so the ring is NOT motion-dependent.
+            const isNew = highlightedIds.includes(a.id);
+            const arrivalClass = isNew ? (reducedMotion ? "dp-arrival-ring" : "dp-arrival-glow") : "";
 
             return (
               <button
                 key={a.id}
+                ref={(el) => { itemRefs.current[a.id] = el; }}
+                data-artifact-item={a.id}
                 onClick={() => selectArtifact(a.id)}
                 className={`w-full flex items-center gap-2 transition-all duration-[180ms] ease-out ${
                   collapsed ? "justify-center px-1 py-1.5" : "px-3 py-1.5 text-left"
@@ -528,7 +743,7 @@ function ArtifactSidebar({
                   isSelected
                     ? "bg-surface-hover border-l-2 border-l-accent-blue"
                     : "border-l-2 border-l-transparent hover:bg-surface-hover/50"
-                }`}
+                } ${arrivalClass}`}
                 title={a.title}
               >
                 {collapsed ? (
@@ -583,6 +798,36 @@ function ArtifactSidebar({
           })}
         </div>
       ))}
+      </div>
+
+      {/* Off-screen new-item pip — appears ONLY when a just-arrived card is
+          outside the current scroll viewport, pointing the way to it. Clicking
+          scrolls the newest such card into view; this scroll is USER-initiated
+          (the arrival itself never moves scroll). A real <button> with a
+          directional label, keyboard-operable and focus-visible. */}
+      {!collapsed && pip && (
+        <button
+          type="button"
+          onClick={() => {
+            itemRefs.current[pip.targetId]?.scrollIntoView?.({
+              block: "center",
+              behavior: reducedMotion ? "auto" : "smooth",
+            });
+          }}
+          aria-label={
+            pip.count > 1
+              ? `Jump to ${pip.count} new artifacts ${pip.dir === "up" ? "above" : "below"}`
+              : `Jump to new artifact ${pip.dir === "up" ? "above" : "below"}`
+          }
+          className={`absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full
+                      bg-accent-blue-strong text-white text-2xs font-medium shadow-md
+                      hover:bg-accent-blue-strong-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue
+                      transition-colors ${pip.dir === "up" ? "top-2" : "bottom-2"}`}
+        >
+          <span aria-hidden="true">{pip.dir === "up" ? "↑" : "↓"}</span>
+          <span>{pip.count > 1 ? `${pip.count} new` : "new"}</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -701,6 +946,13 @@ export function ArtifactPanel() {
   const replayActive = useReplayStore((s) => s.active);
   const replayCursor = useReplayStore((s) => s.cursor);
 
+  // New-item locator — which artifacts arrived LIVE (a store delta after the
+  // first population). Tracked against the full store set (not the filtered
+  // view) so a session-filter toggle doesn't masquerade as an arrival, and
+  // never on initial load / reload. Suppressed entirely during replay, where a
+  // "new item" has no meaning (the panel hides post-cursor artifacts).
+  const { highlightedIds, announcement } = useArrivalHighlights(artifacts, !replayActive);
+
   // Unique session IDs present in the store
   const sessionIds = useMemo(
     () => [...new Set(artifacts.map((a) => a.sessionId))],
@@ -748,6 +1000,19 @@ export function ArtifactPanel() {
       {/* Sync artifacts from other active sessions */}
       <MultiAgentSync />
 
+      {/* Polite, visually-hidden announcement of live arrivals so screen-reader
+          users learn a new artifact came in without depending on the visual
+          glow. One line per arrival event (a burst collapses to a count). */}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="arrival-live-region"
+      >
+        {announcement}
+      </div>
+
       {/* Session filter — shown when artifacts from multiple agents exist */}
       {sessionIds.length > 1 && (
         <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
@@ -789,6 +1054,7 @@ export function ArtifactPanel() {
         artifacts={visibleArtifacts}
         selectedArtifactId={selectedArtifactId}
         unreadIds={unreadIds}
+        highlightedIds={highlightedIds}
         collapsed={effectiveCollapsed}
         width={SIDEBAR_WIDTHS[sidebarWidth]}
         onToggle={toggleSidebar}
