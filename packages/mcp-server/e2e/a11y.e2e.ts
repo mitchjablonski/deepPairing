@@ -117,15 +117,15 @@ test.beforeAll(async () => {
       content: {
         summary: "s",
         findings: [{ category: "Security", title: "F1", detail: "d", significance: "high", evidence: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 2, snippet: "code", explanation: "why" }] }],
-        // #164 — open-question SECTIONS (the redesign). Two questions puts the
-        // shared OpenQuestionSection into the axe scan (dark + light): the
-        // answer disclosure button, the Ask pill, and the question labelling.
-        // Left COLLAPSED (no seeded answer): the inline answer composer reuses
-        // CommentThread, whose textarea is already axe-covered via the decision
-        // card's thread in these same scans — and auto-expanding it here put a
-        // composer into the Autonomy popover test's deliberately-early,
-        // pre-settle page scan, catching it (and the documented "Draft" chip)
-        // mid entrance-fade. Collapsed keeps this test's surface == main's.
+        // #164 — open-question SECTIONS (the redesign). Two questions feed the
+        // openQuestionSections() helper below: the dark + light session tests
+        // SELECT this artifact and expand the first section, so axe scans the
+        // sections for real — disclosure button, Ask pill, question labelling,
+        // answered chip, and the inline answer composer (expanded) alongside a
+        // collapsed sibling. Seeded UNANSWERED (no comment): auto-expanding a
+        // composer at page load put it into the Autonomy popover test's
+        // deliberately-early, pre-settle page scan, catching it (and the
+        // documented "Draft" chip) mid entrance-fade.
         openQuestions: ["Should the cache be write-through?", "Which eviction policy?"],
       },
     }),
@@ -168,6 +168,31 @@ function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Arra
     .join("\n");
 }
 
+/** #164 review — bring the research artifact's OpenQuestionSections into the
+ *  DOM and expand one, so the axe scan covers the sections FOR REAL (the first
+ *  cut of this net seeded openQuestions but only ever scanned the decision
+ *  artifact — the sections were never mounted; a hollow net). Expanding the
+ *  first section puts the inline answer composer into the scan too; the second
+ *  stays collapsed, so both disclosure states are covered. */
+async function openQuestionSections(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByRole("button", { name: /^Audit/ }).click();
+  await page.waitForSelector('[data-artifact-id="res_a11y"]', { timeout: 15000 });
+  await page.getByText("Should the cache be write-through?").waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "Answer this question" }).first().click();
+  await page.getByLabel("Answer question 1").waitFor({ timeout: 15000 });
+  // Same rule as the app-shell scan: let every FINITE animation finish (the
+  // artifact panel's entrance fade + the composer's dp-fade-in) so axe never
+  // samples a mid-fade frame — the documented color-contrast phantom class.
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
 test("a11y: session view with decision + findings has no serious/critical axe violations", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
@@ -190,6 +215,13 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
     .analyze(); // F1 — color-contrast un-excluded: the token re-tint passes AA; ZERO exclusions remain
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+
+  // #164 — second scan with the research artifact selected: the open-question
+  // sections mounted, first one expanded (inline answer composer in the DOM).
+  await openQuestionSections(page);
+  const qResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const qSerious = qResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(qSerious, `axe violations (open-question sections):\n${fmt(qSerious)}`).toEqual([]);
 });
 
 test("a11y: session view in the LIGHT theme has no serious/critical axe violations (#150)", async ({ page }) => {
@@ -217,6 +249,13 @@ test("a11y: session view in the LIGHT theme has no serious/critical axe violatio
     .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+
+  // #164 — light-theme parity for the open-question sections (mounted +
+  // first section expanded), same zero-disabled-rules contract.
+  await openQuestionSections(page);
+  const qResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const qSerious = qResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(qSerious, `axe violations (open-question sections, light):\n${fmt(qSerious)}`).toEqual([]);
 });
 
 test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {

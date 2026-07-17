@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, within, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useArtifactStore } from "../../stores/artifact";
 import { ResearchArtifact } from "../artifacts/ResearchArtifact";
 import { SpecArtifact } from "../artifacts/SpecArtifact";
+import { ArtifactDetail } from "../ArtifactPanel";
 
 /**
  * #164 — open-question redesign. Each open question renders as its own bounded
@@ -190,7 +192,8 @@ describe("#164 — open questions render as bounded sections", () => {
     expect(within(section).queryByText(/answered/i)).not.toBeInTheDocument();
   });
 
-  it("the answer disclosure toggles the inline composer open (keyboard-operable button)", () => {
+  it("the answer disclosure is keyboard-operable: Enter opens, Space toggles (real key events)", async () => {
+    const user = userEvent.setup();
     const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Cache write-through?"] });
     useArtifactStore.setState({ artifacts: [artifact], comments: {} });
     render(<ResearchArtifact artifact={artifact} />);
@@ -199,9 +202,101 @@ describe("#164 — open questions render as bounded sections", () => {
     const btn = within(section).getByRole("button", { name: /answer this question/i });
     // No composer yet.
     expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
-    fireEvent.click(btn);
-    // Composer (the answer box) is now inline in the section.
+
+    // Enter on the focused button opens the composer (the answer box).
+    act(() => btn.focus());
+    await user.keyboard("{Enter}");
     expect(within(section).getByLabelText(/answer question 1/i)).toBeInTheDocument();
     expect(within(section).getByRole("button", { name: /^answer$/i })).toBeInTheDocument();
+
+    // Space toggles it closed again (focus is still on the disclosure button).
+    await user.keyboard(" ");
+    expect(within(section).queryByLabelText(/answer question 1/i)).not.toBeInTheDocument();
+  });
+
+  it("REGRESSION: a question-targeted answer renders exactly ONCE on the full artifact page (not again in the bottom Comments thread)", async () => {
+    // Pre-fix, ArtifactDetail's generalComments filter didn't exclude
+    // questionIndex-targeted comments, so an answer showed TWICE: inline in
+    // its OpenQuestionSection AND in the artifact's bottom "Comments" thread
+    // (getAllByText length was 2). questionIndex 0 on purpose — the filter
+    // must be `== null`, not falsy, or the FIRST question regresses.
+    const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
+    useArtifactStore.setState({
+      artifacts: [artifact],
+      comments: {
+        [artifact.id]: [
+          comment({
+            artifactId: artifact.id,
+            content: "UNIQUE-ANSWER-BODY",
+            target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
+          }),
+        ],
+      },
+    });
+    render(<ArtifactDetail artifact={artifact} />);
+    // The research renderer is a lazy chunk under Suspense — await its mount.
+    await screen.findByText("Which DB?");
+    expect(screen.getAllByText("UNIQUE-ANSWER-BODY")).toHaveLength(1);
+    // And the one copy is the inline one, inside the question's section.
+    expect(within(sectionFor("Which DB?")).getByText("UNIQUE-ANSWER-BODY")).toBeInTheDocument();
+  });
+
+  it("a section that gains its FIRST comment while mounted expands live (WS reply), but a human-collapsed section stays collapsed on later replies", async () => {
+    const user = userEvent.setup();
+    const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
+    useArtifactStore.setState({ artifacts: [artifact], comments: {} });
+    render(<ResearchArtifact artifact={artifact} />);
+
+    const section = sectionFor("Which DB?");
+    // Mounted with no thread → collapsed.
+    expect(within(section).queryByText("FIRST-REPLY")).not.toBeInTheDocument();
+
+    // First comment arrives while mounted (e.g. agent reply over WS) → the
+    // thread reveals itself (pre-fix: only the ✓ updated; the thread hid).
+    act(() => {
+      useArtifactStore.setState({
+        comments: {
+          [artifact.id]: [
+            comment({
+              id: "c_live1",
+              artifactId: artifact.id,
+              author: "agent",
+              content: "FIRST-REPLY",
+              target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
+            }),
+          ],
+        },
+      });
+    });
+    expect(within(section).getByText("FIRST-REPLY")).toBeInTheDocument();
+
+    // The human deliberately collapses it…
+    await user.click(within(section).getByRole("button", { name: /hide answer/i }));
+    expect(within(section).queryByText("FIRST-REPLY")).not.toBeInTheDocument();
+
+    // …a LATER reply (1→2) must not fight them and force it back open.
+    act(() => {
+      useArtifactStore.setState({
+        comments: {
+          [artifact.id]: [
+            comment({
+              id: "c_live1",
+              artifactId: artifact.id,
+              author: "agent",
+              content: "FIRST-REPLY",
+              target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
+            }),
+            comment({
+              id: "c_live2",
+              artifactId: artifact.id,
+              author: "agent",
+              content: "SECOND-REPLY",
+              target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
+            }),
+          ],
+        },
+      });
+    });
+    expect(within(section).queryByText("SECOND-REPLY")).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useChainComments } from "../../hooks/useChainComments";
 import { AskTrigger, CommentThread } from "../CommentThread";
 
@@ -46,6 +46,18 @@ export function OpenQuestionSection({
   // the question); an untouched question stays collapsed behind a prominent
   // Answer button so a wall of questions doesn't open a wall of composers.
   const [open, setOpen] = useState(questionComments.length > 0);
+
+  // Review fix — the initializer above runs once, so a section that gains its
+  // FIRST comment while mounted (e.g. an agent reply arriving over WS) kept
+  // the thread hidden even as the ✓ chip updated. Expand (never collapse) on
+  // the 0→>0 transition only; later replies don't fire it, so a section the
+  // human deliberately collapsed stays collapsed — the ✓/state change is the
+  // signal — instead of fighting them.
+  const prevCount = useRef(questionComments.length);
+  useEffect(() => {
+    if (prevCount.current === 0 && questionComments.length > 0) setOpen(true);
+    prevCount.current = questionComments.length;
+  }, [questionComments.length]);
 
   const labelId = useId();
   const panelId = useId();
