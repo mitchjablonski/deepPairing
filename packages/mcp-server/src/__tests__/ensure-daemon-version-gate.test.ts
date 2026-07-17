@@ -130,7 +130,7 @@ describe("#136 — ensureDaemon version-gates adoption (REAL spawn)", () => {
         } catch {
           return false; // mid-write — retry
         }
-      }, 20_000);
+      }, 35_000); // tsx cold-start on WSL /mnt/c (9P) can exceed the old 20s under full-run contention
       expect(up, "old-version fixture daemon did not come up").toBe(true);
       expect(oldInfo!.version).toBe("0.0.9");
       const oldPid = oldInfo!.pid;

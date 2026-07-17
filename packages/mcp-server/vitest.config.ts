@@ -7,6 +7,24 @@ const STD_EXCLUDE = [
   "**/e2e/**",
 ];
 
+// Real-spawn suites: each boots one or more REAL daemon processes (tsx cold
+// start + bind + daemon.json poll). They live in their own `server-spawn`
+// project with fileParallelism: false so the heavy spawns never stack on each
+// other — under full-run contention on WSL /mnt/c (9P latency) three
+// concurrent tsx cold-starts were the main latency-straggler source.
+const SPAWN_SUITES = [
+  "src/__tests__/daemon-sigterm-port-release.test.ts",
+  "src/__tests__/daemon-version-exposure.test.ts",
+  "src/__tests__/ensure-daemon-version-gate.test.ts",
+  "src/__tests__/fixture-ttl.test.ts",
+];
+
+// Port isolation: computes a per-run + per-worker DEEPPAIRING_PORT_BASE so
+// test-spawned daemons bind ~20000-32000, never the product's canonical
+// 3847-3974 window. Registered FIRST so the env is set before any test module
+// (and project-root.ts's module-load resolution) is imported.
+const PORT_WINDOW_SETUP = "./src/__tests__/test-port-window.setup.ts";
+
 /**
  * C3 — Vitest 4 `projects` split (replaces the removed environmentMatchGlobs).
  *
@@ -30,13 +48,13 @@ export default defineConfig({
           name: "server",
           environment: "node",
           include: ["src/**/*.test.ts"],
-          exclude: STD_EXCLUDE,
+          exclude: [...STD_EXCLUDE, ...SPAWN_SUITES],
           // J1 — redirect the user-global philosophy ledger to an isolated tmp
           // for EVERY server test. Field incident: an un-redirected suite wrote
           // 222 rejections into the developer's real ~/.deeppairing ledger. The
           // guard runs before each test; harnesses that also redirect win by
           // last-registration. See global-store-guard.setup.ts.
-          setupFiles: ["./src/__tests__/global-store-guard.setup.ts"],
+          setupFiles: [PORT_WINDOW_SETUP, "./src/__tests__/global-store-guard.setup.ts"],
           isolate: false,
           // Review-caught: vi.restoreAllMocks() does NOT undo vi.stubGlobal —
           // with a shared worker context a leaked fetch stub persists into
@@ -44,6 +62,39 @@ export default defineConfig({
           // make real fetches). Auto-unstub between files.
           unstubGlobals: true,
           unstubEnvs: true,
+          // Latency class, not a logic class: full runs on WSL /mnt/c (9P)
+          // intermittently push individually-fast tests past the 5s default
+          // under whole-suite transform/IO contention. 15s absorbs the spike;
+          // a genuinely stuck test still fails, just later.
+          testTimeout: 15_000,
+        },
+      },
+      {
+        test: {
+          name: "server-spawn",
+          environment: "node",
+          include: SPAWN_SUITES,
+          exclude: STD_EXCLUDE,
+          setupFiles: [PORT_WINDOW_SETUP, "./src/__tests__/global-store-guard.setup.ts"],
+          isolate: false,
+          unstubGlobals: true,
+          unstubEnvs: true,
+          // Serialize the real-spawn files (see SPAWN_SUITES note above).
+          fileParallelism: false,
+          // Required by vitest when a project's maxWorkers differs from its
+          // siblings' (fileParallelism: false implies 1). groupOrder 1 also
+          // runs the spawn group AFTER the parallel groups — the tsx
+          // cold-starts get the machine to themselves instead of competing
+          // with the transform-heavy web-dom project.
+          sequence: { groupOrder: 1 },
+          // These suites carry explicit per-test timeouts (40-90s); this is
+          // the backstop for any new test added to the project.
+          testTimeout: 60_000,
+          // Disjoint port-window group from the `server` project — pool ids
+          // may restart per pool, so group offsetting (not worker id alone)
+          // is what guarantees the two projects never share a window. See
+          // test-port-window.setup.ts.
+          env: { DEEPPAIRING_TEST_PORT_GROUP: "1" },
         },
       },
       {

@@ -13,14 +13,28 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import net from "node:net";
 import { evictDaemon } from "../daemon/lifecycle.js";
 
-// AA3 — distinct from port-sweep.test.ts (24847..24851) so the suites
-// can run in parallel without colliding on bind.
-const TEST_PORT = 24860;
+// port 0 — OS-assigned per fakeDaemon (was a hardcoded 24860; hardcoded slots
+// raced parallel workers and leftover listeners). fakeDaemon records the
+// bound port here for the test body.
+let TEST_PORT = 0;
 let server: { close?: (cb?: () => void) => void } | null = null;
 let confirmHeaderReceived: string | undefined;
 let evictHits = 0;
+
+/** A port with (very probably) nothing listening: bind 0, note it, release it. */
+async function freeUnusedPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
 
 async function fakeDaemon(opts: {
   pid?: number;
@@ -45,10 +59,12 @@ async function fakeDaemon(opts: {
       return c.json({ status: "evicting", pid: opts.pid ?? 12345 });
     });
   }
-  const s = serve({ fetch: app.fetch, port: TEST_PORT });
-  // serve() returns before the listener is bound; give it a tick so the
-  // immediately-following probe doesn't race the bind.
-  await new Promise((r) => setTimeout(r, 50));
+  // The listeningListener resolves with the bound port, so there is no
+  // bind race to sleep over anymore.
+  let s: typeof server = null;
+  TEST_PORT = await new Promise<number>((resolve) => {
+    s = serve({ fetch: app.fetch, port: 0 }, (info) => resolve(info.port));
+  });
   return s;
 }
 
@@ -68,7 +84,7 @@ afterEach(async () => {
 
 describe("evictDaemon (AA3)", () => {
   it("returns 'no_daemon' when nothing is listening", async () => {
-    const result = await evictDaemon(TEST_PORT, 999);
+    const result = await evictDaemon(await freeUnusedPort(), 999);
     expect(result).toBe("no_daemon");
     expect(evictHits).toBe(0);
   });

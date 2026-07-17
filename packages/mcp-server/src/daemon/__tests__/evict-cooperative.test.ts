@@ -28,9 +28,9 @@ import { setGlobalStoreForTests } from "../../store/global-store.js";
 import { __resetMetricsCacheForTests } from "../../store/metrics-store.js";
 import { ERROR_CODES } from "../../error-codes.js";
 
-// Distinct from port-sweep (24847..24851), evict-daemon unit tests (24860)
-// and ws-lifecycle (24870) so suites can run in parallel without bind races.
-const TEST_PORT = 24880;
+// port 0 — OS-assigned per test (was a hardcoded 24880; hardcoded slots raced
+// parallel workers and leftover listeners for the same bind).
+let TEST_PORT = 0;
 const AUTH_TOKEN = "evict-e2e-token";
 
 let tmpDir: string;
@@ -54,10 +54,11 @@ beforeEach(async () => {
     releaseListenSocket: (opts) => releases.push(opts),
     env: {},
   });
-  server = serve({ fetch: daemon.app.fetch, port: TEST_PORT });
-  // serve() returns before the listener is bound; give it a tick so the
-  // immediately-following probe doesn't race the bind.
-  await new Promise((r) => setTimeout(r, 50));
+  // The listeningListener resolves with the bound port — no bind race to
+  // sleep over, and no hardcoded slot to collide on.
+  TEST_PORT = await new Promise<number>((resolve) => {
+    server = serve({ fetch: daemon.app.fetch, port: 0 }, (info) => resolve(info.port));
+  });
   // The production startup step evictDaemon depends on: daemon.json (which
   // carries the bearer token on a POSIX tmpdir — the III9 in-repo placement)
   // is what daemonAuthHeaders resolves the token from.

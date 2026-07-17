@@ -6842,6 +6842,32 @@ import crypto2 from "node:crypto";
 function projectHashOf(projectRoot2) {
   return crypto2.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
 }
+function resolvePortWindow(env = process.env, warn = (msg) => {
+  try {
+    process.stderr.write(`${msg}
+`);
+  } catch {
+  }
+}) {
+  const readInt = (name, fallback, min, max) => {
+    const raw = env[name];
+    if (raw === void 0 || raw.trim() === "") return fallback;
+    const n = Number(raw.trim());
+    if (!Number.isInteger(n) || n < min || n > max) {
+      warn(`[deepPairing] ignoring ${name}="${raw}" \u2014 expected an integer in ${min}..${max}; using default ${fallback}.`);
+      return fallback;
+    }
+    return n;
+  };
+  const base = readInt("DEEPPAIRING_PORT_BASE", DEFAULT_BASE_PORT, 1024, 65e3);
+  let span = readInt("DEEPPAIRING_PORT_SPAN", DEFAULT_PORT_SPAN, 1, 4096);
+  if (base + span - 1 > 65535) {
+    const clamped = 65535 - base + 1;
+    warn(`[deepPairing] DEEPPAIRING_PORT_BASE=${base} + DEEPPAIRING_PORT_SPAN=${span} runs past port 65535 \u2014 clamping span to ${clamped}.`);
+    span = clamped;
+  }
+  return { base, span };
+}
 function preferredPortFor(projectRoot2) {
   return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
 }
@@ -6865,12 +6891,15 @@ function resolveProjectRoot(opts = {}) {
   }
   return { projectRoot: path2.resolve(cwd()), source: "cwd" };
 }
-var BASE_PORT, PORT_SPAN;
+var DEFAULT_BASE_PORT, DEFAULT_PORT_SPAN, portWindow, BASE_PORT, PORT_SPAN;
 var init_project_root = __esm({
   "src/project-root.ts"() {
     "use strict";
-    BASE_PORT = 3847;
-    PORT_SPAN = 128;
+    DEFAULT_BASE_PORT = 3847;
+    DEFAULT_PORT_SPAN = 128;
+    portWindow = resolvePortWindow();
+    BASE_PORT = portWindow.base;
+    PORT_SPAN = portWindow.span;
   }
 });
 
@@ -7290,7 +7319,7 @@ var init_lifecycle = __esm({
     init_version();
     __thisDir = path5.dirname(fileURLToPath(import.meta.url));
     DAEMON_FILE = "daemon.json";
-    DEFAULT_PORT = 3847;
+    DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
@@ -30226,7 +30255,8 @@ Give the human THIS exact URL to open the review surface.`;
 
 // src/mcp/server.ts
 init_version();
-function createMcpServer(store, broadcast, port = 3847) {
+init_project_root();
+function createMcpServer(store, broadcast, port = BASE_PORT) {
   const server = new Server(
     { name: "deeppairing", version: SERVER_VERSION },
     {
@@ -31409,7 +31439,7 @@ var DaemonClient = class {
   }
   portFromBaseUrl() {
     const port = this.baseUrl.match(/localhost:(\d+)/)?.[1];
-    return port ? parseInt(port, 10) : 3847;
+    return port ? parseInt(port, 10) : BASE_PORT;
   }
 };
 

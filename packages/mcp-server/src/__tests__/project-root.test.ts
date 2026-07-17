@@ -2,7 +2,83 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveProjectRoot, preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
+import {
+  resolveProjectRoot,
+  preferredPortFor,
+  resolvePortWindow,
+  BASE_PORT,
+  PORT_SPAN,
+  DEFAULT_BASE_PORT,
+  DEFAULT_PORT_SPAN,
+} from "../project-root.js";
+
+describe("resolvePortWindow — env-overridable port window", () => {
+  /** Recording warn fake — asserts the stderr-note contract without touching stderr. */
+  const recorder = () => {
+    const warnings: string[] = [];
+    return { warnings, warn: (m: string) => warnings.push(m) };
+  };
+
+  it("defaults to 3847/128 when the env vars are unset (zero product change)", () => {
+    const r = recorder();
+    expect(resolvePortWindow({}, r.warn)).toEqual({ base: DEFAULT_BASE_PORT, span: DEFAULT_PORT_SPAN });
+    expect(DEFAULT_BASE_PORT).toBe(3847);
+    expect(DEFAULT_PORT_SPAN).toBe(128);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("honors a valid override (integer, in range) with no warning", () => {
+    const r = recorder();
+    expect(
+      resolvePortWindow({ DEEPPAIRING_PORT_BASE: "20000", DEEPPAIRING_PORT_SPAN: "64" }, r.warn),
+    ).toEqual({ base: 20000, span: 64 });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("falls back to defaults on garbage, with a stderr-style note per bad var", () => {
+    const r = recorder();
+    for (const bad of ["banana", "12.5", "-1", "1023", "65001"]) {
+      expect(resolvePortWindow({ DEEPPAIRING_PORT_BASE: bad }, r.warn).base).toBe(DEFAULT_BASE_PORT);
+    }
+    for (const bad of ["0", "-5", "4097", "wide"]) {
+      expect(resolvePortWindow({ DEEPPAIRING_PORT_SPAN: bad }, r.warn).span).toBe(DEFAULT_PORT_SPAN);
+    }
+    expect(r.warnings).toHaveLength(9);
+    expect(r.warnings[0]).toMatch(/DEEPPAIRING_PORT_BASE/);
+    expect(r.warnings.at(-1)).toMatch(/DEEPPAIRING_PORT_SPAN/);
+  });
+
+  it("treats empty/whitespace values as unset (no warning)", () => {
+    const r = recorder();
+    expect(resolvePortWindow({ DEEPPAIRING_PORT_BASE: "", DEEPPAIRING_PORT_SPAN: "  " }, r.warn))
+      .toEqual({ base: DEFAULT_BASE_PORT, span: DEFAULT_PORT_SPAN });
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("a bad var falls back independently — the other override still applies", () => {
+    const r = recorder();
+    expect(
+      resolvePortWindow({ DEEPPAIRING_PORT_BASE: "garbage", DEEPPAIRING_PORT_SPAN: "16" }, r.warn),
+    ).toEqual({ base: DEFAULT_BASE_PORT, span: 16 });
+    expect(r.warnings).toHaveLength(1);
+  });
+
+  it("clamps a window that would run past port 65535 (with a note)", () => {
+    const r = recorder();
+    expect(
+      resolvePortWindow({ DEEPPAIRING_PORT_BASE: "65000", DEEPPAIRING_PORT_SPAN: "4096" }, r.warn),
+    ).toEqual({ base: 65000, span: 536 });
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/65535/);
+  });
+
+  it("the module-level BASE_PORT/PORT_SPAN are exactly the resolution of process.env", () => {
+    // Under vitest the port-window setup exports a per-worker base, so this
+    // simultaneously proves (a) consts follow the env and (b) the test window
+    // is active for this process.
+    expect({ base: BASE_PORT, span: PORT_SPAN }).toEqual(resolvePortWindow(process.env, () => {}));
+  });
+});
 
 describe("preferredPortFor — deterministic per-project port", () => {
   it("is deterministic: same projectRoot → same port", () => {
