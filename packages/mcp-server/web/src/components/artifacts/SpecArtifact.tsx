@@ -2,6 +2,7 @@ import type { Artifact, SpecRequirement, SpecTask } from "@deeppairing/shared";
 import { coerceSpecContent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
+import { OpenQuestionSection } from "./OpenQuestionSection";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useChainComments } from "../../hooks/useChainComments";
@@ -107,19 +108,18 @@ export function SpecArtifact({ artifact }: Props) {
       )}
 
       {spec.openQuestions && spec.openQuestions.length > 0 && (
-        <div className="px-3 py-2 bg-accent-amber-dim/30 border border-accent-amber/25 rounded">
-          <div className="text-2xs font-semibold text-accent-amber uppercase tracking-wide mb-1.5">
-            Open questions
+        <div className="space-y-2">
+          <div className="text-2xs font-semibold text-accent-amber uppercase tracking-wide">
+            Open questions ({spec.openQuestions.length})
           </div>
-          {/* D8 (H1) — open questions are the agent explicitly asking its
-              pair for input; they were inert text with no way to answer
-              except a whole-artifact comment. Each gets Ask/Comment targeted
-              per question so answers land in the agent's feedback lane. */}
-          <ul className="space-y-1 text-xs text-text-secondary">
-            {spec.openQuestions.map((q, i) => (
-              <OpenQuestionRow key={i} artifactId={artifact.id} question={q} index={i} />
-            ))}
-          </ul>
+          {/* #164 — open questions are the agent explicitly asking its pair for
+              input. Each is its own bounded section with a prominent answer
+              affordance + inline thread (shared with ResearchArtifact). D8 (H1)
+              per-question targeting lives inside the shared component so
+              answers land in the agent's feedback lane. */}
+          {spec.openQuestions.map((q, i) => (
+            <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} />
+          ))}
         </div>
       )}
 
@@ -128,44 +128,6 @@ export function SpecArtifact({ artifact }: Props) {
           way to approve/revise/reject. Mirrors ResearchArtifact. */}
       <ArtifactStatusActions artifact={artifact} />
     </div>
-  );
-}
-
-function OpenQuestionRow({
-  artifactId,
-  question,
-  index,
-}: {
-  artifactId: string;
-  question: string;
-  index: number;
-}) {
-  const comments = useChainComments(artifactId); // Bug2 — chain aggregation
-  // D8 review — the human's own UNANSWERED AskTrigger question must not
-  // stamp the row "answered"; only plain comments / answered questions do.
-  const answers = comments.filter(
-    (c) =>
-      c.target.questionIndex === index &&
-      !(c.intent === "question" && !c.answeredByCommentId),
-  );
-  return (
-    <li className="flex items-start justify-between gap-2 group">
-      <span className="min-w-0">
-        <span className="text-accent-amber mr-1.5" aria-hidden>?</span>
-        {question}
-        {answers.length > 0 && (
-          <span className="ml-1.5 text-2xs text-accent-green" title="Answered">✓ answered</span>
-        )}
-      </span>
-      <span className="flex items-center gap-1 shrink-0">
-        <AskTrigger artifactId={artifactId} target={{ questionIndex: index, sectionId: "open-question" }} />
-        <CommentTrigger
-          artifactId={artifactId}
-          target={{ questionIndex: index, sectionId: "open-question" }}
-          existingCount={answers.length}
-        />
-      </span>
-    </li>
   );
 }
 

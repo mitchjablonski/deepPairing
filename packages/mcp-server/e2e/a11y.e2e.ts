@@ -117,6 +117,16 @@ test.beforeAll(async () => {
       content: {
         summary: "s",
         findings: [{ category: "Security", title: "F1", detail: "d", significance: "high", evidence: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 2, snippet: "code", explanation: "why" }] }],
+        // #164 — open-question SECTIONS (the redesign). Two questions puts the
+        // shared OpenQuestionSection into the axe scan (dark + light): the
+        // answer disclosure button, the Ask pill, and the question labelling.
+        // Left COLLAPSED (no seeded answer): the inline answer composer reuses
+        // CommentThread, whose textarea is already axe-covered via the decision
+        // card's thread in these same scans — and auto-expanding it here put a
+        // composer into the Autonomy popover test's deliberately-early,
+        // pre-settle page scan, catching it (and the documented "Draft" chip)
+        // mid entrance-fade. Collapsed keeps this test's surface == main's.
+        openQuestions: ["Should the cache be write-through?", "Which eviction policy?"],
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed findings failed: ${r.status}`); });

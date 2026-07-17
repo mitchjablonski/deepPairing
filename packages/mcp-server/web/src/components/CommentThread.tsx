@@ -16,6 +16,14 @@ interface CommentThreadProps {
   // SP4 — Partial<CommentTarget> instead of a hand-rolled subset that drifted
   // from the schema and forced `as any` reads on optionId/sectionId/visualId.
   target?: Partial<CommentTarget>;
+  // #164 — the open-question sections reuse this thread inline as the primary
+  // "answer this question" surface, so let the caller re-voice the composer as
+  // an answer box (placeholder + submit label + a real accessible name on the
+  // textarea) instead of the generic "Add a comment…". All optional — omitted
+  // everywhere else, so existing call sites are byte-for-byte unchanged.
+  placeholder?: string;
+  submitLabel?: string;
+  textareaLabel?: string;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -132,7 +140,14 @@ function CommentBubble({ comment, fromVersion }: { comment: Comment; fromVersion
   );
 }
 
-export function CommentThread({ artifactId, comments, target }: CommentThreadProps) {
+export function CommentThread({
+  artifactId,
+  comments,
+  target,
+  placeholder,
+  submitLabel,
+  textareaLabel,
+}: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
   // supersede advances the selection to v2's new id and remounts this thread,
@@ -192,7 +207,8 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
       <div className="flex gap-1.5 items-end">
         <textarea
           rows={2}
-          placeholder="Add a comment… (⌘⏎ to send, Enter for newline)"
+          placeholder={placeholder ?? "Add a comment… (⌘⏎ to send, Enter for newline)"}
+          aria-label={textareaLabel}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -213,7 +229,7 @@ export function CommentThread({ artifactId, comments, target }: CommentThreadPro
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-colors shrink-0"
         >
-          Send
+          {submitLabel ?? "Send"}
         </button>
       </div>
     </div>
