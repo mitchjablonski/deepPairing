@@ -234,6 +234,8 @@ Pre-1.0, no npm publish yet — invoke the built CLI by path, or `pnpm link
 deeppairing demo                          # fire the hero flow
 deeppairing init                          # set up in this project (interactive)
 deeppairing doctor [--fix]                # diagnose / heal install issues
+deeppairing port                          # bare daemon port to stdout (scriptable; !-friendly in Claude Code)
+deeppairing status                        # friendly daemon picture: port, URL, pid, version, running/alive
 deeppairing team init                     # scaffold .deeppairing/team.json
 deeppairing philosophy export | import f --merge | publish on|off
 deeppairing post-pr-review <pr>           # post pair findings as PR comments

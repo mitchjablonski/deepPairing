@@ -47,7 +47,9 @@ export interface DaemonStatus {
   /** A daemon.json bound port exists (or this is an active session). NOT the
    *  same as reachable — a stale daemon.json reads `running: true, alive: false`. */
   running: boolean;
-  /** `/api/daemon-info` actually responded — the daemon is genuinely up. */
+  /** `/api/daemon-info` actually responded AND identified as THIS project's
+   *  daemon — genuinely up and ours. A foreign daemon squatting a recycled
+   *  port reads alive:false (see the Fix 2 identity check). */
   alive: boolean;
 }
 
@@ -63,8 +65,9 @@ interface DaemonJson {
 /**
  * Walk UP from `startDir` to the nearest directory containing
  * `.deeppairing/daemon.json`. Returns that directory + the parsed file (or a
- * `{}` info when the file exists but is corrupt — it's still THIS project's
- * marker, so we stop walking rather than latch onto a parent project's daemon).
+ * `{}` info when the file exists but is corrupt/hostile-shaped — it's still
+ * THIS project's marker, so we stop walking rather than latch onto a parent
+ * project's daemon).
  * Returns null when no `.deeppairing/daemon.json` exists on the path to root.
  */
 export function findDaemonJson(startDir: string): { dir: string; info: DaemonJson } | null {
@@ -74,7 +77,16 @@ export function findDaemonJson(startDir: string): { dir: string; info: DaemonJso
     const candidate = path.join(dir, ".deeppairing", "daemon.json");
     if (fs.existsSync(candidate)) {
       try {
-        return { dir, info: JSON.parse(fs.readFileSync(candidate, "utf-8")) as DaemonJson };
+        const parsed: unknown = JSON.parse(fs.readFileSync(candidate, "utf-8"));
+        // #186 review Fix 1 — hostile-shape guard. JSON.parse can legally yield
+        // null / a number / a string / an array; treating any of those as a
+        // record would throw on the first property read downstream. A non-object
+        // file is still this project's marker — degrade to `{}` like corrupt.
+        const info: DaemonJson =
+          parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as DaemonJson)
+            : {};
+        return { dir, info };
       } catch {
         // Present-but-corrupt is still this project's marker.
         return { dir, info: {} };
@@ -121,8 +133,15 @@ export async function resolveDaemonStatus(
   const baseRoot = resolveProjectRoot({ env, cwd: () => startDir }).projectRoot;
 
   // Walk UP to the nearest daemon.json (robust to `!`-run-from-a-subdir).
+  // #186 review Fix 1 — every field read off daemon.json is type-guarded: a
+  // hostile shape (`{"projectRoot":42}`, string ports, …) must degrade to the
+  // deterministic fallback, never crash the CLI/tool (a thrown TypeError here
+  // exits `deeppairing status` with 1 and breaks `$(deeppairing port)`).
   const found = findDaemonJson(baseRoot);
-  const effectiveRoot = found?.info.projectRoot ?? found?.dir ?? baseRoot;
+  const effectiveRoot =
+    (typeof found?.info.projectRoot === "string" ? found.info.projectRoot : undefined) ??
+    found?.dir ??
+    baseRoot;
   const deterministicPort = preferredPortFor(effectiveRoot);
 
   // The bound port we KNOW about: an active session's port (authoritative) or a
@@ -134,28 +153,47 @@ export async function resolveDaemonStatus(
   // Probe the candidate for real liveness. daemon.json can be stale.
   const candidate = boundPort ?? deterministicPort;
   let alive = false;
-  let pid = found?.info.pid;
-  let version = found?.info.version;
+  let pid = typeof found?.info.pid === "number" ? found.info.pid : undefined;
+  let version = typeof found?.info.version === "string" ? found.info.version : undefined;
   let liveRoot: string | undefined;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), probeTimeoutMs);
-    const res = await doFetch(`http://localhost:${candidate}/api/daemon-info`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = (await res.json()) as {
-        pid?: unknown;
-        version?: unknown;
-        projectRoot?: unknown;
-      };
-      if (typeof data?.pid === "number") {
-        alive = true;
-        pid = data.pid;
+    try {
+      const res = await doFetch(`http://localhost:${candidate}/api/daemon-info`, {
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          pid?: unknown;
+          version?: unknown;
+          projectRoot?: unknown;
+        };
+        // #186 review Fix 2 — identity check before adopting. Port recycling:
+        // our stale daemon.json's port may now be held by a DIFFERENT project's
+        // daemon (its own preferred slot, or a bind-loop overflow). Adopting it
+        // would report the foreign projectRoot/hash as this project's status and
+        // print the foreign port with clean stdout. Codebase norm: verify
+        // identity before trusting a port (evictDaemon pid-checks;
+        // isDaemonRunning's sweep matches projectRoot; AA4 exists for this
+        // threat class). Require a string projectRoot that matches OURS —
+        // mismatch (or missing) ⇒ not our daemon ⇒ alive stays false and the
+        // deterministic fallback applies. The knownPort path is unaffected in
+        // practice: the wrapper's register() already did the Y3'
+        // expectedProjectRoot binding against that daemon.
+        const probedRoot = typeof data?.projectRoot === "string" ? data.projectRoot : undefined;
+        const isOurs = probedRoot !== undefined && probedRoot === effectiveRoot;
+        if (typeof data?.pid === "number" && isOurs) {
+          alive = true;
+          pid = data.pid;
+          liveRoot = probedRoot;
+          if (typeof data?.version === "string") version = data.version;
+        }
       }
-      if (typeof data?.version === "string") version = data.version;
-      if (typeof data?.projectRoot === "string") liveRoot = data.projectRoot;
+    } finally {
+      // Nit (#186) — clear on EVERY path: on a refused connection the pending
+      // 800ms abort timer kept the process alive (~1.1s vs ~0.3s CLI exit).
+      clearTimeout(timer);
     }
   } catch {
     // Unreachable — alive stays false.

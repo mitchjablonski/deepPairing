@@ -30138,7 +30138,9 @@ function findDaemonJson(startDir) {
     const candidate = path3.join(dir, ".deeppairing", "daemon.json");
     if (fs4.existsSync(candidate)) {
       try {
-        return { dir, info: JSON.parse(fs4.readFileSync(candidate, "utf-8")) };
+        const parsed = JSON.parse(fs4.readFileSync(candidate, "utf-8"));
+        const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        return { dir, info };
       } catch {
         return { dir, info: {} };
       }
@@ -30155,30 +30157,35 @@ async function resolveDaemonStatus(opts = {}) {
   const doFetch = opts.fetchImpl ?? fetch;
   const baseRoot = resolveProjectRoot({ env, cwd: () => startDir }).projectRoot;
   const found = findDaemonJson(baseRoot);
-  const effectiveRoot = found?.info.projectRoot ?? found?.dir ?? baseRoot;
+  const effectiveRoot = (typeof found?.info.projectRoot === "string" ? found.info.projectRoot : void 0) ?? found?.dir ?? baseRoot;
   const deterministicPort = preferredPortFor(effectiveRoot);
   const boundPort = opts.knownPort ?? (typeof found?.info.port === "number" ? found.info.port : void 0);
   const running = boundPort !== void 0;
   const candidate = boundPort ?? deterministicPort;
   let alive = false;
-  let pid = found?.info.pid;
-  let version2 = found?.info.version;
+  let pid = typeof found?.info.pid === "number" ? found.info.pid : void 0;
+  let version2 = typeof found?.info.version === "string" ? found.info.version : void 0;
   let liveRoot;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), probeTimeoutMs);
-    const res = await doFetch(`http://localhost:${candidate}/api/daemon-info`, {
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = await res.json();
-      if (typeof data?.pid === "number") {
-        alive = true;
-        pid = data.pid;
+    try {
+      const res = await doFetch(`http://localhost:${candidate}/api/daemon-info`, {
+        signal: controller.signal
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const probedRoot = typeof data?.projectRoot === "string" ? data.projectRoot : void 0;
+        const isOurs = probedRoot !== void 0 && probedRoot === effectiveRoot;
+        if (typeof data?.pid === "number" && isOurs) {
+          alive = true;
+          pid = data.pid;
+          liveRoot = probedRoot;
+          if (typeof data?.version === "string") version2 = data.version;
+        }
       }
-      if (typeof data?.version === "string") version2 = data.version;
-      if (typeof data?.projectRoot === "string") liveRoot = data.projectRoot;
+    } finally {
+      clearTimeout(timer);
     }
   } catch {
   }
