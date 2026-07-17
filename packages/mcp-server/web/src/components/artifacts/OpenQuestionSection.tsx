@@ -75,7 +75,10 @@ export function OpenQuestionSection({
           section is named by it via aria-labelledby. */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[9px] font-semibold uppercase tracking-wide text-accent-amber/80 mb-1">
+          {/* Full-strength accent-amber — the /80 blend measured 3.94:1 on the
+              light theme's surface-secondary (axe, real scan); full token
+              passes AA on both themes. */}
+          <div className="text-[9px] font-semibold uppercase tracking-wide text-accent-amber mb-1">
             Question {index + 1}
           </div>
           <p
