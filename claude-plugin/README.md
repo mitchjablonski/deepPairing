@@ -99,12 +99,13 @@ Both run the self-contained bundles under `server/` via
 
 **MCP server** (bundled via `.mcp.json`)
 
-- 13 tools: `present_findings`, `present_spec`, `present_options`,
+- 14 tools: `present_findings`, `present_spec`, `present_options`,
   `present_plan`, `present_code_change`, `update_plan_progress`,
   `log_reasoning`, `answer_question`,
   `revise_artifact` (mode: supersede | retract | obsolete),
   `recall` (mode: philosophy | sessions | ledger | any),
-  `post_pr_review`, `export_session`, `check_feedback`.
+  `post_pr_review`, `export_session`, `check_feedback`,
+  `get_companion_url`.
 - MCP resources: `deeppairing://session/current`,
   `deeppairing://artifact/{id}`, `deeppairing://sessions`,
   `deeppairing://session/{id}`.

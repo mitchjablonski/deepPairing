@@ -3235,8 +3235,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path6) {
-      let input = path6;
+    function removeDotSegments(path7) {
+      let input = path7;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3435,8 +3435,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path6, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path6 && path6 !== "/" ? path6 : void 0;
+        const [path7, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path7 && path7 !== "/" ? path7 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6798,12 +6798,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs7, exportName) {
+    function addFormats(ajv, list, fs8, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs7[f]);
+        ajv.addFormat(f, fs8[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -6875,27 +6875,27 @@ var init_project_root = __esm({
 });
 
 // src/daemon/token.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import os2 from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path3.isAbsolute(xdg)) {
+  if (xdg && path4.isAbsolute(xdg)) {
     try {
-      if (fs4.statSync(xdg).isDirectory()) return path3.join(xdg, "deeppairing");
+      if (fs5.statSync(xdg).isDirectory()) return path4.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path3.join(os2.tmpdir(), "deeppairing");
+  return path4.join(os2.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path3.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path4.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs4.existsSync(file2)) return null;
-    return JSON.parse(fs4.readFileSync(file2, "utf-8"));
+    if (!fs5.existsSync(file2)) return null;
+    return JSON.parse(fs5.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
@@ -6922,9 +6922,9 @@ __export(lifecycle_exports, {
   resolveStaleDaemon: () => resolveStaleDaemon
 });
 import { spawn as spawn2 } from "node:child_process";
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import net from "node:net";
-import path4 from "node:path";
+import path5 from "node:path";
 import { fileURLToPath } from "node:url";
 function logStale(msg) {
   try {
@@ -6934,13 +6934,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path4.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path5.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs5.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs5.readFileSync(infoPath, "utf-8"));
+    if (!fs6.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs6.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -7058,7 +7058,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs5.unlinkSync(daemonInfoPath(projectRoot2));
+      fs6.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -7114,8 +7114,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path4.join(__thisDir, "../../dist/daemon/index.js");
-  const scriptPath = fs5.existsSync(daemonScript) ? daemonScript : path4.join(__thisDir, "daemon.js");
+  const daemonScript = path5.join(__thisDir, "../../dist/daemon/index.js");
+  const scriptPath = fs6.existsSync(daemonScript) ? daemonScript : path5.join(__thisDir, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -7288,7 +7288,7 @@ var init_lifecycle = __esm({
     init_token();
     init_project_root();
     init_version();
-    __thisDir = path4.dirname(fileURLToPath(import.meta.url));
+    __thisDir = path5.dirname(fileURLToPath(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = 3847;
     MAX_PORT_ATTEMPTS = 10;
@@ -7819,10 +7819,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path6) {
-  if (!path6)
+function getElementAtPath(obj2, path7) {
+  if (!path7)
     return obj2;
-  return path6.reduce((acc, key) => acc?.[key], obj2);
+  return path7.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -8231,11 +8231,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -8382,16 +8382,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path6 = []) => {
+  const processError = (error52, path7 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -8418,17 +8418,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path6 = []) => {
+  const processError = (error52, path7 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -8460,8 +8460,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path7) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -21459,13 +21459,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path7 = ref.slice(1).split("/").filter(Boolean);
+  if (path7.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path7[0] === defsKey) {
+    const key = path7[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -26905,11 +26905,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs7 = await import("node:fs");
-    const path6 = await import("node:path");
-    const claudeMd = path6.join(process.cwd(), "CLAUDE.md");
-    if (fs7.existsSync(claudeMd)) {
-      const content = fs7.readFileSync(claudeMd, "utf-8");
+    const fs8 = await import("node:fs");
+    const path7 = await import("node:path");
+    const claudeMd = path7.join(process.cwd(), "CLAUDE.md");
+    if (fs8.existsSync(claudeMd)) {
+      const content = fs8.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `npx deeppairing init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -27606,8 +27606,8 @@ var TOOL_ERROR_RETRYABLE = {
 // src/mcp/validate-tool-input.ts
 function formatValidationError(toolName, err, example) {
   const issues = err.issues.slice(0, 5).map((i) => {
-    const path6 = i.path.length ? i.path.join(".") : "(root)";
-    return `  \u2022 ${path6}: ${i.message}`;
+    const path7 = i.path.length ? i.path.join(".") : "(root)";
+    return `  \u2022 ${path7}: ${i.message}`;
   });
   const more = err.issues.length > 5 ? `
   \u2022 \u2026and ${err.issues.length - 5} more` : "";
@@ -30128,6 +30128,95 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
   return { content: [{ type: "text", text: lines.join("\n") }] };
 }
 
+// src/daemon/status.ts
+init_project_root();
+import fs4 from "node:fs";
+import path3 from "node:path";
+function findDaemonJson(startDir) {
+  let dir = path3.resolve(startDir);
+  for (; ; ) {
+    const candidate = path3.join(dir, ".deeppairing", "daemon.json");
+    if (fs4.existsSync(candidate)) {
+      try {
+        return { dir, info: JSON.parse(fs4.readFileSync(candidate, "utf-8")) };
+      } catch {
+        return { dir, info: {} };
+      }
+    }
+    const parent = path3.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+async function resolveDaemonStatus(opts = {}) {
+  const env = opts.env ?? process.env;
+  const startDir = opts.startDir ?? process.cwd();
+  const probeTimeoutMs = opts.probeTimeoutMs ?? 800;
+  const doFetch = opts.fetchImpl ?? fetch;
+  const baseRoot = resolveProjectRoot({ env, cwd: () => startDir }).projectRoot;
+  const found = findDaemonJson(baseRoot);
+  const effectiveRoot = found?.info.projectRoot ?? found?.dir ?? baseRoot;
+  const deterministicPort = preferredPortFor(effectiveRoot);
+  const boundPort = opts.knownPort ?? (typeof found?.info.port === "number" ? found.info.port : void 0);
+  const running = boundPort !== void 0;
+  const candidate = boundPort ?? deterministicPort;
+  let alive = false;
+  let pid = found?.info.pid;
+  let version2 = found?.info.version;
+  let liveRoot;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), probeTimeoutMs);
+    const res = await doFetch(`http://localhost:${candidate}/api/daemon-info`, {
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      if (typeof data?.pid === "number") {
+        alive = true;
+        pid = data.pid;
+      }
+      if (typeof data?.version === "string") version2 = data.version;
+      if (typeof data?.projectRoot === "string") liveRoot = data.projectRoot;
+    }
+  } catch {
+  }
+  const port = opts.knownPort ?? (alive ? candidate : deterministicPort);
+  const finalRoot = liveRoot ?? effectiveRoot;
+  return {
+    port,
+    companionUrl: `http://localhost:${port}`,
+    pid,
+    version: version2,
+    projectRoot: finalRoot,
+    projectHash: projectHashOf(finalRoot),
+    running,
+    alive
+  };
+}
+
+// src/mcp/tools/get-companion-url.ts
+async function handleGetCompanionUrl(ctx, _args) {
+  const status = await resolveDaemonStatus({ knownPort: ctx.port });
+  const structuredContent = {
+    port: status.port,
+    companionUrl: status.companionUrl,
+    version: status.version,
+    running: status.running,
+    alive: status.alive,
+    projectRoot: status.projectRoot
+  };
+  const liveness = status.alive ? "running" : "not currently reachable (open a session or restart Claude Code)";
+  const text = `Companion UI for this project: ${status.companionUrl}
+Port: ${status.port} \xB7 ${liveness}` + (status.version ? ` \xB7 daemon v${status.version}` : "") + `
+Give the human THIS exact URL to open the review surface.`;
+  return {
+    content: [{ type: "text", text }],
+    structuredContent
+  };
+}
+
 // src/mcp/server.ts
 init_version();
 function createMcpServer(store, broadcast, port = 3847) {
@@ -30378,6 +30467,31 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           properties: {
             format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings"], description: "Export format" }
           }
+        }
+      },
+      {
+        // #163 — read-only "where is my review surface" tool. The human's field
+        // need: know what port THIS Claude Code session's daemon is on. They can
+        // ask you ("what's the URL?") and you answer with the live companionUrl,
+        // OR run `!deeppairing port` in the terminal (shared resolver).
+        name: "get_companion_url",
+        annotations: { title: "Get companion URL", readOnlyHint: true, openWorldHint: false },
+        description: "Report the deepPairing companion UI port + URL for this project (so the human can open the review surface). Read-only. Returns structuredContent: port, companionUrl, version, running/alive, projectRoot. Give the human the EXACT companionUrl \u2014 never guess a default.",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        },
+        outputSchema: {
+          type: "object",
+          properties: {
+            port: { type: "number", description: "The companion UI port for this session's daemon (or the deterministic port it would bind if not running)." },
+            companionUrl: { type: "string", description: "http://localhost:<port> \u2014 the exact URL to give the human." },
+            version: { type: "string", description: "The running daemon's server version, when reachable." },
+            running: { type: "boolean", description: "A daemon.json bound port exists (or this is an active session)." },
+            alive: { type: "boolean", description: "The daemon actually responded to a liveness probe." },
+            projectRoot: { type: "string", description: "The resolved project root this daemon serves." }
+          },
+          required: ["port", "companionUrl", "running", "alive", "projectRoot"]
         }
       },
       // III12 — `request_horizon_check` was a 7-line wrapper around
@@ -30776,6 +30890,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handlePostPrReview(ctx, args);
           case "export_session":
             return handleExportSession(ctx, args);
+          case "get_companion_url":
+            return handleGetCompanionUrl(ctx, args);
           default:
             return {
               content: [{ type: "text", text: `Unknown tool: ${name}` }],
@@ -30870,11 +30986,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs7 = await import("node:fs");
-      const path6 = await import("node:path");
-      const infoPath = path6.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs7.existsSync(infoPath)) return false;
-      const raw = fs7.readFileSync(infoPath, "utf-8");
+      const fs8 = await import("node:fs");
+      const path7 = await import("node:path");
+      const infoPath = path7.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs8.existsSync(infoPath)) return false;
+      const raw = fs8.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -30925,7 +31041,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path6, init, isRetry = false) {
+  async request(path7, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -30935,12 +31051,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path6}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path7}`, initWithHash);
     } catch (err2) {
       if (err2?.name === "AbortError" || err2?.name === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path6, init, true);
+        if (recovered) return this.request(path7, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`npx deeppairing doctor\` to diagnose, or restart Claude Code.`
@@ -30955,7 +31071,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path6, init, true);
+        return this.request(path7, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -30967,7 +31083,7 @@ var DaemonClient = class {
       await this.register(this.lastRegisterMeta);
       void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
       });
-      return this.request(path6, init, true);
+      return this.request(path7, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -30975,15 +31091,15 @@ var DaemonClient = class {
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
   }
-  async post(path6, body) {
-    return this.request(path6, {
+  async post(path7, body) {
+    return this.request(path7, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path6) {
-    return this.request(path6, {});
+  async get(path7) {
+    return this.request(path7, {});
   }
   // --- Session lifecycle ---
   /**
@@ -31245,9 +31361,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path6) {
+  async requestPublic(path7) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path6}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path7}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -31293,17 +31409,17 @@ var DaemonClient = class {
 // src/standalone.ts
 init_project_root();
 import crypto3 from "node:crypto";
-import fs6 from "node:fs";
-import path5 from "node:path";
+import fs7 from "node:fs";
+import path6 from "node:path";
 var { projectRoot, source: projectRootSource } = resolveProjectRoot();
-var dpDir = path5.join(projectRoot, ".deeppairing");
-var logFile = path5.join(dpDir, "server.log");
+var dpDir = path6.join(projectRoot, ".deeppairing");
+var logFile = path6.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs6.mkdirSync(path5.dirname(logFile), { recursive: true });
-    fs6.appendFileSync(logFile, line);
+    fs7.mkdirSync(path6.dirname(logFile), { recursive: true });
+    fs7.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -31316,7 +31432,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`npx deeppairing doctor\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path5.basename(projectRoot);
+  const projectName = path6.basename(projectRoot);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto3.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
   const sessionId = `session_${safeProjectName}_${projectHash}`;

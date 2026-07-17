@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders, describeDaemonVersionHealth } from "../daemon/lifecycle.js";
+import { resolveDaemonStatus } from "../daemon/status.js";
 import { SERVER_VERSION } from "../version.js";
 import {
   ensureDeepPairingDir,
@@ -1675,6 +1676,51 @@ async function urlCmd(opts: { open?: boolean } = {}): Promise<void> {
   if (opts.open) openUrl(url);
 }
 
+/**
+ * #163 — `deeppairing port`: print JUST the port number to stdout so it's
+ * scriptable (`open http://localhost:$(deeppairing port)`). When no daemon is
+ * running we STILL print the deterministic port to stdout (where it would bind)
+ * and send a one-line note to STDERR so stdout stays clean for `$(...)`.
+ *
+ * Resolves the project root from cwd via the shared resolver's walk-up (robust
+ * when `!`-run from a subdirectory) and honors CLAUDE_PROJECT_DIR /
+ * DEEPPAIRING_PROJECT_ROOT (resolveProjectRoot, inside resolveDaemonStatus).
+ */
+async function portCmd(): Promise<void> {
+  const status = await resolveDaemonStatus({ startDir: cwd });
+  console.log(String(status.port));
+  if (!status.alive) {
+    console.error(`  ${dim("(no daemon running for this project; would bind here)")}`);
+  }
+}
+
+/**
+ * #163 — `deeppairing status`: the friendly picture — port, companion URL, pid,
+ * version, running/alive, projectRoot, projectHash. Human-formatted, matching
+ * the doctor/init output style.
+ */
+async function statusCmd(): Promise<void> {
+  console.log(bold("\n  deepPairing status\n"));
+  const status = await resolveDaemonStatus({ startDir: cwd });
+
+  const state = status.alive
+    ? green("running")
+    : status.running
+      ? yellow("stale (daemon.json present, not responding)")
+      : dim("not running");
+  console.log(`  ${status.alive ? green("✓") : status.running ? yellow("!") : dim("·")} ${state}`);
+  console.log(`    ${dim("companion URL:")} ${bold(status.companionUrl)}`);
+  console.log(`    ${dim("port:")}         ${status.port}${status.alive ? "" : dim("  (deterministic — where it would bind)")}`);
+  if (status.pid !== undefined) console.log(`    ${dim("pid:")}          ${status.pid}`);
+  if (status.version) console.log(`    ${dim("version:")}      v${status.version}`);
+  console.log(`    ${dim("projectRoot:")}  ${status.projectRoot}`);
+  console.log(`    ${dim("projectHash:")}  ${status.projectHash}`);
+  console.log();
+  console.log(`  ${dim("Tip: in a Claude Code session run")} ${bold("!deeppairing port")} ${dim("for the bare port,")}`);
+  console.log(`  ${dim("or just ask Claude for the URL — it has the companion-URL tool.")}`);
+  console.log();
+}
+
 /** List every live deepPairing daemon in the deterministic port window —
  *  project ↔ URL, so a multi-project user can see all their open projects at
  *  a glance. */
@@ -1740,6 +1786,11 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     dp doctor [--fix] [--yes]              Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     dp sessions [list|prune]               List sessions for this project; prune removes empty stale ones
     dp sessions merge <from> <into> [-y]   Merge two sessions (rescues data split by old non-deterministic ids)
+    dp port                                Print JUST this project's daemon port to stdout (scriptable:
+                                           open http://localhost:$(deeppairing port)). In a Claude Code
+                                           session: !deeppairing port — or just ask Claude for the URL
+                                           (it has the companion-URL MCP tool).
+    dp status                              Friendly daemon picture: port, URL, pid, version, running/alive
     dp url [--open]                        Print this project's companion UI URL (--open launches it)
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
@@ -1822,6 +1873,16 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const open = args.includes("--open");
   urlCmd({ open }).catch((err) => {
     console.error(`  ${red("✗")} url failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "port") {
+  portCmd().catch((err) => {
+    console.error(`  ${red("✗")} port failed: ${err?.message ?? err}`);
+    process.exit(1);
+  });
+} else if (cmd === "status") {
+  statusCmd().catch((err) => {
+    console.error(`  ${red("✗")} status failed: ${err?.message ?? err}`);
     process.exit(1);
   });
 } else if (cmd === "list") {

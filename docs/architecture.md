@@ -48,7 +48,7 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 13 MCP tools (see below). Talks to the
+  session. Implements the 14 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
 - **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to
@@ -66,7 +66,7 @@ with it and DaemonClient (`src/daemon/client.ts`) implements `IStore`
 over HTTP so the same code paths work in standalone or daemon mode. The
 companion UI can aggregate across several projects' daemons.
 
-## The MCP tool surface (13 tools)
+## The MCP tool surface (14 tools)
 
 Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
 in `src/mcp/server.ts`. The split:
@@ -98,6 +98,9 @@ in `src/mcp/server.ts`. The split:
 - `post_pr_review` — push approved findings as inline comments to a PR
 - `export_session` — markdown export (`pr-description` / `pr-comments` /
   `adr` / `full` / `replay` / `learnings`)
+- `get_companion_url` — read-only: report this project's companion UI
+  port + URL so the agent can hand the human the exact review-surface
+  URL (shares the CLI's `deeppairing port` / `status` resolver)
 
 Tool calls return prose `content`; `check_feedback` additionally ships a
 machine-readable mirror (`outputSchema` + `structuredContent`) so clients
