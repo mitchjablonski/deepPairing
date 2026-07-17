@@ -219,11 +219,11 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), the
   `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
-13 MCP tools: `present_findings`, `present_options`, `present_spec`,
+14 MCP tools: `present_findings`, `present_options`, `present_spec`,
 `present_plan`, `present_code_change`, `update_plan_progress`, `log_reasoning`,
 `recall`, `revise_artifact`, `answer_question`, `post_pr_review`,
-`export_session`, `check_feedback` — plus two MCP prompts (`recall` and `seed`)
-for slash-style queries.
+`export_session`, `check_feedback`, `get_companion_url` — plus two MCP prompts
+(`recall` and `seed`) for slash-style queries.
 
 ### CLI
 
@@ -234,6 +234,8 @@ Pre-1.0, no npm publish yet — invoke the built CLI by path, or `pnpm link
 deeppairing demo                          # fire the hero flow
 deeppairing init                          # set up in this project (interactive)
 deeppairing doctor [--fix]                # diagnose / heal install issues
+deeppairing port                          # bare daemon port to stdout (scriptable; !-friendly in Claude Code)
+deeppairing status                        # friendly daemon picture: port, URL, pid, version, running/alive
 deeppairing team init                     # scaffold .deeppairing/team.json
 deeppairing philosophy export | import f --merge | publish on|off
 deeppairing post-pr-review <pr>           # post pair findings as PR comments

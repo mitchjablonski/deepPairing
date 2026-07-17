@@ -29,6 +29,7 @@ import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handleRecall } from "./tools/recall.js";
+import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult } from "./tools/types.js";
 import { SERVER_VERSION } from "../version.js";
 
@@ -344,6 +345,32 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
           properties: {
             format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings"], description: "Export format" },
           },
+        },
+      },
+      {
+        // #163 — read-only "where is my review surface" tool. The human's field
+        // need: know what port THIS Claude Code session's daemon is on. They can
+        // ask you ("what's the URL?") and you answer with the live companionUrl,
+        // OR run `!deeppairing port` in the terminal (shared resolver).
+        name: "get_companion_url",
+        annotations: { title: "Get companion URL", readOnlyHint: true, openWorldHint: false },
+        description:
+          "Report the deepPairing companion UI port + URL for this project (so the human can open the review surface). Read-only. Returns structuredContent: port, companionUrl, version, running/alive, projectRoot. Give the human the EXACT companionUrl — never guess a default.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {},
+        },
+        outputSchema: {
+          type: "object" as const,
+          properties: {
+            port: { type: "number", description: "The companion UI port for this session's daemon (or the deterministic port it would bind if not running)." },
+            companionUrl: { type: "string", description: "http://localhost:<port> — the exact URL to give the human." },
+            version: { type: "string", description: "The running daemon's server version, when reachable." },
+            running: { type: "boolean", description: "A daemon.json bound port exists (or this is an active session)." },
+            alive: { type: "boolean", description: "The daemon actually responded to a liveness probe." },
+            projectRoot: { type: "string", description: "The resolved project root this daemon serves." },
+          },
+          required: ["port", "companionUrl", "running", "alive", "projectRoot"],
         },
       },
       // III12 — `request_horizon_check` was a 7-line wrapper around
@@ -949,6 +976,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 38
 
       case "export_session":
         return handleExportSession(ctx, args);
+
+      case "get_companion_url":
+        // #163 — read-only companion-URL/port report (shared resolver).
+        return handleGetCompanionUrl(ctx, args);
 
       default:
         return {

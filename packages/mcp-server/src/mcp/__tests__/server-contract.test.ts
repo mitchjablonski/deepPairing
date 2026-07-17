@@ -32,9 +32,10 @@ describe("MCP Tool Handlers — protocol contract", () => {
   });
 
   describe("C1 — ToolAnnotations on every tool", () => {
-    it("all 13 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
+    it("all 14 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
       const list = await client.listTools();
-      expect(list.tools).toHaveLength(13);
+      // #163 — get_companion_url added → 13 → 14.
+      expect(list.tools).toHaveLength(14);
       for (const t of list.tools) {
         expect(t.annotations, `${t.name} missing annotations`).toBeDefined();
         expect(typeof (t.annotations as any).openWorldHint).toBe("boolean");
@@ -46,6 +47,8 @@ describe("MCP Tool Handlers — protocol contract", () => {
       // Pure reads.
       expect(byName.recall.readOnlyHint).toBe(true);
       expect(byName.export_session.readOnlyHint).toBe(true);
+      // #163 — get_companion_url is a pure read (just reports the port/URL).
+      expect(byName.get_companion_url.readOnlyHint).toBe(true);
       // check_feedback ACKNOWLEDGES + writes ledger patterns — it must NOT
       // claim read-only, whatever its name suggests.
       expect(byName.check_feedback.readOnlyHint).toBe(false);
@@ -135,6 +138,31 @@ describe("MCP Tool Handlers — protocol contract", () => {
       await expect(
         client.getPrompt({ name: "seed", arguments: {} }),
       ).rejects.toThrow(/concept/);
+    });
+  });
+
+  describe("#163 — get_companion_url tool", () => {
+    it("is advertised with an outputSchema and read-only annotation", async () => {
+      const list = await client.listTools();
+      const tool = list.tools.find((t) => t.name === "get_companion_url");
+      expect(tool).toBeDefined();
+      expect((tool!.annotations as any).readOnlyHint).toBe(true);
+      const out = (tool as any).outputSchema;
+      expect(out).toBeDefined();
+      expect(out.required).toEqual(expect.arrayContaining(["port", "companionUrl", "running", "alive", "projectRoot"]));
+    });
+
+    it("reports THIS session's daemon port + companion URL (harness port 4000)", async () => {
+      const { structuredContent } = await callTool("get_companion_url", {});
+      expect(structuredContent).toBeDefined();
+      // The harness constructs the server with port 4000 → the tool reports it.
+      expect(structuredContent!.port).toBe(4000);
+      expect(structuredContent!.companionUrl).toBe("http://localhost:4000");
+      // knownPort is set (an active session) → running true; nothing listens on
+      // 4000 in-test → alive false.
+      expect(structuredContent!.running).toBe(true);
+      expect(typeof structuredContent!.alive).toBe("boolean");
+      expect(typeof structuredContent!.projectRoot).toBe("string");
     });
   });
 
