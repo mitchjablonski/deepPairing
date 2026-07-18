@@ -775,7 +775,7 @@ describe("Daemon Routes", () => {
 describe("DaemonClient", () => {
   let server: any;
   let client: DaemonClient;
-  const TEST_PORT = 13847; // Unusual port to avoid conflicts
+  let TEST_PORT: number; // OS-assigned via port 0 (was a hardcoded 13847, which raced parallel workers for the slot)
   const SESSION = "client_test_session";
 
   beforeAll(async () => {
@@ -790,7 +790,9 @@ describe("DaemonClient", () => {
       (sid, event) => broadcasts.push({ sessionId: sid, event }),
     );
 
-    server = serve({ fetch: routes.fetch, port: TEST_PORT });
+    TEST_PORT = await new Promise<number>((resolve) => {
+      server = serve({ fetch: routes.fetch, port: 0 }, (info) => resolve(info.port));
+    });
     client = new DaemonClient(TEST_PORT, SESSION);
     await client.register();
   });
@@ -988,8 +990,11 @@ describe("DaemonClient", () => {
         undefined,
         "/projects/A",
       );
-      const localPort = TEST_PORT + 1;
-      const localServer = serve({ fetch: localApp.fetch, port: localPort });
+      // port 0 here too — `TEST_PORT + 1` was only safe with a hardcoded base.
+      let localServer: any;
+      const localPort = await new Promise<number>((resolve) => {
+        localServer = serve({ fetch: localApp.fetch, port: 0 }, (info) => resolve(info.port));
+      });
       const c = new DaemonClient(localPort, "aa2_meta");
       await expect(
         c.register({ expectedProjectRoot: "/projects/B" }),
@@ -1191,7 +1196,6 @@ describe("DaemonClient.recordMetric — production wiring (real HTTP)", () => {
   let server: any;
   let client: DaemonClient;
   let metricsRoot: string;
-  const PORT = 13848;
 
   beforeAll(async () => {
     metricsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-metric-wire-"));
@@ -1204,8 +1208,11 @@ describe("DaemonClient.recordMetric — production wiring (real HTTP)", () => {
       undefined,
       metricsRoot, // daemonProjectRoot — so the /metrics route actually records
     );
-    server = serve({ fetch: routes.fetch, port: PORT });
-    client = new DaemonClient(PORT, "metric_wire_session");
+    // port 0 — OS-assigned free port (was a hardcoded 13848).
+    const port = await new Promise<number>((resolve) => {
+      server = serve({ fetch: routes.fetch, port: 0 }, (info) => resolve(info.port));
+    });
+    client = new DaemonClient(port, "metric_wire_session");
     await client.register();
   });
 

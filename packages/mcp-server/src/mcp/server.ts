@@ -32,6 +32,7 @@ import { handleRecall } from "./tools/recall.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult } from "./tools/types.js";
 import { SERVER_VERSION } from "../version.js";
+import { BASE_PORT } from "../project-root.js";
 
 /**
  * U0.2 — schema for the quick-approve elicitation form.
@@ -72,7 +73,7 @@ type BroadcastFn = (event: any) => void;
  * .describe() first).
  */
 
-export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = 3847) {
+export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BASE_PORT) {
   const server = new Server(
     { name: "deeppairing", version: SERVER_VERSION },
     {

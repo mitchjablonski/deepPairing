@@ -12,7 +12,7 @@ import type {
   RecordDecisionParams,
   RejectedApproach,
 } from "../store/store-interface.js";
-import { projectHashOf } from "../project-root.js";
+import { projectHashOf, BASE_PORT } from "../project-root.js";
 
 export class DaemonClient implements IStore {
   private baseUrl: string;
@@ -741,6 +741,6 @@ export class DaemonClient implements IStore {
   private portFromBaseUrl(): number {
     // baseUrl = http://localhost:{port}/api/internal/sessions/{sessionId}
     const port = this.baseUrl.match(/localhost:(\d+)/)?.[1];
-    return port ? parseInt(port, 10) : 3847;
+    return port ? parseInt(port, 10) : BASE_PORT;
   }
 }

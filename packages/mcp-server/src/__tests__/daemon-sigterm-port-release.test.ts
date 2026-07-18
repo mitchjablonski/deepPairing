@@ -85,8 +85,9 @@ async function startDaemon(): Promise<{ proc: ChildProcess; port: number; projec
 
   const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
   let port = 0;
-  // tsx cold-start + bind: poll up to ~20s (generous for WSL/CI).
-  for (let i = 0; i < 200 && !port; i++) {
+  // tsx cold-start + bind: poll up to ~35s — measured WSL /mnt/c (9P) full-run
+  // contention pushed cold starts past the old 20s budget.
+  for (let i = 0; i < 350 && !port; i++) {
     if (fs.existsSync(infoPath)) {
       try {
         const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
@@ -100,7 +101,7 @@ async function startDaemon(): Promise<{ proc: ChildProcess; port: number; projec
   if (!port) {
     try { proc.kill("SIGKILL"); } catch { /* already gone */ }
     fs.rmSync(projectRoot, { recursive: true, force: true });
-    throw new Error("daemon did not become reachable within 20s");
+    throw new Error("daemon did not become reachable within 35s");
   }
   return { proc, port, projectRoot };
 }
@@ -154,7 +155,7 @@ describe("I5 — daemon releases the LISTEN socket on SIGTERM before flush/exit"
       try { proc.kill("SIGKILL"); } catch { /* already gone */ }
       fs.rmSync(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 40_000);
+  }, 60_000);
 
   it("a second SIGTERM is a no-op (shuttingDown guard) — still exits 0, no double-close throw", async () => {
     const { proc, port, projectRoot } = await startDaemon();
@@ -172,5 +173,5 @@ describe("I5 — daemon releases the LISTEN socket on SIGTERM before flush/exit"
       try { proc.kill("SIGKILL"); } catch { /* already gone */ }
       fs.rmSync(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 40_000);
+  }, 60_000);
 });

@@ -8,7 +8,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTokenSidecar } from "./token.js";
-import { projectHashOf, preferredPortFor } from "../project-root.js";
+import { projectHashOf, preferredPortFor, BASE_PORT } from "../project-root.js";
 import { SERVER_VERSION, compareServerVersions } from "../version.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
@@ -39,7 +39,9 @@ export interface DaemonInfo {
 }
 
 const DAEMON_FILE = "daemon.json";
-export const DEFAULT_PORT = 3847;
+// Alias of the (env-overridable) window base — was a stray `3847` literal that
+// ignored a DEEPPAIRING_PORT_BASE override in the timeout diagnostics.
+export const DEFAULT_PORT = BASE_PORT;
 export const MAX_PORT_ATTEMPTS = 10;
 
 /**

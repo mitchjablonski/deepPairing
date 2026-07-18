@@ -56,8 +56,67 @@ export function projectHashOf(projectRoot: string): string {
 // daemon.json, so a collision (two projects hashing to the same slot) or a
 // squatter degrades gracefully and discovery still works. The AA4
 // X-Project-Hash gate remains the safety net against cross-project writes.
-export const BASE_PORT = 3847;
-export const PORT_SPAN = 128; // deterministic slots: 3847..3974
+//
+// Env override (a real, supported feature — not test-only): the whole window
+// can be relocated with
+//   DEEPPAIRING_PORT_BASE — first port of the window (integer, 1024..65000;
+//                           default 3847)
+//   DEEPPAIRING_PORT_SPAN — number of deterministic slots (integer, 1..4096;
+//                           default 128)
+// Everything downstream (daemon bind loop, doctor sweep, wrapper discovery)
+// derives from BASE_PORT/PORT_SPAN, so a valid override moves the entire
+// product coherently — useful when 3847-3974 clashes with something else on
+// the machine, and used by the vitest setup to keep test-spawned daemons out
+// of the canonical window. Invalid values fall back to the defaults with a
+// stderr note (never a crash). NOTE: the override must be visible to every
+// deepPairing process (wrapper AND daemon) — a daemon spawned without it
+// binds the default window and discovery would sweep the wrong range.
+export const DEFAULT_BASE_PORT = 3847;
+export const DEFAULT_PORT_SPAN = 128; // default deterministic slots: 3847..3974
+
+export interface PortWindow {
+  base: number;
+  span: number;
+}
+
+/**
+ * Resolve the port window from an env, validating honestly: integers only,
+ * base in 1024..65000, span in 1..4096, and the window may not run past
+ * 65535 (span is clamped to fit, with a note). Invalid values fall back to
+ * the defaults silently-except-for-a-stderr-note so a typo'd env can never
+ * take the daemon down. Pure (env + warn injectable) so tests can drive it
+ * with fake envs — the module-level BASE_PORT/PORT_SPAN below are resolved
+ * once from process.env at load.
+ */
+export function resolvePortWindow(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (msg: string) => void = (msg) => {
+    try { process.stderr.write(`${msg}\n`); } catch { /* stderr closed */ }
+  },
+): PortWindow {
+  const readInt = (name: string, fallback: number, min: number, max: number): number => {
+    const raw = env[name];
+    if (raw === undefined || raw.trim() === "") return fallback;
+    const n = Number(raw.trim());
+    if (!Number.isInteger(n) || n < min || n > max) {
+      warn(`[deepPairing] ignoring ${name}="${raw}" — expected an integer in ${min}..${max}; using default ${fallback}.`);
+      return fallback;
+    }
+    return n;
+  };
+  const base = readInt("DEEPPAIRING_PORT_BASE", DEFAULT_BASE_PORT, 1024, 65000);
+  let span = readInt("DEEPPAIRING_PORT_SPAN", DEFAULT_PORT_SPAN, 1, 4096);
+  if (base + span - 1 > 65535) {
+    const clamped = 65535 - base + 1; // ≥ 536 given base ≤ 65000, so never < 1
+    warn(`[deepPairing] DEEPPAIRING_PORT_BASE=${base} + DEEPPAIRING_PORT_SPAN=${span} runs past port 65535 — clamping span to ${clamped}.`);
+    span = clamped;
+  }
+  return { base, span };
+}
+
+const portWindow = resolvePortWindow();
+export const BASE_PORT = portWindow.base;
+export const PORT_SPAN = portWindow.span;
 export function preferredPortFor(projectRoot: string): number {
   // projectHashOf is 8 hex chars = a 32-bit value; mod it into the span.
   return BASE_PORT + (parseInt(projectHashOf(projectRoot), 16) % PORT_SPAN);

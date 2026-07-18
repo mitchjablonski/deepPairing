@@ -174,7 +174,9 @@ describe("#136 — resolveStaleDaemon adopt/restart policy", () => {
 
 // --- resolveStaleDaemon against a REAL fake daemon (real HTTP re-probe) ---
 
-const HTTP_PORT = 24870; // distinct from evict-daemon.test.ts (24860) + port-sweep
+// port 0 — OS-assigned per fakeDaemon (was a hardcoded 24870); fakeDaemon
+// records the bound port here for the test body's DaemonInfo.
+let HTTP_PORT = 0;
 let server: { close?: (cb?: () => void) => void } | null = null;
 
 async function fakeDaemon(opts: { pid: number; projectRoot: string; version?: string }): Promise<typeof server> {
@@ -187,8 +189,10 @@ async function fakeDaemon(opts: { pid: number; projectRoot: string; version?: st
       ...(opts.version !== undefined ? { version: opts.version } : {}),
     }),
   );
-  const s = serve({ fetch: app.fetch, port: HTTP_PORT });
-  await new Promise((r) => setTimeout(r, 50)); // let the listener bind
+  let s: typeof server = null;
+  HTTP_PORT = await new Promise<number>((resolve) => {
+    s = serve({ fetch: app.fetch, port: 0 }, (info) => resolve(info.port));
+  });
   return s;
 }
 

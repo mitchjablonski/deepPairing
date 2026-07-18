@@ -52,6 +52,8 @@ pnpm --filter @deeppairing/mcp-server start         # Start MCP server
 
 > `pnpm --filter @deeppairing/mcp-server build` alone does **not** rebuild `@deeppairing/shared` — if `packages/shared/dist` is missing the server build fails module resolution. Use the root `pnpm build` (turbo orders shared → mcp-server).
 
+> Full local vitest runs on WSL `/mnt/c` can hit 9P filesystem latency (slow tsx cold-starts, transform contention) — a native-ext4 checkout (e.g. under `~`) erases the class. Test isolation: `DEEPPAIRING_PORT_BASE` / `DEEPPAIRING_PORT_SPAN` relocate the daemon port window (see `src/project-root.ts`); the vitest setup sets a per-worker window at ~20000-32000 automatically so test-spawned daemons never touch the canonical 3847-3974 window.
+
 ### Regenerating the committed plugin bundle — use `pnpm build:clean`
 
 `claude-plugin/server/` is generated-but-committed; CI's "Plugin bundle staleness gate" fails if the committed bundle drifts from a cold build. A **warm** `pnpm build` can produce a bundle CI can't reproduce (turbo replays a cache-hit `dist/` and skips the bundle step → stale version stamp; a stale vite dep-cache re-hashes `web/assets/*`). So:

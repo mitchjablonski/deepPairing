@@ -19,7 +19,13 @@ function fakeDaemon(port: number, projectRoot: string, pid = 99999, startedAt = 
   return serve({ fetch: app.fetch, port });
 }
 
-const TEST_RANGE_START = 24847; // arbitrary high port unlikely to collide
+// The sweep contract needs an EXPLICIT contiguous range (offsets 0/1/2 and a
+// known-empty +9 slot), so port 0 doesn't fit here. Derive the base from the
+// per-worker test window (test-port-window.setup.ts) instead of a literal —
+// each vitest worker gets a disjoint 128-port window, so parallel workers
+// can't collide on these binds; within a worker, files run sequentially.
+const envBase = Number(process.env.DEEPPAIRING_PORT_BASE);
+const TEST_RANGE_START = Number.isInteger(envBase) && envBase > 0 ? envBase : 24847;
 const RANGE = { start: TEST_RANGE_START, count: 5 };
 
 describe("port sweep adoption", () => {

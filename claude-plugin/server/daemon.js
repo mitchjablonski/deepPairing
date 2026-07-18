@@ -53,15 +53,44 @@ import crypto2 from "node:crypto";
 function projectHashOf(projectRoot2) {
   return crypto2.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
 }
+function resolvePortWindow(env = process.env, warn = (msg) => {
+  try {
+    process.stderr.write(`${msg}
+`);
+  } catch {
+  }
+}) {
+  const readInt = (name, fallback, min, max) => {
+    const raw2 = env[name];
+    if (raw2 === void 0 || raw2.trim() === "") return fallback;
+    const n = Number(raw2.trim());
+    if (!Number.isInteger(n) || n < min || n > max) {
+      warn(`[deepPairing] ignoring ${name}="${raw2}" \u2014 expected an integer in ${min}..${max}; using default ${fallback}.`);
+      return fallback;
+    }
+    return n;
+  };
+  const base = readInt("DEEPPAIRING_PORT_BASE", DEFAULT_BASE_PORT, 1024, 65e3);
+  let span = readInt("DEEPPAIRING_PORT_SPAN", DEFAULT_PORT_SPAN, 1, 4096);
+  if (base + span - 1 > 65535) {
+    const clamped = 65535 - base + 1;
+    warn(`[deepPairing] DEEPPAIRING_PORT_BASE=${base} + DEEPPAIRING_PORT_SPAN=${span} runs past port 65535 \u2014 clamping span to ${clamped}.`);
+    span = clamped;
+  }
+  return { base, span };
+}
 function preferredPortFor(projectRoot2) {
   return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
 }
-var BASE_PORT, PORT_SPAN;
+var DEFAULT_BASE_PORT, DEFAULT_PORT_SPAN, portWindow, BASE_PORT, PORT_SPAN;
 var init_project_root = __esm({
   "src/project-root.ts"() {
     "use strict";
-    BASE_PORT = 3847;
-    PORT_SPAN = 128;
+    DEFAULT_BASE_PORT = 3847;
+    DEFAULT_PORT_SPAN = 128;
+    portWindow = resolvePortWindow();
+    BASE_PORT = portWindow.base;
+    PORT_SPAN = portWindow.span;
   }
 });
 
@@ -4259,7 +4288,7 @@ var init_lifecycle = __esm({
     init_version();
     __thisDir = path12.dirname(fileURLToPath2(import.meta.url));
     DAEMON_FILE = "daemon.json";
-    DEFAULT_PORT = 3847;
+    DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
