@@ -1,20 +1,22 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId } from "react";
+import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
-import { AskTrigger, CommentThread } from "../CommentThread";
+import { CommentThread } from "../CommentThread";
 
 /**
  * #164 — one open question, rendered as its own bounded section.
  *
- * The old design cramped each question into a list ROW: text on the left,
+ * The original design cramped each question into a list ROW: text on the left,
  * tiny Ask/Comment icon-triggers squeezed on the right, and the reply thread
  * hidden inside a popover — so "just comment below" always won and answering
  * the specific question felt like an afterthought.
  *
- * This gives every question room: the question text as the section's label, a
- * prominent "Answer" affordance directly beneath it, and the conversation
- * about THIS question (filtered by questionIndex) threaded inline so the
- * answers live with the question. The Ask-the-agent (question-intent) path is
- * kept as a secondary pill.
+ * Round 2 (field verdict): no disclosure click either. The answer composer is
+ * simply THERE — the human types once and chooses at submit: **Answer** posts
+ * a plain comment; **Ask** posts with intent:"question" (the AskTrigger
+ * path's semantics — check_feedback's question-priority lane). The
+ * conversation about THIS question (filtered by questionIndex) is threaded
+ * inline above the composer, so answers live with the question.
  *
  * Shared by ResearchArtifact and SpecArtifact — the two were near-duplicate
  * row renderers; one component keeps them consistent by construction.
@@ -29,8 +31,9 @@ export function OpenQuestionSection({
   index: number;
 }) {
   const comments = useChainComments(artifactId); // Bug2 — chain aggregation
+  const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
 
-  // The whole conversation pinned to THIS question (both the human's answers
+  // The whole conversation pinned to THIS question (the human's answers/asks
   // and the agent's replies), threaded inline beneath it.
   const questionComments = comments.filter((c) => c.target.questionIndex === index);
 
@@ -42,25 +45,19 @@ export function OpenQuestionSection({
   );
   const answered = answers.length > 0;
 
-  // The conversation is shown inline whenever it exists (answering lives with
-  // the question); an untouched question stays collapsed behind a prominent
-  // Answer button so a wall of questions doesn't open a wall of composers.
-  const [open, setOpen] = useState(questionComments.length > 0);
-
-  // Review fix — the initializer above runs once, so a section that gains its
-  // FIRST comment while mounted (e.g. an agent reply arriving over WS) kept
-  // the thread hidden even as the ✓ chip updated. Expand (never collapse) on
-  // the 0→>0 transition only; later replies don't fire it, so a section the
-  // human deliberately collapsed stays collapsed — the ✓/state change is the
-  // signal — instead of fighting them.
-  const prevCount = useRef(questionComments.length);
-  useEffect(() => {
-    if (prevCount.current === 0 && questionComments.length > 0) setOpen(true);
-    prevCount.current = questionComments.length;
-  }, [questionComments.length]);
+  // Carried over from the retired AskTrigger popover (its one non-submit
+  // affordance): the human can mark their own unanswered ask resolved, so it
+  // stops counting as waiting-on-the-agent. The thread bubble already shows
+  // the "delivered · awaiting agent" state; this is the way out of it.
+  const ownUnresolvedAsks = questionComments.filter(
+    (c) =>
+      c.author === "human" &&
+      c.intent === "question" &&
+      !c.answeredByCommentId &&
+      !c.humanResolvedAt,
+  );
 
   const labelId = useId();
-  const panelId = useId();
 
   // Preserve the exact targeting the old row used on both trigger paths.
   const target = { questionIndex: index, sectionId: "open-question" as const };
@@ -98,40 +95,35 @@ export function OpenQuestionSection({
         )}
       </div>
 
-      {/* Primary + secondary affordances directly beneath the question. */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-          aria-controls={panelId}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-2xs font-semibold press-scale transition-colors ${
-            open
-              ? "bg-surface-elevated text-text-secondary hover:bg-surface-hover"
-              : "bg-accent-blue-strong text-white hover:bg-accent-blue/80"
-          }`}
-        >
-          <span aria-hidden>{open ? "▾" : "✎"}</span>
-          {open ? "Hide answer" : answered ? "Answer / discuss" : "Answer this question"}
-        </button>
-        <AskTrigger artifactId={artifactId} target={target} variant="pill" />
-      </div>
-
-      {/* Inline thread + answer composer — the conversation about this question,
-          in place. Reuses CommentThread (single source of threading + the
-          composer), re-voiced as an answer box. */}
-      {open && (
-        <div id={panelId} className="dp-fade-in pt-1">
-          <CommentThread
-            artifactId={artifactId}
-            comments={questionComments}
-            target={target}
-            placeholder="Answer this question… (⌘⏎ to send)"
-            submitLabel="Answer"
-            textareaLabel={`Answer question ${index + 1}`}
-          />
+      {/* The escape hatch for an ask the agent never answered (e.g. the
+          session ended) — without it the question waits forever. */}
+      {ownUnresolvedAsks.map((q) => (
+        <div key={q.id} className="flex items-center gap-2 text-2xs text-text-muted">
+          <span className="italic">You asked the agent — awaiting its next turn.</span>
+          <button
+            type="button"
+            onClick={() => void markQuestionResolved(q.id).catch(() => {})}
+            title="Mark this question resolved — stops it counting as waiting on the agent"
+            className="text-accent-blue hover:underline"
+          >
+            Mark resolved
+          </button>
         </div>
-      )}
+      ))}
+
+      {/* Inline thread + always-visible composer. Reuses CommentThread (single
+          source of threading + drafts + the ⌘⏎-answers shortcut), re-voiced as
+          an answer box with a second, question-intent submit ("Ask"). */}
+      <CommentThread
+        artifactId={artifactId}
+        comments={questionComments}
+        target={target}
+        placeholder="Answer this question… (⌘⏎ to send)"
+        submitLabel="Answer"
+        secondarySubmitLabel="Ask"
+        secondarySubmitTitle="Ask the agent about this question — it will answer on its next turn"
+        textareaLabel={`Answer question ${index + 1}`}
+      />
     </section>
   );
 }

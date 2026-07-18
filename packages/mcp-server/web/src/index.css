@@ -203,20 +203,6 @@ html {
   }
 }
 
-/* #164 — open-question answer disclosure reveal. A brief opacity fade only
-   (no layout animation), so an expanding answer composer doesn't jump into
-   view. Honors prefers-reduced-motion: the fade is dropped entirely. */
-@keyframes dp-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-.dp-fade-in {
-  animation: dp-fade-in 160ms ease-out;
-}
-@media (prefers-reduced-motion: reduce) {
-  .dp-fade-in { animation: none; }
-}
-
 /* Skeleton shimmer */
 @keyframes shimmer {
   0% { background-position: -200% 0; }

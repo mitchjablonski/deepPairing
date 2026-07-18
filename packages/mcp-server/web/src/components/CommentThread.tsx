@@ -24,6 +24,13 @@ interface CommentThreadProps {
   placeholder?: string;
   submitLabel?: string;
   textareaLabel?: string;
+  // #164 round 2 — when set, the composer grows a SECOND submit button that
+  // posts the same input with intent:"question" (the AskTrigger path's
+  // semantics: check_feedback's question-priority lane + the awaiting-answer
+  // state). The user types once and chooses Answer vs Ask at submit time —
+  // no separate popover to reach the ask path.
+  secondarySubmitLabel?: string;
+  secondarySubmitTitle?: string;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -147,6 +154,8 @@ export function CommentThread({
   placeholder,
   submitLabel,
   textareaLabel,
+  secondarySubmitLabel,
+  secondarySubmitTitle,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -160,11 +169,20 @@ export function CommentThread({
   const submitComment = useArtifactStore((s) => s.submitComment);
   
 
-  const handleSubmit = async () => {
+  // #164 round 2 — intent is set only by the explicit Ask button; the primary
+  // path (button, ⌘⏎) posts a plain comment. NOTE: callers must invoke via an
+  // arrow (`() => handleSubmit()`), never pass the handler to onClick directly
+  // — a MouseEvent arg would be truthy and silently flip the intent.
+  const handleSubmit = async (intent?: "question") => {
     if (!input.trim() || submitting) return;
     setSubmitting(true);
     try {
-      await submitComment(artifactId, input.trim(), target);
+      await submitComment(
+        artifactId,
+        input.trim(),
+        target,
+        intent === "question" ? { intent } : undefined,
+      );
       setInput(""); // clear only on success; keep the draft for retry on failure
     } catch {
       /* store surfaced the error toast */
@@ -222,8 +240,20 @@ export function CommentThread({
                      placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue
                      disabled:opacity-50 resize-none"
         />
+        {secondarySubmitLabel && (
+          <button
+            onClick={() => handleSubmit("question")}
+            disabled={!input.trim() || submitting}
+            title={secondarySubmitTitle}
+            className="px-2.5 py-1.5 bg-accent-violet-dim text-accent-violet text-xs rounded
+                       hover:bg-accent-violet-dim/80 disabled:bg-surface-elevated disabled:text-text-muted
+                       transition-colors shrink-0"
+          >
+            {secondarySubmitLabel}
+          </button>
+        )}
         <button
-          onClick={handleSubmit}
+          onClick={() => handleSubmit()}
           disabled={!input.trim() || submitting}
           className="px-2.5 py-1.5 bg-accent-blue-strong text-white text-xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted

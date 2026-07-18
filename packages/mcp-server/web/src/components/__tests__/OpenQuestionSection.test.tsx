@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, within, act } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useArtifactStore } from "../../stores/artifact";
 import { ResearchArtifact } from "../artifacts/ResearchArtifact";
@@ -7,11 +7,12 @@ import { SpecArtifact } from "../artifacts/SpecArtifact";
 import { ArtifactDetail } from "../ArtifactPanel";
 
 /**
- * #164 — open-question redesign. Each open question renders as its own bounded
- * <section> (the shared OpenQuestionSection) with a prominent answer button and
- * the reply thread inline — replacing the cramped list ROW with tiny icon
- * triggers and a popover-only thread. These pin the NEW structure, so they fail
- * against the old list-row rendering.
+ * #164 — open-question redesign (round 2, field verdict). Each open question
+ * renders as its own bounded <section> (the shared OpenQuestionSection) with
+ * an ALWAYS-VISIBLE answer composer (no disclosure click) carrying two submit
+ * buttons — Answer (plain comment) and Ask (question-intent) — and the reply
+ * thread inline above the composer. These pin the NEW structure, so they fail
+ * against both the old list-row rendering and the round-1 disclosure design.
  */
 
 const mk = (type: string, content: any, over: any = {}) =>
@@ -45,8 +46,14 @@ function sectionFor(questionText: string): HTMLElement {
   return section as HTMLElement;
 }
 
-describe("#164 — open questions render as bounded sections", () => {
-  beforeEach(() => useArtifactStore.getState().reset());
+describe("#164 — open questions render as bounded sections with an always-visible composer", () => {
+  beforeEach(() => {
+    // restoreAllMocks BEFORE reset: the submitComment spy lives on the zustand
+    // state object itself and survives reset()'s partial set — without this,
+    // spyOn() in a later test returns the SAME spy with accumulated calls.
+    vi.restoreAllMocks();
+    useArtifactStore.getState().reset();
+  });
 
   it("research: one <section> per question, each named by its question text", () => {
     const artifact = mk("research", {
@@ -82,7 +89,7 @@ describe("#164 — open questions render as bounded sections", () => {
     expect(sectionFor("Which DB?")).toBeInTheDocument();
   });
 
-  it("the answer affordance is a REAL button with an accessible name (not a cramped icon)", () => {
+  it("the composer is ALREADY there — labelled textarea + Answer/Ask buttons, no disclosure click", () => {
     const artifact = mk("research", {
       summary: "s",
       findings: [],
@@ -92,10 +99,70 @@ describe("#164 — open questions render as bounded sections", () => {
     render(<ResearchArtifact artifact={artifact} />);
 
     const section = sectionFor("Cache write-through?");
-    const answerBtn = within(section).getByRole("button", { name: /answer this question/i });
+    // Composer visible with zero interaction (round-2 verdict: pre-existing
+    // text box; the round-1 "Answer this question" disclosure is GONE).
+    expect(within(section).getByLabelText("Answer question 1")).toBeInTheDocument();
+    expect(
+      within(section).queryByRole("button", { name: /answer this question/i }),
+    ).not.toBeInTheDocument();
+
+    // Both submit paths are real buttons, disabled while the input is empty.
+    const answerBtn = within(section).getByRole("button", { name: "Answer" });
+    const askBtn = within(section).getByRole("button", { name: "Ask" });
     expect(answerBtn.tagName).toBe("BUTTON");
-    // Collapsed by default (no activity) → composer hidden behind the button.
-    expect(answerBtn).toHaveAttribute("aria-expanded", "false");
+    expect(askBtn.tagName).toBe("BUTTON");
+    expect(answerBtn).toBeDisabled();
+    expect(askBtn).toBeDisabled();
+  });
+
+  it("Answer posts a plain comment to the question's exact target (questionIndex 0 — falsy-zero safe)", async () => {
+    const user = userEvent.setup();
+    const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
+    useArtifactStore.setState({ artifacts: [artifact], comments: {} });
+    const spy = vi
+      .spyOn(useArtifactStore.getState(), "submitComment")
+      .mockResolvedValue(undefined);
+    render(<ResearchArtifact artifact={artifact} />);
+
+    const section = sectionFor("Which DB?");
+    await user.type(within(section).getByLabelText("Answer question 1"), "Postgres");
+    const answerBtn = within(section).getByRole("button", { name: "Answer" });
+    expect(answerBtn).toBeEnabled();
+    await user.click(answerBtn);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      artifact.id,
+      "Postgres",
+      expect.objectContaining({ questionIndex: 0, sectionId: "open-question" }),
+      undefined, // plain comment — NO intent
+    );
+  });
+
+  it("Ask posts with intent:'question' to the RIGHT questionIndex (question 2 → index 1)", async () => {
+    const user = userEvent.setup();
+    const artifact = mk("research", {
+      summary: "s",
+      findings: [],
+      openQuestions: ["First question?", "Second question?"],
+    });
+    useArtifactStore.setState({ artifacts: [artifact], comments: {} });
+    const spy = vi
+      .spyOn(useArtifactStore.getState(), "submitComment")
+      .mockResolvedValue(undefined);
+    render(<ResearchArtifact artifact={artifact} />);
+
+    const second = sectionFor("Second question?");
+    await user.type(within(second).getByLabelText("Answer question 2"), "why is this open?");
+    await user.click(within(second).getByRole("button", { name: "Ask" }));
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      artifact.id,
+      "why is this open?",
+      expect.objectContaining({ questionIndex: 1, sectionId: "open-question" }),
+      { intent: "question" },
+    );
   });
 
   it("questionIndex targeting: a reply on question 2 threads under question 2, NOT question 1", () => {
@@ -121,12 +188,12 @@ describe("#164 — open questions render as bounded sections", () => {
     // The reply lives inline under the SECOND question's section...
     const second = sectionFor("Second question?");
     expect(within(second).getByText("REPLY-TO-SECOND")).toBeInTheDocument();
-    // ...and NOT under the first (which stays collapsed with no thread).
+    // ...and NOT under the first.
     const first = sectionFor("First question?");
     expect(within(first).queryByText("REPLY-TO-SECOND")).not.toBeInTheDocument();
   });
 
-  it("replies render inline beneath the question (section auto-expands when a thread exists)", () => {
+  it("replies render inline ABOVE the composer, visible with zero interaction", () => {
     const artifact = mk("spec", {
       objective: "obj",
       requirements: [],
@@ -147,7 +214,13 @@ describe("#164 — open questions render as bounded sections", () => {
     render(<SpecArtifact artifact={artifact} />);
 
     const section = sectionFor("Which DB?");
-    expect(within(section).getByText("Postgres, for the JSONB support.")).toBeInTheDocument();
+    const reply = within(section).getByText("Postgres, for the JSONB support.");
+    expect(reply).toBeInTheDocument();
+    // Thread ABOVE composer: the textarea comes after the reply in the DOM.
+    const textarea = within(section).getByLabelText("Answer question 1");
+    expect(
+      reply.compareDocumentPosition(textarea) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("✓ answered shows when a plain comment answers the question", () => {
@@ -168,7 +241,7 @@ describe("#164 — open questions render as bounded sections", () => {
     expect(within(sectionFor("Which DB?")).getByText(/answered/i)).toBeInTheDocument();
   });
 
-  it("D8: a human's OWN unanswered question does NOT stamp the section 'answered'", () => {
+  it("D8: a human's OWN unanswered question does NOT stamp the section 'answered' (and offers Mark resolved)", () => {
     const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
     useArtifactStore.setState({
       artifacts: [artifact],
@@ -186,32 +259,35 @@ describe("#164 — open questions render as bounded sections", () => {
       },
     });
     render(<ResearchArtifact artifact={artifact} />);
-    // The question exists as a comment (so the section auto-expands), but it is
-    // an unanswered ask BY the human — it must not read as answered.
     const section = sectionFor("Which DB?");
-    expect(within(section).queryByText(/answered/i)).not.toBeInTheDocument();
+    // The ask renders in the thread but must not read as answered.
+    expect(within(section).getByText("wait, what are the options?")).toBeInTheDocument();
+    expect(within(section).queryByText(/✓ answered/i)).not.toBeInTheDocument();
+    // Carried over from the retired AskTrigger popover: the human can mark
+    // their own stranded ask resolved from the section.
+    expect(within(section).getByRole("button", { name: /mark resolved/i })).toBeInTheDocument();
   });
 
-  it("the answer disclosure is keyboard-operable: Enter opens, Space toggles (real key events)", async () => {
+  it("keyboard: type + Ctrl/Cmd+Enter submits as Answer (plain — no intent)", async () => {
     const user = userEvent.setup();
-    const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Cache write-through?"] });
+    const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
     useArtifactStore.setState({ artifacts: [artifact], comments: {} });
+    const spy = vi
+      .spyOn(useArtifactStore.getState(), "submitComment")
+      .mockResolvedValue(undefined);
     render(<ResearchArtifact artifact={artifact} />);
 
-    const section = sectionFor("Cache write-through?");
-    const btn = within(section).getByRole("button", { name: /answer this question/i });
-    // No composer yet.
-    expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
+    const textarea = within(sectionFor("Which DB?")).getByLabelText("Answer question 1");
+    await user.type(textarea, "Postgres");
+    await user.keyboard("{Control>}{Enter}{/Control}");
 
-    // Enter on the focused button opens the composer (the answer box).
-    act(() => btn.focus());
-    await user.keyboard("{Enter}");
-    expect(within(section).getByLabelText(/answer question 1/i)).toBeInTheDocument();
-    expect(within(section).getByRole("button", { name: /^answer$/i })).toBeInTheDocument();
-
-    // Space toggles it closed again (focus is still on the disclosure button).
-    await user.keyboard(" ");
-    expect(within(section).queryByLabelText(/answer question 1/i)).not.toBeInTheDocument();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      artifact.id,
+      "Postgres",
+      expect.objectContaining({ questionIndex: 0, sectionId: "open-question" }),
+      undefined, // the shortcut is the ANSWER path, never the ask path
+    );
   });
 
   it("REGRESSION: a question-targeted answer renders exactly ONCE on the full artifact page (not again in the bottom Comments thread)", async () => {
@@ -239,64 +315,5 @@ describe("#164 — open questions render as bounded sections", () => {
     expect(screen.getAllByText("UNIQUE-ANSWER-BODY")).toHaveLength(1);
     // And the one copy is the inline one, inside the question's section.
     expect(within(sectionFor("Which DB?")).getByText("UNIQUE-ANSWER-BODY")).toBeInTheDocument();
-  });
-
-  it("a section that gains its FIRST comment while mounted expands live (WS reply), but a human-collapsed section stays collapsed on later replies", async () => {
-    const user = userEvent.setup();
-    const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
-    useArtifactStore.setState({ artifacts: [artifact], comments: {} });
-    render(<ResearchArtifact artifact={artifact} />);
-
-    const section = sectionFor("Which DB?");
-    // Mounted with no thread → collapsed.
-    expect(within(section).queryByText("FIRST-REPLY")).not.toBeInTheDocument();
-
-    // First comment arrives while mounted (e.g. agent reply over WS) → the
-    // thread reveals itself (pre-fix: only the ✓ updated; the thread hid).
-    act(() => {
-      useArtifactStore.setState({
-        comments: {
-          [artifact.id]: [
-            comment({
-              id: "c_live1",
-              artifactId: artifact.id,
-              author: "agent",
-              content: "FIRST-REPLY",
-              target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
-            }),
-          ],
-        },
-      });
-    });
-    expect(within(section).getByText("FIRST-REPLY")).toBeInTheDocument();
-
-    // The human deliberately collapses it…
-    await user.click(within(section).getByRole("button", { name: /hide answer/i }));
-    expect(within(section).queryByText("FIRST-REPLY")).not.toBeInTheDocument();
-
-    // …a LATER reply (1→2) must not fight them and force it back open.
-    act(() => {
-      useArtifactStore.setState({
-        comments: {
-          [artifact.id]: [
-            comment({
-              id: "c_live1",
-              artifactId: artifact.id,
-              author: "agent",
-              content: "FIRST-REPLY",
-              target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
-            }),
-            comment({
-              id: "c_live2",
-              artifactId: artifact.id,
-              author: "agent",
-              content: "SECOND-REPLY",
-              target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
-            }),
-          ],
-        },
-      });
-    });
-    expect(within(section).queryByText("SECOND-REPLY")).not.toBeInTheDocument();
   });
 });
