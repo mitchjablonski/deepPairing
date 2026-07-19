@@ -326,6 +326,30 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0]!.hero?.addedBy).toBe("alex");
     });
 
+    it("#168 — dedupes the hero toast: a replayed/re-delivered block does NOT re-fire it", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect();
+
+      const block = {
+        type: "preflight_blocked",
+        toolName: "present_findings",
+        source: "session",
+        match: { concept: "global mutable state for config", proposal: "Add a global mutable state singleton to hold config", reason: "broke testability", via: "concept" },
+      };
+      // Live delivery (t+5s), then the daemon's reconnect REPLAY of the same block.
+      activeAdapter.emit(block);
+      activeAdapter.emit({ ...block, replayed: true });
+      await flush();
+
+      expect(useToastStore.getState().toasts.filter((t) => t.kind === "preflight-block")).toHaveLength(1);
+
+      // A genuinely DIFFERENT block is NOT suppressed by the dedupe.
+      activeAdapter.emit({ ...block, match: { ...block.match, concept: "singleton service locator", proposal: "add a service-locator singleton" } });
+      await flush();
+      expect(useToastStore.getState().toasts.filter((t) => t.kind === "preflight-block")).toHaveLength(2);
+    });
+
     it("II3 — pushes a sticky 'reload to re-bind' toast on a fatal project mismatch (no silent rebind)", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

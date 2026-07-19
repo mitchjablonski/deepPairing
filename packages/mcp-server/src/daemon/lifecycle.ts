@@ -269,27 +269,127 @@ export async function isDaemonRunning(
   return null;
 }
 
-/** Wait for the daemon info file to appear (polls every 200ms). */
-async function waitForDaemon(projectRoot: string, timeoutMs = 10000): Promise<DaemonInfo> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const info = await isDaemonRunning(projectRoot);
-    if (info) return info;
-    await new Promise((r) => setTimeout(r, 200));
-  }
+/**
+ * #168 — readiness ceiling. The old 10s gave up while a genuinely healthy
+ * daemon was still cold-booting: a first `tsx`/`node` cold start on a 9P
+ * filesystem (WSL /mnt/c) measured ~22s. `waitForDaemon` then threw, the CLI
+ * "failed", and the SAME daemon it spawned came up healthy-but-orphaned a
+ * moment later — so a retry always "worked", which is the classic
+ * fails-then-works-on-retry cold-start bug. 40s is the ceiling; it matches the
+ * spawn-suite per-test budgets (vitest.config.ts SPAWN_SUITES: 40–90s) and
+ * still fails loud on a genuinely dead daemon, just later.
+ */
+export const DEFAULT_READINESS_TIMEOUT_MS = 40_000;
+/** #168 — after this long with no daemon yet, emit ONE progress line so a cold
+ *  boot doesn't look hung (a 30s silent wait reads as a freeze). */
+export const READINESS_PROGRESS_AFTER_MS = 5_000;
+export const READINESS_PROGRESS_MESSAGE =
+  "daemon starting — first run on this filesystem can take ~30s…";
 
-  // A4: informative timeout — include the port range we swept + anything
-  // we can observe about what might be holding it.
-  const hint = await describePortHolders(projectRoot);
-  const first = DEFAULT_PORT;
-  const last = DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1;
-  throw new Error(
-    `deepPairing daemon did not become ready within ${timeoutMs}ms (swept ports ${first}–${last}).\n${hint}\n` +
-    `Run 'npx deeppairing doctor' to diagnose, or check .deeppairing/daemon.log.`,
-  );
+export interface WaitForDaemonOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  /** #168 — emitted once, after progressAfterMs, so a cold 9P boot doesn't look
+   *  hung. Defaults to a stderr writer (visible in Claude Code's MCP panel). */
+  onProgress?: (msg: string) => void;
+  progressAfterMs?: number;
+  /** Injectable seams so the readiness/progress/timeout logic is unit-testable
+   *  with fakes (a fake clock + a fake slow-boot probe) — no real daemon spawn. */
+  isRunning?: (projectRoot: string) => Promise<DaemonInfo | null>;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  describeHolders?: (projectRoot: string) => Promise<string>;
 }
 
-/** Best-effort port-holder description for the timeout error. */
+function defaultProgress(msg: string): void {
+  try { process.stderr.write(`${msg}\n`); } catch { /* stderr closed */ }
+}
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Wait for a healthy daemon to appear. #168 — adaptive: raised ceiling +
+ *  a single progress line after ~5s + a truthful timeout error. */
+export async function waitForDaemon(
+  projectRoot: string,
+  opts: WaitForDaemonOptions = {},
+): Promise<DaemonInfo> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? 200;
+  const progressAfterMs = opts.progressAfterMs ?? READINESS_PROGRESS_AFTER_MS;
+  const onProgress = opts.onProgress ?? defaultProgress;
+  const isRunning = opts.isRunning ?? isDaemonRunning;
+  const now = opts.now ?? Date.now;
+  const doSleep = opts.sleep ?? realSleep;
+  const describeHolders = opts.describeHolders ?? describePortHolders;
+
+  const start = now();
+  let progressShown = false;
+  while (now() - start < timeoutMs) {
+    const info = await isRunning(projectRoot);
+    if (info) return info;
+    if (!progressShown && now() - start >= progressAfterMs) {
+      progressShown = true;
+      onProgress(READINESS_PROGRESS_MESSAGE);
+    }
+    await doSleep(pollIntervalMs);
+  }
+
+  const hint = await describeHolders(projectRoot);
+  throw new Error(buildReadinessTimeoutMessage({ timeoutMs, projectRoot, hint }));
+}
+
+/**
+ * #168 — resolve a path-form `doctor` invocation. `npx deeppairing doctor` is a
+ * dead end for a plugin/cold-clone install (the `deeppairing` bin isn't on
+ * PATH), so we point at the CLI entry by absolute path when we can find it. The
+ * CLI is `dist/cli/init.js`; from this file's dist home (`dist/daemon/`) that's
+ * one level up + `cli/init.js`. Pure over an injected resolved path so the
+ * message builder stays unit-testable.
+ */
+function resolveCliPath(): string | null {
+  const candidates = [
+    path.join(__thisDir, "../cli/init.js"), // dist/daemon → dist/cli/init.js
+    path.join(__thisDir, "cli/init.js"),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
+
+export function doctorCommandHint(cliPath: string | null = resolveCliPath()): string {
+  return cliPath ? `node "${cliPath}" doctor` : "deeppairing doctor";
+}
+
+/**
+ * #168 — build a TRUTHFUL readiness-timeout error. The old message lied on
+ * every clause: it reported `DEFAULT_PORT..+9` (the shared 3847 base) rather
+ * than the ports actually probed (this project's DETERMINISTIC preferred port),
+ * unconditionally told the user to `check .deeppairing/daemon.log` even before
+ * that file exists, and recommended the dead-end `npx deeppairing doctor`.
+ * Pure + exported so the truthfulness is unit-testable without a timeout.
+ */
+export function buildReadinessTimeoutMessage(args: {
+  timeoutMs: number;
+  projectRoot: string;
+  hint: string;
+}): string {
+  const { timeoutMs, projectRoot, hint } = args;
+  const first = preferredPortFor(projectRoot);
+  const last = first + MAX_PORT_ATTEMPTS - 1;
+  const lines = [
+    `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}–${last}).`,
+    hint,
+  ];
+  // Only cite the daemon log if it actually exists — a cold first run has none.
+  const logPath = path.join(projectRoot, ".deeppairing", "daemon.log");
+  if (fs.existsSync(logPath)) {
+    lines.push(`See ${logPath} for the daemon's own startup log.`);
+  }
+  lines.push(`To diagnose: ${doctorCommandHint()}`);
+  return lines.join("\n");
+}
+
+/** Best-effort port-holder description for the timeout error. #168 — sweeps
+ *  from this project's DETERMINISTIC preferred port (what isDaemonRunning
+ *  actually probes), not the shared 3847 base. */
 async function describePortHolders(projectRoot: string): Promise<string> {
   const parts: string[] = [];
   const info = readDaemonInfo(projectRoot);
@@ -304,11 +404,13 @@ async function describePortHolders(projectRoot: string): Promise<string> {
   } else {
     parts.push("No daemon.json found.");
   }
-  // Report what's holding each candidate port so the user can tell if 3847
-  // is a different project's daemon vs. nothing.
+  // Report what's holding each probed port so the user can tell if it's a
+  // different project's daemon vs. nothing.
+  const sweepStart = preferredPortFor(projectRoot);
+  const sweepEnd = sweepStart + MAX_PORT_ATTEMPTS - 1;
   const observations: string[] = [];
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-    const port = DEFAULT_PORT + attempt;
+    const port = sweepStart + attempt;
     const identity = await probeDaemonIdentity(port);
     if (identity) {
       const mine = identity.projectRoot === projectRoot ? " (this project)" : ` (other project: ${identity.projectRoot})`;
@@ -319,13 +421,13 @@ async function describePortHolders(projectRoot: string): Promise<string> {
     parts.push("Ports holding a daemon:");
     parts.push(...observations);
   } else {
-    parts.push(`No daemons responding on ${DEFAULT_PORT}–${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}.`);
+    parts.push(`No daemons responding on ${sweepStart}–${sweepEnd}.`);
   }
   return parts.join("\n");
 }
 
 /** Spawn the daemon as a detached background process. */
-function spawnDaemon(projectRoot: string): { stderrTail: () => string } {
+function spawnDaemon(projectRoot: string): { stderrTail: () => string; release: () => void } {
   // F4 — this file lives in src/daemon/ (or dist/daemon/) now: the tsc-built
   // entry is two levels up at dist/daemon/index.js. The flat-bundle fallback
   // below is unchanged (esbuild inlines this file beside daemon.js).
@@ -345,15 +447,41 @@ function spawnDaemon(projectRoot: string): { stderrTail: () => string } {
   });
 
   let stderrBuf = "";
-  child.stderr?.on("data", (chunk: Buffer) => {
+  const onData = (chunk: Buffer) => {
     const text = chunk.toString();
     stderrBuf += text;
     // Cap buffer to avoid unbounded growth.
     if (stderrBuf.length > 4096) stderrBuf = stderrBuf.slice(-4096);
-  });
+  };
+  child.stderr?.on("data", onData);
 
   child.unref();
-  return { stderrTail: () => stderrBuf };
+
+  // #168 — THE HANG FIX. `child.unref()` unrefs the child PROCESS handle, but
+  // NOT the piped stderr socket: as long as we hold the read end of that pipe
+  // referenced, the parent's event loop stays alive and a cold `demo` run hangs
+  // after printing (the adopt-a-running-daemon path never spawns, so it exits
+  // fine — which is why the hang only showed on a genuinely cold run). We WANT
+  // the early-boot stderr for diagnostics, so we keep the pipe until the daemon
+  // is adopted (or the wait times out), then release it. The daemon mostly logs
+  // to .deeppairing/daemon.log, but it DOES still write stderr post-boot in a
+  // few spots (safeHeartbeatTick's "loud but non-fatal" line, the token-sidecar
+  // SECURITY refusal), and destroying our read end makes those writes EPIPE. So
+  // the daemon entry installs `process.stderr.on("error", …)` (index.ts) to
+  // swallow that EPIPE — without it Node would re-raise the write error as an
+  // uncaughtException and the daemon we just adopted would exit(1).
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try {
+      child.stderr?.removeListener("data", onData);
+      child.stderr?.destroy();
+      (child.stderr as any)?.unref?.();
+    } catch { /* pipe already gone */ }
+    try { child.unref(); } catch { /* already unref'd */ }
+  };
+  return { stderrTail: () => stderrBuf, release };
 }
 
 /**
@@ -585,7 +713,10 @@ export async function resolveStaleDaemon(
  * Ensure the daemon is running. If not, spawn it and wait for readiness.
  * Returns the daemon's port number.
  */
-export async function ensureDaemon(projectRoot: string): Promise<DaemonInfo> {
+export async function ensureDaemon(
+  projectRoot: string,
+  opts: { onProgress?: (msg: string) => void } = {},
+): Promise<DaemonInfo> {
   // A1: probe before spawn — adopts a live daemon even if daemon.json is missing.
   // II1 — returns DaemonInfo (not just port) so the caller can pick up
   // the authToken needed to talk to /api/internal/*. Old `: number` return
@@ -604,13 +735,19 @@ export async function ensureDaemon(projectRoot: string): Promise<DaemonInfo> {
   }
 
   // Spawn daemon
-  const { stderrTail } = spawnDaemon(projectRoot);
+  const { stderrTail, release } = spawnDaemon(projectRoot);
 
   // Wait for it to be ready
   try {
-    return await waitForDaemon(projectRoot);
+    const info = await waitForDaemon(projectRoot, { onProgress: opts.onProgress });
+    // #168 — daemon adopted: release the stderr pipe so it stops pinning the
+    // parent event loop (otherwise a cold `demo`/wrapper start never exits).
+    release();
+    return info;
   } catch (err: any) {
     const tail = stderrTail().trim();
+    // Capture the diagnostic tail FIRST, then release the pipe.
+    release();
     if (tail) {
       throw new Error(`${err.message}\nDaemon stderr:\n${tail}`);
     }

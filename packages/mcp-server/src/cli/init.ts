@@ -1390,7 +1390,11 @@ async function demoCmd(): Promise<void> {
   // a fresh demo session, so the wrong-store threat model doesn't apply. No
   // bearer token or hash header is needed here. (An earlier version of this
   // comment claimed the route was outside the gate; it isn't — it's exempted.)
-  const daemonInfo = await ensureDaemon(cwd);
+  // #168 — thread a progress line into ensureDaemon so a cold boot (~30s on a
+  // 9P filesystem / WSL /mnt/c) shows life instead of a silent freeze.
+  const daemonInfo = await ensureDaemon(cwd, {
+    onProgress: (msg) => console.log(`  ${dim(msg)}`),
+  });
   const port = daemonInfo.port;
   console.log(`  ${green("✓")} Daemon ready on port ${port}`);
 
@@ -1408,22 +1412,34 @@ async function demoCmd(): Promise<void> {
     process.exit(1);
   }
 
-  // Open the companion UI scoped to the demo session. If the browser fails
-  // to open (headless CI, WSL without xdg-open), fall back to logging.
+  // Open the companion UI scoped to the demo session. #168 — RESPECT
+  // DEEPPAIRING_NO_OPEN (and the H4 DEEPPAIRING_OPEN_BROWSER) via the shared
+  // shouldAutoOpenBrowser decision helper; the old code auto-opened
+  // UNCONDITIONALLY, ignoring the opt-out that every scripted/CI/agent harness
+  // sets (a WSL2 field test launched real Chrome + left crashpad orphans). On
+  // suppression we print the URL so the human still knows where to look.
   const url = `http://localhost:${port}/?session=${data.sessionId}`;
-  try {
-    const { spawn } = await import("node:child_process");
-    const cmd = process.platform === "darwin" ? "open"
-      : process.platform === "win32" ? "cmd"
-      : "xdg-open";
-    const spawnArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-    const child = spawn(cmd, spawnArgs, { stdio: "ignore", detached: true });
-    child.on("error", () => {});
-    child.unref();
-  } catch {}
+  const { shouldAutoOpenBrowser } = await import("../daemon/auto-open.js");
+  const willOpen = shouldAutoOpenBrowser(process.env);
+  if (willOpen) {
+    try {
+      const { spawn } = await import("node:child_process");
+      const cmd = process.platform === "darwin" ? "open"
+        : process.platform === "win32" ? "cmd"
+        : "xdg-open";
+      const spawnArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+      const child = spawn(cmd, spawnArgs, { stdio: "ignore", detached: true });
+      child.on("error", () => {});
+      child.unref();
+    } catch {}
+  }
 
   console.log();
-  console.log(`  ${bold("Demo running — open the companion UI and watch:")}`);
+  if (willOpen) {
+    console.log(`  ${bold("Demo running — open the companion UI and watch:")}`);
+  } else {
+    console.log(`  ${bold("Demo running — open")} ${url} ${bold("in your browser and watch:")}`);
+  }
   console.log(`    ${dim("→")} ${url}`);
   console.log();
   console.log(`  ${dim("Script:")}`);
@@ -1438,6 +1454,10 @@ async function demoCmd(): Promise<void> {
   console.log(`  ${dim("project; after a few sessions it spans every deepPairing project.")}`);
   console.log();
   console.log(`  ${green("Session:")} ${data.sessionId}`);
+  console.log();
+  // #168 — the CLI exits now (no more pinned event loop); tell the user the URL
+  // stays live so they don't think a delayed click will hit a dead daemon.
+  console.log(`  ${dim("The URL stays live for ~10 minutes — no need to keep this terminal open.")}`);
   console.log();
 }
 
