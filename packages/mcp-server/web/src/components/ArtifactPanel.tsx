@@ -175,7 +175,12 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       c.target.lineNumber == null &&
       c.target.findingIndex == null &&
       c.target.stepIndex == null &&
-      c.target.lineStart == null,
+      c.target.lineStart == null &&
+      // #164 — question-targeted comments now render INLINE in their
+      // OpenQuestionSection; without this arm they showed twice (section +
+      // this bottom thread). `== null` (not falsy!) — questionIndex 0 is a
+      // valid target on the first question.
+      c.target.questionIndex == null,
   );
 
   return (
