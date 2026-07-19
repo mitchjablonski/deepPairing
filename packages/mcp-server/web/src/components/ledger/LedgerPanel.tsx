@@ -488,7 +488,19 @@ export function FilterPill({
   );
 }
 
-export function EntryRow({ entry }: { entry: PhilosophyEntry }) {
+/**
+ * One stance row. When `onRemoved` is provided, the row carries a per-concept
+ * remove affordance — the first-class way OUT of the ledger (the override
+ * valve is local-blocks-only; users previously had to hand-edit the JSON).
+ * Removal is destructive (it deletes the concept's whole taste history), so
+ * the ✕ only ARMS an explicit inline confirm that says exactly that; the
+ * daemon backs the ledger up to `.removed-<ts>` before the delete. Misclick-
+ * safe by construction: the confirm renders on its own row, away from the ✕.
+ */
+export function EntryRow({ entry, onRemoved }: { entry: PhilosophyEntry; onRemoved?: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const stanceBadge =
     entry.stance === "avoid"
       ? { label: "avoid", cls: "bg-accent-red-dim text-accent-red" }
@@ -496,15 +508,49 @@ export function EntryRow({ entry }: { entry: PhilosophyEntry }) {
       ? { label: "prefer", cls: "bg-accent-green-dim text-accent-green" }
       : { label: "mixed", cls: "bg-surface-hover text-text-secondary" };
 
+  const remove = async () => {
+    if (removing) return;
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      const res = await fetch(`${apiBase()}/api/philosophy/remove`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ concept: entry.concept }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? `remove failed (${res.status})`);
+      }
+      onRemoved?.();
+    } catch (err) {
+      setRemoveError(err instanceof Error ? err.message : String(err));
+      setRemoving(false);
+    }
+  };
+
   return (
     <li className="rounded border border-border-default bg-surface-secondary p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="text-xs font-medium text-text-primary break-words">
           {entry.concept}
         </div>
-        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold ${stanceBadge.cls}`}>
-          {stanceBadge.label}
-        </span>
+        <div className="shrink-0 flex items-center gap-1.5">
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${stanceBadge.cls}`}>
+            {stanceBadge.label}
+          </span>
+          {onRemoved && !confirming && (
+            <button
+              type="button"
+              aria-label={`Remove stance: ${entry.concept}`}
+              title="Remove stance"
+              onClick={() => setConfirming(true)}
+              className="px-1 rounded text-xs leading-none text-text-muted hover:text-accent-red hover:bg-accent-red-dim/30 cursor-pointer"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
       <div className="mt-1 text-2xs text-text-muted flex flex-wrap gap-x-3 gap-y-0.5">
         {entry.projectCount > 1 && <span>{entry.projectCount} projects</span>}
@@ -514,6 +560,42 @@ export function EntryRow({ entry }: { entry: PhilosophyEntry }) {
       {entry.latestReason && (
         <div className="mt-2 text-2xs text-text-secondary italic leading-relaxed">
           "{entry.latestReason}"
+        </div>
+      )}
+      {confirming && (
+        <div
+          data-testid="stance-remove-confirm"
+          className="mt-2 rounded border border-accent-red/30 bg-accent-red-dim/15 p-2.5"
+        >
+          <p className="text-2xs text-text-secondary leading-relaxed">
+            Remove "{entry.concept}"? This permanently deletes its taste history
+            — {entry.instanceCount} recorded instance{entry.instanceCount === 1 ? "" : "s"} across
+            your projects — from the cross-project ledger. A timestamped backup
+            of the ledger is written first.
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={remove}
+              disabled={removing}
+              className="px-2 py-1 rounded text-2xs font-semibold bg-accent-red-dim text-accent-red hover:bg-accent-red/20 cursor-pointer disabled:opacity-60 disabled:cursor-default"
+            >
+              {removing ? "Removing…" : "Remove stance"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setConfirming(false); setRemoveError(null); }}
+              disabled={removing}
+              className="px-2 py-1 rounded text-2xs font-medium text-text-secondary hover:bg-surface-hover cursor-pointer disabled:opacity-60 disabled:cursor-default"
+            >
+              Cancel
+            </button>
+          </div>
+          {removeError && (
+            <p data-testid="stance-remove-error" className="mt-2 text-2xs text-accent-red">
+              Could not remove the stance: {removeError}
+            </p>
+          )}
         </div>
       )}
     </li>

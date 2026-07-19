@@ -546,4 +546,99 @@ describe("LedgerDrawer", () => {
       expect(screen.queryByRole("button", { name: /jump to a citing artifact/i })).toBeNull();
     });
   });
+
+  describe("stance removal — per-concept remove affordance", () => {
+    const ENTRY = {
+      key: "global mutable state for config",
+      concept: "global mutable state for config",
+      stance: "avoid",
+      projectCount: 2,
+      projects: ["a", "b"],
+      instanceCount: 6,
+      approved: 0,
+      rejected: 6,
+      latestReason: "broke testability",
+      firstSeenAt: "2026-07-01",
+      lastSeenAt: "2026-07-12",
+    };
+
+    function removeFetchMock(opts?: { failRemove?: boolean; entriesAfterRemove?: unknown[] }) {
+      const removeFetch = vi.fn().mockResolvedValue(
+        opts?.failRemove
+          ? { ok: false, status: 500, clone: () => ({ json: async () => ({ error: "boom" }) }), json: async () => ({ error: "boom" }) }
+          : { ok: true, json: async () => ({ status: "removed", concept: ENTRY.concept, instancesRemoved: 6, backupPath: "/scratch/v1.json.removed-1" }) },
+      );
+      let removed = false;
+      const fetchMock = vi.fn((url: string, init?: { method?: string; body?: string }) => {
+        if (init?.method === "POST" && url.includes("/api/philosophy/remove")) {
+          removed = !opts?.failRemove;
+          return removeFetch(url, init);
+        }
+        const entries = removed ? (opts?.entriesAfterRemove ?? []) : [ENTRY];
+        return Promise.resolve({ ok: true, json: async () => ({ entries, total: entries.length }) });
+      });
+      return { fetchMock, removeFetch };
+    }
+
+    it("each stance row renders a real remove button with an accessible name", async () => {
+      const { fetchMock } = removeFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+      render(<LedgerDrawer onClose={() => {}} />);
+      await screen.findByText(ENTRY.concept);
+      const btn = screen.getByRole("button", { name: `Remove stance: ${ENTRY.concept}` });
+      expect(btn.tagName).toBe("BUTTON");
+    });
+
+    it("clicking remove shows an explicit confirm that says it deletes taste history — no POST yet", async () => {
+      const { fetchMock, removeFetch } = removeFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+      render(<LedgerDrawer onClose={() => {}} />);
+      await screen.findByText(ENTRY.concept);
+      await userEvent.click(screen.getByRole("button", { name: `Remove stance: ${ENTRY.concept}` }));
+      // The confirm is honest about the blast radius: taste history + backup.
+      const confirm = await screen.findByTestId("stance-remove-confirm");
+      expect(confirm.textContent).toMatch(/deletes/i);
+      expect(confirm.textContent).toMatch(/taste history/i);
+      expect(confirm.textContent).toMatch(/6 recorded instance/i);
+      expect(confirm.textContent).toMatch(/backup/i);
+      expect(removeFetch).not.toHaveBeenCalled();
+    });
+
+    it("Cancel dismisses the confirm without POSTing", async () => {
+      const { fetchMock, removeFetch } = removeFetchMock();
+      vi.stubGlobal("fetch", fetchMock);
+      render(<LedgerDrawer onClose={() => {}} />);
+      await screen.findByText(ENTRY.concept);
+      await userEvent.click(screen.getByRole("button", { name: `Remove stance: ${ENTRY.concept}` }));
+      await userEvent.click(await screen.findByRole("button", { name: /cancel/i }));
+      expect(screen.queryByTestId("stance-remove-confirm")).toBeNull();
+      expect(removeFetch).not.toHaveBeenCalled();
+    });
+
+    it("confirming POSTs /api/philosophy/remove with the concept and refetches the list", async () => {
+      const { fetchMock, removeFetch } = removeFetchMock({ entriesAfterRemove: [] });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<LedgerDrawer onClose={() => {}} />);
+      await screen.findByText(ENTRY.concept);
+      await userEvent.click(screen.getByRole("button", { name: `Remove stance: ${ENTRY.concept}` }));
+      await userEvent.click(await screen.findByRole("button", { name: /^remove stance$/i }));
+      await waitFor(() => expect(removeFetch).toHaveBeenCalled());
+      const [, init] = removeFetch.mock.calls[0]!;
+      expect(JSON.parse(init.body as string).concept).toBe(ENTRY.concept);
+      // The removed row disappears after the refetch.
+      await waitFor(() => expect(screen.queryByText(ENTRY.concept)).toBeNull());
+    });
+
+    it("surfaces a removal failure without dropping the row", async () => {
+      const { fetchMock } = removeFetchMock({ failRemove: true });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<LedgerDrawer onClose={() => {}} />);
+      await screen.findByText(ENTRY.concept);
+      await userEvent.click(screen.getByRole("button", { name: `Remove stance: ${ENTRY.concept}` }));
+      await userEvent.click(await screen.findByRole("button", { name: /^remove stance$/i }));
+      await waitFor(() => expect(screen.getByTestId("stance-remove-error")).toBeInTheDocument());
+      expect(screen.getByText(ENTRY.concept)).toBeInTheDocument();
+    });
+  });
 });
+

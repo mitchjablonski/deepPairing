@@ -7893,7 +7893,12 @@ var ERROR_CODES = {
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
-  comment_not_in_session: "comment_not_in_session"
+  comment_not_in_session: "comment_not_in_session",
+  /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
+  stance_not_found: "stance_not_found",
+  /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
+   *  (H1-5 write-refusal surfaced as a structured route error). */
+  ledger_frozen: "ledger_frozen"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -23583,10 +23588,10 @@ var GlobalStore = class _GlobalStore {
     }
     return { state: "ok", ledgerPath: this.ledgerPath };
   }
-  /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
+  /** Copy the current on-disk ledger to `<path>.<prefix>-<ts>`. Returns the
    *  backup path on success, or null if the copy failed. */
-  snapshotLedger() {
-    const backup = `${this.ledgerPath}.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  snapshotLedger(prefix = "corrupt") {
+    const backup = `${this.ledgerPath}.${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       fs4.copyFileSync(this.ledgerPath, backup);
       return backup;
@@ -23757,6 +23762,11 @@ var GlobalStore = class _GlobalStore {
       at: now
     };
     if (existing) {
+      if (finalized.project === "manual" && finalized.sessionId === "seed" && existing.instances.some(
+        (prior) => prior.project === "manual" && prior.sessionId === "seed" && prior.verdict === finalized.verdict
+      )) {
+        return;
+      }
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
         if (prior.sessionId !== finalized.sessionId) return false;
@@ -23778,6 +23788,52 @@ var GlobalStore = class _GlobalStore {
       };
     }
     this.write(ledger);
+  }
+  /**
+   * First-class stance removal — deletes the WHOLE concept entry (all
+   * instances). This is the missing counterpart to the override valve, which
+   * is local-blocks-only and never touches the global ledger; before this the
+   * only way out was hand-editing the JSON.
+   *
+   * Backup-before-mutate: EVERY removal snapshots the pre-removal bytes to a
+   * fresh `.removed-<ts>` copy (same helper as the `.corrupt-<ts>` copies) so
+   * removal is reversible — restore by copying the backup over the ledger, or
+   * re-merge it with `philosophy import --merge`. Per-removal on purpose
+   * (review #193): a process-lifetime first-snapshot reuse meant a long-lived
+   * daemon that removed A, later recorded B, then removed B reported A-era
+   * bytes as B's "backup" — B was unrecoverable while the UI promised "a
+   * timestamped backup is written first". Removal is rare, filenames carry
+   * ts+rand (no collisions), and the honest contract is one fresh copy each
+   * time. (The corruptSnapshots dedupe map stays — that exists for read-spam
+   * on a persistently bad file, a different problem.) If the backup cannot be
+   * written, the removal is REFUSED (we never destroy the only copy of taste
+   * history).
+   *
+   * Returns null (no write, no backup) when the concept isn't in the ledger.
+   * Throws when the on-disk ledger is corrupt/frozen — write() would refuse
+   * anyway, and a silent no-op would misreport "not found" for stances that
+   * are actually preserved inside the unreadable file.
+   */
+  removeConcept(concept) {
+    const key = normalizeKey(concept);
+    const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      const snap = corruptSnapshots.get(this.ledgerPath);
+      throw new Error(
+        `the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable \u2014 refusing to modify it. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : "") + `Fix or remove the file, then retry.`
+      );
+    }
+    const entry = ledger.concepts[key];
+    if (!entry) return null;
+    const backupPath = this.snapshotLedger("removed");
+    if (!backupPath) {
+      throw new Error(
+        `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
+      );
+    }
+    delete ledger.concepts[key];
+    this.write(ledger);
+    return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */
   get(concept) {
@@ -24613,6 +24669,27 @@ var FileStore = class _FileStore {
   planReviews = /* @__PURE__ */ new Map();
   flushTimer = null;
   sessionId;
+  /**
+   * Demo isolation — `demo_`-prefixed sessions are the daemon's scripted,
+   * throwaway demo (`POST /api/demo/run` + runDemoScript; the prefix is the
+   * load-bearing demo marker across the daemon: broadcast tap, metrics guard,
+   * session eviction). Field bug: the demo walked its scripted rejection
+   * through this REAL store, so (a) recordRejectedApproach mirrored the
+   * demo's example stance into the user's real ~/.deeppairing philosophy
+   * ledger whenever the project had publish on — and non-idempotently, since
+   * each run's fresh demo_<ts> sessionId defeats the II6 dedupe (6 runs → 6
+   * duplicate instances the advisory tier then cited in real sessions) — and
+   * (b) the scripted rejection landed in the project's preferences.json,
+   * arming the REAL preflight with demo-fiction. Demo sessions therefore keep
+   * preferences purely in memory (demoPreferences below) and never mirror
+   * into the global ledger. Derived from the sessionId prefix (not a
+   * constructor flag) so no future call site can construct a demo session
+   * that leaks.
+   */
+  isDemoSession;
+  /** In-memory preferences for demo sessions — never read from or written to
+   *  the project's preferences.json. Null for real sessions. */
+  demoPreferences = null;
   autonomyLevel = "supervised";
   // #139 — detail density (verbosity). Default "rich" == today's behavior, so
   // a preferences.json with no `detailDensity` field loads as rich.
@@ -24662,6 +24739,8 @@ var FileStore = class _FileStore {
     if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
       throw new Error("Invalid session ID");
     }
+    this.isDemoSession = this.sessionId.startsWith("demo_");
+    if (this.isDemoSession) this.demoPreferences = {};
     this.ensureDir();
     this.load();
     this.loadPreferences();
@@ -25327,7 +25406,7 @@ var FileStore = class _FileStore {
       }
     }
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -25393,7 +25472,7 @@ var FileStore = class _FileStore {
   recordApprovedPattern(params) {
     const { description, concept } = params;
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -25439,7 +25518,7 @@ var FileStore = class _FileStore {
   overrideRejectedApproach(params) {
     const { description, concept } = params;
     const conceptKey = concept?.trim() || description?.trim() || "";
-    if (conceptKey && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -25481,10 +25560,15 @@ var FileStore = class _FileStore {
     return this.teamPreferences;
   }
   readPreferences() {
+    if (this.demoPreferences) return this.demoPreferences;
     const prefsPath = path8.join(this.basePath, "preferences.json");
     return _FileStore.salvageRecord("preferences.json", this.loadJsonFile(prefsPath, {}), {});
   }
   writePreferences(prefs) {
+    if (this.demoPreferences) {
+      this.demoPreferences = prefs;
+      return;
+    }
     const prefsPath = path8.join(this.basePath, "preferences.json");
     writeJsonAtomic(prefsPath, prefs);
   }
@@ -26360,6 +26444,35 @@ function isAllowedWsOrigin(origin, hostHeader) {
 }
 
 // src/http/routes.ts
+async function demoLedgerOverlay(sessionId, store) {
+  if (!sessionId?.startsWith("demo_") || !store) return [];
+  try {
+    const memory = await store.getSessionMemory();
+    return memory.rejectedApproaches.map((r) => {
+      const concept = r.concept?.trim() || r.description;
+      const at = r.rejectedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+      const entry = {
+        key: normalizeConceptKey(concept),
+        concept,
+        instances: [
+          {
+            project: "demo",
+            sessionId,
+            verdict: "rejected",
+            reason: r.reason,
+            description: r.description,
+            at
+          }
+        ],
+        firstSeenAt: at,
+        lastSeenAt: at
+      };
+      return { ...entry, stance: deriveStance(entry) };
+    });
+  } catch {
+    return [];
+  }
+}
 async function readJsonValue(c) {
   const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
   let raw2;
@@ -26743,7 +26856,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const trace = await store.getPreflightTrace(artifactId);
     return c.json({ trace: trace ?? null });
   });
-  app.get("/api/philosophy", (c) => {
+  app.get("/api/philosophy", async (c) => {
     const stance = c.req.query("stance");
     const concept = c.req.query("concept") ?? void 0;
     const limit = Number(c.req.query("limit") ?? 50);
@@ -26756,8 +26869,18 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       });
     } catch (err) {
       log2(`[philosophy] query failed, returning empty: ${err}`);
-      return c.json({ entries: [], total: 0 });
+      entries = [];
     }
+    const sid = getSessionId(c);
+    if (sid?.startsWith("demo_")) {
+      const realKeys = new Set(entries.map((e) => e.key));
+      const q = concept?.trim().toLowerCase();
+      const overlay = (await demoLedgerOverlay(sid, getStore(sid))).filter(
+        (e) => !realKeys.has(e.key) && (!q || e.key.includes(q) || e.concept.toLowerCase().includes(q)) && (!stance || e.stance === stance)
+      );
+      entries = [...overlay, ...entries];
+    }
+    if (entries.length === 0) return c.json({ entries: [], total: 0 });
     const summary = entries.map((e) => {
       const projects = new Set(e.instances.map((i) => i.project));
       const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
@@ -26846,6 +26969,47 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       verdict
     });
   });
+  app.post("/api/philosophy/remove", async (c) => {
+    let body;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
+    }
+    const rawConcept = body?.concept;
+    const concept = typeof rawConcept === "string" ? rawConcept.trim() : "";
+    if (!concept) {
+      return c.json(
+        { error: "concept is required (the stance to remove)", code: ERROR_CODES.validation_error },
+        400
+      );
+    }
+    let result;
+    try {
+      result = getGlobalStore().removeConcept(concept);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json(
+        { error: `Could not remove the stance: ${msg}`, code: ERROR_CODES.ledger_frozen },
+        409
+      );
+    }
+    if (!result) {
+      return c.json(
+        { error: `No stance recorded for "${concept}".`, code: ERROR_CODES.stance_not_found },
+        404
+      );
+    }
+    log2(
+      `[philosophy/remove] removed "${result.concept}" (${result.instanceCount} instance(s)); backup at ${result.backupPath}`
+    );
+    return c.json({
+      status: "removed",
+      concept: result.concept,
+      instancesRemoved: result.instanceCount,
+      backupPath: result.backupPath
+    });
+  });
   app.post("/api/philosophy/override", async (c) => {
     let body;
     try {
@@ -26882,7 +27046,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     broadcast({ type: "stance_overridden", concept: concept ?? description, retired: result.retired }, sid);
     return c.json({ status: "overridden", concept: concept ?? description, ...result });
   });
-  app.get("/api/philosophy/digest", (c) => {
+  app.get("/api/philosophy/digest", async (c) => {
     const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
     const now = Date.now();
     const fromMs = now - sinceDays * 24 * 60 * 60 * 1e3;
@@ -26899,6 +27063,14 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         newThisPeriod: [],
         strengthenedThisPeriod: []
       });
+    }
+    const digestSid = getSessionId(c);
+    if (digestSid?.startsWith("demo_")) {
+      const realKeys = new Set(entries.map((e) => e.key));
+      const overlay = (await demoLedgerOverlay(digestSid, getStore(digestSid))).filter(
+        (e) => !realKeys.has(e.key)
+      );
+      entries = [...overlay, ...entries];
     }
     const realProjects = (insts) => new Set(insts.filter((i) => i.project !== "manual").map((i) => i.project));
     const totals = {

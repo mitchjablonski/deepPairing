@@ -39,6 +39,17 @@ export function LedgerDrawer({
   const [teamError, setTeamError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
 
+  // Shared by the seed affordance (new entry appears) and the per-row remove
+  // affordance (removed entry disappears) — same fetch shape as the mount
+  // effect below.
+  const refetchEntries = () => {
+    apiGet(`${apiBase()}/api/philosophy?limit=200`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setEntries(data.entries ?? []);
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
     const ac = new AbortController();
@@ -182,23 +193,13 @@ export function LedgerDrawer({
                       let the user paste a rule from their CLAUDE.md /
                       code-review checklist / team doc. Active accumulation,
                       zero presupposed taste. */}
-                  <SeedAffordance onSeeded={() => {
-                    // Refetch the stance list so the just-seeded entry
-                    // appears immediately. Re-using the same fetch shape
-                    // the mount effect uses.
-                    apiGet(`${apiBase()}/api/philosophy?limit=200`)
-                      .then((r) => r.ok ? r.json() : null)
-                      .then((data) => {
-                        if (data) setEntries(data.entries ?? []);
-                      })
-                      .catch(() => {});
-                  }} />
+                  <SeedAffordance onSeeded={refetchEntries} />
                 </div>
               )}
               {!error && filtered.length > 0 && (
                 <ul className="space-y-3">
                   {filtered.map((e) => (
-                    <EntryRow key={e.key} entry={e} />
+                    <EntryRow key={e.key} entry={e} onRemoved={refetchEntries} />
                   ))}
                 </ul>
               )}

@@ -145,7 +145,9 @@ the collaboration, not the headline:
   `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo sees your
   ledger); writes are **opt-in** per project (one prompt at `init`, default
   off), so a dependency in one project can't poison the others. Portable via
-  `deeppairing philosophy export | import --merge`.
+  `deeppairing philosophy export | import --merge`; drop a stance you no
+  longer hold (whole entry, ledger backed up first) with
+  `deeppairing philosophy remove <concept>` or the ✕ in the Ledger drawer.
 - **Three-layer memory, never merged.** Filesystem-sensed guardrails
   (migrations, CI), committable team conventions, and personal philosophy are
   surfaced to the agent separately.
@@ -237,7 +239,7 @@ deeppairing doctor [--fix]                # diagnose / heal install issues
 deeppairing port                          # bare daemon port to stdout (scriptable; !-friendly in Claude Code)
 deeppairing status                        # friendly daemon picture: port, URL, pid, version, running/alive
 deeppairing team init                     # scaffold .deeppairing/team.json
-deeppairing philosophy export | import f --merge | publish on|off
+deeppairing philosophy export | import f --merge | publish on|off | remove <concept>
 deeppairing post-pr-review <pr>           # post pair findings as PR comments
 deeppairing export <full|pr-comments|adr|replay|learnings>
 ```

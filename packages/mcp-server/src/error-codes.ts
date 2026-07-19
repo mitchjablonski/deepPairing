@@ -44,6 +44,11 @@ export const ERROR_CODES = {
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
+  stance_not_found: "stance_not_found",
+  /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
+   *  (H1-5 write-refusal surfaced as a structured route error). */
+  ledger_frozen: "ledger_frozen",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

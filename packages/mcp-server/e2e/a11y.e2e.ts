@@ -30,6 +30,9 @@ let projectRoot: string;
 // this. Cleaned up in afterAll alongside the daemon teardown.
 let home: string;
 let baseURL: string;
+// Bearer for the public mutation routes (the ledger-drawer scan seeds a
+// stance via /api/philosophy/seed — into the K2-isolated tmp HOME ledger).
+let authToken: string;
 
 async function waitForDaemon(root: string): Promise<{ base: string; token: string }> {
   const daemonJson = path.join(root, ".deeppairing", "daemon.json");
@@ -62,6 +65,7 @@ test.beforeAll(async () => {
   });
   const daemon = await waitForDaemon(projectRoot);
   baseURL = daemon.base;
+  authToken = daemon.token;
 
   // Seed a session with the two richest review surfaces.
   const h = { "Content-Type": "application/json", Authorization: `Bearer ${daemon.token}` };
@@ -383,4 +387,54 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
     .analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y: the Ledger drawer with a stance row + armed remove confirm has no serious/critical axe violations", async ({ page }) => {
+  // #193 — the per-stance remove affordance shipped into a surface no e2e
+  // scan ever opened (the exact hollow-net shape #187 taught us about), so
+  // this opens the drawer for real. Seed one stance first so the Stances tab
+  // renders a row WITH the remove button (workers=1 + declaration order:
+  // this runs last, so the seeded ledger entry can't disturb earlier scans;
+  // the ledger lives in the K2 tmp HOME, never the developer's real one).
+  const info = (await (await fetch(`${baseURL}/api/daemon-info`)).json()) as { projectHash: string };
+  const seed = await fetch(`${baseURL}/api/philosophy/seed`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Project-Hash": info.projectHash,
+      Authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({
+      concept: "global mutable state",
+      verdict: "rejected",
+      reason: "broke testability in 3 places",
+    }),
+  });
+  if (!seed.ok) throw new Error(`seed stance failed: ${seed.status}`);
+
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await page.click('[aria-label="Open the Ledger"]');
+  // Marquee-surface rule: never analyze before the row + its remove button
+  // exist (a drawer stuck on "Loading…" would pass hollow).
+  const removeBtn = page.getByRole("button", { name: /^Remove stance: global mutable state$/ });
+  await removeBtn.waitFor({ timeout: 15000 });
+
+  // Scan 1 — drawer open, row unarmed. Zero disabled rules, like every scan
+  // in this file.
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (drawer, unarmed):\n${fmt(serious)}`).toEqual([]);
+
+  // Scan 2 — armed confirm (the destructive step's copy + buttons). Arming
+  // only — never confirm, so the scan mutates nothing.
+  await removeBtn.click();
+  await page.waitForSelector('[data-testid="stance-remove-confirm"]', { timeout: 15000 });
+  const armed = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const armedSerious = armed.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(armedSerious, `axe violations (drawer, armed confirm):\n${fmt(armedSerious)}`).toEqual([]);
 });
