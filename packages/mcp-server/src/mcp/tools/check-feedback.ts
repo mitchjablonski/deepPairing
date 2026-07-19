@@ -3,6 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../../version.js";
 import { getGlobalStore } from "../../store/global-store.js";
+import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 
 /**
@@ -272,14 +273,21 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
   // FN2 — artifacts the human REJECTED that check_feedback hasn't reported
   // yet. Without this, suggestedAction falls through to "you may proceed"
-  // right after a human rejects a code_change/spec/research (only decisions
-  // & plans had verdict reporting). Comment-independent (a feedback-less
-  // reject still triggers it) and reported exactly once via the
-  // reportedRejectedVerdicts set.
+  // right after a human rejects a code_change/spec/research (only plans had
+  // verdict reporting). Comment-independent (a feedback-less reject still
+  // triggers it) and reported exactly once via the reportedRejectedVerdicts set.
+  //
+  // #169 — `decision` belongs here too. A PICKED decision flips to `approved`
+  // (its verdict rides the getResolvedDecisions path below), but a WHOLE-CARD
+  // rejection ("none of these") sets status=rejected with NO resolved-decision
+  // record — so it had no verdict surface at all and suggestedAction reported
+  // "You may proceed with implementation." the instant the human rejected the
+  // framing. Including it here gives a rejected decision the same "Do NOT apply /
+  // address the rejection" posture every other rejected type gets.
   const freshlyRejected = allArtifacts.filter(
     (a) =>
       a.status === "rejected" &&
-      ["code_change", "spec", "research"].includes(a.type) &&
+      ["code_change", "spec", "research", "decision"].includes(a.type) &&
       !ctx.state.reportedRejectedVerdicts.has(a.id),
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
@@ -483,13 +491,6 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         });
         const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
         for (const rej of rejected) {
-          const rejectedDescription = `${d.context}: ${rej.title}`;
-          // AA1 — read concept from the REJECTED option, not the
-          // winning one. Each option carries its own pattern; the
-          // rejection should compound under the rejected option's
-          // concept, not the winner's.
-          const rejectedConcept: string | undefined =
-            rej.concept?.name ?? rej.description ?? undefined;
           // SP2 — per-option rejection reason. Pre-SP2 every rejected
           // option was stamped with the human's single overall
           // pick-reasoning ("why I chose the winner"), so B and C — often
@@ -497,34 +498,19 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           // signal in the ledger. Prefer THIS option's own cons (its
           // specific "why it's the worse fit"); keep the winner + the
           // human's reasoning as shared context when present.
-          const optionCons: string[] = Array.isArray(rej.cons)
-            ? rej.cons.filter((x) => typeof x === "string" && x.trim())
-            : [];
+          //
+          // #169 — the compose + concept-key + record/broadcast is now shared
+          // with the WHOLE-CARD rejection path (rejected-option-recorder.ts):
+          // recordRejectedOption keys the session ledger on
+          // `${context}: ${option.title}` and the cross-project ledger on the
+          // REJECTED option's own concept, so the two paths can't drift.
           const pickContext = d.response?.reasoning
             ? ` — picked "${option.title}": ${d.response.reasoning}`
             : "";
-          const composedReason = optionCons.length > 0
-            ? `${optionCons.join("; ")}${pickContext}`
-            : d.response?.reasoning;
-          // SP2 — bound the composed reason so a verbose option (many cons
-          // + long reasoning) doesn't crowd the preflight memory's
-          // contextual budget. Display/recall only; matching is on
-          // description/concept, so truncation is lossless for the gate.
-          const rejectReason =
-            composedReason && composedReason.length > 240
-              ? `${composedReason.slice(0, 237)}…`
-              : composedReason;
-          await store.recordRejectedApproach({
-            description: rejectedDescription,
-            reason: rejectReason,
-            sourceArtifactId: d.artifactId,
-            concept: rejectedConcept,
-          });
-          broadcast({
-            type: "ledger_write",
-            kind: "rejected",
-            description: rejectedDescription,
-            concept: rejectedConcept,
+          const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
+          await recordRejectedOption(store, broadcast, {
+            context: d.context,
+            option: rej,
             reason: rejectReason,
             sourceArtifactId: d.artifactId,
           });

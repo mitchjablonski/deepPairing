@@ -418,6 +418,12 @@ function buildProposals(_toolName, toolInput) {
   }
   return { strings: strings.filter(Boolean), paths: paths.filter(Boolean) };
 }
+function stripArtifactClause(message) {
+  return message.replace(/\s*The artifact was NOT created\.\s*$/, "").trimEnd();
+}
+function toHookReason(message) {
+  return stripArtifactClause(message).replace(" refused \u2014 ", " paused for your review \u2014 ");
+}
 function evaluatePreflightHook(args) {
   const { toolName, toolInput, projectRoot } = args;
   const { strings, paths } = buildProposals(toolName, toolInput);
@@ -430,11 +436,13 @@ function evaluatePreflightHook(args) {
     teamPreferences: readTeamPreferences(projectRoot)
   });
   if (!result.blocked) return { deny: false };
-  return { deny: true, reason: result.block.message, source: result.block.source };
+  return { deny: true, reason: toHookReason(result.block.message), source: result.block.source };
 }
 export {
   buildProposals,
   evaluatePreflightHook,
   readRejectedApproaches,
-  readTeamPreferences
+  readTeamPreferences,
+  stripArtifactClause,
+  toHookReason
 };

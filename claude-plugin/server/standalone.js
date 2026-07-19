@@ -28941,6 +28941,23 @@ var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"];
 
 // src/mcp/tools/check-feedback.ts
 init_version();
+
+// src/store/rejected-option-recorder.ts
+var MAX_REASON_LEN = 240;
+function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
+  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
+  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
+  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
+}
+async function recordRejectedOption(store, broadcast, params) {
+  const { context, option, reason, sourceArtifactId } = params;
+  const description = `${context}: ${option.title}`;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
+  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
+}
+
+// src/mcp/tools/check-feedback.ts
 function ledgerHealthField() {
   try {
     const health = getGlobalStore().getHealth();
@@ -29093,7 +29110,7 @@ async function handleCheckFeedback(ctx, args) {
   const totalComments = allComments.length;
   const autonomyLabel = await store.getAutonomyLevel();
   const freshlyRejected = allArtifacts.filter(
-    (a) => a.status === "rejected" && ["code_change", "spec", "research"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
+    (a) => a.status === "rejected" && ["code_change", "spec", "research", "decision"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
   let oldestPendingAge = "";
@@ -29255,23 +29272,11 @@ The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do 
         });
         const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
         for (const rej of rejected) {
-          const rejectedDescription = `${d.context}: ${rej.title}`;
-          const rejectedConcept = rej.concept?.name ?? rej.description ?? void 0;
-          const optionCons = Array.isArray(rej.cons) ? rej.cons.filter((x) => typeof x === "string" && x.trim()) : [];
           const pickContext = d.response?.reasoning ? ` \u2014 picked "${option.title}": ${d.response.reasoning}` : "";
-          const composedReason = optionCons.length > 0 ? `${optionCons.join("; ")}${pickContext}` : d.response?.reasoning;
-          const rejectReason = composedReason && composedReason.length > 240 ? `${composedReason.slice(0, 237)}\u2026` : composedReason;
-          await store.recordRejectedApproach({
-            description: rejectedDescription,
-            reason: rejectReason,
-            sourceArtifactId: d.artifactId,
-            concept: rejectedConcept
-          });
-          broadcast({
-            type: "ledger_write",
-            kind: "rejected",
-            description: rejectedDescription,
-            concept: rejectedConcept,
+          const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
+          await recordRejectedOption(store, broadcast, {
+            context: d.context,
+            option: rej,
             reason: rejectReason,
             sourceArtifactId: d.artifactId
           });
