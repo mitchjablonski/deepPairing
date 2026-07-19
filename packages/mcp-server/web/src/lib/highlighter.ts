@@ -9,6 +9,8 @@
 // and falls back to "text" — those chunks were unreachable dead weight in the
 // published package. Now only the 13 grammars + 2 themes are emitted.
 import type { HighlighterCore } from "@shikijs/core";
+// #166 — pure-data module (no shiki import), safe for the eager bundle.
+import { SYNTAX_COLOR_REPLACEMENTS } from "./syntax-palette";
 
 let highlighter: HighlighterCore | null = null;
 let initPromise: Promise<HighlighterCore> | null = null;
@@ -81,6 +83,10 @@ export async function highlightLines(
   const tokens = h.codeToTokens(code, {
     lang: resolvedLang as any,
     theme,
+    // #166 — per-theme AA re-tint of the vitesse palettes on our surface-code
+    // grounds (shiki scopes the map by theme name at tokenization time). See
+    // lib/syntax-palette.ts; locked by syntax-token-contrast.test.ts.
+    colorReplacements: SYNTAX_COLOR_REPLACEMENTS,
   });
 
   return tokens.tokens.map((lineTokens) =>
