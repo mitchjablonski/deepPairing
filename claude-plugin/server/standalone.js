@@ -26257,6 +26257,7 @@ function deriveStance(entry) {
   return "mixed";
 }
 var corruptSnapshots = /* @__PURE__ */ new Map();
+var removalSnapshots = /* @__PURE__ */ new Map();
 var GlobalStore = class _GlobalStore {
   ledgerPath;
   // H1-5 — set by read() when the on-disk ledger couldn't be trusted at all
@@ -26310,10 +26311,10 @@ var GlobalStore = class _GlobalStore {
     }
     return { state: "ok", ledgerPath: this.ledgerPath };
   }
-  /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
+  /** Copy the current on-disk ledger to `<path>.<prefix>-<ts>`. Returns the
    *  backup path on success, or null if the copy failed. */
-  snapshotLedger() {
-    const backup = `${this.ledgerPath}.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  snapshotLedger(prefix = "corrupt") {
+    const backup = `${this.ledgerPath}.${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       fs2.copyFileSync(this.ledgerPath, backup);
       return backup;
@@ -26484,6 +26485,11 @@ var GlobalStore = class _GlobalStore {
       at: now
     };
     if (existing) {
+      if (finalized.project === "manual" && finalized.sessionId === "seed" && existing.instances.some(
+        (prior) => prior.project === "manual" && prior.sessionId === "seed" && prior.verdict === finalized.verdict
+      )) {
+        return;
+      }
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
         if (prior.sessionId !== finalized.sessionId) return false;
@@ -26505,6 +26511,49 @@ var GlobalStore = class _GlobalStore {
       };
     }
     this.write(ledger);
+  }
+  /**
+   * First-class stance removal — deletes the WHOLE concept entry (all
+   * instances). This is the missing counterpart to the override valve, which
+   * is local-blocks-only and never touches the global ledger; before this the
+   * only way out was hand-editing the JSON.
+   *
+   * Backup-before-mutate: before the FIRST removal of this ledger path in
+   * this process, the pre-removal bytes are snapshotted to `.removed-<ts>`
+   * (same mechanism as the `.corrupt-<ts>` copies) so removal is reversible —
+   * restore by copying the backup over the ledger, or re-merge it with
+   * `philosophy import --merge`. If the backup cannot be written, the removal
+   * is REFUSED (we never destroy the only copy of taste history).
+   *
+   * Returns null (no write, no backup) when the concept isn't in the ledger.
+   * Throws when the on-disk ledger is corrupt/frozen — write() would refuse
+   * anyway, and a silent no-op would misreport "not found" for stances that
+   * are actually preserved inside the unreadable file.
+   */
+  removeConcept(concept) {
+    const key = normalizeKey(concept);
+    const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      const snap = corruptSnapshots.get(this.ledgerPath);
+      throw new Error(
+        `the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable \u2014 refusing to modify it. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : "") + `Fix or remove the file, then retry.`
+      );
+    }
+    const entry = ledger.concepts[key];
+    if (!entry) return null;
+    let backupPath = removalSnapshots.get(this.ledgerPath) ?? null;
+    if (!backupPath || !fs2.existsSync(backupPath)) {
+      backupPath = this.snapshotLedger("removed");
+      if (!backupPath) {
+        throw new Error(
+          `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
+        );
+      }
+      removalSnapshots.set(this.ledgerPath, backupPath);
+    }
+    delete ledger.concepts[key];
+    this.write(ledger);
+    return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */
   get(concept) {
@@ -27604,7 +27653,12 @@ var ERROR_CODES = {
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
-  comment_not_in_session: "comment_not_in_session"
+  comment_not_in_session: "comment_not_in_session",
+  /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
+  stance_not_found: "stance_not_found",
+  /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
+   *  (H1-5 write-refusal surfaced as a structured route error). */
+  ledger_frozen: "ledger_frozen"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,

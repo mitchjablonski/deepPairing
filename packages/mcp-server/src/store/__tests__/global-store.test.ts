@@ -565,3 +565,97 @@ describe("H2-1 (#144) — getHealth() makes a frozen ledger queryable", () => {
     errSpy.mockRestore();
   });
 });
+
+describe("manual-seed idempotency — the (manual, seed) shape never duplicates", () => {
+  it("seeding the same concept twice across simulated days keeps ONE instance", () => {
+    // The II6 dedupe is time-windowed (5s) — a re-seed days later (e.g. the
+    // user pasting the same CLAUDE.md rule again, or a scripted flow re-run)
+    // used to append a duplicate. The manual-seed shape is deterministic
+    // (project="manual", sessionId="seed"), so identical (concept, verdict)
+    // seeds are retries by definition and dedupe PERMANENTLY.
+    store.recordInstance("fakes over mocks", {
+      project: "manual", sessionId: "seed", verdict: "approved", at: "2026-07-01T10:00:00.000Z",
+    });
+    store.recordInstance("fakes over mocks", {
+      project: "manual", sessionId: "seed", verdict: "approved", at: "2026-07-06T09:00:00.000Z",
+    });
+    expect(store.get("fakes over mocks")?.instances).toHaveLength(1);
+  });
+
+  it("re-seeding with the OPPOSITE verdict still appends (genuine stance change)", () => {
+    store.recordInstance("external cache service", {
+      project: "manual", sessionId: "seed", verdict: "rejected", at: "2026-07-01T10:00:00.000Z",
+    });
+    store.recordInstance("external cache service", {
+      project: "manual", sessionId: "seed", verdict: "approved", at: "2026-07-06T09:00:00.000Z",
+    });
+    expect(store.get("external cache service")?.instances).toHaveLength(2);
+  });
+
+  it("genuine session rejections of the same concept in different sessions still append", () => {
+    // The permanent dedupe is scoped to the manual-seed shape ONLY — real
+    // cross-session signal remains appendable (that's the compounding moat).
+    store.recordInstance("global mutable state for config", {
+      project: "repo-a", sessionId: "s1", verdict: "rejected", at: "2026-07-01T10:00:00.000Z",
+    });
+    store.recordInstance("global mutable state for config", {
+      project: "repo-b", sessionId: "s2", verdict: "rejected", at: "2026-07-06T09:00:00.000Z",
+    });
+    expect(store.get("global mutable state for config")?.instances).toHaveLength(2);
+  });
+});
+
+describe("removeConcept — first-class stance removal", () => {
+  it("removes an existing concept, backs the ledger up first, and leaves valid JSON", () => {
+    store.recordInstance("External Cache Service", {
+      project: "repo-a", sessionId: "s1", verdict: "rejected", reason: "ops burden",
+    });
+    store.recordInstance("keep me", { project: "repo-a", sessionId: "s1", verdict: "approved" });
+
+    const result = store.removeConcept("external cache service");
+    expect(result).not.toBeNull();
+    // Reports the display-cased concept + how much history was deleted.
+    expect(result!.concept).toBe("External Cache Service");
+    expect(result!.instanceCount).toBe(1);
+    // Backup-before-mutate: a `.removed-<ts>` snapshot of the PRE-removal
+    // bytes exists and still contains the removed concept.
+    expect(result!.backupPath).toBeTruthy();
+    expect(fs.existsSync(result!.backupPath!)).toBe(true);
+    const backup = JSON.parse(fs.readFileSync(result!.backupPath!, "utf-8"));
+    expect(backup.concepts["external cache service"]).toBeTruthy();
+    expect(path.basename(result!.backupPath!)).toMatch(/\.removed-\d+/);
+
+    // The live ledger no longer has the concept, keeps the rest, parses clean.
+    expect(store.get("external cache service")).toBeNull();
+    expect(store.get("keep me")).toBeTruthy();
+    const live = JSON.parse(fs.readFileSync(ledgerPath, "utf-8"));
+    expect(live.version).toBe(1);
+    expect(Object.keys(live.concepts)).toEqual(["keep me"]);
+  });
+
+  it("removing a nonexistent concept returns null and performs NO write, NO backup", () => {
+    store.recordInstance("real stance", { project: "r", sessionId: "s", verdict: "rejected" });
+    const before = fs.readFileSync(ledgerPath);
+
+    expect(store.removeConcept("never recorded")).toBeNull();
+
+    expect(fs.readFileSync(ledgerPath).equals(before)).toBe(true);
+    expect(fs.readdirSync(tmpDir).filter((f) => f.includes(".removed-"))).toHaveLength(0);
+  });
+
+  it("matches case-insensitively via the normalized key", () => {
+    store.recordInstance("Fakes Over Mocks", { project: "r", sessionId: "s", verdict: "approved" });
+    expect(store.removeConcept("  fakes  over mocks ")).not.toBeNull();
+    expect(store.get("fakes over mocks")).toBeNull();
+  });
+
+  it("refuses to remove from a corrupt (frozen) ledger — the only copy survives", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    store.recordInstance("stance", { project: "r", sessionId: "s", verdict: "rejected" });
+    fs.writeFileSync(ledgerPath, "{ not valid json ");
+    const corruptBytes = fs.readFileSync(ledgerPath);
+    expect(() => store.removeConcept("stance")).toThrow(/corrupt/i);
+    expect(fs.readFileSync(ledgerPath).equals(corruptBytes)).toBe(true);
+    errSpy.mockRestore();
+  });
+});

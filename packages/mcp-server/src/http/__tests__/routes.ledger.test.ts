@@ -1017,3 +1017,98 @@ describe("HTTP Routes", () => {
     });
   });
 });
+
+describe("POST /api/philosophy/remove — first-class stance removal", () => {
+  const ledgerPath = () => path.join(tmpDir, "philosophy.json");
+
+  function seedLedger() {
+    const ledger = new GlobalStore(ledgerPath());
+    ledger.recordInstance("global mutable state for config", {
+      project: "repo-a", sessionId: "s1", verdict: "rejected", reason: "broke testability",
+    });
+    ledger.recordInstance("keep me", { project: "repo-a", sessionId: "s1", verdict: "approved" });
+  }
+
+  it("removes an existing stance, reports the backup, and the drawer read no longer lists it", async () => {
+    seedLedger();
+    const res = await app.request("/api/philosophy/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ concept: "Global Mutable State for Config" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("removed");
+    expect(body.concept).toBe("global mutable state for config");
+    expect(body.instancesRemoved).toBe(1);
+    expect(body.backupPath).toBeTruthy();
+    expect(fs.existsSync(body.backupPath)).toBe(true);
+    // The pre-removal backup still carries the removed stance (reversible).
+    const backup = JSON.parse(fs.readFileSync(body.backupPath, "utf-8"));
+    expect(backup.concepts["global mutable state for config"]).toBeTruthy();
+
+    const read = await app.request("/api/philosophy?limit=200");
+    const entries = (await read.json()).entries as Array<{ concept: string }>;
+    expect(entries.map((e) => e.concept)).toEqual(["keep me"]);
+    // Live file still valid JSON.
+    expect(() => JSON.parse(fs.readFileSync(ledgerPath(), "utf-8"))).not.toThrow();
+  });
+
+  it("404s cleanly on a nonexistent concept with NO write and NO backup", async () => {
+    seedLedger();
+    const before = fs.readFileSync(ledgerPath());
+    const res = await app.request("/api/philosophy/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ concept: "never recorded" }),
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe("stance_not_found");
+    expect(fs.readFileSync(ledgerPath()).equals(before)).toBe(true);
+    expect(fs.readdirSync(tmpDir).filter((f) => f.includes(".removed-"))).toHaveLength(0);
+  });
+
+  it("400s with code=validation_error when concept is missing/empty", async () => {
+    for (const body of [JSON.stringify({}), JSON.stringify({ concept: "  " }), JSON.stringify({ concept: 42 })]) {
+      const res = await app.request("/api/philosophy/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe("validation_error");
+    }
+  });
+
+  it("400s on invalid JSON body", async () => {
+    const res = await app.request("/api/philosophy/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not json",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("401s without the daemon bearer when one is configured (auth posture identical to siblings)", async () => {
+    seedLedger();
+    const gated = withHash(createHttpRoutes(store, tmpDir, () => {}, undefined, "tok-remove"), tmpDir);
+    const noBearer = await gated.request("/api/philosophy/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ concept: "keep me" }),
+    });
+    expect(noBearer.status).toBe(401);
+    expect((await noBearer.json()).code).toBe("daemon_auth_required");
+    // Nothing was removed.
+    expect(getGlobalStore().get("keep me")).toBeTruthy();
+
+    const withBearer = await gated.request("/api/philosophy/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer tok-remove" },
+      body: JSON.stringify({ concept: "keep me" }),
+    });
+    expect(withBearer.status).toBe(200);
+    expect(getGlobalStore().get("keep me")).toBeNull();
+  });
+});

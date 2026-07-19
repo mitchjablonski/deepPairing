@@ -121,7 +121,11 @@ Nothing leaves your machine that you didn't already send to Anthropic.
 - **Storage on your disk only.** Sessions at
   `.deeppairing/sessions/{id}/`; cross-project ledger at
   `~/.deeppairing/philosophy/v1.json`. Plain JSON; inspect with
-  `cat` or `jq`.
+  `cat` or `jq`. Remove a stance you no longer hold with
+  `npx deeppairing philosophy remove <concept>` (or the ✕ on the
+  stance in the Ledger drawer) — the ledger is backed up to a
+  timestamped `.removed-<ts>` copy before the delete, so it's
+  reversible; no hand-editing required.
 
 The only network egress deepPairing performs is what your MCP client
 (Claude Code) does anyway — sending tool results to Anthropic's API.

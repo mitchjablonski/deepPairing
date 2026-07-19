@@ -178,6 +178,20 @@ re-evaluates without losing history.
 Manually-seeded entries (via `POST /api/philosophy/seed` or the UI's
 SeedAffordance) carry `project: "manual"` so they're distinguishable
 from session-driven entries. Caps: ≤50 lines, ≤16 KiB UTF-8 per POST.
+Re-seeding an identical (concept, verdict) is permanently idempotent —
+the deterministic `("manual", "seed")` shape dedupes without the II6
+time window.
+
+Stances are removable first-class (`POST /api/philosophy/remove`, the
+✕ on a stance row in the Ledger drawer, or
+`deeppairing philosophy remove <concept>`): the whole concept entry is
+deleted, after the ledger is snapshotted to a `.removed-<ts>` backup
+(once per process) so the surgery is reversible.
+
+Demo sessions (`demo_` prefix, minted by `POST /api/demo/run`) never
+write the ledger — or the project's `preferences.json` — at all; the
+demo's example stance is served to the drawer/digest from the demo
+session's in-memory state.
 
 The ledger is the only structurally cross-project surface. Every
 session can query it via `recall(mode='philosophy' | 'ledger')` and

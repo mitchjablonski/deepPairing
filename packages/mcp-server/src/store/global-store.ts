@@ -121,6 +121,15 @@ export function deriveStance(entry: PhilosophyEntry): PhilosophyStance {
 // cycle re-snapshots instead of pointing at bytes that no longer exist.
 const corruptSnapshots = new Map<string, string>();
 
+// Stance-removal backups — the `.removed-<ts>` snapshot taken before the FIRST
+// removal of each ledger path THIS process (backup-before-mutate: removal
+// deletes taste history, so a pre-surgery copy must exist on disk before the
+// first shrinking write). Value = the backup file path, so every removal in
+// the process can report where the reversible copy lives. Same shape as
+// corruptSnapshots above; kept separate because their lifecycles differ (a
+// clean read clears corrupt snapshots — removal backups must survive).
+const removalSnapshots = new Map<string, string>();
+
 export class GlobalStore {
   private ledgerPath: string;
   // H1-5 — set by read() when the on-disk ledger couldn't be trusted at all
@@ -178,10 +187,10 @@ export class GlobalStore {
     return { state: "ok", ledgerPath: this.ledgerPath };
   }
 
-  /** Copy the current on-disk ledger to `<path>.corrupt-<ts>`. Returns the
+  /** Copy the current on-disk ledger to `<path>.<prefix>-<ts>`. Returns the
    *  backup path on success, or null if the copy failed. */
-  private snapshotLedger(): string | null {
-    const backup = `${this.ledgerPath}.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  private snapshotLedger(prefix: "corrupt" | "removed" = "corrupt"): string | null {
+    const backup = `${this.ledgerPath}.${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       fs.copyFileSync(this.ledgerPath, backup);
       return backup;
@@ -426,6 +435,28 @@ export class GlobalStore {
     };
 
     if (existing) {
+      // Manual-seed idempotency (demo-ledger-isolation follow-through) —
+      // the synthetic (project="manual", sessionId="seed") shape is
+      // deterministic, so an identical (concept, verdict) seed arriving
+      // again — the user re-pasting the same CLAUDE.md rule days later, or
+      // any scripted flow re-run — is a retry by definition and dedupes
+      // PERMANENTLY, not just inside the II6 5s window. Scoped strictly to
+      // the manual-seed shape: genuine session rejections of the same
+      // concept in different sessions carry distinct sessionIds and remain
+      // appendable (that's the compounding signal). An opposite-verdict
+      // seed is a genuine stance change and still appends.
+      if (
+        finalized.project === "manual" &&
+        finalized.sessionId === "seed" &&
+        existing.instances.some(
+          (prior) =>
+            prior.project === "manual" &&
+            prior.sessionId === "seed" &&
+            prior.verdict === finalized.verdict,
+        )
+      ) {
+        return;
+      }
       // II6 — scan recent instances for a duplicate within the window.
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
@@ -448,6 +479,54 @@ export class GlobalStore {
       };
     }
     this.write(ledger);
+  }
+
+  /**
+   * First-class stance removal — deletes the WHOLE concept entry (all
+   * instances). This is the missing counterpart to the override valve, which
+   * is local-blocks-only and never touches the global ledger; before this the
+   * only way out was hand-editing the JSON.
+   *
+   * Backup-before-mutate: before the FIRST removal of this ledger path in
+   * this process, the pre-removal bytes are snapshotted to `.removed-<ts>`
+   * (same mechanism as the `.corrupt-<ts>` copies) so removal is reversible —
+   * restore by copying the backup over the ledger, or re-merge it with
+   * `philosophy import --merge`. If the backup cannot be written, the removal
+   * is REFUSED (we never destroy the only copy of taste history).
+   *
+   * Returns null (no write, no backup) when the concept isn't in the ledger.
+   * Throws when the on-disk ledger is corrupt/frozen — write() would refuse
+   * anyway, and a silent no-op would misreport "not found" for stances that
+   * are actually preserved inside the unreadable file.
+   */
+  removeConcept(concept: string): { concept: string; instanceCount: number; backupPath: string | null } | null {
+    const key = normalizeKey(concept);
+    const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      const snap = corruptSnapshots.get(this.ledgerPath);
+      throw new Error(
+        `the philosophy ledger at ${this.ledgerPath} is corrupt/unreadable — refusing to modify it. ` +
+          (snap ? `A backup of the corrupt file is at ${snap}. ` : "") +
+          `Fix or remove the file, then retry.`,
+      );
+    }
+    const entry = ledger.concepts[key];
+    if (!entry) return null;
+
+    let backupPath = removalSnapshots.get(this.ledgerPath) ?? null;
+    if (!backupPath || !fs.existsSync(backupPath)) {
+      backupPath = this.snapshotLedger("removed");
+      if (!backupPath) {
+        throw new Error(
+          `could not back the ledger up before removal (${this.ledgerPath}) — refusing to delete taste history without a reversible copy.`,
+        );
+      }
+      removalSnapshots.set(this.ledgerPath, backupPath);
+    }
+
+    delete ledger.concepts[key];
+    this.write(ledger);
+    return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
 
   /** Look up a single entry by concept (case-insensitive). */

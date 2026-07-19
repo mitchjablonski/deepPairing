@@ -1264,7 +1264,41 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     return;
   }
 
-  console.error(`  ${red("✗")} Unknown philosophy subcommand: ${sub ?? "(none)"}. Try: export | import <file> --merge | publish on|off`);
+  if (sub === "remove") {
+    // First-class stance removal — the ledger's missing exit. The override
+    // valve is local-blocks-only; before this the only way to drop a stance
+    // from ~/.deeppairing/philosophy/v1.json was hand-editing the JSON.
+    // Removes the WHOLE concept entry; the store snapshots the ledger to
+    // `.removed-<ts>` before the first removal in a process (reversible —
+    // copy it back, or `philosophy import <backup> --merge`).
+    const concept = rest.filter((a) => !a.startsWith("-")).join(" ").trim();
+    if (!concept) {
+      console.error(`  ${red("✗")} philosophy remove requires a concept.`);
+      console.error(`  ${dim('   Example: npx deeppairing philosophy remove "global mutable state"')}`);
+      process.exit(1);
+    }
+    let result;
+    try {
+      result = store.removeConcept(concept);
+    } catch (err) {
+      console.error(`  ${red("✗")} Could not remove the stance: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+    if (!result) {
+      console.error(`  ${red("✗")} No stance recorded for "${concept}" in ${store.getLedgerPath()}.`);
+      console.error(`  ${dim("   List your stances: npx deeppairing philosophy export | jq '.concepts | keys'")}`);
+      process.exit(1);
+    }
+    console.log(bold("\n  deepPairing philosophy remove"));
+    console.log(`  ${green("✓")} Removed "${result!.concept}" — ${result!.instanceCount} instance(s) of taste history deleted`);
+    console.log(`    ${dim("from:")}   ${store.getLedgerPath()}`);
+    console.log(`    ${dim("backup:")} ${result!.backupPath ?? "(none)"}`);
+    console.log(`  ${dim("Changed your mind? Restore the backup over the ledger, or re-merge it:")}`);
+    console.log(`  ${dim(`  npx deeppairing philosophy import ${result!.backupPath ?? "<backup>"} --merge`)}\n`);
+    return;
+  }
+
+  console.error(`  ${red("✗")} Unknown philosophy subcommand: ${sub ?? "(none)"}. Try: export | import <file> --merge | publish on|off | remove <concept>`);
   process.exit(1);
 }
 
@@ -1783,6 +1817,8 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     dp philosophy import <f> --merge       Merge an exported ledger into your current one (idempotent)
     dp philosophy publish [on|off]         Flip THIS project's opt-in to publish rejections/approvals
                                            into the cross-project ledger (bare = show current state)
+    dp philosophy remove <concept>         Remove a stance (whole concept entry) from the ledger —
+                                           backs the ledger up to .removed-<ts> first, prints the path
     dp doctor [--fix] [--yes]              Diagnose — with --fix, heals stale daemon.json, gitignore, Stop hook
     dp sessions [list|prune]               List sessions for this project; prune removes empty stale ones
     dp sessions merge <from> <into> [-y]   Merge two sessions (rescues data split by old non-deterministic ids)

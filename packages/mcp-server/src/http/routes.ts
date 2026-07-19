@@ -9,7 +9,13 @@ import type { IStore } from "../store/store-interface.js";
 import { FileStore } from "../store/file-store.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
-import { getGlobalStore, isSeededEntry } from "../store/global-store.js";
+import {
+  getGlobalStore,
+  isSeededEntry,
+  deriveStance,
+  type PhilosophyEntry,
+  type PhilosophyStance,
+} from "../store/global-store.js";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
@@ -22,7 +28,51 @@ import {
   PreferenceBodySchema,
   RetrospectiveBodySchema,
   formatZodIssues,
+  normalizeConceptKey,
 } from "@deeppairing/shared";
+
+/**
+ * Demo-ledger isolation — demo sessions (`demo_` prefix, minted only by
+ * `POST /api/demo/run`) never persist to the cross-project philosophy ledger
+ * (see FileStore.isDemoSession). The Ledger drawer + digest opened from a
+ * demo tab still need to SHOW the demo's example stance, so this synthesizes
+ * ledger-shaped entries from the demo session's own in-memory session memory
+ * — the drawer renders demo state, the on-disk ledger stays byte-identical.
+ * Returns [] for non-demo sessions and on any store hiccup (overlay is
+ * strictly additive; it must never break the real read).
+ */
+async function demoLedgerOverlay(
+  sessionId: string | undefined,
+  store: IStore | null,
+): Promise<Array<PhilosophyEntry & { stance: PhilosophyStance }>> {
+  if (!sessionId?.startsWith("demo_") || !store) return [];
+  try {
+    const memory = await store.getSessionMemory();
+    return memory.rejectedApproaches.map((r) => {
+      const concept = r.concept?.trim() || r.description;
+      const at = r.rejectedAt ?? new Date().toISOString();
+      const entry: PhilosophyEntry = {
+        key: normalizeConceptKey(concept),
+        concept,
+        instances: [
+          {
+            project: "demo",
+            sessionId,
+            verdict: "rejected",
+            reason: r.reason,
+            description: r.description,
+            at,
+          },
+        ],
+        firstSeenAt: at,
+        lastSeenAt: at,
+      };
+      return { ...entry, stance: deriveStance(entry) };
+    });
+  } catch {
+    return [];
+  }
+}
 
 // U0.6 — getter may return null when no session matches AND none exist.
 // Routes treat null as "no active session" rather than spawning a placeholder.
@@ -729,14 +779,14 @@ export function createHttpRoutes(
   // N3.1: Philosophy ledger (cross-project, shared across all sessions).
   // Powers the "Your taste" drawer. Read-only — mutations happen via the
   // MCP tools during live sessions.
-  app.get("/api/philosophy", (c) => {
+  app.get("/api/philosophy", async (c) => {
     const stance = c.req.query("stance") as "avoid" | "prefer" | "mixed" | undefined;
     const concept = c.req.query("concept") ?? undefined;
     const limit = Number(c.req.query("limit") ?? 50);
     // H1-5(c) — query() reads the on-disk global ledger; a future shape bug
     // there must DEGRADE this taste route to empty, not 500 it. (Read-only,
     // safe to return []).
-    let entries;
+    let entries: Array<PhilosophyEntry & { stance: PhilosophyStance }>;
     try {
       entries = getGlobalStore().query({
         stance: stance && ["avoid", "prefer", "mixed"].includes(stance) ? stance : undefined,
@@ -745,8 +795,23 @@ export function createHttpRoutes(
       });
     } catch (err) {
       log(`[philosophy] query failed, returning empty: ${err}`);
-      return c.json({ entries: [], total: 0 });
+      entries = [];
     }
+    // Demo-ledger isolation — a demo tab's drawer shows the demo's example
+    // stance from session state (never persisted). Same filters as query().
+    const sid = getSessionId(c);
+    if (sid?.startsWith("demo_")) {
+      const realKeys = new Set(entries.map((e) => e.key));
+      const q = concept?.trim().toLowerCase();
+      const overlay = (await demoLedgerOverlay(sid, getStore(sid))).filter(
+        (e) =>
+          !realKeys.has(e.key) &&
+          (!q || e.key.includes(q) || e.concept.toLowerCase().includes(q)) &&
+          (!stance || e.stance === stance),
+      );
+      entries = [...overlay, ...entries];
+    }
+    if (entries.length === 0) return c.json({ entries: [], total: 0 });
     // Trim to the bits the UI needs so we don't ship every full instance
     // history on page load. The drawer can click-to-expand for details.
     const summary = entries.map((e) => {
@@ -875,6 +940,58 @@ export function createHttpRoutes(
     });
   });
 
+  // First-class stance removal — the missing counterpart to seed/override.
+  // The override valve is local-blocks-only; until this route the only way to
+  // get a stance OUT of the cross-project ledger was hand-editing the JSON.
+  // Removes the WHOLE concept entry (all instances). The store backs the
+  // ledger up to `.removed-<ts>` before the first removal in a process, so
+  // the deletion is reversible (GlobalStore.removeConcept). Bearer-gated like
+  // every mutation by the SP1 middleware above.
+  app.post("/api/philosophy/remove", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body", code: ERROR_CODES.validation_error }, 400);
+    }
+    const rawConcept = (body as { concept?: unknown } | null)?.concept;
+    const concept = typeof rawConcept === "string" ? rawConcept.trim() : "";
+    if (!concept) {
+      return c.json(
+        { error: "concept is required (the stance to remove)", code: ERROR_CODES.validation_error },
+        400,
+      );
+    }
+    let result;
+    try {
+      result = getGlobalStore().removeConcept(concept);
+    } catch (err) {
+      // Corrupt/frozen ledger or an un-backupable file — the store refused
+      // the surgery so the only copy survives. Surface the reason.
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json(
+        { error: `Could not remove the stance: ${msg}`, code: ERROR_CODES.ledger_frozen },
+        409,
+      );
+    }
+    if (!result) {
+      return c.json(
+        { error: `No stance recorded for "${concept}".`, code: ERROR_CODES.stance_not_found },
+        404,
+      );
+    }
+    // Names + counts only — never echo ledger contents into logs.
+    log(
+      `[philosophy/remove] removed "${result.concept}" (${result.instanceCount} instance(s)); backup at ${result.backupPath}`,
+    );
+    return c.json({
+      status: "removed",
+      concept: result.concept,
+      instancesRemoved: result.instanceCount,
+      backupPath: result.backupPath,
+    });
+  });
+
   // Scope-down (override) a personal pre-flight block the user judges a false
   // positive. The gate is fuzzy by design, so wrong blocks are guaranteed —
   // this is the safety valve. Retires the matching local stance (clears the
@@ -925,7 +1042,7 @@ export function createHttpRoutes(
     return c.json({ status: "overridden", concept: concept ?? description, ...result });
   });
 
-  app.get("/api/philosophy/digest", (c) => {
+  app.get("/api/philosophy/digest", async (c) => {
     const sinceDays = Math.min(Math.max(Number(c.req.query("sinceDays") ?? 7), 1), 90);
     const now = Date.now();
     const fromMs = now - sinceDays * 24 * 60 * 60 * 1000;
@@ -946,6 +1063,18 @@ export function createHttpRoutes(
         newThisPeriod: [],
         strengthenedThisPeriod: [],
       });
+    }
+
+    // Demo-ledger isolation — same session-state overlay the /api/philosophy
+    // read applies, so a demo tab's digest carries the example stance without
+    // the ledger ever learning it.
+    const digestSid = getSessionId(c);
+    if (digestSid?.startsWith("demo_")) {
+      const realKeys = new Set(entries.map((e) => e.key));
+      const overlay = (await demoLedgerOverlay(digestSid, getStore(digestSid))).filter(
+        (e) => !realKeys.has(e.key),
+      );
+      entries = [...overlay, ...entries];
     }
 
     // BB1 — synthetic project="manual" markers (AA9 seeds) must NOT

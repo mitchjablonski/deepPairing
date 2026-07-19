@@ -35,6 +35,27 @@ export class FileStore implements IStore {
   private planReviews: Map<string, PlanReviewRecord> = new Map();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
+  /**
+   * Demo isolation — `demo_`-prefixed sessions are the daemon's scripted,
+   * throwaway demo (`POST /api/demo/run` + runDemoScript; the prefix is the
+   * load-bearing demo marker across the daemon: broadcast tap, metrics guard,
+   * session eviction). Field bug: the demo walked its scripted rejection
+   * through this REAL store, so (a) recordRejectedApproach mirrored the
+   * demo's example stance into the user's real ~/.deeppairing philosophy
+   * ledger whenever the project had publish on — and non-idempotently, since
+   * each run's fresh demo_<ts> sessionId defeats the II6 dedupe (6 runs → 6
+   * duplicate instances the advisory tier then cited in real sessions) — and
+   * (b) the scripted rejection landed in the project's preferences.json,
+   * arming the REAL preflight with demo-fiction. Demo sessions therefore keep
+   * preferences purely in memory (demoPreferences below) and never mirror
+   * into the global ledger. Derived from the sessionId prefix (not a
+   * constructor flag) so no future call site can construct a demo session
+   * that leaks.
+   */
+  private readonly isDemoSession: boolean;
+  /** In-memory preferences for demo sessions — never read from or written to
+   *  the project's preferences.json. Null for real sessions. */
+  private demoPreferences: Record<string, unknown> | null = null;
   private autonomyLevel: "supervised" | "balanced" | "autonomous" = "supervised";
   // #139 — detail density (verbosity). Default "rich" == today's behavior, so
   // a preferences.json with no `detailDensity` field loads as rich.
@@ -97,6 +118,8 @@ export class FileStore implements IStore {
     if (this.sessionId.includes("..") || this.sessionId.includes("/") || this.sessionId.includes("\\")) {
       throw new Error("Invalid session ID");
     }
+    this.isDemoSession = this.sessionId.startsWith("demo_");
+    if (this.isDemoSession) this.demoPreferences = {};
     this.ensureDir();
     this.load();
     this.loadPreferences();
@@ -1016,8 +1039,12 @@ export class FileStore implements IStore {
     // III8 — gate on the per-project publish opt-in. Reads still work,
     // local preferences.json is still updated below; only the global
     // mirror is gated.
+    // Demo isolation — a demo session's scripted rejection must NEVER reach
+    // the real cross-project ledger (defense in depth: demoPreferences never
+    // carry the publish flag either, but this gate keeps the invariant even
+    // if the demo prefs ever get seeded from disk).
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -1087,8 +1114,9 @@ export class FileStore implements IStore {
     // password hashing" approval in project A never bucketed with the
     // same approval in project B.
     // III8 — same per-project publish opt-in gate as the rejected path.
+    // Demo isolation — same never-mirror gate as the rejected path.
     const conceptKey = concept?.trim() || description.trim();
-    if (conceptKey && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -1136,8 +1164,9 @@ export class FileStore implements IStore {
    */
   overrideRejectedApproach(params: { description?: string; concept?: string }): { retired: number } {
     const { description, concept } = params;
+    // Demo isolation — same never-mirror gate as the record paths.
     const conceptKey = concept?.trim() || description?.trim() || "";
-    if (conceptKey && this.globalLedgerPublishEnabled()) {
+    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         getGlobalStore().recordInstance(conceptKey, {
           project: this.projectHint,
@@ -1187,11 +1216,20 @@ export class FileStore implements IStore {
   }
 
   private readPreferences(): Record<string, any> {
+    // Demo isolation — demo sessions read their own in-memory copy, never the
+    // project's real preferences.json (whose rejectedApproaches feed the REAL
+    // preflight, and whose globalLedgerPublish flag arms the global mirror).
+    if (this.demoPreferences) return this.demoPreferences;
     const prefsPath = path.join(this.basePath, "preferences.json");
     return FileStore.salvageRecord("preferences.json", this.loadJsonFile<unknown>(prefsPath, {}), {} as Record<string, any>);
   }
 
   private writePreferences(prefs: Record<string, any>): void {
+    // Demo isolation — a demo run must leave preferences.json byte-identical.
+    if (this.demoPreferences) {
+      this.demoPreferences = prefs;
+      return;
+    }
     const prefsPath = path.join(this.basePath, "preferences.json");
     // II4 — preferences.json holds the rejected-approach memory used by every
     // preflight. A torn write here silently wipes the moat, so use the atomic
