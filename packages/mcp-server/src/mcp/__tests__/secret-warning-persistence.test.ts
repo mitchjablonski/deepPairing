@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { FileStore } from "../../store/file-store.js";
+import * as secretScan from "../../secret-scan.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
 /**
@@ -16,6 +17,12 @@ import { setupServerTest, makeCallTool } from "./server-test-harness.js";
  * present_options / log_reasoning now scan + persist the same way, and every
  * match carries its LOCATION (content field path + 1-based line — derived
  * from the match index, never the value).
+ *
+ * #162 — the scan MOVED from the tool handlers into FileStore.createArtifact
+ * (the same choke point addComment already uses); the handlers read the
+ * matches back off the returned artifact for the `secret_warning` broadcast.
+ * Every persisted shape below is unchanged — this suite is the proof the
+ * consumer chain (banner / sidebar / check_feedback) never noticed the move.
  *
  * Fixture secrets are documented example values (AWS's AKIAIOSFODNN7EXAMPLE),
  * never real credentials.
@@ -189,6 +196,62 @@ describe("#158 — revise_artifact re-scans the superseding content", () => {
     const v3 = (await ctx.store.getArtifacts()).find((a) => a.version === 3);
     expect(v3).toBeDefined();
     expect("secretWarnings" in v3!).toBe(false);
+  });
+});
+
+// #162 — one scan per artifact, and it lives in the STORE. The handler no
+// longer pre-scans for persistence and then hands the store a param to trust;
+// createArtifact runs the single authoritative scanContentForSecrets and the
+// handler broadcasts from the returned artifact. Guard against the regression
+// where both layers scan (double work) or neither does (silent gap).
+describe("#162 — exactly ONE scan per artifact, at the store choke point", () => {
+  it("present_code_change with a secret: scanContentForSecrets runs once; warning persists AND broadcasts", async () => {
+    const spy = vi.spyOn(secretScan, "scanContentForSecrets");
+    try {
+      await callTool("present_code_change", {
+        filePath: "src/config.ts",
+        changeType: "modify",
+        before: "x",
+        after: `const key = "${FAKE_AWS_KEY}";`,
+        reasoning: "r",
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      // ...and that one scan fed BOTH consumers: the persisted field…
+      const [artifact] = await ctx.store.getArtifacts();
+      expect(artifact?.secretWarnings).toEqual([
+        { pattern: "AKIA", label: "AWS access key id", field: "after", line: 1 },
+      ]);
+      // …and the fire-and-forget broadcast.
+      const warning = ctx.broadcasts.find((b) => b.type === "secret_warning");
+      expect(warning?.artifactId).toBe(artifact!.id);
+      expect(warning?.patterns).toEqual(["AKIA"]);
+      expect(warning?.labels).toEqual(["AWS access key id"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a clean present_findings still scans exactly once (the store always scans; handlers never do)", async () => {
+    const spy = vi.spyOn(secretScan, "scanContentForSecrets");
+    try {
+      await callTool("present_findings", {
+        title: "Docs audit",
+        summary: "Everything is fine.",
+        findings: [
+          {
+            category: "quality",
+            title: "README is current",
+            detail: "No drift found.",
+            significance: "low",
+            evidence: "README.md matches the CLI surface.",
+          },
+        ],
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(ctx.broadcasts.find((b) => b.type === "secret_warning")).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

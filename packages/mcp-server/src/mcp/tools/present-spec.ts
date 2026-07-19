@@ -2,7 +2,6 @@ import { nanoid } from "nanoid";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
-import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -32,17 +31,17 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     ...(visuals ? { visuals } : {}),
   };
   // #160 — specs were a scanner GAP: design/context prose quotes configs and
-  // sample payloads, exactly where a pasted key hides. Scan BEFORE creation so
-  // matches PERSIST on the artifact (labels+location only — never the value);
-  // the #158 banner and check_feedback consumers then work for free.
-  const secretMatches = scanContentForSecrets(content);
+  // sample payloads, exactly where a pasted key hides. #162 — the scan runs
+  // INSIDE createArtifact now (parity with addComment); matches PERSIST on
+  // the artifact (labels+location only — never the value) and we read them
+  // back for the broadcast below.
   const artifact = await ctx.store.createArtifact({
     id,
     type: "spec",
     title,
     content,
-    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb is populated on
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);

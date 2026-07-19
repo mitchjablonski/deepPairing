@@ -2,7 +2,6 @@ import { nanoid } from "nanoid";
 import { validatePresentFindingsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
-import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentFindings(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -31,27 +30,24 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   // snippets, detail text, or recommendations. Doesn't redact (the
   // user may have a legitimate reason to quote the key — e.g.,
   // reviewing a secret-scanner finding).
-  // #158 — scan BEFORE creation so matches PERSIST on the artifact
-  // (secretWarnings) and the companion UI can render the warning after
-  // any reload; the broadcast below is fire-and-forget (and a no-op in
-  // daemon mode), so it alone never surfaced anything.
-  // #160 — scan the WHOLE content object (was a curated blob list) so each
-  // match carries its field path + line and the banner can say WHERE
-  // ("in `findings[0].evidence[1].snippet` (line 2)").
+  // #162 — the scan lives INSIDE FileStore.createArtifact now (parity with
+  // addComment): matches PERSIST on the artifact (#158) with field path +
+  // line (#160), and we read them back off the returned artifact for the
+  // fire-and-forget broadcast below (a no-op in daemon mode) — one scan per
+  // artifact, at the choke point.
   const content = {
     summary: validated.data.summary,
     findings: validated.data.findings,
     openQuestions: validated.data.openQuestions ?? [],
   };
-  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
     type: "research",
     title: args?.title ?? "Research Findings",
     content,
-    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — persist + broadcast the trace BEFORE artifact_created so the
   // companion UI can render the breadcrumb populated on first paint
   // instead of mounting it null and refetching when the trace event

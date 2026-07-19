@@ -2,7 +2,6 @@ import { nanoid } from "nanoid";
 import { validatePresentCodeChangeInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
-import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -52,15 +51,13 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // surface for leaked vendor-prefixed API keys; a refactor near
   // auth code or a finding that quotes a config block is exactly
   // where the agent might paste a real secret. See secret-scan.ts.
-  // #158 — scan BEFORE creation so the matches are PERSISTED on the
-  // artifact (secretWarnings): the broadcast below is fire-and-forget
-  // and, in daemon mode, a no-op — a warning that only lives on the
-  // wire never renders anywhere.
-  // #160 — scan the WHOLE content object (was a flat [before, after,
-  // reasoning] blob list) so each match carries its field path + line and
-  // the banner can say WHERE ("in `after` (line 4)").
+  // #162 — the scan moved INTO FileStore.createArtifact (parity with
+  // addComment): the store walks the whole content object (#160 — each match
+  // carries its field path + line) and persists the result (#158 — so the
+  // warning survives a reload; the broadcast below is fire-and-forget and, in
+  // daemon mode, a no-op). We read the matches back off the returned artifact
+  // for the broadcast — one scan per artifact, at the choke point.
   const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
-  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
@@ -69,8 +66,8 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     content,
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
-    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb is populated on
   // first paint (see present-findings.ts for the full rationale).
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);

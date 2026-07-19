@@ -27966,86 +27966,6 @@ async function maybeUpdateTaskStatus(_server, _artifactId, _store) {
   void taskHandleForArtifact;
 }
 
-// src/secret-scan.ts
-var PATTERNS = [
-  { re: /\bsk-[A-Za-z0-9_-]{16,}/, pattern: "sk-", label: "OpenAI / Anthropic-shape API key" },
-  { re: /\bAKIA[0-9A-Z]{12,20}\b/, pattern: "AKIA", label: "AWS access key id" },
-  { re: /\bghp_[A-Za-z0-9]{20,}/, pattern: "ghp_", label: "GitHub personal access token" },
-  { re: /\bgho_[A-Za-z0-9]{20,}/, pattern: "gho_", label: "GitHub OAuth token" },
-  { re: /\bglpat-[A-Za-z0-9_-]{20,}/, pattern: "glpat-", label: "GitLab personal access token" },
-  { re: /\bya29\.[A-Za-z0-9_-]{20,}/, pattern: "ya29.", label: "Google OAuth access token" },
-  { re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, pattern: "PEM", label: "Private key (PEM)" },
-  // #160 — conservative expansion (see the noise-tradeoff note above).
-  // Stripe LIVE mode only: sk_test_ is deliberately out (docs/test snippets
-  // quote it constantly; a leaked test key is not the launch-day tweet).
-  { re: /\bsk_live_[A-Za-z0-9]{16,}/, pattern: "sk_live_", label: "Stripe live secret key" },
-  // Slack token families: bot (xoxb), user (xoxp), app (xoxa), refresh (xoxr),
-  // signing/session (xoxs). Requires token-length payload after the dash so
-  // prose like "tokens start with xoxb-" never trips it.
-  { re: /\bxox[bpars]-[A-Za-z0-9][A-Za-z0-9-]{9,}/, pattern: "xox", label: "Slack token" },
-  // npm automation tokens: npm_ + 36 base62 chars, NO underscores — which is
-  // exactly what keeps npm_config_registry / npm_package_name (real env vars
-  // in every npm lifecycle script) out.
-  { re: /\bnpm_[A-Za-z0-9]{30,}/, pattern: "npm_", label: "npm access token" },
-  // GitHub fine-grained PAT: github_pat_ + 22 base62 + "_" + 59 base62.
-  // The exact 22-char first segment is required so a prose placeholder like
-  // "github_pat_your_token_here" can't match.
-  { re: /\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{30,}/, pattern: "github_pat_", label: "GitHub fine-grained personal access token" },
-  // GCP service-account JSON: the "private_key" field whose VALUE is a PEM
-  // opener. `"private_key_id"` (sibling field, non-secret hex) can't match —
-  // the field name must end exactly at the closing quote.
-  { re: /"private_key"\s*:\s*"-----BEGIN/, pattern: '"private_key"', label: "GCP service-account key (JSON)" },
-  // Signed JWT: three base64url segments. Collision-prone as a bare
-  // three-dotted-segments shape, so BOTH the header and payload segments must
-  // start with `eyJ` (base64url of `{"`) and the signature must be present
-  // and token-length — an unsigned/two-segment example never matches.
-  { re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}/, pattern: "eyJ", label: "JWT (signed)" }
-];
-function lineOfIndex(text, index) {
-  let line = 1;
-  for (let i = 0; i < index; i++) {
-    if (text.charCodeAt(i) === 10) line++;
-  }
-  return line;
-}
-function scanForSecrets(text) {
-  if (typeof text !== "string" || text.length === 0) return [];
-  const matches = [];
-  for (const { re, pattern, label } of PATTERNS) {
-    const m = re.exec(text);
-    if (m) {
-      matches.push({ pattern, label, line: lineOfIndex(text, m.index) });
-    }
-  }
-  return matches;
-}
-function scanContentForSecrets(content, maxDepth = 6) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  const walk = (value, fieldPath, depth) => {
-    if (depth > maxDepth || value == null) return;
-    if (typeof value === "string") {
-      for (const m of scanForSecrets(value)) {
-        if (seen.has(m.pattern)) continue;
-        seen.add(m.pattern);
-        out.push(fieldPath ? { ...m, field: fieldPath } : m);
-      }
-      return;
-    }
-    if (Array.isArray(value)) {
-      value.forEach((v, i) => walk(v, `${fieldPath}[${i}]`, depth + 1));
-      return;
-    }
-    if (typeof value === "object") {
-      for (const [k, v] of Object.entries(value)) {
-        walk(v, fieldPath ? `${fieldPath}.${k}` : k, depth + 1);
-      }
-    }
-  };
-  walk(content, "", 0);
-  return out;
-}
-
 // src/mcp/tools/log-reasoning.ts
 async function handleLogReasoning(ctx, args) {
   const validated = validateLogReasoningInput(args);
@@ -28062,16 +27982,15 @@ async function handleLogReasoning(ctx, args) {
     alternativeDetails: args?.alternativeDetails,
     confidence: args?.confidence
   };
-  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "reasoning",
     title: args?.action ?? "Reasoning",
     content,
     agentReasoning: args?.reasoning,
-    relatedArtifactIds: relatedIds,
-    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+    relatedArtifactIds: relatedIds
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
@@ -28787,15 +28706,14 @@ async function handlePresentFindings(ctx, args) {
     findings: validated.data.findings,
     openQuestions: validated.data.openQuestions ?? []
   };
-  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid3(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
     type: "research",
     title: args?.title ?? "Research Findings",
-    content,
-    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+    content
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
@@ -28847,15 +28765,14 @@ async function handlePresentOptions(ctx, args) {
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
   const content = { context, options: proposedOptions, decisionId, stakes };
-  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "decision",
     title: context,
     content,
-    relatedArtifactIds: args?.relatedFindings,
-    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+    relatedArtifactIds: args?.relatedFindings
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
   await ctx.store.recordDecisionRequest({
     decisionId,
@@ -29525,7 +29442,6 @@ async function handleReviseArtifact(ctx, args) {
         decisionContent.stakes = oldStakes;
       }
     }
-    const secretMatches = scanContentForSecrets(content);
     const newArtifact = await store.createArtifact({
       id: newId,
       type: old.type,
@@ -29534,7 +29450,6 @@ async function handleReviseArtifact(ctx, args) {
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
-      ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {},
       // Bug4 — carry the old version's relatedArtifactIds onto v2 so the
       // reference graph doesn't dangle at the SOURCE when v1 is superseded
       // (belt-and-suspenders with the client-side resolveToLiveId in the flow
@@ -29798,14 +29713,13 @@ async function handlePresentSpec(ctx, args) {
     openQuestions: openQuestions ?? [],
     ...visuals ? { visuals } : {}
   };
-  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "spec",
     title,
-    content,
-    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+    content
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
@@ -29859,15 +29773,14 @@ async function handlePresentPlan(ctx, args) {
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
   const content = { steps: planSteps, estimatedChanges, ...visuals ? { visuals } : {} };
-  const secretMatches = scanContentForSecrets(content);
   const artifact = await ctx.store.createArtifact({
     id,
     type: "plan",
     title,
     content,
-    relatedArtifactIds: args?.relatedFindings,
-    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+    relatedArtifactIds: args?.relatedFindings
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   await ctx.store.recordPlanReview(id);
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -29928,7 +29841,6 @@ async function handlePresentCodeChange(ctx, args) {
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
   const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
-  const secretMatches = scanContentForSecrets(content);
   const id = `art_${nanoid3(10)}`;
   const artifact = await ctx.store.createArtifact({
     id,
@@ -29936,9 +29848,9 @@ async function handlePresentCodeChange(ctx, args) {
     title: `${effectiveChangeType} ${filePath}`,
     content,
     agentReasoning: reasoning,
-    relatedArtifactIds: args?.relatedFindings,
-    ...secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}
+    relatedArtifactIds: args?.relatedFindings
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
