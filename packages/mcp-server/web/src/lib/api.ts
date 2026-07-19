@@ -177,7 +177,7 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
   try {
     res = await fetch(input, init);
   } catch (err: any) {
-    throw new ApiError(0, "network_error", `Couldn't reach the daemon. Run \`npx deeppairing doctor\` to diagnose.`);
+    throw new ApiError(0, "network_error", `Couldn't reach the daemon. Run \`node packages/mcp-server/dist/cli/init.js doctor\` to diagnose.`);
   }
   if (res.ok) return res;
 
@@ -200,7 +200,7 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
     // U6 — point users at the doctor command alongside the action they
     // need to take. If "start Claude Code" doesn't work the next thing
     // they should reach for is the diagnostic.
-    message = "No active deepPairing session. Start Claude Code with deepPairing configured, or run `npx deeppairing doctor --fix`.";
+    message = "No active deepPairing session. Start Claude Code with deepPairing configured, or run `node packages/mcp-server/dist/cli/init.js doctor --fix`.";
   }
 
   throw new ApiError(res.status, code, message);

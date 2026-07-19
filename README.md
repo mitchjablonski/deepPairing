@@ -27,7 +27,7 @@ node packages/mcp-server/dist/cli/init.js demo
 
 Fires the hero flow against a real companion UI (auto-opens your browser), so
 you feel the review surface + the rejection gate before installing anything.
-Node 22+, pnpm 10+. Then, to use it in your own project:
+Node 20.11+ (22+ recommended, and what CI runs), pnpm 10+. Then, to use it in your own project:
 **[install in Claude Code ↓](#install-in-claude-code)**.
 
 ## What you get

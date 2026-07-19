@@ -604,7 +604,7 @@ export function EntryRow({ entry, onRemoved }: { entry: PhilosophyEntry; onRemov
 
 /**
  * P3 — Team conventions panel. Read-only view of .deeppairing/team.json.
- * Nudges `npx deeppairing team init` when the file is absent or empty.
+ * Nudges `node packages/mcp-server/dist/cli/init.js team init` when the file is absent or empty.
  * Edits happen via file + PR (intentional — team policy isn't something
  * you change from a chat UI).
  */

@@ -32,7 +32,7 @@ describe("SkillLoadBanner", () => {
     render(<SkillLoadBanner />);
     await waitFor(() => expect(screen.getByText(/claude may not be using deepPairing tools/i)).toBeInTheDocument());
     expect(screen.getByText(/\/deeppairing:start/)).toBeInTheDocument();
-    expect(screen.getByText(/npx deeppairing init/)).toBeInTheDocument();
+    expect(screen.getByText(/init\.js init/)).toBeInTheDocument();
   });
 
   it("does NOT render when the skill IS likely loaded", async () => {

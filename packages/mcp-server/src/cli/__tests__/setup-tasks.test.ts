@@ -14,6 +14,7 @@ import {
   HOOK_MARKERS,
   runDaemonStartupSetup,
   isPluginManaged,
+  diagnoseLocalHooks,
 } from "../setup-tasks.js";
 
 // The e2e hook run imports the BUILT matcher core; skip those cases on an
@@ -923,5 +924,80 @@ describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", 
     } catch { /* non-zero exit shouldn't happen here */ }
     expect(stdout.trim()).toBe(""); // allowed (no deny/ask emitted)
     expect(stderr).not.toMatch(/preflight hook error/); // clean short-circuit, not a fail-open
+  });
+});
+
+describe("diagnoseLocalHooks — doctor's per-mode hook reconciliation (#196)", () => {
+  // Installs all three deepPairing hooks into a scratch project's
+  // settings.local.json exactly the way `init` does.
+  function initInstallAll(): void {
+    ensureStopHook(tmpDir);
+    ensureCheckpointHook(tmpDir);
+    ensurePreflightHook(tmpDir);
+  }
+  const byHook = (rows: { hook: string; state: string }[]) =>
+    Object.fromEntries(rows.map((r) => [r.hook, r.state])) as Record<string, string>;
+
+  it("NOT plugin-managed + init ran: all three hooks are 'ok'", () => {
+    initInstallAll();
+    const s = byHook(diagnoseLocalHooks(tmpDir, /* pluginManaged */ false));
+    expect(s.Stop).toBe("ok");
+    expect(s.PostToolUse).toBe("ok");
+    expect(s.PreToolUse).toBe("ok");
+  });
+
+  it("NOT plugin-managed + no init: the PreToolUse rejection-gate reads 'missing' (doctor now flags + offers install)", () => {
+    // Pre-#196 doctor never inspected PreToolUse, so a missing gate was silent.
+    const s = byHook(diagnoseLocalHooks(tmpDir, false));
+    expect(s.PreToolUse).toBe("missing");
+    // And installing it (the offered fix) flips it to ok.
+    ensurePreflightHook(tmpDir);
+    expect(byHook(diagnoseLocalHooks(tmpDir, false)).PreToolUse).toBe("ok");
+  });
+
+  it("plugin-managed + init also ran (double-install): Stop + PreToolUse are 'redundant', checkpoint stays 'ok'", () => {
+    initInstallAll();
+    const s = byHook(diagnoseLocalHooks(tmpDir, /* pluginManaged */ true));
+    // The plugin declares Stop + preflight natively → the project-local copies
+    // double-fire, so doctor must flag them as removable.
+    expect(s.Stop).toBe("redundant");
+    expect(s.PreToolUse).toBe("redundant");
+    // Checkpoint has no plugin equivalent — it belongs in .local.
+    expect(s.PostToolUse).toBe("ok");
+  });
+
+  it("plugin-managed: --fix removal of the redundant project-local rows leaves checkpoint intact and re-reads 'ok'", () => {
+    initInstallAll();
+    const local = path.join(tmpDir, ".claude", "settings.local.json");
+    // The fixes doctor pushes for the 'redundant' verdicts:
+    expect(cleanDpEntriesFromScope(local, "Stop", HOOK_MARKERS.Stop).ok).toBe(true);
+    expect(cleanDpEntriesFromScope(local, "PreToolUse", HOOK_MARKERS.PreToolUse).ok).toBe(true);
+    const s = byHook(diagnoseLocalHooks(tmpDir, true));
+    expect(s.Stop).toBe("ok");        // gone → plugin provides it, nothing redundant
+    expect(s.PreToolUse).toBe("ok");  // gone → plugin provides it
+    expect(s.PostToolUse).toBe("ok"); // untouched — checkpoint has no plugin copy
+    // The checkpoint row genuinely survived on disk.
+    const settings = JSON.parse(fs.readFileSync(local, "utf-8"));
+    expect(settings.hooks.PostToolUse.length).toBeGreaterThan(0);
+    expect(settings.hooks.Stop ?? []).toHaveLength(0);
+    expect(settings.hooks.PreToolUse ?? []).toHaveLength(0);
+  });
+
+  it("plugin-managed + init NEVER ran: Stop/PreToolUse read 'ok' (plugin provides), checkpoint reads 'missing'", () => {
+    const s = byHook(diagnoseLocalHooks(tmpDir, true));
+    expect(s.Stop).toBe("ok");
+    expect(s.PreToolUse).toBe("ok");
+    expect(s.PostToolUse).toBe("missing");
+  });
+
+  it("NOT plugin-managed: a legacy flat-shape Stop entry reads 'legacy'", () => {
+    const claudeDir = path.join(tmpDir, ".claude");
+    fs.mkdirSync(claudeDir, { recursive: true });
+    // Legacy flat shape — command directly on the entry, no nested hooks[].
+    fs.writeFileSync(
+      path.join(claudeDir, "settings.local.json"),
+      JSON.stringify({ hooks: { Stop: [{ command: "node .deeppairing/hooks/stop.mjs" }] } }),
+    );
+    expect(byHook(diagnoseLocalHooks(tmpDir, false)).Stop).toBe("legacy");
   });
 });

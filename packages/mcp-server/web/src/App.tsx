@@ -152,7 +152,7 @@ function App() {
   useDocumentTitleBadge();
 
   // Fetch active sessions on mount, auto-connect to the first one (or to the
-  // session named in ?session=... — used by `npx deeppairing demo` to land
+  // session named in ?session=... — used by `node packages/mcp-server/dist/cli/init.js demo` to land
   // the user directly on the demo session).
   useEffect(() => {
     const init = async () => {
@@ -709,7 +709,7 @@ function DisconnectBanner() {
       {prolonged ? (
         <span className="text-2xs text-accent-red">
           Still disconnected after {Math.round(outageMs / 60_000)} min — the daemon may be down. Run{" "}
-          <code className="bg-surface-elevated px-1 py-0.5 rounded">npx deeppairing doctor --fix</code> in the project, then reload.
+          <code className="bg-surface-elevated px-1 py-0.5 rounded">node packages/mcp-server/dist/cli/init.js doctor --fix</code> in the project, then reload.
         </span>
       ) : (
         <span className="text-2xs text-accent-red">

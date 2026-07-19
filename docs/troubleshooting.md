@@ -103,7 +103,7 @@ loaded deepPairing's MCP server.
 ## Build / install fails on a fresh clone
 
 * **`pnpm install` fails with peer dependency warnings:** harmless on
-  Node 22+/pnpm 10+. The build still produces a working dist.
+  Node 20.11+/pnpm 10+. The build still produces a working dist.
 * **`pnpm build` succeeds but `node packages/mcp-server/dist/cli/init.js`
   errors:** check that `pnpm build` actually ran for the
   `@deeppairing/mcp-server` workspace. `pnpm --filter @deeppairing/mcp-server build`
@@ -119,6 +119,41 @@ That's the intended interactive behavior: on a fresh start the daemon opens
 the companion UI once. For scripted, CI, or agent-driven starts, set
 `DEEPPAIRING_NO_OPEN=1` in the daemon's environment to suppress it (the
 older `DEEPPAIRING_OPEN_BROWSER=0` opt-out also still works).
+
+## `deepPairing daemon did not become ready within …ms`
+
+The MCP wrapper spawns the daemon on first use and polls for it to answer. On a
+**cold start over a slow filesystem** — WSL `/mnt/c` (9P), an NFS-mounted home,
+some SMB shares — the daemon's Node/tsx cold start plus the first `.deeppairing/`
+writes can outlast the poll window, and you see this on the wrapper's stderr
+(it also names the port range it swept).
+
+**It's almost always transient.** Re-run the tool (or restart Claude Code) and
+it connects — the daemon it just spawned is usually still finishing startup, and
+the second attempt reuses it. The ready window is generous precisely to absorb
+these slow-filesystem cold starts, so if it *keeps* timing out the daemon is
+genuinely stuck: check `.deeppairing/daemon.log` for a FATAL line, then run
+`node packages/mcp-server/dist/cli/init.js doctor --fix`. The durable fix is a
+native-filesystem checkout (e.g. under `~` on ext4/APFS) — the cold start there
+is a fraction of the 9P time.
+
+## Claude Code's MCP startup times out on `/mnt/c`
+
+Distinct from the daemon-ready timeout above: this is *Claude Code's own* MCP
+startup budget, not deepPairing's. On WSL with the project under `/mnt/c`, the
+deepPairing MCP server's first handshake can take **21–26s** (9P latency on the
+tsx cold start), which can brush that budget — the server shows as failed in
+`/mcp` even though nothing is actually wrong.
+
+Raise Claude Code's MCP startup timeout with the **`MCP_TIMEOUT`** environment
+variable (milliseconds) before launching:
+
+```bash
+MCP_TIMEOUT=60000 claude
+```
+
+As with the timeout above, a native-ext4 checkout (e.g. under `~`) erases the
+latency class entirely and is the durable fix.
 
 ## Still stuck?
 

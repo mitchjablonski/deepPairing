@@ -20,7 +20,7 @@ export function TeamPanel({ data, error }: { data: TeamPreferencesData | null; e
           committable file your whole team's deepPairing sessions will pick up. Scaffold one with:
         </p>
         <pre className="text-[11px] bg-surface-elevated px-3 py-2 rounded border border-border-default overflow-x-auto">
-          npx deeppairing team init
+          node packages/mcp-server/dist/cli/init.js team init
         </pre>
         <p className="leading-relaxed">
           Each preference carries a <strong>kind</strong> (require / prefer / avoid),

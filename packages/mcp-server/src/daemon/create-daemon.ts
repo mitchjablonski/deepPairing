@@ -620,7 +620,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // O1a: skill-load detection. Two signals inform whether the agent is likely
   // wired up to actually call deepPairing tools:
   //   (a) Config signal — CLAUDE.md has the deepPairing marker, which means
-  //       `npx deeppairing init` has run.
+  //       `node packages/mcp-server/dist/cli/init.js init` has run.
   //   (b) Runtime signal — any session has created an artifact recently, which
   //       proves the agent is picking up the pairing-protocol skill (since only
   //       MCP tool calls create artifacts).

@@ -31,7 +31,7 @@ const POLICY_BUDGET_CHARS = 600;
 
 // The pairing-protocol preamble. Always-on orientation so consuming projects
 // that wire ONLY the MCP server (no pairing-protocol skill, no
-// `npx deeppairing init`) still get the choreography — the happy-path sequence
+// `node packages/mcp-server/dist/cli/init.js init`) still get the choreography — the happy-path sequence
 // plus the two rules that keep the dialogue in the companion UI. It's
 // fixed-size and essential, so it rides in the uncapped prefix and is NOT
 // charged against the contextual budget below. Faithful to SKILL.md.
@@ -541,7 +541,7 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       const content = fs.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
-          "\n💡 Tip: run `npx deeppairing init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
+          "\n💡 Tip: run `node packages/mcp-server/dist/cli/init.js init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
         );
       }
     }

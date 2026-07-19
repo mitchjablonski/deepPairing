@@ -28,30 +28,30 @@ describe("`deeppairing doctor --fix` surfaces (U6)", () => {
     const init = read("cli/init.ts");
     // Match the actual setup-complete block so we don't false-positive on
     // doctor being mentioned inside the doctor command itself.
-    expect(init).toMatch(/Setup complete![\s\S]+?npx deeppairing doctor[\s\S]+?--fix/);
+    expect(init).toMatch(/Setup complete![\s\S]+?doctor[\s\S]+?--fix/);
   });
 
   it("daemon.ts non-EADDRINUSE bind failure stderr mentions doctor --fix", () => {
     const daemon = read("daemon/index.ts");
     // The bind-failed branch:
-    expect(daemon).toMatch(/bind failed[\s\S]+?npx deeppairing doctor --fix/);
+    expect(daemon).toMatch(/bind failed[\s\S]+?doctor --fix/);
   });
 
   it("daemon.ts no-free-port FATAL stderr mentions doctor --fix", () => {
     const daemon = read("daemon/index.ts");
-    expect(daemon).toMatch(/No free port[\s\S]+?npx deeppairing doctor --fix/);
+    expect(daemon).toMatch(/No free port[\s\S]+?doctor --fix/);
   });
 
   it("standalone.ts top-level catch stderr mentions doctor --fix", () => {
     const standalone = read("standalone.ts");
-    expect(standalone).toMatch(/deepPairing wrapper[\s\S]+?npx deeppairing doctor --fix/);
+    expect(standalone).toMatch(/deepPairing wrapper[\s\S]+?doctor --fix/);
   });
 });
 
 describe("Z5b / AA3 — doctor handles Y3' project_mismatch", () => {
   // Y3' added a 403 project_mismatch when the wrapper hits a daemon
   // serving a different projectRoot. The user sees the error in MCP
-  // stderr; their natural next move is `npx deeppairing doctor --fix`.
+  // stderr; their natural next move is `doctor --fix`.
   // Pre-Z5b doctor had no awareness of that case and the user was
   // stranded. AA3 hardened the remediation: cooperative evict first,
   // SIGTERM as fallback, --yes mode skips it. These pins defend the
@@ -97,7 +97,7 @@ describe("Companion UI surfaces mention doctor (U6)", () => {
       path.join(srcDir, "..", "web", "src", "components", "SkillLoadBanner.tsx"),
       "utf-8",
     );
-    expect(banner).toMatch(/npx deeppairing doctor --fix/);
+    expect(banner).toMatch(/doctor --fix/);
   });
 
   it("safeFetch's no_active_session message mentions doctor --fix", () => {
@@ -105,7 +105,7 @@ describe("Companion UI surfaces mention doctor (U6)", () => {
       path.join(srcDir, "..", "web", "src", "lib", "api.ts"),
       "utf-8",
     );
-    expect(api).toMatch(/no_active_session[\s\S]+?npx deeppairing doctor --fix/);
+    expect(api).toMatch(/no_active_session[\s\S]+?doctor --fix/);
   });
 
   it("safeFetch's network-error message points at doctor", () => {
@@ -113,7 +113,7 @@ describe("Companion UI surfaces mention doctor (U6)", () => {
       path.join(srcDir, "..", "web", "src", "lib", "api.ts"),
       "utf-8",
     );
-    expect(api).toMatch(/network_error[\s\S]+?npx deeppairing doctor/);
+    expect(api).toMatch(/network_error[\s\S]+?doctor/);
   });
 });
 

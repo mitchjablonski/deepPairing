@@ -181,7 +181,7 @@ export class DaemonClient implements IStore {
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). ` +
-        `Reconnect failed — run \`npx deeppairing doctor\` to diagnose, or restart Claude Code.`,
+        `Reconnect failed — run \`node packages/mcp-server/dist/cli/init.js doctor\` to diagnose, or restart Claude Code.`,
       );
     }
     if (res.ok) return res.json();
@@ -335,7 +335,7 @@ export class DaemonClient implements IStore {
       const code = body.code ?? "project_mismatch";
       const explanation =
         code === "project_hash_mismatch"
-          ? "The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run `npx deeppairing doctor --fix` to evict the squatter."
+          ? "The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run `node packages/mcp-server/dist/cli/init.js doctor --fix` to evict the squatter."
           : (body.error ?? "Daemon serves a different project. Restart the wrapper.");
       throw new Error(
         `[deepPairing] Daemon project mismatch (${code}). ${explanation}`,

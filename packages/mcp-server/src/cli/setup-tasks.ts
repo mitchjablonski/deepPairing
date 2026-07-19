@@ -1,6 +1,6 @@
 /**
  * Shared idempotent project-setup tasks. Used by both:
- *   - `npx deeppairing init` (full setup, includes CLAUDE.md mutation)
+ *   - `node packages/mcp-server/dist/cli/init.js init` (full setup, includes CLAUDE.md mutation)
  *   - The daemon on first startup (non-CLAUDE.md subset; the plugin install
  *     path skips `init` entirely, so the daemon picks up the slack)
  *
@@ -45,9 +45,9 @@ export interface ScopeFileInfo {
   count: number;
 }
 
-/** Map a hookKey ("Stop" | "PostToolUse") to a substring marker that
- *  identifies a deepPairing entry without depending on the exact command. */
-type HookKey = "Stop" | "PostToolUse";
+/** Map a hookKey ("Stop" | "PostToolUse" | "PreToolUse") to a substring marker
+ *  that identifies a deepPairing entry without depending on the exact command. */
+type HookKey = "Stop" | "PostToolUse" | "PreToolUse";
 
 function scopeFiles(projectRoot: string): Array<{ scope: ScopeFileInfo["scope"]; path: string }> {
   return [
@@ -140,6 +140,55 @@ export const HOOK_MARKERS = {
   PostToolUse: CHECKPOINT_HOOK_MARKER,
   PreToolUse: PREFLIGHT_HOOK_MARKER,
 } as const;
+
+export type LocalHookState = "ok" | "missing" | "legacy" | "redundant";
+export interface LocalHookDiagnosis {
+  hook: HookKey;
+  state: LocalHookState;
+}
+
+/**
+ * #196 — reconcile the THREE deepPairing hooks in a project's
+ * `.claude/settings.local.json` against whether we're running plugin-managed.
+ *
+ * The plugin declares the Stop + PreToolUse (preflight) hooks NATIVELY in
+ * `hooks/hooks.json`, and Claude Code does NOT dedupe across sources — so a
+ * project-local copy of EITHER fires a SECOND time on every event
+ * ("redundant"). The PostToolUse checkpoint has no plugin equivalent, so it
+ * belongs in `settings.local.json` in every mode. Outside plugin mode all
+ * three belong there, so a missing one is "missing" (and a legacy flat-shape
+ * Stop entry — `{command}` with no nested `hooks[]` — is "legacy").
+ *
+ * Pure over the on-disk file + the plugin-managed flag, so `doctor` can turn
+ * each verdict into a report line + a fix, and tests can assert both
+ * directions without spawning anything.
+ */
+export function diagnoseLocalHooks(projectRoot: string, pluginManaged: boolean): LocalHookDiagnosis[] {
+  const settingsPath = path.join(projectRoot, ".claude", "settings.local.json");
+  const settings = readJsonOrNull(settingsPath);
+
+  const stopPresent = countDpEntries(settings, "Stop", HOOK_MARKERS.Stop) > 0;
+  const stopEntries = Array.isArray(settings?.hooks?.Stop) ? settings.hooks.Stop : [];
+  const stopLegacy = stopEntries.some(
+    (e: any) => typeof e?.command === "string" && HOOK_MARKERS.Stop(e.command) && !Array.isArray(e?.hooks),
+  );
+  const checkpointPresent = countDpEntries(settings, "PostToolUse", HOOK_MARKERS.PostToolUse) > 0;
+  const preflightPresent = countDpEntries(settings, "PreToolUse", HOOK_MARKERS.PreToolUse) > 0;
+
+  const stopState: LocalHookState = pluginManaged
+    ? (stopPresent ? "redundant" : "ok")
+    : (stopPresent ? (stopLegacy ? "legacy" : "ok") : "missing");
+  const checkpointState: LocalHookState = checkpointPresent ? "ok" : "missing";
+  const preflightState: LocalHookState = pluginManaged
+    ? (preflightPresent ? "redundant" : "ok")
+    : (preflightPresent ? "ok" : "missing");
+
+  return [
+    { hook: "Stop", state: stopState },
+    { hook: "PostToolUse", state: checkpointState },
+    { hook: "PreToolUse", state: preflightState },
+  ];
+}
 
 export function ensureDeepPairingDir(projectRoot: string): SetupResult {
   const dpDir = path.join(projectRoot, ".deeppairing");
@@ -361,7 +410,7 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
@@ -591,7 +640,7 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
@@ -603,7 +652,7 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
  * Run the subset of setup tasks the daemon should perform on first spawn.
  * NOTE: CLAUDE.md mutation is intentionally NOT here — silently rewriting
  * a user's CLAUDE.md from a background daemon spawned by an MCP install
- * would surprise people. That stays opt-in via `npx deeppairing init`.
+ * would surprise people. That stays opt-in via `node packages/mcp-server/dist/cli/init.js init`.
  */
 // ---------------------------------------------------------------------------
 // WP5 — PreToolUse preflight hook. The MCP-side preflight only fires when the

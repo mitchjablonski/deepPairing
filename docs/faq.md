@@ -122,7 +122,7 @@ Nothing leaves your machine that you didn't already send to Anthropic.
   `.deeppairing/sessions/{id}/`; cross-project ledger at
   `~/.deeppairing/philosophy/v1.json`. Plain JSON; inspect with
   `cat` or `jq`. Remove a stance you no longer hold with
-  `npx deeppairing philosophy remove <concept>` (or the ✕ on the
+  `node packages/mcp-server/dist/cli/init.js philosophy remove <concept>` (or the ✕ on the
   stance in the Ledger drawer) — the ledger is backed up to a
   timestamped `.removed-<ts>` copy before the delete, so it's
   reversible; no hand-editing required.

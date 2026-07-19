@@ -248,7 +248,7 @@ async function main() {
   // continue; daemon.log is the durable channel regardless.
   process.stderr.on("error", () => { /* reader gone (EPIPE) — never fatal */ });
 
-  // N2.2: plugin install path doesn't run `npx deeppairing init`, so the
+  // N2.2: plugin install path doesn't run `node packages/mcp-server/dist/cli/init.js init`, so the
   // daemon picks up the slack: ensure .deeppairing/, .gitignore entry, and
   // Stop hook. CLAUDE.md mutation stays opt-in via init — too invasive to
   // do silently from a backgrounded MCP server.
@@ -316,7 +316,7 @@ async function main() {
         // U6 — point users at the recovery command in every fatal stderr.
         process.stderr.write(
           `deepPairing daemon: bind failed — ${result.err?.message ?? result.err}\n` +
-          `Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.\n`,
+          `Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.\n`,
         );
         process.exit(3);
       }
@@ -326,7 +326,7 @@ async function main() {
 
     if (!server) {
       // U6 — `--fix` so the user gets the heal-it path, not just the diagnose-it one.
-      const msg = `No free port in ${MAX_PORT_ATTEMPTS} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}–${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
+      const msg = `No free port in ${MAX_PORT_ATTEMPTS} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}–${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal.`;
       log(`FATAL: ${msg}`);
       process.stderr.write(`deepPairing daemon: ${msg}\n`);
       process.exit(2);

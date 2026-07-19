@@ -339,9 +339,10 @@ export async function waitForDaemon(
 }
 
 /**
- * #168 — resolve a path-form `doctor` invocation. `npx deeppairing doctor` is a
- * dead end for a plugin/cold-clone install (the `deeppairing` bin isn't on
- * PATH), so we point at the CLI entry by absolute path when we can find it. The
+ * #168 — resolve a path-form `doctor` invocation. Invoking `doctor` through the
+ * unpublished `deeppairing` npm bin is a dead end for a plugin/cold-clone
+ * install (it isn't on PATH, and `npx` fetches a placeholder), so we point at
+ * the CLI entry by absolute path when we can find it. The
  * CLI is `dist/cli/init.js`; from this file's dist home (`dist/daemon/`) that's
  * one level up + `cli/init.js`. Pure over an injected resolved path so the
  * message builder stays unit-testable.
@@ -363,7 +364,7 @@ export function doctorCommandHint(cliPath: string | null = resolveCliPath()): st
  * every clause: it reported `DEFAULT_PORT..+9` (the shared 3847 base) rather
  * than the ports actually probed (this project's DETERMINISTIC preferred port),
  * unconditionally told the user to `check .deeppairing/daemon.log` even before
- * that file exists, and recommended the dead-end `npx deeppairing doctor`.
+ * that file exists, and recommended a dead-end `doctor` via the unpublished npm bin.
  * Pure + exported so the truthfulness is unit-testable without a timeout.
  */
 export function buildReadinessTimeoutMessage(args: {

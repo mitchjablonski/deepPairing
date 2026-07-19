@@ -1,6 +1,6 @@
 /**
  * P3 — .deeppairing/team.json must accept a JSONC header (line comments)
- * so the scaffold `npx deeppairing team init` writes can document what
+ * so the scaffold `node packages/mcp-server/dist/cli/init.js team init` writes can document what
  * each kind means without breaking JSON.parse. FileStore.getTeamPreferences
  * is the contract these tests pin.
  */

@@ -10,7 +10,7 @@ has the short version; this page is the detail, the caveats, and the
 > the hero flow against a real companion UI in ~90 seconds, no Claude Code
 > install needed.
 
-All the "from a clone" paths need the build first (Node 22+, pnpm 10+):
+All the "from a clone" paths need the build first (Node 20.11+, 22+ recommended; pnpm 10+):
 
 ```bash
 git clone https://github.com/mitchjablonski/deepPairing.git
@@ -62,8 +62,11 @@ node packages/mcp-server/dist/cli/init.js init   # run inside your project
 ```
 
 It writes `.mcp.json` (so Claude Code auto-loads deepPairing — no launch flag),
-installs the PreToolUse **rejection-gate hook** + the checkpoint hooks into
-`.claude/settings.local.json`, and drops the protocol preamble into `CLAUDE.md`.
+installs all three hooks into `.claude/settings.local.json` — the PreToolUse
+**rejection-gate**, the PostToolUse **checkpoint**, and the **Stop checkpoint** —
+and drops the protocol preamble into `CLAUDE.md`. Installing the rejection-gate
+at `init` time (not waiting for the first daemon start) means the gate is live
+from your very first session.
 
 ## `init` vs. the plugin — what differs
 
@@ -82,7 +85,7 @@ can't detect the plugin, so running `init` explicitly **will** double-install
 those two hooks. Clean up the redundant `settings.local.json` rows with:
 
 ```bash
-npx deeppairing doctor --fix
+node packages/mcp-server/dist/cli/init.js doctor --fix
 ```
 
 ## After install
@@ -97,3 +100,10 @@ opted into publishing) an advisory flag on your other projects.
 If something misbehaves, [docs/troubleshooting.md](docs/troubleshooting.md) is
 keyed on the actual error strings, and `deeppairing doctor` diagnoses common
 install issues.
+
+**If the plugin loads but no daemon ever comes up** — the companion UI stays on
+*Waiting for Claude* and never shows an artifact — that's the
+[“Waiting for Claude” stays forever](docs/troubleshooting.md#waiting-for-claude-stays-forever)
+entry: most often Claude Code is running in a different folder than the daemon,
+or the MCP server hasn't loaded. On WSL `/mnt/c` first starts, also see
+[Claude Code's MCP startup times out](docs/troubleshooting.md#claude-codes-mcp-startup-times-out-on-mntc).

@@ -2,7 +2,7 @@
 /**
  * deepPairing init — sets up a project for deepPairing collaboration.
  *
- * Usage: npx deeppairing init
+ * Usage: node packages/mcp-server/dist/cli/init.js init
  *
  * Creates:
  * - .mcp.json with deepPairing MCP server configuration
@@ -21,6 +21,7 @@ import {
   ensureGitignoreEntry,
   ensureStopHook,
   ensureCheckpointHook,
+  ensurePreflightHook,
   HOOK_MARKERS,
 } from "./setup-tasks.js";
 import readline from "node:readline";
@@ -161,7 +162,7 @@ freshness window means a recent \`present_code_change\` covers incidental
 edits — call the checkpoint for the main change, then the trailing config
 tweaks pass through.
 
-The PostToolUse hook (installed by \`npx deeppairing init\`) enforces this: if
+The PostToolUse hook (installed by \`node packages/mcp-server/dist/cli/init.js init\`) enforces this: if
 you Write/Edit a non-skip file without an intervening present_code_change,
 the hook nags and forces you to checkpoint before continuing.
 
@@ -414,6 +415,24 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
     console.log(`  ${dim("✓")} ${ckptResult.message}`);
   }
 
+  // #170 — PreToolUse rejection-gate hook. INSTALL.md advertises `init` as
+  // installing this, but until now only the daemon's first-start setup did
+  // (runDaemonStartupSetup). Wiring it here makes the doc true AND gives a
+  // real safety win: the concept-rejection gate is live from the very first
+  // Claude Code session, not only after the daemon has booted once. Idempotent
+  // (own-the-row) — the daemon's startup setup finds it already canonical and
+  // writes nothing. In the rare init-AND-plugin case it double-installs like
+  // the Stop hook does; doctor now detects that under plugin mode and offers
+  // to remove the redundant project-local rows under --fix (#196).
+  const preflightResult = ensurePreflightHook(cwd);
+  if (!preflightResult.ok) {
+    console.log(`  ${yellow("!")} ${preflightResult.message}`);
+  } else if (preflightResult.changed) {
+    console.log(`  ${green("✓")} ${preflightResult.message} (blocks re-proposing concepts you've rejected)`);
+  } else {
+    console.log(`  ${dim("✓")} ${preflightResult.message}`);
+  }
+
   // III8 — one-time prompt for the cross-project ledger publish opt-in.
   // Default is off. We surface this consciously so the user makes a real
   // choice about whether this project's rejections / approvals get
@@ -461,7 +480,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
   ${dim("Claude will present findings, decisions, and plans. You review")}
   ${dim("and steer in the companion UI. Try: \"Analyze the auth module.\"")}
 
-  ${dim("If anything goes sideways:")} ${bold("npx deeppairing doctor")} ${dim("diagnoses;")} ${bold("--fix")} ${dim("heals.")}
+  ${dim("If anything goes sideways:")} ${bold("node packages/mcp-server/dist/cli/init.js doctor")} ${dim("diagnoses;")} ${bold("--fix")} ${dim("heals.")}
 `);
 
   // Q1: offer to launch the scripted demo so the user SEES the hook fire in
@@ -474,7 +493,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
     opts.yes ||
     (await confirmPrompt(`  Want to see deepPairing's concept-aware rejection-block fire right now? [Y/n] `, /* default */ true));
   if (!shouldRun) {
-    console.log(`  ${dim("Skipped. Run")} ${bold("npx deeppairing demo")} ${dim("any time.")}`);
+    console.log(`  ${dim("Skipped. Run")} ${bold("node packages/mcp-server/dist/cli/init.js demo")} ${dim("any time.")}`);
     console.log();
     return;
   }
@@ -827,78 +846,81 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     console.log(`  ${dim("·")} No .gitignore in this directory (skipping that check)`);
   }
 
-  const hooksPath = path.join(cwd, ".claude", "settings.local.json");
-  let stopHookPresent = false;
-  let stopHookLegacyShape = false;
-  let checkpointHookPresent = false;
-  if (fs.existsSync(hooksPath)) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
-      // X9 — recognition routes through the same HOOK_MARKERS the installer
-      // and the cross-scope detector use. Without this, the doctor missed
-      // the file-based Stop hook (`node .deeppairing/hooks/stop.mjs`) because
-      // its substring is lowercase ".deeppairing", not "deepPairing".
-      const isDpEntry = (entry: any, marker: (cmd: string) => boolean): boolean => {
-        if (typeof entry?.command === "string" && marker(entry.command)) return true;
-        if (Array.isArray(entry?.hooks)) {
-          return entry.hooks.some(
-            (h: any) => typeof h?.command === "string" && marker(h.command),
-          );
-        }
-        return false;
-      };
+  // 6a. Hook reconciliation (#196). The three deepPairing hooks normally live
+  // in .claude/settings.local.json — EXCEPT under the plugin, which declares
+  // Stop + PreToolUse NATIVELY (hooks/hooks.json). Claude Code doesn't dedupe
+  // across sources, so a project-local copy of a plugin-provided hook fires a
+  // SECOND time on every event (the exact double-fire INSTALL.md points here to
+  // clean). diagnoseLocalHooks encodes that per-mode truth; we turn each
+  // verdict into a report line and — with --fix — a heal. Doctor-specific
+  // helpers are dynamically imported so the install path doesn't load them.
+  const { detectCrossScopeDpEntries, cleanDpEntriesFromScope, isPluginManaged, diagnoseLocalHooks } =
+    await import("./setup-tasks.js");
+  const hookLocalPath = path.join(cwd, ".claude", "settings.local.json");
+  const pluginManaged = isPluginManaged();
+  const hookState: Record<string, string> = {};
+  for (const d of diagnoseLocalHooks(cwd, pluginManaged)) hookState[d.hook] = d.state;
 
-      const stopHooks = settings?.hooks?.Stop ?? [];
-      stopHookPresent =
-        Array.isArray(stopHooks) && stopHooks.some((e: any) => isDpEntry(e, HOOK_MARKERS.Stop));
-      // Legacy flat shape — { command } directly on the entry, no nested
-      // hooks array. Claude Code warns "Invalid settings / hooks: Expected
-      // array" for these; ensureStopHook heals them on next run.
-      stopHookLegacyShape = Array.isArray(stopHooks) && stopHooks.some(
-        (entry: any) =>
-          typeof entry?.command === "string" &&
-          HOOK_MARKERS.Stop(entry.command) &&
-          !Array.isArray(entry?.hooks),
-      );
-      const postToolUse = settings?.hooks?.PostToolUse ?? [];
-      checkpointHookPresent =
-        Array.isArray(postToolUse) &&
-        postToolUse.some((e: any) => isDpEntry(e, HOOK_MARKERS.PostToolUse));
-    } catch {}
+  // Stop hook.
+  switch (hookState.Stop) {
+    case "ok":
+      console.log(`  ${green("✓")} Claude Code Stop hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+      break;
+    case "legacy":
+      console.log(`  ${yellow("!")} Claude Code Stop hook uses the legacy flat shape (Claude Code warns "Invalid settings / hooks: Expected array")`);
+      fixes.push({
+        label: "Replace legacy Stop-hook entry with the correct nested shape",
+        // ensureStopHook heals legacy entries before re-installing.
+        apply: () => { const r = ensureStopHook(cwd); return { ok: r.ok, message: r.message }; },
+      });
+      break;
+    case "redundant":
+      console.log(`  ${yellow("!")} Stop hook is duplicated in settings.local.json — the plugin already provides it, so BOTH fire on every stop`);
+      fixes.push({
+        label: "Remove the redundant project-local Stop hook (the plugin provides it natively)",
+        apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "Stop", HOOK_MARKERS.Stop); return { ok: r.ok, message: r.message }; },
+      });
+      break;
+    default: // "missing"
+      console.log(`  ${yellow("!")} Claude Code Stop hook NOT configured (agent can stop while artifacts are unreviewed)`);
+      fixes.push({
+        label: "Add Stop hook to .claude/settings.local.json",
+        apply: () => { const r = ensureStopHook(cwd); return { ok: r.ok, message: r.message }; },
+      });
   }
-  if (stopHookPresent && !stopHookLegacyShape) {
-    console.log(`  ${green("✓")} Claude Code Stop hook configured`);
-  } else if (stopHookPresent && stopHookLegacyShape) {
-    console.log(`  ${yellow("!")} Claude Code Stop hook uses the legacy flat shape (Claude Code warns "Invalid settings / hooks: Expected array")`);
-    fixes.push({
-      label: "Replace legacy Stop-hook entry with the correct nested shape",
-      apply: () => {
-        // ensureStopHook now heals legacy entries before re-installing.
-        const r = ensureStopHook(cwd);
-        return { ok: r.ok, message: r.message };
-      },
-    });
-  } else {
-    console.log(`  ${yellow("!")} Claude Code Stop hook NOT configured (agent can stop while artifacts are unreviewed)`);
-    fixes.push({
-      label: "Add Stop hook to .claude/settings.local.json",
-      apply: () => {
-        const r = ensureStopHook(cwd);
-        return { ok: r.ok, message: r.message };
-      },
-    });
-  }
-  if (checkpointHookPresent) {
+
+  // PostToolUse checkpoint hook — no plugin equivalent, so it belongs in
+  // settings.local.json in EVERY mode.
+  if (hookState.PostToolUse === "ok") {
     console.log(`  ${green("✓")} Claude Code per-edit checkpoint hook configured`);
   } else {
     console.log(`  ${yellow("!")} Per-edit checkpoint hook NOT configured (agent can batch Write/Edit without present_code_change)`);
     fixes.push({
       label: "Add PostToolUse checkpoint hook to .claude/settings.local.json",
-      apply: () => {
-        const r = ensureCheckpointHook(cwd);
-        return { ok: r.ok, message: r.message };
-      },
+      apply: () => { const r = ensureCheckpointHook(cwd); return { ok: r.ok, message: r.message }; },
     });
+  }
+
+  // PreToolUse rejection-gate hook (#196 — doctor did NOT check this before,
+  // so a missing gate went unreported and a plugin+init double-install was
+  // never offered a fix even though the redundant row now fires on every edit).
+  switch (hookState.PreToolUse) {
+    case "ok":
+      console.log(`  ${green("✓")} PreToolUse rejection-gate hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+      break;
+    case "redundant":
+      console.log(`  ${yellow("!")} PreToolUse rejection-gate hook is duplicated in settings.local.json — the plugin already provides it, so BOTH fire on every Write/Edit`);
+      fixes.push({
+        label: "Remove the redundant project-local PreToolUse rejection-gate hook (the plugin provides it natively)",
+        apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "PreToolUse", HOOK_MARKERS.PreToolUse); return { ok: r.ok, message: r.message }; },
+      });
+      break;
+    default: // "missing"
+      console.log(`  ${yellow("!")} PreToolUse rejection-gate hook NOT configured (rejected concepts won't be blocked before the edit lands)`);
+      fixes.push({
+        label: "Add PreToolUse rejection-gate hook to .claude/settings.local.json",
+        apply: () => { const r = ensurePreflightHook(cwd); return { ok: r.ok, message: r.message }; },
+      });
   }
 
   // X2 — cross-scope hook detection. Even with the canonical entry in
@@ -906,11 +928,8 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   // or project-shared (.claude/settings.json) — leftover from earlier
   // installs. Claude Code merges them in and runs both → "Ran 2 stop hooks."
   // We only auto-clean when --fix is passed, since these scopes might
-  // contain other intentional hooks.
-  // HOOK_MARKERS already imported at top — keep the dynamic import only for
-  // helpers that are doctor-specific (avoids loading them in the install path).
-  const { detectCrossScopeDpEntries, cleanDpEntriesFromScope } =
-    await import("./setup-tasks.js");
+  // contain other intentional hooks. (Helpers imported with diagnoseLocalHooks
+  // above.)
   const crossScopeStop = detectCrossScopeDpEntries(cwd, "Stop", HOOK_MARKERS.Stop)
     .filter((s) => s.scope !== "project-local" && s.count > 0);
   const crossScopeCheckpoint = detectCrossScopeDpEntries(cwd, "PostToolUse", HOOK_MARKERS.PostToolUse)
@@ -993,10 +1012,10 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
       console.log(`  ${bold("To recover — run this yourself (doctor will NOT touch this file):")}`);
       if (isPermIssue) {
         console.log(`      chmod u+rw ${shQuote(report.ledgerPath)}`);
-        console.log(`    ${dim("Then re-run ")}${bold("npx deeppairing doctor")}${dim(" — once the file is readable it'll tell you whether it's genuinely corrupt (with the mv remedy) or fine.")}`);
+        console.log(`    ${dim("Then re-run ")}${bold("node packages/mcp-server/dist/cli/init.js doctor")}${dim(" — once the file is readable it'll tell you whether it's genuinely corrupt (with the mv remedy) or fine.")}`);
       } else {
         console.log(`      ${report.remedyCommand}`);
-        console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `npx deeppairing philosophy import <file> --merge` to keep its history.")}`);
+        console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `node packages/mcp-server/dist/cli/init.js philosophy import <file> --merge` to keep its history.")}`);
       }
     }
   } catch (err) {
@@ -1204,7 +1223,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
       // Bare `philosophy publish` reports the current state.
       const current = seedStore.getGlobalLedgerPublish();
       console.log(`\n  Cross-project ledger publish for ${bold(projectName)}: ${bold(current ? "on" : "off")}`);
-      console.log(`  ${dim("Flip it: npx deeppairing philosophy publish on|off")}\n`);
+      console.log(`  ${dim("Flip it: node packages/mcp-server/dist/cli/init.js philosophy publish on|off")}\n`);
       seedStore.forceFlush();
       return;
     }
@@ -1225,7 +1244,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
   const store = new GlobalStore();
 
   if (sub === "export") {
-    // Print to stdout so callers can redirect: `npx deeppairing philosophy export > stances.json`
+    // Print to stdout so callers can redirect: `node packages/mcp-server/dist/cli/init.js philosophy export > stances.json`
     process.stdout.write(JSON.stringify(store.exportLedger(), null, 2) + "\n");
     return;
   }
@@ -1235,7 +1254,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     const merge = rest.includes("--merge");
     if (!file) {
       console.error(`  ${red("✗")} philosophy import requires a file path.`);
-      console.error(`  ${dim("   Example: npx deeppairing philosophy import stances.json --merge")}`);
+      console.error(`  ${dim("   Example: node packages/mcp-server/dist/cli/init.js philosophy import stances.json --merge")}`);
       process.exit(1);
     }
     if (!merge) {
@@ -1274,7 +1293,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     const concept = rest.filter((a) => !a.startsWith("-")).join(" ").trim();
     if (!concept) {
       console.error(`  ${red("✗")} philosophy remove requires a concept.`);
-      console.error(`  ${dim('   Example: npx deeppairing philosophy remove "global mutable state"')}`);
+      console.error(`  ${dim('   Example: node packages/mcp-server/dist/cli/init.js philosophy remove "global mutable state"')}`);
       process.exit(1);
     }
     let result;
@@ -1286,7 +1305,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     }
     if (!result) {
       console.error(`  ${red("✗")} No stance recorded for "${concept}" in ${store.getLedgerPath()}.`);
-      console.error(`  ${dim("   List your stances: npx deeppairing philosophy export | jq '.concepts | keys'")}`);
+      console.error(`  ${dim("   List your stances: node packages/mcp-server/dist/cli/init.js philosophy export | jq '.concepts | keys'")}`);
       process.exit(1);
     }
     console.log(bold("\n  deepPairing philosophy remove"));
@@ -1294,7 +1313,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     console.log(`    ${dim("from:")}   ${store.getLedgerPath()}`);
     console.log(`    ${dim("backup:")} ${result!.backupPath ?? "(none)"}`);
     console.log(`  ${dim("Changed your mind? Restore the backup over the ledger, or re-merge it:")}`);
-    console.log(`  ${dim(`  npx deeppairing philosophy import ${result!.backupPath ?? "<backup>"} --merge`)}\n`);
+    console.log(`  ${dim(`  node packages/mcp-server/dist/cli/init.js philosophy import ${result!.backupPath ?? "<backup>"} --merge`)}\n`);
     return;
   }
 
@@ -1537,7 +1556,7 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
       console.log(`    ${dim("·")} ${s.id} ${dim(`— ${s.artifactCount} artifacts, last activity ${age}`)}`);
     }
     console.log();
-    console.log(`  ${dim("To remove empty/stale sessions:")} ${bold("npx deeppairing sessions prune")} ${dim("[--yes]")}`);
+    console.log(`  ${dim("To remove empty/stale sessions:")} ${bold("node packages/mcp-server/dist/cli/init.js sessions prune")} ${dim("[--yes]")}`);
     console.log();
     return;
   }
@@ -1551,7 +1570,7 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
     const fromId = rest.find((a) => !a.startsWith("-") && rest.indexOf(a) === 0);
     const intoId = rest.filter((a) => !a.startsWith("-"))[1];
     if (!fromId || !intoId) {
-      console.error(`  ${red("✗")} Usage: npx deeppairing sessions merge <from-id> <into-id>`);
+      console.error(`  ${red("✗")} Usage: node packages/mcp-server/dist/cli/init.js sessions merge <from-id> <into-id>`);
       console.error(`  ${dim("   Example: sessions merge session_1777131724008 session_1777131802548_951295")}`);
       process.exit(1);
     }
@@ -1807,9 +1826,10 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   if (!cmd) {
     main().catch((err) => { console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`); process.exit(1); });
   } else {
-    // IV2 — was 14 `npx deeppairing` lines. Pre-1.0 the package isn't
-    // on npm, so `npx deeppairing` returns 404 and the user sees a
-    // command that doesn't work as their first impression. III9 fixed
+    // IV2 — this help block used to lead with 14 lines invoking the CLI
+    // through the unpublished npm package name. Pre-1.0 that name isn't on
+    // npm, so the fetch 404s and the user's first impression is a command
+    // that doesn't work. III9 fixed
     // this in the README; the CLI help was missed. Now: leading `dp`
     // placeholder = whichever invocation the user reached the help
     // through (the linked `deeppairing` command after `pnpm link
@@ -1887,7 +1907,7 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const format = args[1];
   const sessionId = args[2];
   if (!format) {
-    console.error(`  ${red("✗")} export requires a format. Run 'npx deeppairing --help'.`);
+    console.error(`  ${red("✗")} export requires a format. Run 'node packages/mcp-server/dist/cli/init.js --help'.`);
     process.exit(1);
   }
   exportCmd(format, sessionId).catch((err) => {
@@ -1950,7 +1970,7 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const ref = args[1];
   if (!ref) {
     console.error(`  ${red("✗")} post-pr-review requires a PR number or URL.`);
-    console.error(`  ${dim("   Example: npx deeppairing post-pr-review 42")}`);
+    console.error(`  ${dim("   Example: node packages/mcp-server/dist/cli/init.js post-pr-review 42")}`);
     process.exit(1);
   }
   // Parse optional --session-id and --event flags
@@ -1965,6 +1985,6 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     process.exit(1);
   });
 } else {
-  console.log(`  Unknown command: ${cmd}\n  Run ${dim("npx deeppairing --help")} for usage.`);
+  console.log(`  Unknown command: ${cmd}\n  Run ${dim("node packages/mcp-server/dist/cli/init.js --help")} for usage.`);
   process.exit(1);
 }
