@@ -27063,7 +27063,7 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
       const content = fs8.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
-          "\n\u{1F4A1} Tip: run `npx deeppairing init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
+          "\n\u{1F4A1} Tip: run `node packages/mcp-server/dist/cli/init.js init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
         );
       }
     }
@@ -28967,7 +28967,7 @@ function ledgerHealthField() {
         state: "frozen",
         ledgerPath: health.ledgerPath,
         ...health.backupPath ? { backupPath: health.backupPath } : {},
-        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `npx deeppairing doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
+        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `node packages/mcp-server/dist/cli/init.js doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
       }
     };
   } catch {
@@ -30906,7 +30906,6 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     const args = rawArgs ?? {};
     let firstCallHint = "";
     if (firstToolCall && HINT_TOOLS.has(name)) {
-      firstToolCall = false;
       firstCallHint = await buildFirstCallHint(store, port);
     }
     const tryElicit2 = (message) => tryElicit(server, message);
@@ -30983,8 +30982,16 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     } catch (err) {
       result = formatHandlerError(name, err);
     }
-    if (firstCallHint && HINT_TOOLS.has(name) && result?.content && Array.isArray(result.content) && !result.isError) {
-      result.content.push({ type: "text", text: firstCallHint });
+    if (firstCallHint && HINT_TOOLS.has(name) && result?.content && Array.isArray(result.content)) {
+      if (!result.isError) {
+        result.content.push({ type: "text", text: firstCallHint });
+        firstToolCall = false;
+      } else if (result?._meta?.code === "INPUT_VALIDATION_FAILED") {
+        result.content.push({
+          type: "text",
+          text: "\nNew to deepPairing? A valid minimal call looks like the example above; the full pairing protocol arrives on your first successful call."
+        });
+      }
     }
     return result;
   });
@@ -31140,7 +31147,7 @@ var DaemonClient = class {
         if (recovered) return this.request(path7, init, true);
       }
       throw new Error(
-        `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`npx deeppairing doctor\` to diagnose, or restart Claude Code.`
+        `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`node packages/mcp-server/dist/cli/init.js doctor\` to diagnose, or restart Claude Code.`
       );
     }
     if (res.ok) return res.json();
@@ -31213,7 +31220,7 @@ var DaemonClient = class {
       this.lastRegisterMeta = void 0;
       const body = await res.json().catch(() => ({}));
       const code = body.code ?? "project_mismatch";
-      const explanation = code === "project_hash_mismatch" ? "The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run `npx deeppairing doctor --fix` to evict the squatter." : body.error ?? "Daemon serves a different project. Restart the wrapper.";
+      const explanation = code === "project_hash_mismatch" ? "The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run `node packages/mcp-server/dist/cli/init.js doctor --fix` to evict the squatter." : body.error ?? "Daemon serves a different project. Restart the wrapper.";
       throw new Error(
         `[deepPairing] Daemon project mismatch (${code}). ${explanation}`
       );
@@ -31510,7 +31517,7 @@ async function main() {
   const daemonInfo = await ensureDaemon(projectRoot);
   const port = daemonInfo.port;
   if (!daemonInfo.authToken) {
-    log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`npx deeppairing doctor\` to refresh daemon.json.`);
+    log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`node packages/mcp-server/dist/cli/init.js doctor\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
   const projectName = path6.basename(projectRoot);
@@ -31558,7 +31565,7 @@ main().catch((err) => {
   log(`Fatal: ${err}`);
   process.stderr.write(
     `deepPairing wrapper: ${err?.message ?? err}
-Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
+Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.
 `
   );
   process.exit(1);

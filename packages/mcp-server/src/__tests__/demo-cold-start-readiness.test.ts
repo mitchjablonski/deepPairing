@@ -7,7 +7,7 @@
  * with a fake clock + a fake slow-boot probe (fakes-not-mocks: plain functions
  * satisfying the injected seams) — no real daemon spawn — and pin the truthful
  * timeout message the old code lied on (wrong port range, phantom daemon.log,
- * dead-end `npx deeppairing doctor`).
+ * the dead-end npm-bin `doctor` invocation).
  */
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
@@ -127,7 +127,9 @@ describe("#168 buildReadinessTimeoutMessage — truthful on every clause", () =>
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "dp-timeout-dr-"));
     const msg = buildReadinessTimeoutMessage({ timeoutMs: 40_000, projectRoot: root, hint: "x" });
     expect(msg).toContain("doctor");
-    expect(msg).not.toContain("npx deeppairing doctor");
+    // Needle assembled from fragments so this assertion doesn't itself trip the
+    // dead-end guard (no-npx-deeppairing.test.ts).
+    expect(msg).not.toContain(["npx", "deeppairing", "doctor"].join(" "));
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

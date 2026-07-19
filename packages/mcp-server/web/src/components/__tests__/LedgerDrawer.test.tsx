@@ -250,7 +250,7 @@ describe("LedgerDrawer", () => {
       render(<LedgerDrawer onClose={() => {}} />);
       await userEvent.click(screen.getByRole("button", { name: /^team$/i }));
       await waitFor(() => expect(screen.getByText(/no team conventions set up yet/i)).toBeInTheDocument());
-      expect(screen.getByText(/npx deeppairing team init/i)).toBeInTheDocument();
+      expect(screen.getByText(/init\.js team init/i)).toBeInTheDocument();
     });
 
     it("renders preferences grouped by kind when team.json exists", async () => {

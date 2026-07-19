@@ -979,7 +979,7 @@ export class FileStore implements IStore {
    * global one.
    *
    * Reads `globalLedgerPublish` from preferences.json. Set via the
-   * one-time `init` prompt (or `npx deeppairing philosophy publish on/off`).
+   * one-time `init` prompt (or `node packages/mcp-server/dist/cli/init.js philosophy publish on/off`).
    */
   private globalLedgerPublishEnabled(): boolean {
     return this.readPreferences().globalLedgerPublish === true;
@@ -987,7 +987,7 @@ export class FileStore implements IStore {
 
   /**
    * III8 — flip the per-project publish opt-in. Used by the `init`
-   * prompt, by the `npx deeppairing philosophy publish on/off` command,
+   * prompt, by the `node packages/mcp-server/dist/cli/init.js philosophy publish on/off` command,
    * and by tests that want to exercise the cross-project mirror path.
    * Idempotent. Persists to preferences.json.
    */

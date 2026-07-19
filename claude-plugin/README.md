@@ -138,7 +138,7 @@ agent instructions from a backgrounded MCP server would surprise people.
 For that, run:
 
 ```bash
-npx deeppairing init
+node packages/mcp-server/dist/cli/init.js init
 ```
 
 That appends a deepPairing protocol block to `CLAUDE.md` so the agent
@@ -151,7 +151,7 @@ same ground, so this is optional.
 > a plain terminal where it can't detect the plugin, so it *will*
 > double-install the Stop + preflight hooks into `settings.local.json` (the
 > plugin declares them too). That's noisy, not harmful — run
-> `npx deeppairing doctor --fix` to remove the redundant `settings.local.json`
+> `node packages/mcp-server/dist/cli/init.js doctor --fix` to remove the redundant `settings.local.json`
 > rows.
 
 ## What makes this different

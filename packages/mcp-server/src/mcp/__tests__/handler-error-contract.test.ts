@@ -175,7 +175,7 @@ describe("#147 — TOOL_EXECUTION_FAILED retryability split", () => {
     expect(
       formatHandlerError(
         "recall",
-        new Error("daemon connection lost (likely after host sleep). Reconnect failed — run `npx deeppairing doctor` to diagnose, or restart Claude Code."),
+        new Error("daemon connection lost (likely after host sleep). Reconnect failed — run `node packages/mcp-server/dist/cli/init.js doctor` to diagnose, or restart Claude Code."),
       )._meta?.retryable,
     ).toBe(true);
   });

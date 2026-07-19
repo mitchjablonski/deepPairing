@@ -31,7 +31,7 @@ function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: st
           `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; ` +
           `new approvals/rejections are NOT being recorded until it is repaired. ` +
           (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") +
-          "Run `npx deeppairing doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start).",
+          "Run `node packages/mcp-server/dist/cli/init.js doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start).",
       },
     };
   } catch {

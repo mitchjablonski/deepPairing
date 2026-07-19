@@ -19,7 +19,7 @@
  *      signal for "the workspace the user is working in."
  *   2. `DEEPPAIRING_PROJECT_ROOT` — escape hatch for users running the
  *      wrapper outside Claude Code (CI, scripts, IDE extensions).
- *   3. `process.cwd()` — fallback for direct `npx deeppairing` invocation
+ *   3. `process.cwd()` — fallback for direct `node packages/mcp-server/dist/cli/init.js` invocation
  *      from the user's terminal, where cwd IS the workspace.
  *
  * The resolver also returns WHICH signal won so the wrapper can log it,

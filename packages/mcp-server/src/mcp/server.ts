@@ -866,12 +866,15 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     // warning" ambiguity where the agent couldn't tell whether to keep polling
     // or retract a proposal.
     let firstCallHint = "";
-    // II12.1 — consume the latch only on the first HINT_TOOL call. Previously
-    // it flipped on the first call of ANY tool, so a leading read
-    // (recall/check_feedback) discarded the built hint and the agent's first
-    // present_* got nothing — which would routinely drop the protocol preamble.
+    // II12.1 — the latch gates the hint to the first HINT_TOOL call, so a
+    // leading read (recall/check_feedback) doesn't burn it before the agent's
+    // first present_*. #170 — build the hint here but do NOT flip the latch
+    // yet: the burn moved to the attach site so it fires only when the hint is
+    // actually DELIVERED (a successful call). A first call that fails validation
+    // therefore keeps the latch armed, so the full protocol still rides the
+    // first SUCCESSFUL call instead of being lost to a malformed opener.
+    // buildFirstCallHint is a pure read, so rebuilding it on a retry is safe.
     if (firstToolCall && HINT_TOOLS.has(name)) {
-      firstToolCall = false;
       // X4 — full assembly lives in mcp/first-call-hint.ts; the BLOCKING +
       // CONTEXTUAL tiering, the HINT_BUDGET_CHARS cap, and the recall
       // pointer all moved with it. The handler here just dispatches.
@@ -1025,21 +1028,33 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     // and content[1+] for ambient context. The same hint is also exposed
     // as a `deeppairing://onboarding` resource (added below) for
     // clients that prefer the resource model.
-    // III1 — gate on !result.isError. Pre-III1 the push fired on every
-    // tool reply with a content[] array, including the ~17 isError:true
-    // validation/preflight-reject returns. That meant a malformed first
-    // write call got "INPUT_VALIDATION_FAILED: ..." followed by a 4KB
-    // onboarding dump — exactly the parsing footgun II12 was supposed to
-    // retire, just on the error branch. Tool errors must stay clean so
-    // the agent can decide what to do without paragraphs of distraction.
+    // III1 — the FULL hint is gated on !result.isError. Pre-III1 the push fired
+    // on every tool reply with a content[] array, including the ~17 isError:true
+    // validation/preflight-reject returns. That meant a malformed first write
+    // call got "INPUT_VALIDATION_FAILED: ..." followed by a 4KB onboarding dump
+    // — exactly the parsing footgun II12 was supposed to retire, just on the
+    // error branch. Tool errors must stay clean so the agent can decide what to
+    // do without paragraphs of distraction.
     if (
       firstCallHint &&
       HINT_TOOLS.has(name) &&
       result?.content &&
-      Array.isArray(result.content) &&
-      !result.isError
+      Array.isArray(result.content)
     ) {
-      result.content.push({ type: "text", text: firstCallHint });
+      if (!result.isError) {
+        result.content.push({ type: "text", text: firstCallHint });
+        // #170 — burn the latch only now that the hint was actually delivered.
+        firstToolCall = false;
+      } else if ((result as any)?._meta?.code === "INPUT_VALIDATION_FAILED") {
+        // #170 — the agent's FIRST call was malformed, so it's protocol-blind.
+        // III1 keeps the 4KB onboarding dump OFF error responses; give exactly
+        // ONE orienting line instead. The latch stays armed (see above), so the
+        // full protocol still arrives on the first successful call.
+        result.content.push({
+          type: "text",
+          text: "\nNew to deepPairing? A valid minimal call looks like the example above; the full pairing protocol arrives on your first successful call.",
+        });
+      }
     }
     return result;
   });

@@ -902,6 +902,33 @@ describe("MCP Tool Handlers — firstCallHint", () => {
       expect(text).toMatch(/INPUT_VALIDATION_FAILED|required|missing/i);
     });
 
+    it("#170 — first-call validation error carries a ONE-LINE protocol pointer (not the full dump)", async () => {
+      // A protocol-blind agent whose opener fails validation should still get
+      // oriented — but with a single line, not the 4KB onboarding hint III1
+      // keeps off error responses.
+      const { text, isError } = await callTool("present_findings", { summary: "x" } /* no findings → invalid */);
+      expect(isError).toBe(true);
+      // The one-liner rides the error.
+      expect(text).toMatch(/New to deepPairing\? A valid minimal call/);
+      expect(text).toMatch(/full pairing protocol arrives on your first successful call/);
+      // The FULL hint still does not (errors stay clean).
+      expect(text).not.toMatch(/\[First use this session\]/);
+    });
+
+    it("#170 — a failed first call keeps the latch armed: the first SUCCESSFUL call still gets the full hint", async () => {
+      // Malformed opener — fails validation, must NOT burn the onboarding latch.
+      const bad = await callTool("present_findings", { summary: "x" } /* invalid */);
+      expect(bad.isError).toBe(true);
+      // Now a valid call — it is the first *successful* write, so it carries
+      // the full protocol the malformed opener would otherwise have lost.
+      const { text } = await callTool("present_findings", {
+        summary: "recovered",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).toMatch(/\[First use this session\]/);
+      expect(text).toMatch(/\[deepPairing protocol\]/);
+    });
+
     it("hint still fires on the first WRITE call even if a READ call ran first", async () => {
       // II12.1 — the latch is consumed only on the first HINT_TOOL (write)
       // call, so a leading read (recall/check_feedback) no longer burns the

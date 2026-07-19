@@ -164,7 +164,7 @@ describe("safeFetch (U3)", () => {
     });
     // Network-error message points the user at doctor.
     try { await safeFetch("/x"); } catch (e: any) {
-      expect(e.message).toMatch(/deeppairing doctor/i);
+      expect(e.message).toMatch(/init\.js doctor/i);
     }
   });
 });

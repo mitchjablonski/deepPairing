@@ -5200,7 +5200,7 @@ function ensureStopHook(projectRoot2) {
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err) {
@@ -5376,7 +5376,7 @@ function ensureCheckpointHook(projectRoot2) {
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`npx deeppairing doctor --fix\` to clean them.`;
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err) {
@@ -25442,14 +25442,14 @@ var FileStore = class _FileStore {
    * global one.
    *
    * Reads `globalLedgerPublish` from preferences.json. Set via the
-   * one-time `init` prompt (or `npx deeppairing philosophy publish on/off`).
+   * one-time `init` prompt (or `node packages/mcp-server/dist/cli/init.js philosophy publish on/off`).
    */
   globalLedgerPublishEnabled() {
     return this.readPreferences().globalLedgerPublish === true;
   }
   /**
    * III8 — flip the per-project publish opt-in. Used by the `init`
-   * prompt, by the `npx deeppairing philosophy publish on/off` command,
+   * prompt, by the `node packages/mcp-server/dist/cli/init.js philosophy publish on/off` command,
    * and by tests that want to exercise the cross-project mirror path.
    * Idempotent. Persists to preferences.json.
    */
@@ -29342,7 +29342,7 @@ async function main() {
       log(`FATAL bind error on port ${candidate}: ${result.err}`);
       process.stderr.write(
         `deepPairing daemon: bind failed \u2014 ${result.err?.message ?? result.err}
-Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
+Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.
 `
       );
       process.exit(3);
@@ -29353,7 +29353,7 @@ Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.
     }
   }
   if (!server) {
-    const msg = `No free port in ${MAX_PORT_ATTEMPTS2} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}\u2013${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`npx deeppairing doctor --fix\` to diagnose and heal.`;
+    const msg = `No free port in ${MAX_PORT_ATTEMPTS2} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}\u2013${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal.`;
     log(`FATAL: ${msg}`);
     process.stderr.write(`deepPairing daemon: ${msg}
 `);

@@ -351,7 +351,7 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     useToastStore.getState().dismissAll();
     const s = useArtifactStore.getState();
     await expect(s.submitComment("a1", "hi")).rejects.toBeDefined();
-    expect(useToastStore.getState().toasts[0]!.body).toMatch(/deeppairing doctor/i);
+    expect(useToastStore.getState().toasts[0]!.body).toMatch(/init\.js doctor/i);
   });
 });
 

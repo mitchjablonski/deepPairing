@@ -50,13 +50,13 @@ async function main() {
   const daemonInfo = await ensureDaemon(projectRoot);
   const port = daemonInfo.port;
   if (!daemonInfo.authToken) {
-    log(`WARN: daemon at port ${port} did not advertise authToken — internal calls will 401. Run \`npx deeppairing doctor\` to refresh daemon.json.`);
+    log(`WARN: daemon at port ${port} did not advertise authToken — internal calls will 401. Run \`node packages/mcp-server/dist/cli/init.js doctor\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
 
   // U0.6 — deterministic sessionId per projectRoot. Previously every wrapper
   // spawn minted a fresh `session_<timestamp>_<random>`, which meant a
-  // restart of Claude Code or a second `npx deeppairing init` produced a
+  // restart of Claude Code or a second `node packages/mcp-server/dist/cli/init.js init` produced a
   // duplicate session for the same project. The companion UI bound to one;
   // the agent's current wrapper polled another; approvals never landed
   // where the agent was looking. Hashing projectRoot collapses all wrappers
@@ -121,7 +121,7 @@ main().catch((err) => {
   // MCP stderr panel before they ever open the companion UI.
   process.stderr.write(
     `deepPairing wrapper: ${err?.message ?? err}\n` +
-    `Run \`npx deeppairing doctor --fix\` to diagnose and heal common causes.\n`,
+    `Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.\n`,
   );
   process.exit(1);
 });
