@@ -235,6 +235,19 @@ async function main() {
     process.exit(1);
   });
 
+  // #168 — swallow errors on our OWN stderr stream. The wrapper spawns us with
+  // `stdio: ["ignore","ignore","pipe"]` and, once it adopts us, DESTROYS its
+  // read end of that pipe to free its event loop (lifecycle.ts spawnDaemon
+  // release()). Any later write to our stderr then EPIPEs. Post-boot writers
+  // exist — safeHeartbeatTick ("loud but non-fatal", create-daemon.ts) and the
+  // token-sidecar SECURITY refusal — and without this listener Node re-raises
+  // the stream 'error' as an uncaughtException, which the handler above turns
+  // into exit(1): the wrapper's cleanup would then KILL the daemon it just
+  // adopted. This also cures the pre-existing variant where the WRAPPER (not
+  // the daemon) had exited and left our stderr reader gone. Best-effort log +
+  // continue; daemon.log is the durable channel regardless.
+  process.stderr.on("error", () => { /* reader gone (EPIPE) — never fatal */ });
+
   // N2.2: plugin install path doesn't run `npx deeppairing init`, so the
   // daemon picks up the slack: ensure .deeppairing/, .gitignore entry, and
   // Stop hook. CLAUDE.md mutation stays opt-in via init — too invasive to

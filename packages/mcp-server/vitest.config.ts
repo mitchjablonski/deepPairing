@@ -17,6 +17,8 @@ const SPAWN_SUITES = [
   "src/__tests__/daemon-version-exposure.test.ts",
   "src/__tests__/ensure-daemon-version-gate.test.ts",
   "src/__tests__/fixture-ttl.test.ts",
+  // #168 — real cold `deeppairing demo` spawn (CLI-exits + NO_OPEN check).
+  "src/__tests__/demo-cli-exit.test.ts",
 ];
 
 // Port isolation: computes a per-run + per-worker DEEPPAIRING_PORT_BASE so

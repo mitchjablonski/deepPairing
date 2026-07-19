@@ -6940,15 +6940,21 @@ var init_token = __esm({
 var lifecycle_exports = {};
 __export(lifecycle_exports, {
   DEFAULT_PORT: () => DEFAULT_PORT,
+  DEFAULT_READINESS_TIMEOUT_MS: () => DEFAULT_READINESS_TIMEOUT_MS,
   MAX_PORT_ATTEMPTS: () => MAX_PORT_ATTEMPTS,
+  READINESS_PROGRESS_AFTER_MS: () => READINESS_PROGRESS_AFTER_MS,
+  READINESS_PROGRESS_MESSAGE: () => READINESS_PROGRESS_MESSAGE,
+  buildReadinessTimeoutMessage: () => buildReadinessTimeoutMessage,
   classifyDaemonVersion: () => classifyDaemonVersion,
   daemonAuthHeaders: () => daemonAuthHeaders,
   describeDaemonVersionHealth: () => describeDaemonVersionHealth,
+  doctorCommandHint: () => doctorCommandHint,
   ensureDaemon: () => ensureDaemon,
   evictDaemon: () => evictDaemon,
   isDaemonRunning: () => isDaemonRunning,
   probeDaemonIdentity: () => probeDaemonIdentity,
-  resolveStaleDaemon: () => resolveStaleDaemon
+  resolveStaleDaemon: () => resolveStaleDaemon,
+  waitForDaemon: () => waitForDaemon
 });
 import { spawn as spawn2 } from "node:child_process";
 import fs6 from "node:fs";
@@ -7093,21 +7099,61 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   return null;
 }
-async function waitForDaemon(projectRoot2, timeoutMs = 1e4) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const info = await isDaemonRunning(projectRoot2);
-    if (info) return info;
-    await new Promise((r) => setTimeout(r, 200));
+function defaultProgress(msg) {
+  try {
+    process.stderr.write(`${msg}
+`);
+  } catch {
   }
-  const hint = await describePortHolders(projectRoot2);
-  const first = DEFAULT_PORT;
-  const last = DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1;
-  throw new Error(
-    `deepPairing daemon did not become ready within ${timeoutMs}ms (swept ports ${first}\u2013${last}).
-${hint}
-Run 'npx deeppairing doctor' to diagnose, or check .deeppairing/daemon.log.`
-  );
+}
+async function waitForDaemon(projectRoot2, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? 200;
+  const progressAfterMs = opts.progressAfterMs ?? READINESS_PROGRESS_AFTER_MS;
+  const onProgress = opts.onProgress ?? defaultProgress;
+  const isRunning = opts.isRunning ?? isDaemonRunning;
+  const now = opts.now ?? Date.now;
+  const doSleep = opts.sleep ?? realSleep;
+  const describeHolders = opts.describeHolders ?? describePortHolders;
+  const start = now();
+  let progressShown = false;
+  while (now() - start < timeoutMs) {
+    const info = await isRunning(projectRoot2);
+    if (info) return info;
+    if (!progressShown && now() - start >= progressAfterMs) {
+      progressShown = true;
+      onProgress(READINESS_PROGRESS_MESSAGE);
+    }
+    await doSleep(pollIntervalMs);
+  }
+  const hint = await describeHolders(projectRoot2);
+  throw new Error(buildReadinessTimeoutMessage({ timeoutMs, projectRoot: projectRoot2, hint }));
+}
+function resolveCliPath() {
+  const candidates = [
+    path5.join(__thisDir, "../cli/init.js"),
+    // dist/daemon → dist/cli/init.js
+    path5.join(__thisDir, "cli/init.js")
+  ];
+  return candidates.find((p) => fs6.existsSync(p)) ?? null;
+}
+function doctorCommandHint(cliPath = resolveCliPath()) {
+  return cliPath ? `node "${cliPath}" doctor` : "deeppairing doctor";
+}
+function buildReadinessTimeoutMessage(args) {
+  const { timeoutMs, projectRoot: projectRoot2, hint } = args;
+  const first = preferredPortFor(projectRoot2);
+  const last = first + MAX_PORT_ATTEMPTS - 1;
+  const lines = [
+    `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
+    hint
+  ];
+  const logPath = path5.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs6.existsSync(logPath)) {
+    lines.push(`See ${logPath} for the daemon's own startup log.`);
+  }
+  lines.push(`To diagnose: ${doctorCommandHint()}`);
+  return lines.join("\n");
 }
 async function describePortHolders(projectRoot2) {
   const parts = [];
@@ -7125,9 +7171,11 @@ async function describePortHolders(projectRoot2) {
   } else {
     parts.push("No daemon.json found.");
   }
+  const sweepStart = preferredPortFor(projectRoot2);
+  const sweepEnd = sweepStart + MAX_PORT_ATTEMPTS - 1;
   const observations = [];
   for (let attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
-    const port = DEFAULT_PORT + attempt;
+    const port = sweepStart + attempt;
     const identity = await probeDaemonIdentity(port);
     if (identity) {
       const mine = identity.projectRoot === projectRoot2 ? " (this project)" : ` (other project: ${identity.projectRoot})`;
@@ -7138,7 +7186,7 @@ async function describePortHolders(projectRoot2) {
     parts.push("Ports holding a daemon:");
     parts.push(...observations);
   } else {
-    parts.push(`No daemons responding on ${DEFAULT_PORT}\u2013${DEFAULT_PORT + MAX_PORT_ATTEMPTS - 1}.`);
+    parts.push(`No daemons responding on ${sweepStart}\u2013${sweepEnd}.`);
   }
   return parts.join("\n");
 }
@@ -7155,13 +7203,29 @@ function spawnDaemon(projectRoot2) {
     env: { ...process.env, DEEPPAIRING_PROJECT_ROOT: projectRoot2 }
   });
   let stderrBuf = "";
-  child.stderr?.on("data", (chunk) => {
+  const onData = (chunk) => {
     const text = chunk.toString();
     stderrBuf += text;
     if (stderrBuf.length > 4096) stderrBuf = stderrBuf.slice(-4096);
-  });
+  };
+  child.stderr?.on("data", onData);
   child.unref();
-  return { stderrTail: () => stderrBuf };
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try {
+      child.stderr?.removeListener("data", onData);
+      child.stderr?.destroy();
+      child.stderr?.unref?.();
+    } catch {
+    }
+    try {
+      child.unref();
+    } catch {
+    }
+  };
+  return { stderrTail: () => stderrBuf, release };
 }
 function classifyDaemonVersion(runningVersion, myVersion) {
   if (runningVersion === void 0 || runningVersion === null || runningVersion === "") {
@@ -7291,17 +7355,20 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
   await waitForRelease(existing.port, existing.pid);
   return "restarted";
 }
-async function ensureDaemon(projectRoot2) {
+async function ensureDaemon(projectRoot2, opts = {}) {
   const existing = await isDaemonRunning(projectRoot2);
   if (existing) {
     const outcome = await resolveStaleDaemon(existing, SERVER_VERSION, projectRoot2, { log: logStale });
     if (outcome === "adopt") return existing;
   }
-  const { stderrTail } = spawnDaemon(projectRoot2);
+  const { stderrTail, release } = spawnDaemon(projectRoot2);
   try {
-    return await waitForDaemon(projectRoot2);
+    const info = await waitForDaemon(projectRoot2, { onProgress: opts.onProgress });
+    release();
+    return info;
   } catch (err) {
     const tail = stderrTail().trim();
+    release();
     if (tail) {
       throw new Error(`${err.message}
 Daemon stderr:
@@ -7310,7 +7377,7 @@ ${tail}`);
     throw err;
   }
 }
-var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, sleep;
+var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, realSleep, sleep;
 var init_lifecycle = __esm({
   "src/daemon/lifecycle.ts"() {
     "use strict";
@@ -7321,6 +7388,10 @@ var init_lifecycle = __esm({
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
+    DEFAULT_READINESS_TIMEOUT_MS = 4e4;
+    READINESS_PROGRESS_AFTER_MS = 5e3;
+    READINESS_PROGRESS_MESSAGE = "daemon starting \u2014 first run on this filesystem can take ~30s\u2026";
+    realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });

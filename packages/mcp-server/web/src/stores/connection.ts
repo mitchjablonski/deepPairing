@@ -106,6 +106,27 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     notifyIfUnfocused("deepPairing — your turn", body);
   };
 
+  // #168 — hero-toast dedupe. The demo (and a sleep/blip reconnect on any
+  // session) can re-deliver a preflight_blocked a client already saw: the
+  // daemon stashes the demo's block and REPLAYS it on connect (`replayed:true`),
+  // and the toast store has no dedupe of its own — so a reconnect would fire the
+  // hero toast a second time. Track seen block identities and skip the toast for
+  // an already-seen block; the event data itself is still processed (idempotent).
+  // KEY: an explicit event id if one ever exists, else a content composite
+  // (source + concept + proposal + via + rejectedAt). This is the key #195's
+  // PreflightBlockLog should reuse so a replayed event doesn't double-append.
+  const seenPreflightBlockKeys = new Set<string>();
+  interface BlockEventLike {
+    id?: string; blockId?: string; source?: string;
+    match?: { concept?: string; proposal?: string; via?: string; rejectedAt?: string; blockId?: string };
+  }
+  const preflightBlockKey = (d: BlockEventLike): string => {
+    const explicit = d.id ?? d.blockId ?? d.match?.blockId;
+    if (explicit) return `id:${explicit}`;
+    const m = d.match ?? {};
+    return [d.source ?? "session", m.concept ?? "", m.proposal ?? "", m.via ?? "", m.rejectedAt ?? ""].join("|");
+  };
+
   function handleMessage(data: any) {
     // Import artifact store lazily to avoid circular deps
     import("./artifact").then(({ useArtifactStore }) => {
@@ -344,6 +365,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         case "preflight_blocked":
           // O2: the rejection-block hero toast. This is THE distinctive
           // deepPairing moment — the UI treats it as such.
+          // #168 — dedupe: a replayed/reconnect re-delivery of a block already
+          // seen must NOT re-fire the hero toast. Skip the toast (not the whole
+          // case) for a seen key so any non-toast processing stays idempotent.
+          if (seenPreflightBlockKeys.has(preflightBlockKey(data))) break;
+          seenPreflightBlockKeys.add(preflightBlockKey(data));
           import("./toast").then(({ useToastStore }) => {
             const match = data.match ?? {};
             const source: "session" | "team" = data.source === "team" ? "team" : "session";

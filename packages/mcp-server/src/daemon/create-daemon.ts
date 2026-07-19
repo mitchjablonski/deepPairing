@@ -231,7 +231,20 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // Also keep a global set for the "all sessions" view
   const globalClients = new Set<WebSocket>();
 
+  // #168 — money-shot replay. The demo's hero moment (`preflight_blocked` at
+  // t+5s) is a transient broadcast, NOT part of a session's persisted state, so
+  // a tab opened after t+5s (the human clicks the printed URL a few seconds
+  // late) reconnects, gets the artifact/ledger state via `connected`, and MISSES
+  // the block toast — the entire point of the demo. We stash the last
+  // preflight_blocked per DEMO session and replay it to any late-joining WS
+  // client. Only demo sessions (throwaway) and only this one event type — real
+  // pairing toasts are live signals we must never resurrect on reconnect.
+  const demoReplayEvents = new Map<string, any>();
+
   function broadcast(sessionId: string, event: any): void {
+    if (sessionId.startsWith("demo_") && event?.type === "preflight_blocked") {
+      demoReplayEvents.set(sessionId, event);
+    }
     const data = JSON.stringify({ ...event, sessionId });
 
     // Send to session-specific clients
@@ -295,12 +308,53 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   let shutdownTimer: ReturnType<typeof setInterval> | null = null;
 
+  // #168 — demo-aware idle grace. A `deeppairing demo` run creates a demo
+  // session but registers NO wrapper (activeSessions stays empty) and, once the
+  // CLI exits, holds NO WS client — so the plain idle check would shut the
+  // daemon down 60s later and the printed URL would die (connection refused) if
+  // the human clicked it even a minute late. We chose a SERVER-SIDE grace over
+  // holding the CLI open: bug #168.2 requires the `demo` command to EXIT cleanly
+  // (a foreground hold reintroduces exactly the pinned-loop feel we just fixed),
+  // and the grace keeps the command's fire-and-forget shape while giving the
+  // daemon a demo-aware lifetime. 10 minutes is comfortably longer than "click
+  // the link I just printed" without leaking a daemon for the rest of the day.
+  const DEMO_IDLE_GRACE_MS = 10 * 60_000;
+
+  function demoGraceActive(nowMs = Date.now()): boolean {
+    // Key off the `demo_` sessionId prefix — the same demo-session marker #193
+    // established (FileStore.isDemoSession = sessionId.startsWith("demo_")) and
+    // that the replay stash below and the /api/demo/run eviction already use.
+    for (const [sessionId, meta] of sessionMeta.entries()) {
+      if (!sessionId.startsWith("demo_")) continue;
+      const createdAt = Date.parse(meta.registeredAt);
+      if (Number.isNaN(createdAt)) continue;
+      if (nowMs - createdAt < DEMO_IDLE_GRACE_MS) return true;
+    }
+    return false;
+  }
+
   function checkAutoShutdown(): void {
+    // #168 — while a freshly-created demo session is inside its grace window,
+    // hold the daemon open even with no clients so a late click on the printed
+    // URL still connects. The 30s cadence (index.ts) re-invokes this, so once
+    // the grace expires the normal 60s idle shutdown proceeds on the next tick.
+    if (activeSessions.size === 0 && getClientCount() === 0 && demoGraceActive()) {
+      if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
+      return;
+    }
     if (activeSessions.size === 0 && getClientCount() === 0) {
       if (!shutdownTimer) {
         log("No active sessions or clients — will shut down in 60s if still idle");
         shutdownTimer = setTimeout(() => {
-          if (activeSessions.size === 0 && getClientCount() === 0) {
+          // #168 — the callback MUST re-check the demo grace too, not just
+          // idleness. A timer armed while idle can fire AFTER a `deeppairing
+          // demo` run created an in-grace session in the intervening window
+          // (warm-adopt path: no cold spawn, no WS client) — without this
+          // check it would exitProcess(0) despite just printing "URL stays
+          // live ~10 minutes". /api/demo/run also calls checkAutoShutdown() to
+          // disarm this timer immediately, but this guard is the backstop for
+          // any arm/fire race the eager disarm doesn't cover.
+          if (activeSessions.size === 0 && getClientCount() === 0 && !demoGraceActive()) {
             log("Auto-shutting down (idle)");
             // I5 — same close gap as the signal handlers: free the port before
             // the flush so an incoming daemon can rebind immediately.
@@ -634,6 +688,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
+      demoReplayEvents.delete(oldest); // #168 — don't leak the stashed hero event
     }
     const sessionId = `demo_${Date.now()}`;
     const store = createSession(sessionId);
@@ -643,6 +698,12 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       registeredAt: new Date().toISOString(),
     });
     runDemoScript({ sessionId, store, broadcast });
+    // #168 — disarm any idle-shutdown timer already armed before this request:
+    // the new demo session is inside its grace, so the daemon must not shut
+    // down. checkAutoShutdown() sees demoGraceActive() and clears the timer
+    // immediately rather than letting it fire and no-op (which also relies on
+    // the callback's own !demoGraceActive() backstop above).
+    checkAutoShutdown();
     return c.json({ sessionId, startedAt: new Date().toISOString() });
   });
 
@@ -861,6 +922,18 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         // AA4 — include projectHash so the browser can echo it in
         // X-Project-Hash and the per-session routes can verify.
         ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+      }
+
+      // #168 — replay the demo's hero `preflight_blocked` to a late joiner. A
+      // client that connected BEFORE t+5s never has a replay stashed yet (it
+      // gets the live broadcast instead), so this can't double-fire the toast;
+      // one connecting AFTER gets it here and the demo's point survives. The
+      // `replayed` flag is informational — the UI keys on `type`.
+      if (sessionId.startsWith("demo_")) {
+        const replay = demoReplayEvents.get(sessionId);
+        if (replay) {
+          ws.send(JSON.stringify({ ...replay, sessionId, replayed: true }));
+        }
       }
 
       // II5 — handle 'error' before 'close'. An RSV1 framing error, an
