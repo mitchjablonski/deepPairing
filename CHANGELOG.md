@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.1.13 — 2026-07-18
+
+Code you can read, secrets that can't slip through. No breaking changes.
+
+### Fixed
+- **Light-mode code is readable again.** An accessibility audit of the syntax
+  palettes found 20 token colors below the AA contrast floor on code
+  backgrounds — light-mode comments were the worst at 2.14:1, with strings,
+  punctuation, JSON keys, and more also failing; even dark mode had four
+  offenders. Every one is re-tinted to ≥4.6:1 with its hue preserved (the
+  palette still reads as vitesse), pinned by a test that runs the real
+  highlight pipeline across all 13 grammars, and the accessibility scans now
+  exercise real multi-line code in both themes so palette drift can't return
+  silently.
+
+### Internal
+- **The secret scanner is now un-bypassable on every write path.** Artifact
+  content is scanned authoritatively inside the store at create time (matching
+  how comments already worked) — client-supplied warnings can neither forge nor
+  suppress the result — and the one previously unscanned content-mutation path
+  (plan progress notes) is covered. One scan per artifact; the warning banner,
+  sidebar marker, and agent signal are unchanged.
+
 ## v0.1.12 — 2026-07-18
 
 Every feature in this release came from live pairing feedback — asked for in
