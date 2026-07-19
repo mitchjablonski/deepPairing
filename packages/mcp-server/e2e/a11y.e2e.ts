@@ -116,7 +116,14 @@ test.beforeAll(async () => {
       id: "res_a11y", type: "research", title: "Audit",
       content: {
         summary: "s",
-        findings: [{ category: "Security", title: "F1", detail: "d", significance: "high", evidence: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 2, snippet: "code", explanation: "why" }] }],
+        // #166 — the evidence snippet is REAL multi-line TypeScript (string,
+        // comment, keyword, punctuation, number tokens), not the old one-word
+        // "code": the vitesse-light AA failure (#B07D48 strings at 3.27:1)
+        // shipped because no scanned surface ever mounted a highlighted string
+        // or comment — the seed must exercise the token families for the scans
+        // to mean anything. Both the dark and light session scans select this
+        // artifact and wait for shiki's colored spans before analyzing.
+        findings: [{ category: "Security", title: "F1", detail: "d", significance: "high", evidence: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 2, snippet: 'const label = "cache me"; // pick a cache\nexport function pick(n: number) { return n ?? 42; }', explanation: "why" }] }],
         // #164 — open-question SECTIONS (the redesign, round 2: no disclosure
         // — the composer is always visible). Two questions feed the
         // openQuestionSections() helper below: the dark + light session tests
@@ -177,6 +184,14 @@ async function openQuestionSections(page: import("@playwright/test").Page): Prom
   await page.click('[data-artifact-item="res_a11y"]');
   await page.waitForSelector('[data-artifact-id="res_a11y"]', { timeout: 15000 });
   await page.getByLabel("Answer question 1").waitFor({ timeout: 15000 });
+  // #166 — shiki highlights asynchronously (lazy wasm + grammar chunks): wait
+  // for a COLORED token span inside the evidence snippet, or axe would scan
+  // plain uncolored text and "pass" without ever measuring the syntax palette
+  // (exactly how the vitesse-light AA failure went unseen).
+  await page.waitForSelector(
+    '[data-artifact-id="res_a11y"] .bg-surface-code span[style*="color:"]',
+    { timeout: 15000 },
+  );
   // Same rule as the app-shell scan: let every FINITE animation finish (the
   // artifact panel's entrance fade) so axe never samples a mid-fade frame —
   // the documented color-contrast phantom class.
@@ -248,18 +263,17 @@ test("a11y: session view in the LIGHT theme has no serious/critical axe violatio
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 
   // #164 — light-theme parity for the open-question sections (mounted, with
-  // always-visible composers). Scoped to the sections (zero disabled RULES, but
-  // include()-limited) because the first REAL run of this scan surfaced a
-  // pre-existing, out-of-#164 violation elsewhere on the research page:
-  // vitesse-light's own string-token color (#B07D48) is 3.27:1 on the light
-  // surface-code — every code snippet in light mode fails AA, and no light
-  // scan ever mounted one before. That needs a syntax-palette pass (shiki
-  // colorReplacements or a higher-contrast light theme), tracked separately —
-  // when fixed, drop the include() and scan the whole page like the dark test.
+  // always-visible composers). #166 — FULL-PAGE again, like the dark test:
+  // this scan launched include()-scoped to the sections because its first real
+  // run caught vitesse-light's string color (#B07D48) at 3.27:1 on the light
+  // surface-code. The #166 palette re-tint (lib/syntax-palette.ts, locked by
+  // syntax-token-contrast.test.ts) fixed the whole light+dark syntax palette,
+  // so the scope is dropped — and the page now includes a MOUNTED highlighted
+  // snippet (openQuestionSections waits for shiki's colored spans), so the
+  // palette is measured for real on every run.
   await openQuestionSections(page);
   const qResults = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa"])
-    .include('[data-artifact-id="res_a11y"] section')
     .analyze();
   const qSerious = qResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(qSerious, `axe violations (open-question sections, light):\n${fmt(qSerious)}`).toEqual([]);
