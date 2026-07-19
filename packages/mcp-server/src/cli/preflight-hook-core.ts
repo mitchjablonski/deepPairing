@@ -120,6 +120,32 @@ export interface HookDecision {
   source?: "session" | "team";
 }
 
+/**
+ * #169 — runPreflight's block message ends with "The artifact was NOT created."
+ * That clause is written for the AGENT-facing present_* tool error (where a tool
+ * call really did fail to create an artifact). But the SAME message is reused as
+ * the human's PreToolUse permission prompt for a raw Edit/Write — where there is
+ * no artifact, and the edit isn't refused outright, it's paused for the human to
+ * allow or deny. So the clause is meaningless (and misleading) on the hook
+ * surface. Strip it HERE, in the hook lane only — the agent-facing MCP tool
+ * error (tool-helpers.ts) keeps runPreflight's message verbatim.
+ */
+export function stripArtifactClause(message: string): string {
+  return message.replace(/\s*The artifact was NOT created\.\s*$/, "").trimEnd();
+}
+
+/**
+ * F6 — the shared runPreflight headline reads "<Tool> refused —". That's true on
+ * the AGENT-facing present_* tool error (the tool call really did refuse to
+ * create the artifact), but wrong on the HOOK surface: the PreToolUse gate emits
+ * permissionDecision "ask", i.e. it PAUSES the Edit for the human to allow or
+ * deny — it does not refuse it. Reword the verb for the hook lane only; the
+ * agent-facing message (tool-helpers.ts) keeps "refused" verbatim.
+ */
+export function toHookReason(message: string): string {
+  return stripArtifactClause(message).replace(" refused — ", " paused for your review — ");
+}
+
 /** Evaluate a PreToolUse Edit/Write/MultiEdit against the project's rejected
  *  approaches + team prefs. Returns deny + the matcher's LLM-facing reason, or
  *  {deny:false}. Pure given the projectRoot's on-disk ledgers. */
@@ -140,5 +166,9 @@ export function evaluatePreflightHook(args: {
     teamPreferences: readTeamPreferences(projectRoot),
   });
   if (!result.blocked) return { deny: false };
-  return { deny: true, reason: result.block.message, source: result.block.source };
+  // #169 + F6 — hook-facing reason: drop the agent-only "artifact was NOT
+  // created" tail AND reword "refused" → "paused for your review" (the gate
+  // asks the human, it doesn't hard-refuse). The REJECTED_APPROACH_BLOCKED
+  // prefix + the rationale/concept/reason are preserved.
+  return { deny: true, reason: toHookReason(result.block.message), source: result.block.source };
 }

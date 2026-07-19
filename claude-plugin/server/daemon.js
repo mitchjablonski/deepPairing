@@ -26411,6 +26411,21 @@ function findRetrospective(state, decisionId) {
   return retros?.find((r) => r.decisionId === decisionId);
 }
 
+// src/store/rejected-option-recorder.ts
+function optionConceptKey(option) {
+  for (const c of [option.concept?.name, option.description, option.title]) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return void 0;
+}
+async function recordRejectedOptionConcept(store, broadcast, params) {
+  const { option, reason, sourceArtifactId } = params;
+  const key = optionConceptKey(option);
+  if (!key) return;
+  await store.recordRejectedApproach({ description: key, reason, sourceArtifactId, concept: key });
+  broadcast({ type: "ledger_write", kind: "rejected", description: key, concept: key, reason, sourceArtifactId });
+}
+
 // src/http/routes.ts
 init_project_root();
 
@@ -26727,6 +26742,26 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     } else {
       log2(`[comment] DEDUPED \u2014 sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
     }
+    if (isNew) {
+      const sectionId = target?.sectionId;
+      if (sectionId === "decision_revision_requested") {
+        const arts = await store.getArtifacts();
+        const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
+        const dContent = decision?.content;
+        const options = Array.isArray(dContent?.options) ? dContent.options : [];
+        if (decision && options.length > 0) {
+          const reason = content.trim() || void 0;
+          const scopedBroadcast = (event) => broadcast(event, sid);
+          for (const option of options) {
+            await recordRejectedOptionConcept(store, scopedBroadcast, {
+              option,
+              reason,
+              sourceArtifactId: artifactId
+            });
+          }
+        }
+      }
+    }
     if (projectRoot2) {
       const sectionId = target?.sectionId;
       if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
@@ -26870,6 +26905,24 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       if (artifact && artifact.type !== "decision") {
         const artConcept = artifact.content?.concept?.name;
         const concept = humanConcept?.trim() || artConcept || void 0;
+        await store.recordRejectedApproach({
+          description: artifact.title,
+          reason: feedback?.trim() || void 0,
+          sourceArtifactId: artifactId,
+          concept
+        });
+        broadcast({
+          type: "ledger_write",
+          kind: "rejected",
+          description: artifact.title,
+          concept,
+          reason: feedback?.trim() || void 0,
+          sourceArtifactId: artifactId
+        }, sid);
+      } else if (artifact && artifact.type === "decision") {
+        const content = artifact.content;
+        const context = content?.context?.trim() || artifact.title;
+        const concept = humanConcept?.trim() || context || void 0;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || void 0,

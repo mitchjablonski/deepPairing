@@ -473,6 +473,54 @@ describe("DecisionCard — keyboard navigation", () => {
   });
 });
 
+describe("DecisionCard — hard reject the framing (#169 F1/F2)", () => {
+  it("shows the reject trigger only with an artifactId", () => {
+    const { rerender } = render(<DecisionCard event={event} decisionId="dec_abc" />);
+    expect(screen.queryByRole("button", { name: /reject this framing/i })).not.toBeInTheDocument();
+    rerender(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    expect(screen.getByRole("button", { name: /reject this framing/i })).toBeInTheDocument();
+  });
+
+  it("POSTs status:'rejected' with the reason + named concept to /api/artifacts/:id/status", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /reject this framing/i }));
+    await userEvent.type(
+      screen.getByPlaceholderText(/we don't need a cache at all/i),
+      "wrong question — measure first",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/name the pattern you're rejecting/i),
+      "premature caching",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /reject & remember/i }));
+
+    const statusCall = (fetch as any).mock.calls.find(
+      (c: any[]) => typeof c[0] === "string" && c[0].includes("/api/artifacts/art_dec/status"),
+    );
+    expect(statusCall).toBeTruthy();
+    const body = JSON.parse(statusCall[1].body);
+    expect(body.status).toBe("rejected");
+    expect(body.feedback).toContain("wrong question");
+    expect(body.concept).toBe("premature caching");
+  });
+
+  it("after reject, shows the confirmation and hides the composer", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /reject this framing/i }));
+    await userEvent.type(screen.getByPlaceholderText(/we don't need a cache at all/i), "no caching here");
+    await userEvent.click(screen.getByRole("button", { name: /reject & remember/i }));
+
+    expect(screen.getByText(/you rejected this framing/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/we don't need a cache at all/i)).not.toBeInTheDocument();
+  });
+
+  it("reject confirm is disabled until a reason is typed", async () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_dec" />);
+    await userEvent.click(screen.getByRole("button", { name: /reject this framing/i }));
+    expect(screen.getByRole("button", { name: /reject & remember/i })).toBeDisabled();
+  });
+});
+
 describe("DecisionCard — Send back for revision (Fix B)", () => {
   // Field bug: a human commented on the overall decision; the agent thought
   // about it (visible in the chat) but didn't post back to the UI, AND the

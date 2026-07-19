@@ -350,6 +350,37 @@ describe("connection store — handleMessage dispatch", () => {
       expect(useToastStore.getState().toasts.filter((t) => t.kind === "preflight-block")).toHaveLength(2);
     });
 
+    it("#169 — ALSO persists the block into the PreflightBlockLog store (survives the 12s toast)", async () => {
+      const { usePreflightBlockStore } = await import("../preflightBlocks");
+      usePreflightBlockStore.getState().clear();
+
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "preflight_blocked",
+        toolName: "present_options",
+        source: "session",
+        match: {
+          concept: "redis for caching",
+          proposal: "add a redis cache",
+          reason: "wrong question, not wrong options",
+          via: "concept",
+          rejectedAt: "2026-04-16T10:00:00.000Z",
+        },
+      });
+      await flush();
+
+      const blocks = usePreflightBlockStore.getState().blocks;
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]!.source).toBe("session");
+      expect(blocks[0]!.concept).toBe("redis for caching");
+      expect(blocks[0]!.reason).toBe("wrong question, not wrong options");
+      expect(blocks[0]!.via).toBe("concept");
+      expect(blocks[0]!.rejectedAt).toBe("2026-04-16T10:00:00.000Z");
+      // The record carries a client id + timestamp so the log can key + sort it.
+      expect(typeof blocks[0]!.id).toBe("string");
+      expect(typeof blocks[0]!.at).toBe("string");
+    });
+
     it("II3 — pushes a sticky 'reload to re-bind' toast on a fatal project mismatch (no silent rebind)", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

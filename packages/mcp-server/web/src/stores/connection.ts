@@ -362,17 +362,20 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           }
           break;
 
-        case "preflight_blocked":
+        case "preflight_blocked": {
           // O2: the rejection-block hero toast. This is THE distinctive
           // deepPairing moment — the UI treats it as such.
           // #168 — dedupe: a replayed/reconnect re-delivery of a block already
-          // seen must NOT re-fire the hero toast. Skip the toast (not the whole
-          // case) for a seen key so any non-toast processing stays idempotent.
+          // seen must NOT re-fire the hero toast (or re-append the log). Skip
+          // the whole case for a seen key. #169's PreflightBlockLog store ALSO
+          // dedupes on its own key — belt-and-suspenders, independent lanes.
           if (seenPreflightBlockKeys.has(preflightBlockKey(data))) break;
           seenPreflightBlockKeys.add(preflightBlockKey(data));
+          const match = data.match ?? {};
+          const source: "session" | "team" = data.source === "team" ? "team" : "session";
+          const concept = match.concept ?? match.description ?? "this approach";
+          const via = match.via ?? "surface";
           import("./toast").then(({ useToastStore }) => {
-            const match = data.match ?? {};
-            const source: "session" | "team" = data.source === "team" ? "team" : "session";
             const title = source === "team"
               ? "Blocked by team policy"
               : "Blocked by your taste";
@@ -382,11 +385,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               // body not used for preflight-block; render from hero
               hero: {
                 source,
-                concept: match.concept ?? match.description ?? "this approach",
+                concept,
                 description: match.description,
                 proposal: match.proposal,
                 reason: match.reason,
-                via: match.via ?? "surface",
+                via,
                 addedBy: match.addedBy,
                 rejectedAt: match.rejectedAt,
                 projectCount: match.projectCount,
@@ -398,7 +401,22 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               },
             });
           });
+          // #169 — persist the block moment past the 12s toast so the gate
+          // firing survives in a header log (PreflightBlockLog).
+          import("./preflightBlocks").then(({ usePreflightBlockStore }) => {
+            usePreflightBlockStore.getState().pushBlock({
+              source,
+              concept,
+              proposal: match.proposal,
+              reason: match.reason,
+              via,
+              addedBy: match.addedBy,
+              rejectedAt: match.rejectedAt,
+              projectCount: match.projectCount,
+            });
+          });
           break;
+        }
 
         case "ledger_write":
           // O7: taste compounds as the user works — surface each write so

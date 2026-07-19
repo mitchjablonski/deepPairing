@@ -7,6 +7,8 @@ import {
   readRejectedApproaches,
   readTeamPreferences,
   evaluatePreflightHook,
+  stripArtifactClause,
+  toHookReason,
 } from "../preflight-hook-core.js";
 
 let dir: string;
@@ -82,6 +84,27 @@ describe("readTeamPreferences — JSONC", () => {
   });
 });
 
+describe("stripArtifactClause (#169) — hook-only clause removal", () => {
+  it("strips the trailing agent-only clause", () => {
+    const msg = "REJECTED_APPROACH_BLOCKED: Edit refused — ... present_findings first. The artifact was NOT created.";
+    expect(stripArtifactClause(msg)).toBe("REJECTED_APPROACH_BLOCKED: Edit refused — ... present_findings first.");
+  });
+  it("is a no-op on a message that never had the clause", () => {
+    const msg = "REJECTED_APPROACH_BLOCKED: some other reason.";
+    expect(stripArtifactClause(msg)).toBe(msg);
+  });
+});
+
+describe("toHookReason (#169 F6) — hook-only wording", () => {
+  it("rewords 'refused' → 'paused for your review' AND drops the artifact clause", () => {
+    const msg = 'REJECTED_APPROACH_BLOCKED: Edit refused — your proposal contains "x". The artifact was NOT created.';
+    const out = toHookReason(msg);
+    expect(out).toBe('REJECTED_APPROACH_BLOCKED: Edit paused for your review — your proposal contains "x".');
+    expect(out).not.toContain("refused");
+    expect(out).not.toContain("The artifact was NOT created");
+  });
+});
+
 describe("evaluatePreflightHook — the platform-level gate", () => {
   it("DENIES an Edit whose new content matches a rejected approach (concept), with the LLM-facing reason", () => {
     writePrefs({ rejectedApproaches: [{ description: "global mutable config", concept: "global mutable state", reason: "caused test flakes" }] });
@@ -92,6 +115,21 @@ describe("evaluatePreflightHook — the platform-level gate", () => {
     });
     expect(d.deny).toBe(true);
     expect(d.source).toBe("session");
+    expect(d.reason).toMatch(/REJECTED_APPROACH_BLOCKED/);
+  });
+
+  it("#169 — the HOOK reason drops the agent-only 'artifact was NOT created' clause (there is no artifact on an Edit gate)", () => {
+    writePrefs({ rejectedApproaches: [{ description: "global mutable config", concept: "global mutable state", reason: "caused test flakes" }] });
+    const d = evaluatePreflightHook({
+      toolName: "Edit",
+      toolInput: { file_path: "/src/config.ts", new_string: "export let cfg = {}; // global mutable state singleton" },
+      projectRoot: dir,
+    });
+    expect(d.reason).not.toContain("The artifact was NOT created");
+    // F6 — the gate PAUSES (permissionDecision "ask"), it doesn't refuse.
+    expect(d.reason).not.toContain("refused");
+    expect(d.reason).toContain("paused for your review");
+    // The actionable prefix + rationale are preserved.
     expect(d.reason).toMatch(/REJECTED_APPROACH_BLOCKED/);
   });
 

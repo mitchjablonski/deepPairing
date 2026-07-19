@@ -16,6 +16,9 @@ import {
   type PhilosophyEntry,
   type PhilosophyStance,
 } from "../store/global-store.js";
+import { recordRejectedOptionConcept } from "../store/rejected-option-recorder.js";
+import type { LedgerRejectionBroadcast } from "../store/rejected-option-recorder.js";
+import type { DecisionOption } from "@deeppairing/shared";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
@@ -470,6 +473,37 @@ export function createHttpRoutes(
       // was still writing.
       log(`[comment] DEDUPED — sid=${sid ?? "(none)"} artifactId=${artifactId} reusedId=${comment.id} len=${content.length}`);
     }
+    // #169 (Fix 2) — the "↻ None of these fit" send-back posts a
+    // question-intent comment tagged sectionId "decision_revision_requested".
+    // That gesture genuinely rejects each LISTED option (the human is asking
+    // for a different SET), so it's the explicit per-option rejection signal:
+    // arm the gate for each option (reason = the send-back text) so
+    // re-proposing one of THEM surfaces the rejection — while a follow-up
+    // present_options for the SAME question with NEW options sails through
+    // (per-option keys are `${context}: ${title}`; new titles don't collide).
+    // This is deliberately the per-option path; the whole-card
+    // status:"rejected" gesture records ONE framing entry instead (status
+    // route above). Only on a genuinely NEW comment — never a dedupe replay.
+    if (isNew) {
+      const sectionId = (target as { sectionId?: string } | undefined)?.sectionId;
+      if (sectionId === "decision_revision_requested") {
+        const arts = await store.getArtifacts();
+        const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
+        const dContent = decision?.content as { context?: string; options?: DecisionOption[] } | null;
+        const options = Array.isArray(dContent?.options) ? dContent.options : [];
+        if (decision && options.length > 0) {
+          const reason = content.trim() || undefined;
+          const scopedBroadcast: LedgerRejectionBroadcast = (event) => broadcast(event, sid);
+          for (const option of options) {
+            await recordRejectedOptionConcept(store, scopedBroadcast, {
+              option,
+              reason,
+              sourceArtifactId: artifactId,
+            });
+          }
+        }
+      }
+    }
     // R1: Q3's horizon-check trigger fires as a question-intent comment
     // with sectionId "horizon_check:request:<horizon>". The broadcast
     // interceptor doesn't see sectionId (feedback_received is trimmed),
@@ -690,9 +724,9 @@ export function createHttpRoutes(
       broadcast({ type: "comment_added", comment }, sid);
     }
 
-    // When a non-decision artifact is rejected, remember the approach so
-    // pre-flight blocks any future re-proposal. Description is the artifact
-    // title; reason is the feedback comment (required client-side).
+    // When an artifact is rejected, remember the approach so pre-flight blocks
+    // any future re-proposal. reason is the feedback comment (required
+    // client-side).
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find((a) => a.id === artifactId);
@@ -706,6 +740,42 @@ export function createHttpRoutes(
         //   3. the artifact title (legacy fallback).
         const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
         const concept = humanConcept?.trim() || artConcept || undefined;
+        await store.recordRejectedApproach({
+          description: artifact.title,
+          reason: feedback?.trim() || undefined,
+          sourceArtifactId: artifactId,
+          concept,
+        });
+        broadcast({
+          type: "ledger_write",
+          kind: "rejected",
+          description: artifact.title,
+          concept,
+          reason: feedback?.trim() || undefined,
+          sourceArtifactId: artifactId,
+        }, sid);
+      } else if (artifact && artifact.type === "decision") {
+        // #169 (+F1) — a WHOLE-CARD decision rejection is the "wrong question /
+        // don't do this at all" gesture: the human rejects the FRAMING, not the
+        // individual options. So record ONE framing-level entry, NOT one per
+        // option. Fanning out per option (an earlier cut) poisoned every
+        // option's surface noun project-wide: rejecting "Which cache backend?"
+        // (Redis/Memcached/…) then surface-blocked a Redis job-queue edit, a
+        // docker `redis:` service, an `lru-cache` import — because the matcher
+        // pulls the post-colon noun ("…: Redis" → "redis") and matches it
+        // everywhere. Keying on the QUESTION instead means the concept lane
+        // catches a re-proposal of the same framing ("cache backend") while an
+        // unrelated Redis edit sails through. The per-option-with-a-pick signal
+        // still lives on the unchosen-losers path (check_feedback) and the
+        // "none of these fit" send-back — both of which name specific options.
+        //
+        // Concept key priority mirrors the non-decision path: (1) the
+        // HUMAN-named concept from the reject prompt (F3 — the whole point of
+        // the field; earlier this branch discarded it), then (2) the card's
+        // context/question.
+        const content = artifact.content as { context?: string } | null;
+        const context = content?.context?.trim() || artifact.title;
+        const concept = humanConcept?.trim() || context || undefined;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || undefined,

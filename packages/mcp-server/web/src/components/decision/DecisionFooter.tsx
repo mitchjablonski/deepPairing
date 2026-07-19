@@ -13,6 +13,16 @@ interface DecisionFooterProps {
   setSendBackText: (v: string) => void;
   submitSendBack: () => void;
   sendBackSent: boolean;
+  /** #169 (F1/F2) — the HARD-reject gesture ("wrong question"), distinct from
+   *  the send-back ("none of these fit"). Arms the gate against the framing. */
+  showReject: boolean;
+  setShowReject: Dispatch<SetStateAction<boolean>>;
+  rejectText: string;
+  setRejectText: (v: string) => void;
+  rejectConcept: string;
+  setRejectConcept: (v: string) => void;
+  submitReject: () => void;
+  rejectSent: boolean;
   showReasoning: boolean;
   setShowReasoning: Dispatch<SetStateAction<boolean>>;
   reasoning: string;
@@ -34,6 +44,14 @@ export function DecisionFooter({
   setSendBackText,
   submitSendBack,
   sendBackSent,
+  showReject,
+  setShowReject,
+  rejectText,
+  setRejectText,
+  rejectConcept,
+  setRejectConcept,
+  submitReject,
+  rejectSent,
   showReasoning,
   setShowReasoning,
   reasoning,
@@ -94,6 +112,65 @@ export function DecisionFooter({
         </div>
       )}
 
+      {showReject && !rejectSent && (
+        <div className="space-y-2 mb-2 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
+          <label className="block text-2xs text-text-muted">
+            Why is this the wrong question? The agent will remember not to
+            re-propose this framing.
+          </label>
+          <textarea
+            rows={2}
+            autoFocus
+            value={rejectText}
+            onChange={(e) => setRejectText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                submitReject();
+              }
+              if (e.key === "Escape") {
+                setShowReject(false);
+                setRejectText("");
+                setRejectConcept("");
+              }
+            }}
+            placeholder="e.g. we don't need a cache at all here — this is premature optimization"
+            className="w-full px-2.5 py-1.5 bg-surface-secondary border border-accent-red/30 rounded text-xs text-text-primary
+                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-red resize-none"
+          />
+          <input
+            type="text"
+            value={rejectConcept}
+            onChange={(e) => setRejectConcept(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); submitReject(); }
+              if (e.key === "Escape") { setShowReject(false); setRejectText(""); setRejectConcept(""); }
+            }}
+            placeholder="Name the pattern you're rejecting (optional — your cross-project memory key)"
+            aria-label="Name the pattern you're rejecting"
+            className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
+                       placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-red"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={submitReject}
+              disabled={!rejectText.trim()}
+              className="px-3 py-1 text-xs font-medium bg-accent-red text-white rounded
+                         hover:bg-accent-red/80 disabled:opacity-50 transition-colors press-scale"
+            >
+              ✕ Reject &amp; remember
+            </button>
+            <button
+              onClick={() => { setShowReject(false); setRejectText(""); setRejectConcept(""); }}
+              className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
+            >
+              Cancel
+            </button>
+            <span className="ml-auto text-2xs text-text-muted italic">⌘⏎ to reject</span>
+          </div>
+        </div>
+      )}
+
       {showReasoning && (
         <div className="flex gap-2 mb-2">
           <input
@@ -128,7 +205,15 @@ export function DecisionFooter({
       {/* Tertiary affordance row — both triggers live here as muted
           text links. The "decision sent back" indicator displaces them
           once revision is requested (the user already escaped). */}
-      {sendBackSent ? (
+      {rejectSent ? (
+        <div className="flex items-center gap-2 text-2xs text-accent-red">
+          <span aria-hidden>✕</span>
+          <span>
+            You rejected this framing — the agent won't re-propose it. Your
+            reason is remembered across sessions.
+          </span>
+        </div>
+      ) : sendBackSent ? (
         <div className="flex items-center gap-2 text-2xs text-accent-amber">
           <span aria-hidden>↻</span>
           <span>
@@ -164,12 +249,22 @@ export function DecisionFooter({
           )}
           {artifactId && !showSendBack && (
             <button
-              onClick={() => { setShowSendBack(true); setShowReasoning(false); }}
+              onClick={() => { setShowSendBack(true); setShowReasoning(false); setShowReject(false); }}
               className="hover:text-accent-amber transition-colors"
               title="None of these options fit — send the decision back to the agent for a revised option set"
               aria-label="Send decision back for revised options"
             >
               ↻ None of these fit
+            </button>
+          )}
+          {artifactId && !showReject && (
+            <button
+              onClick={() => { setShowReject(true); setShowSendBack(false); setShowReasoning(false); }}
+              className="hover:text-accent-red transition-colors"
+              title="Reject this whole framing — you don't want any version of this. Remembered so the agent can't re-propose the same question."
+              aria-label="Reject this framing — wrong question"
+            >
+              ✕ Reject — wrong question
             </button>
           )}
         </div>

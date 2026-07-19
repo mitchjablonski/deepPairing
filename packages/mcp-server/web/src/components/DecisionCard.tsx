@@ -65,6 +65,7 @@ type DecisionPhase =
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const submitComment = useArtifactStore((s) => s.submitComment);
+  const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   // C2 — consumption receipt: true once the agent's check_feedback drained
   // this resolution (live decisions_acknowledged event, or the persisted
   // acknowledged flag on hydration).
@@ -118,6 +119,16 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
    */
   const [showSendBack, setShowSendBack] = useState(false);
   const [sendBackText, setSendBackText] = useDraft(`dec-sendback:${decisionId}`);
+  // #169 (F1/F2) — the HARD-reject gesture ("wrong question — don't do this at
+  // all"), distinct from the send-back ("none of these fit — give me a
+  // different set"). This one arms the gate against the FRAMING (one entry
+  // keyed on the question), so re-proposing the same question blocks while an
+  // unrelated edit mentioning an option's noun sails through. Wired to the
+  // status:"rejected" endpoint (server records the framing entry).
+  const [showReject, setShowReject] = useState(false);
+  const [rejectText, setRejectText] = useState("");
+  const [rejectConcept, setRejectConcept] = useState("");
+  const [rejectSent, setRejectSent] = useState(false);
   // FF9 — opt-in for the prediction-capture phase on high-stakes
   // decisions. Pre-FF9 every high-stakes pick was forced through the
   // predicting modal, which the PMF council called the loudest
@@ -386,6 +397,29 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     } catch {
       // UX7d — store surfaced the error toast; keep the composer open + text for
       // retry (don't advance to sentBack) instead of an unhandled rejection.
+    } finally {
+      inFlightRef.current = false;
+    }
+  };
+
+  // #169 (F1/F2) — the HARD reject: the human rejects the whole FRAMING with a
+  // reason (and, optionally, names the concept — the cross-project ledger key).
+  // POSTs status:"rejected" so the server records ONE framing-level entry
+  // (routes.ts), which blocks re-proposing the same question but NOT an
+  // unrelated edit that happens to mention an option. Same inFlightRef guard as
+  // submitSendBack.
+  const submitReject = async () => {
+    const text = rejectText.trim();
+    if (!artifactId || !text || phase.kind !== "idle" || inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      await updateArtifactStatus(artifactId, "rejected", text, rejectConcept.trim() || undefined);
+      setRejectSent(true);
+      setShowReject(false);
+      setRejectText("");
+      setRejectConcept("");
+    } catch {
+      // Store toasted; keep the composer + text for retry.
     } finally {
       inFlightRef.current = false;
     }
@@ -661,6 +695,14 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         setSendBackText={setSendBackText}
         submitSendBack={submitSendBack}
         sendBackSent={sendBackSent}
+        showReject={showReject}
+        setShowReject={setShowReject}
+        rejectText={rejectText}
+        setRejectText={setRejectText}
+        rejectConcept={rejectConcept}
+        setRejectConcept={setRejectConcept}
+        submitReject={submitReject}
+        rejectSent={rejectSent}
         showReasoning={showReasoning}
         setShowReasoning={setShowReasoning}
         reasoning={reasoning}

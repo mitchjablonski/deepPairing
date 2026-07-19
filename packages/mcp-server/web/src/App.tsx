@@ -25,6 +25,7 @@ import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { HookStatus } from "./components/HookStatus";
+import { PreflightBlockLog } from "./components/PreflightBlockLog";
 import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
@@ -449,6 +450,8 @@ function App() {
             </svg>
             <span className="hidden min-[700px]:inline">Decisions</span>
           </button>
+          <span className="text-2xs text-text-muted mx-1">·</span>
+          <PreflightBlockLog />
           <span className="text-2xs text-text-muted mx-1">·</span>
           <HookStatus />
           <span className="text-2xs text-text-muted mx-1">·</span>
