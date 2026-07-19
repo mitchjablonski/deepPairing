@@ -26257,7 +26257,6 @@ function deriveStance(entry) {
   return "mixed";
 }
 var corruptSnapshots = /* @__PURE__ */ new Map();
-var removalSnapshots = /* @__PURE__ */ new Map();
 var GlobalStore = class _GlobalStore {
   ledgerPath;
   // H1-5 — set by read() when the on-disk ledger couldn't be trusted at all
@@ -26518,12 +26517,19 @@ var GlobalStore = class _GlobalStore {
    * is local-blocks-only and never touches the global ledger; before this the
    * only way out was hand-editing the JSON.
    *
-   * Backup-before-mutate: before the FIRST removal of this ledger path in
-   * this process, the pre-removal bytes are snapshotted to `.removed-<ts>`
-   * (same mechanism as the `.corrupt-<ts>` copies) so removal is reversible —
-   * restore by copying the backup over the ledger, or re-merge it with
-   * `philosophy import --merge`. If the backup cannot be written, the removal
-   * is REFUSED (we never destroy the only copy of taste history).
+   * Backup-before-mutate: EVERY removal snapshots the pre-removal bytes to a
+   * fresh `.removed-<ts>` copy (same helper as the `.corrupt-<ts>` copies) so
+   * removal is reversible — restore by copying the backup over the ledger, or
+   * re-merge it with `philosophy import --merge`. Per-removal on purpose
+   * (review #193): a process-lifetime first-snapshot reuse meant a long-lived
+   * daemon that removed A, later recorded B, then removed B reported A-era
+   * bytes as B's "backup" — B was unrecoverable while the UI promised "a
+   * timestamped backup is written first". Removal is rare, filenames carry
+   * ts+rand (no collisions), and the honest contract is one fresh copy each
+   * time. (The corruptSnapshots dedupe map stays — that exists for read-spam
+   * on a persistently bad file, a different problem.) If the backup cannot be
+   * written, the removal is REFUSED (we never destroy the only copy of taste
+   * history).
    *
    * Returns null (no write, no backup) when the concept isn't in the ledger.
    * Throws when the on-disk ledger is corrupt/frozen — write() would refuse
@@ -26541,15 +26547,11 @@ var GlobalStore = class _GlobalStore {
     }
     const entry = ledger.concepts[key];
     if (!entry) return null;
-    let backupPath = removalSnapshots.get(this.ledgerPath) ?? null;
-    if (!backupPath || !fs2.existsSync(backupPath)) {
-      backupPath = this.snapshotLedger("removed");
-      if (!backupPath) {
-        throw new Error(
-          `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
-        );
-      }
-      removalSnapshots.set(this.ledgerPath, backupPath);
+    const backupPath = this.snapshotLedger("removed");
+    if (!backupPath) {
+      throw new Error(
+        `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
+      );
     }
     delete ledger.concepts[key];
     this.write(ledger);

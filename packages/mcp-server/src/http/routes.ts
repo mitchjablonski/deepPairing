@@ -944,7 +944,7 @@ export function createHttpRoutes(
   // The override valve is local-blocks-only; until this route the only way to
   // get a stance OUT of the cross-project ledger was hand-editing the JSON.
   // Removes the WHOLE concept entry (all instances). The store backs the
-  // ledger up to `.removed-<ts>` before the first removal in a process, so
+  // ledger up to a fresh `.removed-<ts>` before every removal, so
   // the deletion is reversible (GlobalStore.removeConcept). Bearer-gated like
   // every mutation by the SP1 middleware above.
   app.post("/api/philosophy/remove", async (c) => {

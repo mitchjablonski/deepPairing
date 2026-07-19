@@ -1040,9 +1040,12 @@ export class FileStore implements IStore {
     // local preferences.json is still updated below; only the global
     // mirror is gated.
     // Demo isolation — a demo session's scripted rejection must NEVER reach
-    // the real cross-project ledger (defense in depth: demoPreferences never
-    // carry the publish flag either, but this gate keeps the invariant even
-    // if the demo prefs ever get seeded from disk).
+    // the real cross-project ledger. NOTE: the three `!this.isDemoSession`
+    // gates (here + approved + override) are the BELT — the in-memory
+    // demoPreferences layer (which never carries the publish flag) is the
+    // suspenders, so removing just these gates stays green today. They are
+    // deliberate defense-in-depth, not dead code: they keep the invariant
+    // even if demo prefs ever get seeded from disk. Don't strip them.
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {

@@ -121,14 +121,6 @@ export function deriveStance(entry: PhilosophyEntry): PhilosophyStance {
 // cycle re-snapshots instead of pointing at bytes that no longer exist.
 const corruptSnapshots = new Map<string, string>();
 
-// Stance-removal backups — the `.removed-<ts>` snapshot taken before the FIRST
-// removal of each ledger path THIS process (backup-before-mutate: removal
-// deletes taste history, so a pre-surgery copy must exist on disk before the
-// first shrinking write). Value = the backup file path, so every removal in
-// the process can report where the reversible copy lives. Same shape as
-// corruptSnapshots above; kept separate because their lifecycles differ (a
-// clean read clears corrupt snapshots — removal backups must survive).
-const removalSnapshots = new Map<string, string>();
 
 export class GlobalStore {
   private ledgerPath: string;
@@ -487,19 +479,26 @@ export class GlobalStore {
    * is local-blocks-only and never touches the global ledger; before this the
    * only way out was hand-editing the JSON.
    *
-   * Backup-before-mutate: before the FIRST removal of this ledger path in
-   * this process, the pre-removal bytes are snapshotted to `.removed-<ts>`
-   * (same mechanism as the `.corrupt-<ts>` copies) so removal is reversible —
-   * restore by copying the backup over the ledger, or re-merge it with
-   * `philosophy import --merge`. If the backup cannot be written, the removal
-   * is REFUSED (we never destroy the only copy of taste history).
+   * Backup-before-mutate: EVERY removal snapshots the pre-removal bytes to a
+   * fresh `.removed-<ts>` copy (same helper as the `.corrupt-<ts>` copies) so
+   * removal is reversible — restore by copying the backup over the ledger, or
+   * re-merge it with `philosophy import --merge`. Per-removal on purpose
+   * (review #193): a process-lifetime first-snapshot reuse meant a long-lived
+   * daemon that removed A, later recorded B, then removed B reported A-era
+   * bytes as B's "backup" — B was unrecoverable while the UI promised "a
+   * timestamped backup is written first". Removal is rare, filenames carry
+   * ts+rand (no collisions), and the honest contract is one fresh copy each
+   * time. (The corruptSnapshots dedupe map stays — that exists for read-spam
+   * on a persistently bad file, a different problem.) If the backup cannot be
+   * written, the removal is REFUSED (we never destroy the only copy of taste
+   * history).
    *
    * Returns null (no write, no backup) when the concept isn't in the ledger.
    * Throws when the on-disk ledger is corrupt/frozen — write() would refuse
    * anyway, and a silent no-op would misreport "not found" for stances that
    * are actually preserved inside the unreadable file.
    */
-  removeConcept(concept: string): { concept: string; instanceCount: number; backupPath: string | null } | null {
+  removeConcept(concept: string): { concept: string; instanceCount: number; backupPath: string } | null {
     const key = normalizeKey(concept);
     const ledger = this.read();
     if (this.lastReadCorrupt) {
@@ -513,15 +512,11 @@ export class GlobalStore {
     const entry = ledger.concepts[key];
     if (!entry) return null;
 
-    let backupPath = removalSnapshots.get(this.ledgerPath) ?? null;
-    if (!backupPath || !fs.existsSync(backupPath)) {
-      backupPath = this.snapshotLedger("removed");
-      if (!backupPath) {
-        throw new Error(
-          `could not back the ledger up before removal (${this.ledgerPath}) — refusing to delete taste history without a reversible copy.`,
-        );
-      }
-      removalSnapshots.set(this.ledgerPath, backupPath);
+    const backupPath = this.snapshotLedger("removed");
+    if (!backupPath) {
+      throw new Error(
+        `could not back the ledger up before removal (${this.ledgerPath}) — refusing to delete taste history without a reversible copy.`,
+      );
     }
 
     delete ledger.concepts[key];

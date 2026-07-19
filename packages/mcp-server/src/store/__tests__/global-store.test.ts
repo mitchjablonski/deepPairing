@@ -659,3 +659,27 @@ describe("removeConcept — first-class stance removal", () => {
     errSpy.mockRestore();
   });
 });
+
+describe("removeConcept — fresh backup per removal (long-lived daemon)", () => {
+  it("the SECOND removal's backup contains the just-removed concept, not a stale first snapshot", () => {
+    // Review repro (#193): the process-lifetime snapshot reuse meant a daemon
+    // that removed concept A, then later recorded and removed concept B,
+    // reported A-era bytes as B's "backup" — B was unrecoverable while the
+    // drawer copy promised "a timestamped backup is written first". One
+    // snapshot PER removal is the honest contract; filenames carry ts+rand so
+    // they can't collide, and removal is rare enough that spray isn't a risk.
+    store.recordInstance("first concept", { project: "r", sessionId: "s1", verdict: "rejected" });
+    const first = store.removeConcept("first concept")!;
+    expect(first.backupPath).toBeTruthy();
+
+    // A later stance lands AFTER the first removal's snapshot...
+    store.recordInstance("late concept b", { project: "r", sessionId: "s2", verdict: "rejected" });
+    const second = store.removeConcept("late concept b")!;
+
+    // ...so its backup must be a FRESH pre-removal copy that contains it.
+    expect(second.backupPath).toBeTruthy();
+    expect(second.backupPath).not.toBe(first.backupPath);
+    const secondBackup = JSON.parse(fs.readFileSync(second.backupPath!, "utf-8"));
+    expect(secondBackup.concepts["late concept b"]).toBeTruthy();
+  });
+});

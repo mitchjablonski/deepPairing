@@ -1269,7 +1269,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     // valve is local-blocks-only; before this the only way to drop a stance
     // from ~/.deeppairing/philosophy/v1.json was hand-editing the JSON.
     // Removes the WHOLE concept entry; the store snapshots the ledger to
-    // `.removed-<ts>` before the first removal in a process (reversible —
+    // a fresh `.removed-<ts>` before every removal (reversible —
     // copy it back, or `philosophy import <backup> --merge`).
     const concept = rest.filter((a) => !a.startsWith("-")).join(" ").trim();
     if (!concept) {

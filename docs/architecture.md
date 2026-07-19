@@ -185,8 +185,8 @@ time window.
 Stances are removable first-class (`POST /api/philosophy/remove`, the
 ✕ on a stance row in the Ledger drawer, or
 `deeppairing philosophy remove <concept>`): the whole concept entry is
-deleted, after the ledger is snapshotted to a `.removed-<ts>` backup
-(once per process) so the surgery is reversible.
+deleted, after the ledger is snapshotted to a fresh `.removed-<ts>`
+backup (one per removal) so the surgery is reversible.
 
 Demo sessions (`demo_` prefix, minted by `POST /api/demo/run`) never
 write the ledger — or the project's `preferences.json` — at all; the
