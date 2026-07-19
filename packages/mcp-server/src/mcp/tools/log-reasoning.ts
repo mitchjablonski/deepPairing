@@ -2,7 +2,6 @@ import { nanoid } from "nanoid";
 import { validateLogReasoningInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { notifyResourcesListChanged } from "../tool-helpers.js";
-import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -25,7 +24,8 @@ export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<T
   // artifact-level warning every other present_* path persists: the reasoning
   // card renders through ArtifactDetail, whose #158 banner reads
   // artifact.secretWarnings. Labels+location only — never the value.
-  const secretMatches = scanContentForSecrets(content);
+  // #162 — the scan runs INSIDE createArtifact (parity with addComment); we
+  // read the matches back off the returned artifact for the broadcast below.
   const artifact = await ctx.store.createArtifact({
     id,
     type: "reasoning",
@@ -33,8 +33,8 @@ export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<T
     content,
     agentReasoning: args?.reasoning,
     relatedArtifactIds: relatedIds,
-    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({

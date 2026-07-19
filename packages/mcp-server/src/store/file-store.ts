@@ -8,7 +8,7 @@ import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
-import { scanForSecrets } from "../secret-scan.js";
+import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
 import { listSessions, searchAll, findPastPredictions, addRetrospective, listAllDecisions } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
@@ -422,9 +422,20 @@ export class FileStore implements IStore {
     relatedArtifactIds?: string[];
     parentId?: string | null;
     version?: number;
-    secretWarnings?: Array<{ pattern: string; label: string; field?: string; line?: number }>;
   }): Artifact {
     const now = new Date().toISOString();
+    // #162 — the store scans AUTHORITATIVELY, mirroring addComment. Pre-#162
+    // the tool handlers pre-scanned and passed `secretWarnings` in, and this
+    // method trusted the param — so a bearer-authed caller POSTing straight to
+    // /api/internal/.../artifacts with a secret in `content` and no warnings
+    // persisted unwarned (and could equally forge warnings onto clean
+    // content). Now every create path — present_* handlers, revise_artifact's
+    // supersede, the demo script, direct internal-route POSTs — converges on
+    // this one scan; anything a caller claims (still possible via the
+    // internal route's .passthrough() body) is ignored and recomputed.
+    // Handlers that broadcast `secret_warning` read the result back off the
+    // returned artifact, so there is exactly ONE scan per artifact.
+    const secretWarnings = scanContentForSecrets(params.content);
     const artifact: Artifact = {
       id: params.id,
       sessionId: this.sessionId,
@@ -438,9 +449,7 @@ export class FileStore implements IStore {
       relatedArtifactIds: params.relatedArtifactIds,
       // V4/#158 — persist scanner matches ONLY when present so the stored
       // JSON for clean artifacts stays byte-identical to before.
-      ...(params.secretWarnings && params.secretWarnings.length > 0
-        ? { secretWarnings: params.secretWarnings }
-        : {}),
+      ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -562,6 +571,20 @@ export class FileStore implements IStore {
       touched = true;
     }
     if (!touched) return null;
+    // #162 — statusNote is free text, and this is the ONLY path that mutates
+    // artifact content after creation (revise/supersede creates a NEW
+    // artifact; renameArtifact touches the title; updateArtifactStatus is
+    // status-only). A secret pasted into a note must trip the same
+    // authoritative scan createArtifact runs. Recompute-and-replace over the
+    // whole content: deterministic, so unchanged fields keep their warnings
+    // and a cleaned note honestly clears its own. Key stays OMITTED (never an
+    // empty array) so clean stored JSON is unchanged.
+    const secretWarnings = scanContentForSecrets(art.content);
+    if (secretWarnings.length > 0) {
+      art.secretWarnings = secretWarnings;
+    } else {
+      delete art.secretWarnings;
+    }
     art.updatedAt = new Date().toISOString();
     this.scheduleFlush();
     return art;

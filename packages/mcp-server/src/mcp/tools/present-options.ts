@@ -2,7 +2,6 @@ import { nanoid } from "nanoid";
 import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
-import { scanContentForSecrets } from "../../secret-scan.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -38,18 +37,18 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   const decisionId = `dec_${nanoid(10)}`;
   const content = { context, options: proposedOptions, decisionId, stakes };
   // #160 — decisions were a scanner GAP: option descriptions/pros/cons quote
-  // sample configs ("with key sk-…") exactly like findings evidence does. Scan
-  // BEFORE creation so matches PERSIST (labels+location only — never the
-  // value); the #158 banner and check_feedback consumers then work for free.
-  const secretMatches = scanContentForSecrets(content);
+  // sample configs ("with key sk-…") exactly like findings evidence does.
+  // #162 — the scan runs INSIDE createArtifact now (parity with addComment);
+  // matches PERSIST (labels+location only — never the value) and we read them
+  // back for the broadcast below.
   const artifact = await ctx.store.createArtifact({
     id,
     type: "decision",
     title: context,
     content,
     relatedArtifactIds: args?.relatedFindings,
-    ...(secretMatches.length > 0 ? { secretWarnings: secretMatches } : {}),
   });
+  const secretMatches = artifact.secretWarnings ?? [];
   // Y1' — record the preflight trace alongside the artifact.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
   await ctx.store.recordDecisionRequest({

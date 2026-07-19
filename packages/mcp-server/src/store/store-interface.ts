@@ -71,14 +71,13 @@ export interface CreateArtifactParams {
   parentId?: string | null;
   /** Override the default version of 1; used when superseding. */
   version?: number;
-  /**
-   * V4/#158 — secret-scanner matches for this artifact's content, persisted
-   * on the artifact so the warning survives a reload (the fire-and-forget
-   * `secret_warning` broadcast alone never reached a daemon-mode browser).
-   * Carries pattern prefix + label (+ #160 field/line location) only —
-   * never the matched value.
-   */
-  secretWarnings?: Array<{ pattern: string; label: string; field?: string; line?: number }>;
+  // #162 — `secretWarnings` was REMOVED from this param shape: the store now
+  // scans `content` authoritatively at create time (parity with addComment),
+  // so callers no longer pre-compute or pass warnings — they read the result
+  // off the returned artifact (`artifact.secretWarnings`) for the
+  // `secret_warning` broadcast. A stale/older client sending the field over
+  // the daemon's internal route (its body schema is .passthrough()) is
+  // accepted on the wire but IGNORED — the store recomputes.
 }
 
 export interface AddCommentParams {

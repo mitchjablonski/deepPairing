@@ -24051,6 +24051,32 @@ function scanForSecrets(text) {
   }
   return matches;
 }
+function scanContentForSecrets(content, maxDepth = 6) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const walk = (value, fieldPath, depth) => {
+    if (depth > maxDepth || value == null) return;
+    if (typeof value === "string") {
+      for (const m of scanForSecrets(value)) {
+        if (seen.has(m.pattern)) continue;
+        seen.add(m.pattern);
+        out.push(fieldPath ? { ...m, field: fieldPath } : m);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => walk(v, `${fieldPath}[${i}]`, depth + 1));
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        walk(v, fieldPath ? `${fieldPath}.${k}` : k, depth + 1);
+      }
+    }
+  };
+  walk(content, "", 0);
+  return out;
+}
 
 // src/store/session-scan.ts
 import fs6 from "node:fs";
@@ -24883,6 +24909,7 @@ var FileStore = class _FileStore {
   // --- Artifacts ---
   createArtifact(params) {
     const now = (/* @__PURE__ */ new Date()).toISOString();
+    const secretWarnings = scanContentForSecrets(params.content);
     const artifact = {
       id: params.id,
       sessionId: this.sessionId,
@@ -24896,7 +24923,7 @@ var FileStore = class _FileStore {
       relatedArtifactIds: params.relatedArtifactIds,
       // V4/#158 — persist scanner matches ONLY when present so the stored
       // JSON for clean artifacts stays byte-identical to before.
-      ...params.secretWarnings && params.secretWarnings.length > 0 ? { secretWarnings: params.secretWarnings } : {},
+      ...secretWarnings.length > 0 ? { secretWarnings } : {},
       createdAt: now,
       updatedAt: now
     };
@@ -24974,6 +25001,12 @@ var FileStore = class _FileStore {
       touched = true;
     }
     if (!touched) return null;
+    const secretWarnings = scanContentForSecrets(art.content);
+    if (secretWarnings.length > 0) {
+      art.secretWarnings = secretWarnings;
+    } else {
+      delete art.secretWarnings;
+    }
     art.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     this.scheduleFlush();
     return art;

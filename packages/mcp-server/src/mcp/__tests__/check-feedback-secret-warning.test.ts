@@ -49,12 +49,14 @@ function makeCtx(store: FileStore): ToolContext {
 describe("#158 — check_feedback surfaces persisted secret warnings on pending artifacts", () => {
   it("marks the flagged entry (labels only) and leaves the clean entry byte-identical", async () => {
     const store = new FileStore(tmpDir, "s1");
+    // #162 — createArtifact now scans content itself (a passed-in
+    // secretWarnings param no longer exists and would be ignored anyway), so
+    // the flagged fixture carries a REAL secret shape in its content.
     store.createArtifact({
       id: "art_flagged",
       type: "code_change",
       title: "modify src/config.ts",
-      content: { filePath: "src/config.ts", changeType: "modify", before: "x", after: "y", reasoning: "r" },
-      secretWarnings: [{ pattern: "AKIA", label: "AWS access key id" }],
+      content: { filePath: "src/config.ts", changeType: "modify", before: "x", after: 'const key = "AKIAIOSFODNN7EXAMPLE";', reasoning: "r" },
     });
     store.createArtifact({
       id: "art_clean",

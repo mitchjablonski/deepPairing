@@ -39,6 +39,10 @@ const RecordApprovedBody = z.object({
 // live vuln — but it brings them up to the same tier as the memory routes.
 // `.passthrough()` keeps every optional field the store reads (parentId,
 // version, target, intent, …) untouched.
+// #162 — a `secretWarnings` key in a create-artifact body still passes
+// through here (older wrappers send it) but is IGNORED: FileStore.
+// createArtifact scans `content` authoritatively and recomputes, so a
+// bearer-authed caller can neither suppress nor forge warnings.
 const CreateArtifactBody = z
   .object({
     id: z.string().min(1),
