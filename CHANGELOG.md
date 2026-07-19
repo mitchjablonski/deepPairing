@@ -1,5 +1,83 @@
 # Changelog
 
+## v0.1.14 — 2026-07-19
+
+The first-impressions release: the batch from the new-user journey audit. The
+demo survives a cold start, the gate fires from its most natural trigger, no
+command dead-ends into a wrong repo, and the cross-project ledger is yours to
+prune. No breaking changes.
+
+### Added
+- **The cross-project ledger is now yours to prune.** There was no first-class
+  way to remove a stance — you had to hand-edit the JSON. Now every stance row
+  in the Ledger drawer carries a ✕ that arms an inline confirm (telling you
+  exactly how many recorded instances across your projects it will delete), and
+  `deeppairing philosophy remove <concept>` does the same from the terminal.
+  Either path writes a timestamped ledger backup *before* the first removal and
+  refuses if that backup can't be written, and prints the
+  `philosophy import <backup> --merge` incantation to restore.
+- **The block moment persists past its toast.** When the pre-flight gate fires,
+  a new session-scoped header chip + popover keeps the record — what was
+  blocked, the concept, the prior reason, and when — instead of the moment
+  vanishing with the 12s toast.
+
+### Fixed
+- **Rejecting a decision now arms the gate — the signature loop fires from its
+  most natural trigger.** A whole-card "none of these, I reject this framing"
+  reject used to record *nothing*: the ledger only learned option concepts when
+  you *picked* one, so a re-proposal of the rejected framing sailed straight
+  through. Now a card reject records each presented option's concept with your
+  reason, and `check_feedback` gives a rejected decision the same "Do NOT apply
+  / address the rejection" posture every other rejected type gets — no more
+  reporting the rejection while simultaneously saying "You may proceed with
+  implementation."
+- **The demo survives a cold start.** Four cold-start bugs made a first
+  `deeppairing demo` fail-then-work, hang the terminal, print a URL that died
+  in ~60s, or miss its own hero moment. Fixed: readiness now waits up to 40s
+  with a progress line (a cold 9P boot no longer reads as a freeze and times
+  out early); the CLI exits cleanly instead of hanging on the detached child's
+  pipe; a demo-aware idle grace keeps the daemon alive ~10 min so the printed
+  URL still works; and the hero `preflight_blocked` moment is replayed to a tab
+  that opens after it fired. Timeout errors now report this project's *actual*
+  probed port range and a command that actually runs.
+- **The demo never touches your real ledger.** A demo run walked its scripted
+  rejection through a real store on your real project root — polluting
+  `~/.deeppairing`'s cross-project ledger (non-idempotently: six runs left six
+  duplicate instances the advisory tier later cited as real taste) and arming
+  your local pre-flight gate with demo-fiction. Demo sessions now keep
+  preferences purely in memory and never hit the ledger mirror sites;
+  `preferences.json` and the ledger stay byte-identical. The drawer opened from
+  a demo tab still *shows* the example stance, via an in-memory overlay that
+  never persists.
+- **No command dead-ends anymore.** Every `npx deeppairing …` suggestion —
+  in strings, docs, the web UI, and comments — resolved to an npm placeholder
+  that exits 1 with a wrong repo URL, a hostile first impression for anyone
+  copy-pasting it. All rewritten to the path form that actually runs, with a
+  grep-guard test so they can't creep back.
+- **The rejection gate is live from session one.** `init` claimed to install
+  the PreToolUse rejection-gate hook but didn't — it only arrived at first
+  daemon start. `init` now writes all three hooks, so the concept-rejection
+  gate protects you from the first session, not the first daemon boot.
+
+### Internal
+- **Manual-seed idempotency.** The ledger's deterministic manual-seed shape now
+  permanently dedupes on (concept, project, seed, verdict) — genuine
+  cross-session rejections and opposite-verdict re-seeds still append.
+- **A protocol-blind agent gets onboarded even when its first calls fail.** A
+  short pointer line now rides `INPUT_VALIDATION_FAILED` responses while the
+  onboarding latch stays armed, so the full protocol still rides the first
+  *successful* call.
+- **`doctor` gains a PreToolUse check** (and drops the plugin-redundant row),
+  so a missing gate hook is diagnosable.
+
+### Docs
+- **Troubleshooting entries for the cold-start reality.** New guidance for the
+  `daemon did not become ready within …ms` cold-boot on 9P/network
+  filesystems, the Claude Code MCP startup timeout on `/mnt/c` (`MCP_TIMEOUT`),
+  and the "plugin loads but no daemon" symptom.
+- CLAUDE.md now documents the required `Finding.significance` field (both
+  `significance` and `impact` exist; the required one was missing).
+
 ## v0.1.13 — 2026-07-18
 
 Code you can read, secrets that can't slip through. No breaking changes.
