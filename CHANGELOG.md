@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.1.12 — 2026-07-18
+
+Every feature in this release came from live pairing feedback — asked for in
+the tab, built, felt, and refined in rounds. No breaking changes.
+
+### Added
+- **A new artifact shows you where it landed.** A card that arrives live gets a
+  brief glow in the sidebar — and if it lands outside your scroll view, a small
+  pip points the way, jumping there only when you click. Your scroll is never
+  moved for you, nothing glows on load/reload/replay (initial population and
+  cross-session backfill are absorbed silently), screen-reader users get a
+  polite announcement, and reduced-motion gets a static ring.
+- **`deeppairing port` and `deeppairing status`.** Instantly find the daemon's
+  port and companion URL for any project — `!deeppairing port` from inside a
+  Claude Code session prints just the number (scriptable), `status` gives the
+  full picture (URL, pid, version, alive). Robust from subdirectories (walks up
+  to the nearest `.deeppairing`), never adopts another project's daemon on a
+  recycled port, and survives hostile `daemon.json` contents. The agent can
+  answer too: a new `get_companion_url` MCP tool (the 14th) reports this
+  session's actual daemon.
+- **Open questions are now answerable in place.** Each question is its own
+  section with the answer box just *there* — type and hit Answer (⌘⏎), or Ask
+  to send it back to the agent as a question; replies thread directly under
+  the question they answer. The old cramped row with tiny icons and a popover
+  is gone. Shaped by two live refinement rounds.
+
+### Fixed
+- **Modal panels are solid again.** The project-decisions and session-browser
+  modals used a color token that was never defined, so their panels rendered
+  transparent over the blurred backdrop — near-invisible in dark mode,
+  translucent grey in light. Both now use the solid surface other dialogs use,
+  and a new design-token integrity test fails the build if any surface/accent
+  class references an undefined token.
+- **A question-targeted answer no longer appears twice** (inline under its
+  question and again in the general comments).
+
+### Docs
+- **The README shows what the prose promises.** Refreshed screenshots at 2×,
+  including the surfaces that had none: region-anchored diagram comments (the
+  hero), the project-wide decisions view (re-shot after the modal fix), and
+  the detail-density dial — all captured from the real rendered app by the
+  CI-run spec that guards the selectors against rot.
+
+### Internal
+- **Local test runs are trustworthy again.** Test-spawned daemons now derive
+  ports outside the product's 3847–3974 window (per-worker isolated spans), an
+  aborted run can no longer leak fixture processes (120s TTL + forward-probe),
+  hardcoded-port suites use kernel-assigned ports, and spawn budgets absorb
+  measured WSL latency. The flake class that produced phantom failures on dev
+  machines with live daemons is structurally closed.
+- Secret-scanner test fixtures are assembled at runtime so the repo's own
+  source never contains token-shaped strings (our fixtures were tripping
+  GitGuardian); detection coverage unchanged.
+
 ## v0.1.11 — 2026-07-10
 
 The review-round release: everything found by a six-lens project audit
