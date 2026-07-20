@@ -44,6 +44,17 @@ export const ERROR_CODES = {
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
+  suggestion_not_countered: "suggestion_not_countered",
+  /** #172 — agent tried to counter a suggestion the human INSISTED on (their
+   *  version is authoritative — apply verbatim, don't re-argue). */
+  suggestion_insisted_authoritative: "suggestion_insisted_authoritative",
+  /** #172 — a transition on a suggestion already shipped in a version (counter
+   *  after apply, or a second apply stamping a different version). */
+  suggestion_already_applied: "suggestion_already_applied",
+  /** #172 — answer_question hit a pending/insisted suggestion without a valid
+   *  suggestionState (the MUST-respond contract). */
+  suggestion_response_required: "suggestion_response_required",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen

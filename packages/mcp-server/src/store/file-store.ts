@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, SessionAnnotation, TeamPreference, PreflightTrace } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace } from "@deeppairing/shared";
+import { suggestionSummary } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
@@ -686,6 +687,7 @@ export class FileStore implements IStore {
     intent?: "comment" | "question" | "suggestion";
     parentCommentId?: string | null;
     codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
+    suggestion?: CommentSuggestion;
   }): Comment {
     const now = Date.now();
     const parentKey = params.parentCommentId ?? "";
@@ -732,6 +734,9 @@ export class FileStore implements IStore {
       ...(params.codeReferences && params.codeReferences.length > 0
         ? { codeReferences: params.codeReferences }
         : {}),
+      // #172 — persist the first-class suggested edit. Spread so a plain comment
+      // stays byte-identical on disk.
+      ...(params.suggestion ? { suggestion: params.suggestion } : {}),
       answeredByCommentId: null,
       acknowledged: params.author === "agent",
       createdAt: new Date(now).toISOString(),
@@ -759,6 +764,74 @@ export class FileStore implements IStore {
 
   getComment(commentId: string): Comment | undefined {
     return this.comments.find((c) => c.id === commentId);
+  }
+
+  /**
+   * #172 — patch a comment's suggestion state machine. Records the ledger
+   * side-effects when — and only when — a suggestion first gets an
+   * `appliedInVersion` stamp:
+   *
+   *   - APPLIED (verbatim/extension of the HUMAN's edit, no counter) + a genuine
+   *     "why" note → the why becomes an approved pattern (a durable preference).
+   *   - INSISTED (the human overrode the agent's counter) → the override is
+   *     recorded regardless of a note, using the human's reason when present.
+   *   - APPLIED with a `counter` present (the human took the AGENT's counter) →
+   *     nothing recorded: the human's original edit did not win.
+   *
+   * All ledger writes go through recordApprovedPattern, which already honors
+   * demo-session isolation (#193, in-memory only) and the global-ledger publish
+   * gate — so a demo run stays in-memory and no global write happens beyond what
+   * the existing gate allows.
+   */
+  updateCommentSuggestion(commentId: string, update: import("./store-interface.js").SuggestionUpdate): Comment | undefined {
+    const comment = this.comments.find((c) => c.id === commentId);
+    if (!comment?.suggestion) return undefined;
+    const prev = comment.suggestion;
+    const prevAppliedVersion = prev.appliedInVersion;
+
+    const next: CommentSuggestion = {
+      ...prev,
+      ...(update.state !== undefined ? { state: update.state } : {}),
+      ...(update.appliedInVersion !== undefined ? { appliedInVersion: update.appliedInVersion } : {}),
+      ...(update.counter !== undefined ? { counter: update.counter } : {}),
+    };
+    comment.suggestion = next;
+
+    // A human take-counter / insist re-queues the comment so the agent's next
+    // check_feedback poll picks up the new obligation.
+    if (update.resetAcknowledged) {
+      comment.acknowledged = false;
+      this.notifyFeedbackWaiters();
+    }
+
+    // Ledger: fire once, at the moment the edit first ships in a version.
+    const newlyApplied = next.appliedInVersion != null && prevAppliedVersion == null;
+    if (newlyApplied) {
+      // A genuine "why" is any content that isn't the auto-generated summary the
+      // composer falls back to when the note is left blank.
+      const summary = suggestionSummary(comment.target.filePath, next.lineStart, next.lineEnd);
+      const why = comment.content.trim();
+      const hasWhy = why.length > 0 && why !== summary;
+
+      if (next.state === "insisted") {
+        // The human overrode the agent's counter — record the override with
+        // their reason (the why note), or a generic override line when blank.
+        this.recordApprovedPattern({
+          description: hasWhy
+            ? why
+            : `Human insisted on their exact edit at ${summary.replace(/^Suggested edit to /, "")}`,
+        });
+      } else if (!next.counter && hasWhy) {
+        // The human's own edit was applied (verbatim or with extension) and they
+        // told us why → a durable preference.
+        this.recordApprovedPattern({ description: why });
+      }
+      // else: took-the-counter (counter present) or no why → this-edit-only, no
+      // ledger entry.
+    }
+
+    this.scheduleFlush();
+    return comment;
   }
 
   // --- Status changes (V-fix) ---

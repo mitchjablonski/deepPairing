@@ -138,6 +138,63 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed findings failed: ${r.status}`); });
+  // #172 — a code_change carrying two suggested edits (a PENDING one and a
+  // COUNTERED one, the latter with Claude's reply). No `before` → the Result
+  // view (CommentableCode) renders, mounting SuggestionCards on the anchor
+  // lines so axe covers the pending amber pill, the countered violet pill + its
+  // action row, and the mini unified diff in BOTH themes.
+  const uploadSrc = [
+    "export async function uploadWithRetry(file) {",
+    "  for (let attempt = 0; attempt < 5; attempt++) {",
+    "    try { return await upload(file); }",
+    "    catch { await sleep(1000); }",
+    "  }",
+    "  throw new UploadFailedError();",
+    "}",
+  ].join("\n");
+  await fetch(`${baseURL}/api/internal/sessions/a11y/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cc_a11y", type: "code_change", title: "Retry wrapper",
+      content: { filePath: "lib/upload.ts", after: uploadSrc, changeType: "create" },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed code_change failed: ${r.status}`); });
+  await fetch(`${baseURL}/api/internal/sessions/a11y/comments`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cmt_sugg_pending", artifactId: "cc_a11y", author: "human", intent: "suggestion",
+      content: "Fixed 1s sleeps hammer the endpoint.",
+      target: { artifactId: "cc_a11y", lineStart: 4, lineEnd: 4, filePath: "lib/upload.ts" },
+      suggestion: {
+        originalText: "    catch { await sleep(1000); }",
+        replacementText: "    catch (err) {\n      if (!isRetryable(err)) throw err;\n      await sleep(2 ** attempt * 250);\n    }",
+        lineStart: 4, lineEnd: 4, state: "pending",
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed pending suggestion failed: ${r.status}`); });
+  await fetch(`${baseURL}/api/internal/sessions/a11y/comments`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cmt_sugg_countered", artifactId: "cc_a11y", author: "human", intent: "suggestion",
+      content: "return null instead of throwing",
+      target: { artifactId: "cc_a11y", lineStart: 6, lineEnd: 6, filePath: "lib/upload.ts" },
+      suggestion: {
+        originalText: "  throw new UploadFailedError();",
+        replacementText: "  return null;",
+        lineStart: 6, lineEnd: 6, state: "countered",
+        counter: { reason: "Returning null would silently drop the upload — attach the last error as cause instead." },
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed countered suggestion failed: ${r.status}`); });
+  await fetch(`${baseURL}/api/internal/sessions/a11y/comments`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cmt_sugg_reply", artifactId: "cc_a11y", author: "agent", parentCommentId: "cmt_sugg_countered",
+      content: "Returning null would silently drop the upload — three call sites never check for it. Keep the throw but attach the last error as cause?",
+      target: { artifactId: "cc_a11y", lineStart: 6, lineEnd: 6, filePath: "lib/upload.ts" },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed suggestion reply failed: ${r.status}`); });
+
   // #140 — a SEPARATE single-artifact session whose plan carries a diagram, so
   // it renders directly (like bootstrap's visuals test) and axe can scan the
   // region-comment affordance (drag overlay + keyboard node-list disclosure)
@@ -208,6 +265,72 @@ async function openQuestionSections(page: import("@playwright/test").Page): Prom
     ),
   );
 }
+
+/** #172 — mount the code_change with its two SuggestionCards (pending +
+ *  countered) so axe scans the pills, mini-diff, and action row for real. */
+async function openSuggestionArtifact(page: import("@playwright/test").Page): Promise<void> {
+  await page.click('[data-artifact-item="cc_a11y"]');
+  await page.waitForSelector('[data-artifact-id="cc_a11y"]', { timeout: 15000 });
+  // Both cards must be mounted (pending + countered) before analyzing.
+  await page.waitForSelector('[data-testid="suggestion-card"][data-state="pending"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="suggestion-card"][data-state="countered"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#172): suggested-edit cards (pending + countered) have no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openSuggestionArtifact(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (suggestion cards, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#172): suggested-edit cards have no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openSuggestionArtifact(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (suggestion cards, light):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("keyboard (#172): the Suggest edit composer and the counter action buttons are reachable + operable", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openSuggestionArtifact(page);
+
+  // The countered card's action buttons are reachable by keyboard.
+  const takeCounter = page.getByRole("button", { name: /take the counter/i });
+  await takeCounter.focus();
+  await expect(takeCounter).toBeFocused();
+  const insist = page.getByRole("button", { name: /insist on mine/i });
+  await insist.focus();
+  await expect(insist).toBeFocused();
+
+  // Open a line composer, switch to Suggest edit, and type into the mono
+  // mini-editor entirely by keyboard — the editor is a real, operable textbox.
+  await page.locator('[data-comment-anchor="line:lib/upload.ts:2"] button[aria-label="Add a comment on this line"]').click();
+  await page.getByRole("button", { name: /^Suggest edit$/ }).click();
+  const editor = page.getByTestId("suggestion-editor");
+  await editor.focus();
+  await expect(editor).toBeFocused();
+  await page.keyboard.type(" // edited");
+  await expect(editor).toHaveValue(/\/\/ edited/);
+
+  // ACTIVATE "Take the counter" by keyboard (Enter), not just focus — the
+  // countered card must resolve (its action row disappears once state → applied).
+  // Done LAST so the mutation doesn't disturb the scans above (no retries).
+  await takeCounter.focus();
+  await takeCounter.press("Enter");
+  await expect(page.getByRole("button", { name: /take the counter/i })).toHaveCount(0);
+});
 
 test("a11y: session view with decision + findings has no serious/critical axe violations", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);

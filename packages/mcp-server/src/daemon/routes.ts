@@ -8,7 +8,8 @@ import { z } from "zod";
 import type { FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { AutonomyLevelSchema, DetailDensitySchema } from "@deeppairing/shared";
+import { AutonomyLevelSchema, DetailDensitySchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
+import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
 
@@ -591,6 +592,27 @@ export function createDaemonRoutes(
       try { recordMetricEvent(daemonProjectRoot, { kind: "question_answered" }); } catch {}
     }
     return c.json({ status: "marked" });
+  });
+
+  // #172 — agent-side suggestion state transitions (apply / counter / stamp the
+  // insist). The MCP tool (answer_question) reaches here via DaemonClient.
+  // F2 — STRICT Zod at the boundary (parity with every sibling internal route):
+  // a hostile shape (`state:"obliterated"`, non-string reason, NaN version) is a
+  // 400 that persists nothing. F1-defense — re-run the transition guard here so
+  // a raw internal call can't counter-after-insist even if it bypasses the tool.
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, SuggestionUpdateBodySchema);
+    if (!parsed.ok) return parsed.res;
+    const commentId = c.req.param("commentId");
+    const existing = r.store.getComment(commentId);
+    if (!existing?.suggestion) return c.json({ comment: null });
+    const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
+    if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
+    const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
+    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
+    return c.json({ comment: comment ?? null });
   });
 
   // F1 — sink for metric events the MCP server knows about but the daemon's

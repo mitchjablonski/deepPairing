@@ -3,6 +3,32 @@ import type { Comment, PlanVisualAnnotation } from "@deeppairing/shared";
 import { useHighlightedCode } from "../hooks/useHighlightedCode";
 import { detectLanguage } from "../lib/highlighter";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "./LineComments";
+import { SuggestionCard } from "./SuggestionCard";
+
+/**
+ * #172 — split a line's comments into suggested-edit CARDS (rendered by
+ * SuggestionCard, with their agent/human replies pulled in) vs the plain
+ * comment chips. A suggestion and its replies must NOT also render as chips.
+ */
+export function partitionSuggestions(lineComments: Comment[]): {
+  suggestions: Comment[];
+  repliesBySuggestion: Record<string, Comment[]>;
+  chips: Comment[];
+} {
+  const suggestions = lineComments.filter((c) => c.suggestion);
+  const suggestionIds = new Set(suggestions.map((c) => c.id));
+  const repliesBySuggestion: Record<string, Comment[]> = {};
+  const chips: Comment[] = [];
+  for (const c of lineComments) {
+    if (c.suggestion) continue;
+    if (c.parentCommentId && suggestionIds.has(c.parentCommentId)) {
+      (repliesBySuggestion[c.parentCommentId] ??= []).push(c);
+      continue;
+    }
+    chips.push(c);
+  }
+  return { suggestions, repliesBySuggestion, chips };
+}
 
 /** Presentational treatment for an agent annotation marker, by semantic kind. */
 const contextAnnStyle = { glyph: "›", cls: "text-text-muted" };
@@ -71,6 +97,7 @@ export function CommentableCode({
         const lineNum = lineStart + i;
         const lineComments = commentsByLine?.get(lineNum) ?? [];
         const isCommentActive = activeLine === lineNum;
+        const { suggestions, repliesBySuggestion, chips } = partitionSuggestions(lineComments);
 
         // X10 — anchor key matches commentAnchorKey() in lib/comment-anchor.ts.
         const anchorKey = `line:${filePath ?? ""}:${lineNum}`;
@@ -130,13 +157,29 @@ export function CommentableCode({
               );
             })}
 
+            {/* #172 — posted suggested-edit cards. Always shown (independent of
+                the composer) since a suggestion is a persistent artifact state,
+                not transient draft chatter. */}
+            {suggestions.length > 0 && (
+              <div className="ml-[5.5rem] mr-3 my-1.5 space-y-2">
+                {suggestions.map((sc) => (
+                  <SuggestionCard
+                    key={sc.id}
+                    comment={sc}
+                    replies={repliesBySuggestion[sc.id] ?? []}
+                    filePath={filePath}
+                  />
+                ))}
+              </div>
+            )}
+
             {/* Existing comments on this line (collapsed/threaded) — hidden
                 while the composer is open since the composer shows them too. */}
-            {lineComments.length > 0 && !isCommentActive && (
+            {chips.length > 0 && !isCommentActive && (
               <div className="ml-[5.5rem] mr-3 my-1">
                 <LineCommentChips
                   lineNum={lineNum}
-                  comments={lineComments}
+                  comments={chips}
                   artifactId={artifactId}
                   filePath={filePath}
                   onOpenLine={() => openLine(lineNum)}
@@ -153,9 +196,11 @@ export function CommentableCode({
                 artifactId={artifactId}
                 filePath={filePath}
                 lineText={lines[lineNum - lineStart] ?? ""}
+                sourceLines={lines}
+                sourceLineStart={lineStart}
                 mode={mode}
                 setMode={setMode}
-                existingComments={lineComments}
+                existingComments={chips}
                 targetContext={targetContext}
                 onClose={closeLine}
               />

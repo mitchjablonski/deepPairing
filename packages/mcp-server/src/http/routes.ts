@@ -25,6 +25,7 @@ import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
 import {
   CommentBodySchema,
+  SuggestionResolveBodySchema,
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,
   RenameBodySchema,
@@ -408,7 +409,7 @@ export function createHttpRoutes(
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = CommentBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { artifactId, content, target, intent, parentCommentId } = parsed.data;
+    const { artifactId, content, target, intent, parentCommentId, suggestion } = parsed.data;
 
     // F6 — an artifact-targeted comment stored into a session that doesn't
     // own the artifact is WORSE than a no-op: it renders in the merged UI
@@ -443,6 +444,7 @@ export function createHttpRoutes(
       target,
       intent,
       parentCommentId: parentCommentId ?? null,
+      suggestion,
     });
 
     // U0.1 — when addComment dedupes, it returns the existing comment whose
@@ -544,6 +546,51 @@ export function createHttpRoutes(
       broadcast({ type: "comment_updated", comment }, sid);
     }
     return c.json({ status: "resolved", commentId, comment: comment ?? null });
+  });
+
+  // #172 — the human resolves a COUNTERED suggestion from the companion UI.
+  // "take_counter" accepts the agent's counter (state → applied, no version
+  // yet — the agent applies its counter and stamps the version on its next
+  // turn). "insist" makes the human's exact version authoritative (state →
+  // insisted; the agent applies it verbatim, no re-argue). Both re-queue the
+  // comment (resetAcknowledged) so check_feedback surfaces the new obligation.
+  app.post("/api/comments/:commentId/suggestion", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    const existing = await store.getComment(commentId);
+    if (!existing) {
+      return c.json(
+        { error: "comment_not_in_session", code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+    // Only a COUNTERED suggestion is take/insist-able. Fail loudly on anything
+    // else so a stale double-click can't corrupt the state machine.
+    if (!existing.suggestion || existing.suggestion.state !== "countered") {
+      return c.json(
+        { error: "suggestion_not_countered", code: "suggestion_not_countered",
+          message: "Only a suggestion the agent has countered can be taken or insisted on." },
+        409,
+      );
+    }
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = SuggestionResolveBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+
+    const comment = await store.updateCommentSuggestion(commentId, {
+      state: parsed.data.action === "insist" ? "insisted" : "applied",
+      resetAcknowledged: true,
+    });
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+      // The human just acted — wake the agent's poll (mirrors comment-create).
+      broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
+    }
+    return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
   });
 
   // Resolve a decision from the web UI

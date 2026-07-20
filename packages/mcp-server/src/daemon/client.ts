@@ -431,6 +431,14 @@ export class DaemonClient implements IStore {
     await this.post(`/comments/${commentId}/answered`, { answerCommentId });
   }
 
+  async updateCommentSuggestion(
+    commentId: string,
+    update: import("../store/store-interface.js").SuggestionUpdate,
+  ): Promise<Comment | undefined> {
+    const data = await this.post<{ comment: Comment | null }>(`/comments/${commentId}/suggestion`, update);
+    return data.comment ?? undefined;
+  }
+
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
    *  (the wrapper's broadcast is a no-op in standalone). Never throws. */
   async recordMetric(event:

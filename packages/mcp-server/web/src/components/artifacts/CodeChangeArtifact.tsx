@@ -1,6 +1,7 @@
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { coerceCodeChangeContent } from "@deeppairing/shared";
-import { CommentableCode } from "../CommentableCode";
+import { CommentableCode, partitionSuggestions } from "../CommentableCode";
+import { SuggestionCard } from "../SuggestionCard";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { ConceptBadge } from "../ConceptBadge";
@@ -22,6 +23,44 @@ interface DiffCommentProps {
   artifactId: string;
   filePath?: string;
   commentsByLine: Map<number, Comment[]>;
+}
+
+/**
+ * #172 — a diff row's feedback: suggested-edit cards (always shown) + plain
+ * comment chips (hidden while its composer is open). Shared by both diff views.
+ */
+function LineFeedback({
+  lineComments,
+  lineNum,
+  artifactId,
+  filePath,
+  onOpenLine,
+  hideChips,
+}: {
+  lineComments: Comment[];
+  lineNum: number;
+  artifactId: string;
+  filePath?: string;
+  onOpenLine: () => void;
+  hideChips: boolean;
+}) {
+  const { suggestions, repliesBySuggestion, chips } = partitionSuggestions(lineComments);
+  return (
+    <>
+      {suggestions.length > 0 && (
+        <div className="ml-[5.5rem] mr-3 my-1.5 space-y-2">
+          {suggestions.map((sc) => (
+            <SuggestionCard key={sc.id} comment={sc} replies={repliesBySuggestion[sc.id] ?? []} filePath={filePath} />
+          ))}
+        </div>
+      )}
+      {chips.length > 0 && !hideChips && (
+        <div className="ml-[5.5rem] mr-3 my-1">
+          <LineCommentChips lineNum={lineNum} comments={chips} artifactId={artifactId} filePath={filePath} onOpenLine={onOpenLine} />
+        </div>
+      )}
+    </>
+  );
 }
 
 function UnifiedDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: DiffLine[] } & DiffCommentProps) {
@@ -125,20 +164,19 @@ function UnifiedDiffView({ diff, artifactId, filePath, commentsByLine }: { diff:
                   </span>
                 </div>
 
-                {/* Existing comments + threaded replies on the new-side line. */}
-                {commentable && lineComments.length > 0 && !isActive && (
-                  <div className="ml-[5.5rem] mr-3 my-1">
-                    <LineCommentChips
-                      lineNum={newLine}
-                      comments={lineComments}
-                      artifactId={artifactId}
-                      filePath={filePath}
-                      onOpenLine={() => {
-                        setActiveLine(newLine);
-                        setMode("comment");
-                      }}
-                    />
-                  </div>
+                {/* Existing comments/suggestions + threaded replies on the new-side line. */}
+                {commentable && lineComments.length > 0 && (
+                  <LineFeedback
+                    lineComments={lineComments}
+                    lineNum={newLine}
+                    artifactId={artifactId}
+                    filePath={filePath}
+                    hideChips={isActive}
+                    onOpenLine={() => {
+                      setActiveLine(newLine);
+                      setMode("comment");
+                    }}
+                  />
                 )}
 
                 {/* Inline composer. No span end (a diff isn't a contiguous
@@ -342,20 +380,19 @@ function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: D
                   />
                 </div>
 
-                {/* Existing comments + threaded replies, full width below the row. */}
-                {commentable && lineComments.length > 0 && !isActive && (
-                  <div className="ml-[5.5rem] mr-3 my-1">
-                    <LineCommentChips
-                      lineNum={newLine!}
-                      comments={lineComments}
-                      artifactId={artifactId}
-                      filePath={filePath}
-                      onOpenLine={() => {
-                        setActiveLine(newLine!);
-                        setMode("comment");
-                      }}
-                    />
-                  </div>
+                {/* Existing comments/suggestions + threaded replies, full width below the row. */}
+                {commentable && lineComments.length > 0 && (
+                  <LineFeedback
+                    lineComments={lineComments}
+                    lineNum={newLine!}
+                    artifactId={artifactId}
+                    filePath={filePath}
+                    hideChips={isActive}
+                    onOpenLine={() => {
+                      setActiveLine(newLine!);
+                      setMode("comment");
+                    }}
+                  />
                 )}
 
                 {/* Inline composer — single-line targeting, same as result view. */}
