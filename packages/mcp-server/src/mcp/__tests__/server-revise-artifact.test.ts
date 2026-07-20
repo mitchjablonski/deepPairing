@@ -295,6 +295,61 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       expect(store.getArtifacts()[0].status).not.toBe("superseded");
     });
 
+    it("#171 — rejects a malformed changeset supersede (files not an array) via the changeset validator", async () => {
+      await callTool("present_changeset", {
+        title: "Move TTL refresh into middleware",
+        files: [
+          { path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 26 }] }] },
+        ],
+      });
+      const old = store.getArtifacts()[0];
+      const before = store.getArtifacts().length;
+      const { isError, text } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
+        content: { files: "nope" }, // pre-fix: persisted a silently-empty v2 with no error
+        reason: "revise",
+      });
+      expect(isError).toBe(true);
+      expect(text).toContain("INPUT_VALIDATION_FAILED");
+      // No v2 landed; the old changeset is untouched.
+      expect(store.getArtifacts().length).toBe(before);
+      expect(store.getArtifacts()[0].status).not.toBe("superseded");
+    });
+
+    it("#171 — a superseded changeset starts with FRESH review state (echoed reviewState is stripped)", async () => {
+      await callTool("present_changeset", {
+        title: "Move TTL refresh into middleware",
+        files: [
+          { path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 26 }] }] },
+          { path: "auth/session.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "y", newLine: 12 }] }] },
+        ],
+      });
+      const old = store.getArtifacts()[0];
+      // Human reviewed a file on v1.
+      store.setChangesetFileReview!(old.id, "auth/middleware.ts", "reviewed");
+      expect((store.getArtifacts()[0].content as any).reviewState).toEqual({ "auth/middleware.ts": "reviewed" });
+
+      const { isError } = await callTool("revise_artifact", {
+        artifactId: old.id,
+        mode: "supersede",
+        content: {
+          files: [
+            { path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "z", newLine: 26 }] }] },
+            { path: "auth/session.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "y", newLine: 12 }] }] },
+          ],
+          // The agent echoes v1's review state — a stale ✓ on a changed diff.
+          reviewState: { "auth/middleware.ts": "reviewed" },
+        },
+        reason: "adjust the middleware check",
+      });
+      expect(isError).toBeFalsy();
+      const v2 = store.getArtifacts().find((a) => a.id !== old.id)!;
+      expect(v2.type).toBe("changeset");
+      // v2 must not carry v1's ✓ mark — review starts fresh.
+      expect((v2.content as any).reviewState).toBeUndefined();
+    });
+
     it("F5 — refuses to supersede a closed (rejected) artifact instead of resurrecting it", async () => {
       await callTool("present_findings", {
         summary: "x",

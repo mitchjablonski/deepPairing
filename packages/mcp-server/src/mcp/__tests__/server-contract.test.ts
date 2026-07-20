@@ -9,6 +9,7 @@ import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -57,6 +58,29 @@ describe("MCP Tool Handlers — protocol contract", () => {
       // claim read-only, whatever its name suggests.
       expect(byName.check_feedback.readOnlyHint).toBe(false);
       expect(byName.check_feedback.idempotentHint).toBe(false);
+    });
+
+    // #171 — the "N tools" prose in user-facing docs drifted TWICE (14 survived
+    // a 13→14 bump, then a 14→15 bump), so pin it: every "N (MCP) tools" claim
+    // in the known docs must equal the registered tool count. Scoped to these
+    // files so an unrelated "N tools" phrase elsewhere can't false-fail; the
+    // dated CHANGELOG is deliberately excluded (it records historical counts).
+    it("user-facing docs' tool-count claims match the registered tool count (drift guard)", async () => {
+      const list = await client.listTools();
+      const count = list.tools.length;
+      const here = path.dirname(fileURLToPath(import.meta.url));
+      // __tests__ → mcp → src → mcp-server → packages → repo root
+      const repoRoot = path.resolve(here, "../../../../..");
+      const docs = ["README.md", "CLAUDE.md", "CONTRIBUTING.md", "docs/architecture.md", "claude-plugin/README.md"];
+      const countRe = /(\d+)\s+(?:MCP\s+)?tools?\b/gi;
+      const drift: Array<{ file: string; claim: string; expected: number }> = [];
+      for (const rel of docs) {
+        const src = fs.readFileSync(path.join(repoRoot, rel), "utf-8");
+        for (const m of src.matchAll(countRe)) {
+          if (Number(m[1]) !== count) drift.push({ file: rel, claim: m[0], expected: count });
+        }
+      }
+      expect(drift, `docs claim a tool count != ${count}:\n${JSON.stringify(drift, null, 2)}`).toEqual([]);
     });
   });
 

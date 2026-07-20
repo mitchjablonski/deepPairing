@@ -29713,6 +29713,10 @@ var SUPERSEDE_VALIDATORS = {
   plan: validatePresentPlanInput,
   decision: validatePresentOptionsInput,
   code_change: validatePresentCodeChangeInput,
+  // #171 — without this entry the lookup returned undefined and a malformed
+  // changeset (e.g. files: "nope") superseded straight to disk as a silently
+  // empty v2 with no error for the agent to self-correct from.
+  changeset: validatePresentChangesetInput,
   reasoning: validateLogReasoningInput
 };
 async function handleReviseArtifact(ctx, args) {
@@ -29752,6 +29756,9 @@ async function handleReviseArtifact(ctx, args) {
     if (supersedeValidator) {
       const v = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v.ok) return v.error;
+    }
+    if (old.type === "changeset" && content && typeof content === "object") {
+      delete content.reviewState;
     }
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;

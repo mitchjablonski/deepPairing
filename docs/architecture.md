@@ -48,7 +48,7 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 14 MCP tools (see below). Talks to the
+  session. Implements the 15 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
 - **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to

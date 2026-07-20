@@ -358,6 +358,18 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                     )}
                     {hunk.lines.map((line, li) => {
                       const newLine = line.newLine ?? null;
+                      // FOLLOW-UP (#171): line comments anchor to the NEW-side
+                      // line only, so a purely-DELETED line (no newLine) isn't
+                      // commentable — a reviewer can't yet anchor "why did you
+                      // remove this?" on a del row, and a fully-deleted file has
+                      // zero commentable lines. Fixing it needs a `side`
+                      // discriminator on the comment anchor (old/new numbers
+                      // overlap in a diff, so they'd collide without it), which
+                      // cross-cuts the SHARED LineComposer/LineCommentChips
+                      // (also used by code_change) + comment-read keying +
+                      // check_feedback delivery — deferred to keep that shared
+                      // machinery stable. Same new-side-only behavior as
+                      // CodeChangeArtifact's diff views.
                       const commentable = interactive && newLine != null;
                       const lineComments = newLine != null ? activeCommentsByLine.get(newLine) ?? [] : [];
                       const xfileChips = newLine != null ? crossFileAnchorsByLine.get(newLine) ?? [] : [];
