@@ -33,9 +33,9 @@ export type ToolResult = {
  * count toward "pending". These MUST stay in sync across the long-poll gate,
  * the pendingCount tally, and the suggestedAction branch (see check-feedback.ts).
  */
-export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change"] as const;
+export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"] as const;
 /** Draft types listed in the WAITING block (decisions get their own line). */
-export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"] as const;
+export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset"] as const;
 
 export interface ToolHelpers {
   /** MCP elicitation with graceful fallback. */

@@ -165,6 +165,121 @@ export const codeChangeArtifact: Artifact = {
   updatedAt: "2026-04-02T10:10:00.000Z",
 };
 
+// #171 — a multi-file changeset reviewed as one artifact. Mirrors the approved
+// mockup (session-TTL refresh moved into middleware): 4 files, unified-diff
+// hunks, per-file stats, risk chips, and one file already marked reviewed.
+export const changesetArtifact: Artifact = {
+  id: "art_changeset_001",
+  sessionId: "sess_1",
+  type: "changeset",
+  version: 2,
+  parentId: "art_changeset_000",
+  title: "Move session-TTL refresh out of the routes and into middleware",
+  status: "draft",
+  content: {
+    summary: "Centralize the sliding-window TTL refresh so every authenticated route inherits it, instead of each route touching the session store by hand.",
+    risks: ["touches auth"],
+    files: [
+      {
+        path: "auth/session.ts",
+        changeType: "modified",
+        stats: { additions: 8, deletions: 5 },
+        hunks: [
+          {
+            header: "@@ -10,6 +10,9 @@ export interface Session {",
+            lines: [
+              { kind: "ctx", content: "export interface Session {", oldLine: 10, newLine: 10 },
+              { kind: "ctx", content: "  id: string;", oldLine: 11, newLine: 11 },
+              { kind: "add", content: "  expiresAt: number; // sliding window, refreshed on touch", newLine: 12 },
+              { kind: "ctx", content: "}", oldLine: 12, newLine: 13 },
+            ],
+          },
+        ],
+      },
+      {
+        path: "auth/middleware.ts",
+        changeType: "modified",
+        stats: { additions: 24, deletions: 11 },
+        hunks: [
+          {
+            header: "@@ -24,9 +24,14 @@ export function requireSession(store: SessionStore) {",
+            lines: [
+              { kind: "ctx", content: "  return async (req, res, next) => {", oldLine: 24, newLine: 24 },
+              { kind: "ctx", content: "    const sid = readSessionCookie(req);", oldLine: 25, newLine: 25 },
+              { kind: "del", content: "    const session = await store.get(sid);", oldLine: 26 },
+              { kind: "del", content: "    if (!session) return res.status(401).end();", oldLine: 27 },
+              { kind: "add", content: "    const session = await store.getAndTouch(sid); // refreshes TTL", newLine: 26 },
+              { kind: "add", content: "    if (!session || session.expiresAt < Date.now()) {", newLine: 27 },
+              { kind: "add", content: "      clearSessionCookie(res);", newLine: 28 },
+              { kind: "add", content: "      return res.status(401).end();", newLine: 29 },
+              { kind: "add", content: "    }", newLine: 30 },
+              { kind: "ctx", content: "    req.session = session;", oldLine: 28, newLine: 31 },
+              { kind: "ctx", content: "    next();", oldLine: 29, newLine: 32 },
+            ],
+          },
+        ],
+      },
+      {
+        path: "routes/login.ts",
+        changeType: "modified",
+        stats: { additions: 3, deletions: 9 },
+        hunks: [
+          {
+            header: "@@ -40,10 +40,4 @@ router.post('/login', async (req, res) => {",
+            lines: [
+              { kind: "del", content: "  const session = await store.create(user.id);", oldLine: 40 },
+              { kind: "del", content: "  scheduleTtlRefresh(session);", oldLine: 41 },
+              { kind: "add", content: "  const session = await store.create(user.id); // TTL now handled in middleware", newLine: 40 },
+            ],
+          },
+        ],
+      },
+      {
+        path: "auth/session.test.ts",
+        changeType: "added",
+        stats: { additions: 51, deletions: 0 },
+        hunks: [
+          {
+            header: "@@ -0,0 +1,5 @@",
+            lines: [
+              { kind: "add", content: "import { getAndTouch } from './session';", newLine: 1 },
+              { kind: "add", content: "test('getAndTouch refreshes the sliding window', async () => {", newLine: 2 },
+              { kind: "add", content: "  const s = await getAndTouch(sid);", newLine: 3 },
+              { kind: "add", content: "  expect(s.expiresAt).toBeGreaterThan(Date.now());", newLine: 4 },
+              { kind: "add", content: "});", newLine: 5 },
+            ],
+          },
+        ],
+      },
+    ],
+    reviewState: {
+      "auth/session.ts": "reviewed",
+      "routes/login.ts": "reviewed",
+    },
+  },
+  agentReasoning: "Superseded v1 (you asked to keep the sliding window) — the refresh now lives in one middleware instead of every route.",
+  createdAt: "2026-04-02T10:20:00.000Z",
+  updatedAt: "2026-04-02T10:20:00.000Z",
+};
+
+// A cross-file comment binding the TTL constant to the middleware check.
+export const changesetCrossFileComment: Comment = {
+  id: "cmt_xfile_001",
+  sessionId: "sess_1",
+  target: {
+    artifactId: "art_changeset_001",
+    anchors: [
+      { filePath: "auth/session.ts", lineStart: 12 },
+      { filePath: "auth/middleware.ts", lineStart: 27 },
+    ],
+  },
+  parentCommentId: null,
+  author: "human",
+  content: "TTL constant and the middleware check must stay in sync.",
+  acknowledged: false,
+  createdAt: "2026-04-02T10:21:00.000Z",
+};
+
 export const sampleComment: Comment = {
   id: "cmt_001",
   sessionId: "sess_1",

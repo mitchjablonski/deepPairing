@@ -614,6 +614,35 @@ export class FileStore implements IStore {
     return art;
   }
 
+  /** #171 — mark ONE file of a changeset reviewed/skipped, in place. See
+   *  store-interface.ts. Human-driven review PROGRESS (not a decision record):
+   *  it lives on the artifact content so it rides getArtifacts()/check_feedback
+   *  and the WS full-artifact patch — the same in-content pattern
+   *  updatePlanProgress uses. Reversible: passing `null` clears the file's
+   *  state (e.g. un-checking "File looks right"). */
+  setChangesetFileReview(
+    artifactId: string,
+    filePath: string,
+    state: "reviewed" | "skipped" | null,
+  ): Artifact | null {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art || art.type !== "changeset") return null;
+    const content = art.content as { files?: Array<{ path?: string }>; reviewState?: Record<string, "reviewed" | "skipped"> };
+    // Only accept a path that's actually part of the changeset — a review flag
+    // for a phantom file is the caller's bug, not something to persist.
+    if (!Array.isArray(content.files) || !content.files.some((f) => f.path === filePath)) return null;
+    const reviewState = content.reviewState ?? {};
+    if (state === null) {
+      delete reviewState[filePath];
+    } else {
+      reviewState[filePath] = state;
+    }
+    content.reviewState = reviewState;
+    art.updatedAt = new Date().toISOString();
+    this.scheduleFlush();
+    return art;
+  }
+
   getArtifacts(): Artifact[] {
     return this.artifacts;
   }

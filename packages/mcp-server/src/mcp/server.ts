@@ -28,6 +28,7 @@ import { handlePostPrReview } from "./tools/post-pr-review.js";
 import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
+import { handlePresentChangeset } from "./tools/present-changeset.js";
 import { handleRecall } from "./tools/recall.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult } from "./tools/types.js";
@@ -196,7 +197,18 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             },
             pendingArtifacts: {
               type: "array",
-              items: { type: "object", properties: { id: { type: "string" }, type: { type: "string" }, title: { type: "string" } } },
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  type: { type: "string" },
+                  title: { type: "string" },
+                  // #171 — changeset per-file review progress.
+                  reviewState: { type: "object", description: "Changeset only — per-file review state keyed by path ('reviewed'|'skipped')." },
+                  filesReviewed: { type: "number", description: "Changeset only — count of files marked reviewed or skipped." },
+                  filesTotal: { type: "number", description: "Changeset only — total files in the changeset." },
+                },
+              },
             },
             questions: {
               type: "array",
@@ -209,6 +221,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   content: { type: "string" },
                   lineStart: { type: "number" },
                   findingIndex: { type: "number" },
+                  // #171 — changeset file dimension + cross-file anchors.
+                  filePath: { type: "string", description: "Changeset only — the file this line comment targets." },
+                  anchors: { type: "array", description: "Cross-file thread — 2+ {filePath, lineStart, lineEnd?} anchors.", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — region-anchored diagram comment: the node labels it
                   // covers (textual; ids/rect are deliberately omitted).
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
@@ -228,6 +243,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   filePath: { type: "string" },
                   lineStart: { type: "number" },
                   findingIndex: { type: "number" },
+                  // #171 — cross-file thread anchors (a changeset comment binding 2+ locations).
+                  anchors: { type: "array", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — see questions.items.region.
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } },
                 },
@@ -280,6 +297,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change),
+      },
+      {
+        name: "present_changeset",
+        annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description:
+          "Present a change that spans 2+ FILES as ONE reviewable artifact — unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change." +
+          "\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human reviews each file (marking it reviewed/skipped) and approves the whole changeset in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file review state, comments, and verdict.",
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset),
       },
       {
         name: "recall",
@@ -850,6 +878,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     "present_spec",
     "present_plan",
     "present_code_change",
+    "present_changeset",
     "log_reasoning",
     "revise_artifact",
     "post_pr_review",
@@ -958,6 +987,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
 
       case "present_code_change":
         return handlePresentCodeChange(ctx, args);
+
+      case "present_changeset":
+        // #171 — multi-file changeset review (extracted to tools/present-changeset.ts).
+        return handlePresentChangeset(ctx, args);
 
       case "check_feedback":
         // B3 — extracted to mcp/tools/check-feedback.ts (the last big inline

@@ -297,6 +297,20 @@ export interface ArtifactState {
   renameArtifact: (artifactId: string, title: string) => Promise<void>;
 
   /**
+   * #171 — mark ONE file of a changeset reviewed / skipped (or clear it with
+   * state=null). Review PROGRESS, not a decision — it patches
+   * `content.reviewState` on the artifact. Optimistic: flips the local state
+   * immediately (the WS `changeset_review_updated` broadcast is session-scoped
+   * and may never reach a switched-into project), then POSTs; rolls back the
+   * one file's entry on failure.
+   */
+  setChangesetFileReview: (
+    artifactId: string,
+    filePath: string,
+    state: "reviewed" | "skipped" | null,
+  ) => Promise<void>;
+
+  /**
    * Mark a human's OWN unanswered question resolved. Optimistically stamps
    * humanResolvedAt locally then POSTs. VISIBILITY/waiting-signal only — does
    * NOT touch the comment's `acknowledged` field (the agent's drain queue).
@@ -827,6 +841,53 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         }),
       "Rename artifact",
     );
+  },
+
+  setChangesetFileReview: async (artifactId, filePath, state) => {
+    assertNotReplay("Reviewing a file");
+    {
+      const owner = get().owningSession(artifactId);
+      if (isForeignSession(owner)) await guardForeignOwner("Reviewing a file", owner);
+    }
+    // Snapshot the file's prior review state for a surgical rollback, then patch
+    // content.reviewState optimistically (mirrors optimisticArtifactPatch but on
+    // a nested content field, which that helper doesn't cover).
+    const priorArtifact = get().artifacts.find((a) => a.id === artifactId);
+    const priorState = ((priorArtifact?.content as { reviewState?: Record<string, unknown> } | null)?.reviewState ?? {})[filePath];
+    const patch = (rs: Record<string, unknown>): Record<string, unknown> => {
+      const next = { ...rs };
+      if (state === null) delete next[filePath];
+      else next[filePath] = state;
+      return next;
+    };
+    set((s) => ({
+      artifacts: s.artifacts.map((a) =>
+        a.id === artifactId
+          ? { ...a, content: { ...(a.content as Record<string, unknown>), reviewState: patch((a.content as { reviewState?: Record<string, unknown> }).reviewState ?? {}) } }
+          : a,
+      ),
+    }));
+    try {
+      await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/changeset-review`, {
+        method: "POST",
+        headers: sessionHeaders(get().owningSession(artifactId)),
+        body: JSON.stringify({ filePath, state }),
+      });
+    } catch (err) {
+      // Roll back only this file's entry against the CURRENT state so a WS
+      // update that landed mid-request isn't wiped.
+      set((s) => ({
+        artifacts: s.artifacts.map((a) => {
+          if (a.id !== artifactId) return a;
+          const rs = { ...((a.content as { reviewState?: Record<string, unknown> }).reviewState ?? {}) };
+          if (priorState === undefined) delete rs[filePath];
+          else rs[filePath] = priorState;
+          return { ...a, content: { ...(a.content as Record<string, unknown>), reviewState: rs } };
+        }),
+      }));
+      await toastApiError("Mark file reviewed", err);
+      throw err;
+    }
   },
 
   markQuestionResolved: async (commentId) => {

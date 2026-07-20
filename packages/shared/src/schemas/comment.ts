@@ -49,6 +49,23 @@ export const CommentTargetSchema = z.object({
     })
     .optional()
     .describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers"),
+  // #171 — cross-file comment anchors for a changeset. A single-file line
+  // comment within a changeset uses `filePath` + `lineStart`/`lineEnd` above
+  // (filePath already existed); a CROSS-FILE thread carries 2+ entries here so
+  // one comment can bind two (or more) locations across files — the thing
+  // single-file review fundamentally can't say (e.g. "this TTL constant and
+  // that middleware check must stay in sync"). All optional; an old comment
+  // with no `anchors` loads unchanged.
+  anchors: z
+    .array(
+      z.object({
+        filePath: z.string(),
+        lineStart: z.number().int(),
+        lineEnd: z.number().int().optional(),
+      }),
+    )
+    .optional()
+    .describe("Cross-file comment anchors — 2+ entries make this a cross-file thread spanning changeset files"),
 });
 
 export type CommentTarget = z.infer<typeof CommentTargetSchema>;

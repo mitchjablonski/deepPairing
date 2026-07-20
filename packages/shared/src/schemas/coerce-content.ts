@@ -13,6 +13,11 @@ import type {
   SpecRequirement,
   SpecTask,
   ReasoningContent,
+  ChangesetContent,
+  ChangesetFile,
+  ChangesetHunk,
+  ChangesetHunkLine,
+  ChangesetReviewState,
 } from "./content-types.js";
 
 /**
@@ -359,6 +364,65 @@ export function coerceReasoningContent(raw: unknown): ReasoningContent {
   return out;
 }
 
+// --- changeset (#171) ---------------------------------------------------------
+
+function coerceHunkLine(v: unknown): ChangesetHunkLine {
+  const l = obj(v);
+  const out: ChangesetHunkLine = {
+    kind: oneOf(l.kind, ["ctx", "add", "del"] as const, "ctx"),
+    content: str(l.content),
+  };
+  if (typeof l.oldLine === "number" && Number.isFinite(l.oldLine)) out.oldLine = l.oldLine;
+  if (typeof l.newLine === "number" && Number.isFinite(l.newLine)) out.newLine = l.newLine;
+  return out;
+}
+
+function coerceHunk(v: unknown): ChangesetHunk {
+  const h = obj(v);
+  const out: ChangesetHunk = { lines: arr(h.lines).map(coerceHunkLine) };
+  if (typeof h.header === "string") out.header = h.header;
+  return out;
+}
+
+function coerceChangesetFile(v: unknown): ChangesetFile {
+  const f = obj(v);
+  const out: ChangesetFile = {
+    path: str(f.path),
+    changeType: oneOf(f.changeType, ["modified", "added", "deleted"] as const, "modified"),
+    hunks: arr(f.hunks).map(coerceHunk),
+  };
+  if (isObj(f.stats)) {
+    out.stats = {
+      additions: num((f.stats as Record<string, unknown>).additions),
+      deletions: num((f.stats as Record<string, unknown>).deletions),
+    };
+  }
+  return out;
+}
+
+/** Keep only "reviewed"/"skipped" values (drop junk) so the renderer trusts
+ *  the map. */
+function coerceReviewState(v: unknown): ChangesetReviewState | undefined {
+  if (!isObj(v)) return undefined;
+  const out: ChangesetReviewState = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (val === "reviewed" || val === "skipped") out[k] = val;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function coerceChangesetContent(raw: unknown): ChangesetContent {
+  const c = obj(raw);
+  const out: ChangesetContent = {
+    files: arr(c.files).map(coerceChangesetFile),
+  };
+  if (typeof c.summary === "string") out.summary = c.summary;
+  if (Array.isArray(c.risks)) out.risks = strArr(c.risks);
+  const reviewState = coerceReviewState(c.reviewState);
+  if (reviewState) out.reviewState = reviewState;
+  return out;
+}
+
 // --- dispatcher ---------------------------------------------------------------
 
 /** Coerce by artifact type. Returns null for types with no structured content
@@ -372,6 +436,7 @@ export function coerceArtifactContent(
   | DecisionContent
   | CodeChangeContent
   | ReasoningContent
+  | ChangesetContent
   | null {
   switch (artifact.type) {
     case "research": return coerceResearchContent(artifact.content);
@@ -380,6 +445,7 @@ export function coerceArtifactContent(
     case "decision": return coerceDecisionContent(artifact.content);
     case "code_change": return coerceCodeChangeContent(artifact.content);
     case "reasoning": return coerceReasoningContent(artifact.content);
+    case "changeset": return coerceChangesetContent(artifact.content);
     default: return null;
   }
 }

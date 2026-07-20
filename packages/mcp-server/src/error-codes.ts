@@ -60,6 +60,12 @@ export const ERROR_CODES = {
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
    *  (H1-5 write-refusal surfaced as a structured route error). */
   ledger_frozen: "ledger_frozen",
+  /** #171 — a changeset-review write targeted an artifact that isn't a
+   *  changeset, or a file path that isn't part of it. */
+  not_a_changeset_file: "not_a_changeset_file",
+  /** #171 — the store can't persist changeset review state (a read-only /
+   *  non-FileStore implementation lacks setChangesetFileReview). */
+  unsupported: "unsupported",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

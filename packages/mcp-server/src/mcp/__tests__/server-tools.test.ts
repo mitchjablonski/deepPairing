@@ -282,6 +282,74 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
     });
   });
 
+  describe("present_changeset (#171)", () => {
+    const sampleFiles = [
+      {
+        path: "auth/middleware.ts",
+        changeType: "modified",
+        stats: { additions: 2, deletions: 1 },
+        hunks: [{
+          header: "@@ -24,3 +24,4 @@",
+          lines: [
+            { kind: "ctx", content: "const sid = readSessionCookie(req);", oldLine: 25, newLine: 25 },
+            { kind: "del", content: "const s = await store.get(sid);", oldLine: 26 },
+            { kind: "add", content: "const s = await store.getAndTouch(sid);", newLine: 26 },
+          ],
+        }],
+      },
+      {
+        path: "auth/session.ts",
+        changeType: "modified",
+        hunks: [{ lines: [{ kind: "add", content: "expiresAt: number;", newLine: 12 }] }],
+      },
+    ];
+
+    it("registers, records a changeset artifact, and broadcasts (non-blocking — returns immediately)", async () => {
+      const before = Date.now();
+      const { text, isError } = await callTool("present_changeset", {
+        title: "Move TTL refresh into middleware",
+        summary: "Centralize the sliding-window refresh",
+        risks: ["touches auth"],
+        files: sampleFiles,
+      });
+      const elapsed = Date.now() - before;
+
+      expect(isError).toBeFalsy();
+      expect(text).toContain("Changeset");
+      expect(text).toContain("2 files");
+      // Non-blocking: it records + returns, never waits on a human.
+      expect(elapsed).toBeLessThan(5000);
+
+      const arts = store.getArtifacts();
+      expect(arts).toHaveLength(1);
+      expect(arts[0].type).toBe("changeset");
+      expect(arts[0].status).toBe("draft");
+      expect((arts[0].content as any).files).toHaveLength(2);
+      expect((arts[0].content as any).risks).toEqual(["touches auth"]);
+
+      const types = broadcasts.map((b) => b.type);
+      expect(types).toContain("artifact_created");
+      expect(types).toContain("preflight_trace_recorded");
+    });
+
+    it("advertises present_changeset in tools/list with a file-spanning description", async () => {
+      const list = await client.listTools();
+      const tool = list.tools.find((t) => t.name === "present_changeset");
+      expect(tool).toBeDefined();
+      expect(tool!.description).toMatch(/2\+ FILES/);
+      // reviewState is human-driven — it must NOT be advertised as agent input.
+      expect((tool!.inputSchema as any).properties.reviewState).toBeUndefined();
+      expect((tool!.inputSchema as any).required).toContain("title");
+    });
+
+    it("rejects a malformed changeset (files not an array) with INPUT_VALIDATION_FAILED", async () => {
+      const r = await callTool("present_changeset", { title: "bad", files: "nope" });
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/INPUT_VALIDATION_FAILED/);
+      expect(store.getArtifacts()).toHaveLength(0);
+    });
+  });
+
   describe("port in responses", () => {
     it("includes the correct port in tool responses", async () => {
       const { text } = await callTool("present_findings", {

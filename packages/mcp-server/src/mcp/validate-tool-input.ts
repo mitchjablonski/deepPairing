@@ -29,6 +29,7 @@ import {
   PlanContentSchema,
   CodeChangeContentSchema,
   ReasoningContentSchema,
+  ChangesetContentSchema,
   PlanVisualSchema,
   DecisionOptionBaseSchema,
 } from "@deeppairing/shared";
@@ -277,6 +278,31 @@ const EXAMPLE_REASONING = `{
     "oneLineExplanation": "depend on an interface, not a concrete impl" }
 }`;
 
+const EXAMPLE_CHANGESET = `{
+  "title": "Move session-TTL refresh into middleware",
+  "summary": "Centralize the sliding-window refresh so every route inherits it",
+  "risks": ["touches auth"],
+  "files": [
+    {
+      "path": "auth/middleware.ts",
+      "changeType": "modified",
+      "stats": { "additions": 4, "deletions": 2 },
+      "hunks": [
+        {
+          "header": "@@ -24,4 +24,6 @@",
+          "lines": [
+            { "kind": "ctx", "content": "  const sid = readSessionCookie(req);", "oldLine": 25, "newLine": 25 },
+            { "kind": "del", "content": "  const session = await store.get(sid);", "oldLine": 26 },
+            { "kind": "add", "content": "  const session = await store.getAndTouch(sid);", "newLine": 26 }
+          ]
+        }
+      ]
+    },
+    { "path": "auth/session.ts", "changeType": "modified",
+      "hunks": [ { "lines": [ { "kind": "add", "content": "  expiresAt: number;", "newLine": 12 } ] } ] }
+  ]
+}`;
+
 // Per-tool input adapters: pull the relevant args fields, run the matching
 // content schema. The schemas live in @deeppairing/shared and are already
 // the source of truth for what the daemon stores.
@@ -365,6 +391,25 @@ export function validatePresentCodeChangeInput(args: any): ValidationResult<z.in
   return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };
 }
 
+export function validatePresentChangesetInput(args: any): ValidationResult<z.infer<typeof ChangesetContentSchema> & { title: string }> {
+  // A changeset needs a title (artifact-level) plus the content fields.
+  const titleParse = z.object({ title: z.string().min(1) }).safeParse(args);
+  if (!titleParse.success) {
+    return { ok: false, error: formatValidationError("present_changeset", titleParse.error, EXAMPLE_CHANGESET) };
+  }
+  const contentParse = ChangesetContentSchema.safeParse({
+    summary: args?.summary,
+    files: args?.files,
+    risks: args?.risks,
+    // reviewState is HUMAN-driven (set via the review route), never taken from
+    // agent input — deliberately not read here.
+  });
+  if (!contentParse.success) {
+    return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET) };
+  }
+  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+}
+
 export function validateLogReasoningInput(args: any): ValidationResult<z.infer<typeof ReasoningContentSchema>> {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -427,6 +472,10 @@ export const TOOL_INPUT_SCHEMAS = {
       .describe("Artifact IDs of findings that motivated this change"),
   }),
   log_reasoning: ReasoningContentSchema,
+  // #171 — multi-file changeset. `reviewState` is HUMAN-driven (set via the
+  // review route), so it's omitted from the advertised input — the agent never
+  // sends it.
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true }).extend({ title: ARTIFACT_TITLE }),
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's
