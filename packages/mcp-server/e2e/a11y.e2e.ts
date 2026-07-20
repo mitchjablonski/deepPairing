@@ -306,7 +306,7 @@ test("keyboard (#172): the Suggest edit composer and the counter action buttons 
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
   await openSuggestionArtifact(page);
 
-  // The countered card's action buttons are reachable + operable by keyboard.
+  // The countered card's action buttons are reachable by keyboard.
   const takeCounter = page.getByRole("button", { name: /take the counter/i });
   await takeCounter.focus();
   await expect(takeCounter).toBeFocused();
@@ -323,6 +323,13 @@ test("keyboard (#172): the Suggest edit composer and the counter action buttons 
   await expect(editor).toBeFocused();
   await page.keyboard.type(" // edited");
   await expect(editor).toHaveValue(/\/\/ edited/);
+
+  // ACTIVATE "Take the counter" by keyboard (Enter), not just focus — the
+  // countered card must resolve (its action row disappears once state → applied).
+  // Done LAST so the mutation doesn't disturb the scans above (no retries).
+  await takeCounter.focus();
+  await takeCounter.press("Enter");
+  await expect(page.getByRole("button", { name: /take the counter/i })).toHaveCount(0);
 });
 
 test("a11y: session view with decision + findings has no serious/critical axe violations", async ({ page }) => {

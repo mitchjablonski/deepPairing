@@ -26142,6 +26142,11 @@ var CommentBodySchema = external_exports.object({
 var SuggestionResolveBodySchema = external_exports.object({
   action: external_exports.enum(["take_counter", "insist"])
 });
+var SuggestionUpdateBodySchema = external_exports.object({
+  state: external_exports.enum(["applied", "countered"]).optional(),
+  appliedInVersion: external_exports.number().int().positive().optional(),
+  counter: SuggestionCounterSchema.optional()
+}).strict();
 var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional(),
@@ -27763,6 +27768,15 @@ var ERROR_CODES = {
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
+  /** #172 — agent tried to counter a suggestion the human INSISTED on (their
+   *  version is authoritative — apply verbatim, don't re-argue). */
+  suggestion_insisted_authoritative: "suggestion_insisted_authoritative",
+  /** #172 — a transition on a suggestion already shipped in a version (counter
+   *  after apply, or a second apply stamping a different version). */
+  suggestion_already_applied: "suggestion_already_applied",
+  /** #172 — answer_question hit a pending/insisted suggestion without a valid
+   *  suggestionState (the MUST-respond contract). */
+  suggestion_response_required: "suggestion_response_required",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
@@ -29223,9 +29237,10 @@ ${s.replacementText}
     \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`
           );
         } else if (tookCounter) {
+          const counterBody = s.counter?.replacementText ? `apply your counter-proposal:
+${s.counter.replacementText}` : `revise the code per your counter's reasoning${s.counter?.reason ? ` ("${s.counter.reason}")` : ""}`;
           suggestionLines.push(
-            `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 apply your counter-proposal${s.counter?.replacementText ? `:
-${s.counter.replacementText}` : ""} and stamp the version.
+            `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 ${counterBody} and stamp the version.
     \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`
           );
         } else {
@@ -29506,6 +29521,34 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   };
 }
 
+// src/store/store-interface.ts
+function validateSuggestionTransition(current, update) {
+  if (update.state === "countered") {
+    if (current.state === "insisted") {
+      return {
+        ok: false,
+        code: "suggestion_insisted_authoritative",
+        message: 'The human INSISTED on their exact version after your counter \u2014 it is authoritative. Apply it verbatim with suggestionState:"applied" + appliedInVersion; do not counter or re-argue.'
+      };
+    }
+    if (current.appliedInVersion != null) {
+      return {
+        ok: false,
+        code: "suggestion_already_applied",
+        message: `This suggestion already shipped in v${current.appliedInVersion} \u2014 it can no longer be countered.`
+      };
+    }
+  }
+  if (update.appliedInVersion != null && current.appliedInVersion != null && current.appliedInVersion !== update.appliedInVersion) {
+    return {
+      ok: false,
+      code: "suggestion_already_applied",
+      message: `This suggestion already shipped in v${current.appliedInVersion}; it can't be re-stamped as v${update.appliedInVersion}.`
+    };
+  }
+  return { ok: true };
+}
+
 // src/mcp/tools/answer-question.ts
 async function handleAnswerQuestion(ctx, args) {
   const { store, broadcast } = ctx;
@@ -29525,38 +29568,59 @@ async function handleAnswerQuestion(ctx, args) {
     };
   }
   const suggestionStateRaw = typeof args?.suggestionState === "string" ? args.suggestionState : void 0;
-  if (parent.suggestion && (suggestionStateRaw === "applied" || suggestionStateRaw === "countered")) {
-    const replyId = `cmt_${nanoid3(10)}`;
-    const reply = await store.addComment({
-      id: replyId,
-      artifactId: parent.target?.artifactId ?? "__session__",
-      content: answer,
-      author: "agent",
-      target: parent.target ?? { artifactId: "__session__" },
-      parentCommentId: commentId
-    });
-    let update;
-    if (suggestionStateRaw === "countered") {
-      const counterReplacement = args?.counterReplacement != null ? String(args.counterReplacement) : void 0;
-      update = { state: "countered", counter: { reason: answer, ...counterReplacement ? { replacementText: counterReplacement } : {} } };
-    } else {
-      const versionRaw = Number(args?.appliedInVersion);
-      const appliedInVersion = Number.isFinite(versionRaw) && versionRaw > 0 ? Math.floor(versionRaw) : void 0;
-      if (appliedInVersion == null) {
+  const validState = suggestionStateRaw === "applied" || suggestionStateRaw === "countered";
+  if (parent.suggestion) {
+    const s = parent.suggestion;
+    const owesResponse = s.appliedInVersion == null && (s.state === "pending" || s.state === "insisted" || s.state === "applied" && !!s.counter);
+    if (owesResponse && !validState) {
+      return {
+        content: [{
+          type: "text",
+          text: `answer_question: ${commentId} is a SUGGESTED EDIT you must respond to \u2014 a plain reply is not enough (it would leave the suggestion PENDING forever). Call again with suggestionState: "applied" + appliedInVersion (apply verbatim, or apply-with-extension and name the change in \`answer\`), or "countered" with your reason in \`answer\`. [code: suggestion_response_required]`
+        }],
+        isError: true
+      };
+    }
+    if (validState) {
+      let update;
+      if (suggestionStateRaw === "countered") {
+        const counterReplacement = args?.counterReplacement != null ? String(args.counterReplacement) : void 0;
+        update = { state: "countered", counter: { reason: answer, ...counterReplacement ? { replacementText: counterReplacement } : {} } };
+      } else {
+        const versionRaw = Number(args?.appliedInVersion);
+        const appliedInVersion = Number.isFinite(versionRaw) && versionRaw > 0 ? Math.floor(versionRaw) : void 0;
+        if (appliedInVersion == null) {
+          return {
+            content: [{ type: "text", text: "answer_question: applying a suggestion requires appliedInVersion (the artifact version that now contains the edit)." }],
+            isError: true
+          };
+        }
+        update = s.state === "insisted" ? { appliedInVersion } : { state: "applied", appliedInVersion };
+      }
+      const verdict = validateSuggestionTransition(s, update);
+      if (!verdict.ok) {
         return {
-          content: [{ type: "text", text: "answer_question: applying a suggestion requires appliedInVersion (the artifact version that now contains the edit)." }],
+          content: [{ type: "text", text: `answer_question: ${verdict.message} [code: ${verdict.code}]` }],
           isError: true
         };
       }
-      update = parent.suggestion.state === "insisted" ? { appliedInVersion } : { state: "applied", appliedInVersion };
+      const replyId = `cmt_${nanoid3(10)}`;
+      const reply = await store.addComment({
+        id: replyId,
+        artifactId: parent.target?.artifactId ?? "__session__",
+        content: answer,
+        author: "agent",
+        target: parent.target ?? { artifactId: "__session__" },
+        parentCommentId: commentId
+      });
+      const updated = await store.updateCommentSuggestion(commentId, update);
+      broadcast({ type: "comment_added", comment: reply });
+      if (updated) broadcast({ type: "comment_updated", comment: updated });
+      const verb = suggestionStateRaw === "countered" ? "Countered the suggestion" : `Applied the suggestion${updated?.suggestion?.appliedInVersion ? ` (in v${updated.suggestion.appliedInVersion})` : ""}`;
+      return {
+        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback()}` }]
+      };
     }
-    const updated = await store.updateCommentSuggestion(commentId, update);
-    broadcast({ type: "comment_added", comment: reply });
-    if (updated) broadcast({ type: "comment_updated", comment: updated });
-    const verb = suggestionStateRaw === "countered" ? "Countered the suggestion" : `Applied the suggestion${updated?.suggestion?.appliedInVersion ? ` (in v${updated.suggestion.appliedInVersion})` : ""}`;
-    return {
-      content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback()}` }]
-    };
   }
   const answerId = `cmt_${nanoid3(10)}`;
   const codeRefs = Array.isArray(args?.evidence) ? args.evidence.filter((e) => e && typeof e === "object").map((e) => ({

@@ -7967,6 +7967,15 @@ var ERROR_CODES = {
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
   suggestion_not_countered: "suggestion_not_countered",
+  /** #172 — agent tried to counter a suggestion the human INSISTED on (their
+   *  version is authoritative — apply verbatim, don't re-argue). */
+  suggestion_insisted_authoritative: "suggestion_insisted_authoritative",
+  /** #172 — a transition on a suggestion already shipped in a version (counter
+   *  after apply, or a second apply stamping a different version). */
+  suggestion_already_applied: "suggestion_already_applied",
+  /** #172 — answer_question hit a pending/insisted suggestion without a valid
+   *  suggestionState (the MUST-respond contract). */
+  suggestion_response_required: "suggestion_response_required",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
@@ -23348,6 +23357,11 @@ var CommentBodySchema = external_exports.object({
 var SuggestionResolveBodySchema = external_exports.object({
   action: external_exports.enum(["take_counter", "insist"])
 });
+var SuggestionUpdateBodySchema = external_exports.object({
+  state: external_exports.enum(["applied", "countered"]).optional(),
+  appliedInVersion: external_exports.number().int().positive().optional(),
+  counter: SuggestionCounterSchema.optional()
+}).strict();
 var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional(),
@@ -27770,6 +27784,34 @@ function mountStaticUi(app, opts) {
   });
 }
 
+// src/store/store-interface.ts
+function validateSuggestionTransition(current, update) {
+  if (update.state === "countered") {
+    if (current.state === "insisted") {
+      return {
+        ok: false,
+        code: "suggestion_insisted_authoritative",
+        message: 'The human INSISTED on their exact version after your counter \u2014 it is authoritative. Apply it verbatim with suggestionState:"applied" + appliedInVersion; do not counter or re-argue.'
+      };
+    }
+    if (current.appliedInVersion != null) {
+      return {
+        ok: false,
+        code: "suggestion_already_applied",
+        message: `This suggestion already shipped in v${current.appliedInVersion} \u2014 it can no longer be countered.`
+      };
+    }
+  }
+  if (update.appliedInVersion != null && current.appliedInVersion != null && current.appliedInVersion !== update.appliedInVersion) {
+    return {
+      ok: false,
+      code: "suggestion_already_applied",
+      message: `This suggestion already shipped in v${current.appliedInVersion}; it can't be re-stamped as v${update.appliedInVersion}.`
+    };
+  }
+  return { ok: true };
+}
+
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/middleware/body-limit/index.js
 var ERROR_MESSAGE = "Payload Too Large";
 var bodyLimit = (options) => {
@@ -28195,10 +28237,14 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    const parsed = await readJsonObject(c);
+    const parsed = await parseJsonBody(c, SuggestionUpdateBodySchema);
     if (!parsed.ok) return parsed.res;
-    const update = parsed.body;
-    const comment = r.store.updateCommentSuggestion(c.req.param("commentId"), update);
+    const commentId = c.req.param("commentId");
+    const existing = r.store.getComment(commentId);
+    if (!existing?.suggestion) return c.json({ comment: null });
+    const verdict = validateSuggestionTransition(existing.suggestion, parsed.data);
+    if (!verdict.ok) return c.json({ error: verdict.message, code: verdict.code }, 409);
+    const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
     if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
     return c.json({ comment: comment ?? null });
   });

@@ -388,8 +388,14 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
             `- 🔧 INSISTED EDIT [${loc}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter — apply it VERBATIM, do not re-argue:\n${s.replacementText}\n    → ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`,
           );
         } else if (tookCounter) {
+          // A counter can be reason-only (no replacement code). Tell the agent
+          // to revise per the reason rather than "apply your counter-proposal"
+          // when there's no concrete code to apply.
+          const counterBody = s.counter?.replacementText
+            ? `apply your counter-proposal:\n${s.counter.replacementText}`
+            : `revise the code per your counter's reasoning${s.counter?.reason ? ` ("${s.counter.reason}")` : ""}`;
           suggestionLines.push(
-            `- 🔧 COUNTER ACCEPTED [${loc}]${commentSecretNote(c)} The human TOOK YOUR COUNTER — apply your counter-proposal${s.counter?.replacementText ? `:\n${s.counter.replacementText}` : ""} and stamp the version.\n    → ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`,
+            `- 🔧 COUNTER ACCEPTED [${loc}]${commentSecretNote(c)} The human TOOK YOUR COUNTER — ${counterBody} and stamp the version.\n    → ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`,
           );
         } else {
           // pending (the common case)
@@ -456,6 +462,12 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         });
         continue;
       }
+      // DEPRECATED (#172) — the legacy one-line `target.suggestion` STRING. The
+      // canonical suggested-edit surface is the first-class `comment.suggestion`
+      // OBJECT handled above (state machine + must-respond + ledger). This branch
+      // remains ONLY to keep serving suggestions posted by a stale browser tab
+      // running pre-#172 UI; new suggestions never take this path. Remove once no
+      // stale tabs remain in the field.
       if (c.target.suggestion) {
         const filePath = c.target.filePath ?? "unknown";
         const line = c.target.lineStart ?? "?";

@@ -110,6 +110,53 @@ export interface SuggestionUpdate {
   resetAcknowledged?: boolean;
 }
 
+/**
+ * #172 — the pure transition guard for the AGENT-driven surface (answer_question
+ * + the internal daemon route). `updateCommentSuggestion` is a low-level setter;
+ * these are the invariants a caller must enforce BEFORE calling it so a bad
+ * transition can't (a) flip an insisted override back to countered — which the
+ * "counter present ⇒ took-the-counter" ledger branch then mis-reads, destroying
+ * the override record — or (b) silently re-stamp a shipped edit with a new
+ * version. The human take/insist route never trips these (it only moves
+ * countered → applied/insisted), so it doesn't call this.
+ */
+export function validateSuggestionTransition(
+  current: CommentSuggestion,
+  update: SuggestionUpdate,
+): { ok: true } | { ok: false; code: string; message: string } {
+  // A counter is only valid while the negotiation is still open.
+  if (update.state === "countered") {
+    if (current.state === "insisted") {
+      return {
+        ok: false,
+        code: "suggestion_insisted_authoritative",
+        message:
+          "The human INSISTED on their exact version after your counter — it is authoritative. Apply it verbatim with suggestionState:\"applied\" + appliedInVersion; do not counter or re-argue.",
+      };
+    }
+    if (current.appliedInVersion != null) {
+      return {
+        ok: false,
+        code: "suggestion_already_applied",
+        message: `This suggestion already shipped in v${current.appliedInVersion} — it can no longer be countered.`,
+      };
+    }
+  }
+  // The applied-version stamp is write-once (idempotent same-version is fine).
+  if (
+    update.appliedInVersion != null &&
+    current.appliedInVersion != null &&
+    current.appliedInVersion !== update.appliedInVersion
+  ) {
+    return {
+      ok: false,
+      code: "suggestion_already_applied",
+      message: `This suggestion already shipped in v${current.appliedInVersion}; it can't be re-stamped as v${update.appliedInVersion}.`,
+    };
+  }
+  return { ok: true };
+}
+
 export interface RecordDecisionParams {
   decisionId: string;
   artifactId: string;

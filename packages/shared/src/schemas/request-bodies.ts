@@ -16,7 +16,7 @@
  * mean the client has drifted from the contract and we want to know.
  */
 import { z } from "zod";
-import { CommentSuggestionSchema } from "./comment.js";
+import { CommentSuggestionSchema, SuggestionCounterSchema } from "./comment.js";
 
 // POST /api/comments — submit a comment from the web UI.
 export const CommentBodySchema = z.object({
@@ -41,6 +41,22 @@ export const SuggestionResolveBodySchema = z.object({
   action: z.enum(["take_counter", "insist"]),
 });
 export type SuggestionResolveBody = z.infer<typeof SuggestionResolveBodySchema>;
+
+// POST /api/internal/sessions/:sessionId/comments/:commentId/suggestion — the
+// AGENT-driven transition (from answer_question via DaemonClient). Deliberately
+// STRICT and narrow: only "applied"/"countered" states (take/insist are
+// HUMAN-only via the public route), a positive-int version, and a well-formed
+// counter — so a hostile/garbage internal call can't persist `state:"obliterated"`
+// or a NaN version. `.strict()` also rejects `resetAcknowledged` (never sent on
+// the agent path) and a raw `insisted` injection.
+export const SuggestionUpdateBodySchema = z
+  .object({
+    state: z.enum(["applied", "countered"]).optional(),
+    appliedInVersion: z.number().int().positive().optional(),
+    counter: SuggestionCounterSchema.optional(),
+  })
+  .strict();
+export type SuggestionUpdateBody = z.infer<typeof SuggestionUpdateBodySchema>;
 
 // POST /api/decisions/:decisionId — resolve a decision from the web UI.
 export const DecisionResolveBodySchema = z.object({

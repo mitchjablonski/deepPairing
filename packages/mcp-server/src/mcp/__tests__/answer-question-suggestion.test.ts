@@ -122,6 +122,101 @@ describe("#172 answer_question resolves suggestions", () => {
     expect(store.getSessionMemory().approvedPatterns).toContain("returning early is cleaner");
   });
 
+  // --- F1: counter-after-insist / counter-after-applied ---
+
+  it("F1 — rejects a counter on an INSISTED suggestion and PRESERVES the override ledger entry", async () => {
+    const store = new FileStore(tmpDir, "s_f1_insist");
+    seed(store, "returning early is cleaner");
+    store.updateCommentSuggestion("cmt_s", { state: "countered", counter: { reason: "no" } });
+    store.updateCommentSuggestion("cmt_s", { state: "insisted", resetAcknowledged: true });
+    // The agent applies the insisted version → records the override.
+    await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "applied verbatim", suggestionState: "applied", appliedInVersion: 3 });
+    expect(store.getSessionMemory().approvedPatterns).toContain("returning early is cleaner");
+
+    // Now the agent tries to COUNTER it after the fact — must be refused, and
+    // the state + override record must be untouched.
+    const res = await handleAnswerQuestion(makeCtx(store), {
+      commentId: "cmt_s", answer: "actually let me counter", suggestionState: "countered", counterReplacement: "x",
+    });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toMatch(/suggestion_insisted_authoritative|suggestion_already_applied/);
+    const c = store.getComment("cmt_s")!;
+    expect(c.suggestion?.state).toBe("insisted"); // NOT flipped to countered
+    expect(c.suggestion?.appliedInVersion).toBe(3);
+    // No orphan agent reply from the rejected counter.
+    const replies = store.getCommentsForArtifact("art_1").filter((r) => r.parentCommentId === "cmt_s");
+    expect(replies).toHaveLength(1); // only the apply reply
+    // Override survived.
+    expect(store.getSessionMemory().approvedPatterns).toEqual(["returning early is cleaner"]);
+  });
+
+  it("F1 — rejects a counter on an already-APPLIED suggestion (no zombie countered+appliedInVersion)", async () => {
+    const store = new FileStore(tmpDir, "s_f1_applied");
+    seed(store, "why");
+    await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "applied", suggestionState: "applied", appliedInVersion: 2 });
+    const res = await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "counter", suggestionState: "countered" });
+    expect(res.isError).toBe(true);
+    const c = store.getComment("cmt_s")!;
+    expect(c.suggestion?.state).toBe("applied");
+    expect(c.suggestion?.appliedInVersion).toBe(2);
+    expect(c.suggestion?.counter).toBeUndefined();
+  });
+
+  // --- F3: MUST-respond at the tool boundary ---
+
+  it("F3 — a plain answer to a PENDING suggestion is refused (no reply posted, stays pending)", async () => {
+    const store = new FileStore(tmpDir, "s_f3");
+    seed(store, "why");
+    const res = await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "sure, looks fine" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toMatch(/suggestion_response_required/);
+    expect(store.getComment("cmt_s")!.suggestion?.state).toBe("pending");
+    // No agent reply leaked onto the card.
+    expect(store.getCommentsForArtifact("art_1").filter((r) => r.parentCommentId === "cmt_s")).toHaveLength(0);
+  });
+
+  it("F3 — a plain answer to an INSISTED (not-yet-applied) suggestion is refused", async () => {
+    const store = new FileStore(tmpDir, "s_f3_insist");
+    seed(store, "why");
+    store.updateCommentSuggestion("cmt_s", { state: "insisted" });
+    const res = await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "ok" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toMatch(/suggestion_response_required/);
+  });
+
+  it("F3 — a plain reply to a COUNTERED suggestion (awaiting the human) STILL works", async () => {
+    const store = new FileStore(tmpDir, "s_f3_counter");
+    seed(store, "why");
+    store.updateCommentSuggestion("cmt_s", { state: "countered", counter: { reason: "no" } });
+    const res = await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "one more thought for you" });
+    expect(res.isError).toBeFalsy();
+    // A normal threaded reply landed; state unchanged.
+    const reply = store.getCommentsForArtifact("art_1").find((r) => r.parentCommentId === "cmt_s");
+    expect(reply?.content).toBe("one more thought for you");
+    expect(store.getComment("cmt_s")!.suggestion?.state).toBe("countered");
+  });
+
+  // --- F4: double-apply must not silently overwrite the version stamp ---
+
+  it("F4 — a second apply with a DIFFERENT version is refused; the original stamp survives", async () => {
+    const store = new FileStore(tmpDir, "s_f4");
+    seed(store, "why");
+    await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "applied", suggestionState: "applied", appliedInVersion: 2 });
+    const res = await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "re-applied", suggestionState: "applied", appliedInVersion: 7 });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toMatch(/suggestion_already_applied/);
+    expect(store.getComment("cmt_s")!.suggestion?.appliedInVersion).toBe(2); // NOT 7
+  });
+
+  it("F4 — re-applying the SAME version is idempotent (allowed)", async () => {
+    const store = new FileStore(tmpDir, "s_f4_idem");
+    seed(store, "why");
+    await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "applied", suggestionState: "applied", appliedInVersion: 2 });
+    const res = await handleAnswerQuestion(makeCtx(store), { commentId: "cmt_s", answer: "applied again", suggestionState: "applied", appliedInVersion: 2 });
+    expect(res.isError).toBeFalsy();
+    expect(store.getComment("cmt_s")!.suggestion?.appliedInVersion).toBe(2);
+  });
+
   it("a plain question comment (no suggestion) still answers normally", async () => {
     const store = new FileStore(tmpDir, "s_q");
     store.addComment({
