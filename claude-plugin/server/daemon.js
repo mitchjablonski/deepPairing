@@ -7965,6 +7965,8 @@ var ERROR_CODES = {
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
+  suggestion_not_countered: "suggestion_not_countered",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
@@ -8000,67 +8002,6 @@ var TOOL_ERROR_RETRYABLE = {
 // src/store/file-store.ts
 import fs9 from "node:fs";
 import path8 from "node:path";
-
-// ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
-import { webcrypto as crypto3 } from "node:crypto";
-
-// ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/url-alphabet/index.js
-var urlAlphabet = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
-
-// ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
-var POOL_SIZE_MULTIPLIER = 128;
-var pool;
-var poolOffset;
-function fillPool(bytes) {
-  if (!pool || pool.length < bytes) {
-    pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER);
-    crypto3.getRandomValues(pool);
-    poolOffset = 0;
-  } else if (poolOffset + bytes > pool.length) {
-    crypto3.getRandomValues(pool);
-    poolOffset = 0;
-  }
-  poolOffset += bytes;
-}
-function nanoid(size = 21) {
-  fillPool(size |= 0);
-  let id = "";
-  for (let i = poolOffset - size; i < poolOffset; i++) {
-    id += urlAlphabet[pool[i] & 63];
-  }
-  return id;
-}
-
-// src/store/global-store.ts
-import fs4 from "node:fs";
-import os2 from "node:os";
-import path3 from "node:path";
-
-// src/store/salvage.ts
-var salvageLogged = /* @__PURE__ */ new Set();
-function salvageLog(label, message) {
-  if (salvageLogged.has(label)) return;
-  salvageLogged.add(label);
-  console.error(`[deepPairing] ${label}: ${message}`);
-}
-function salvageArray(label, raw2, idField) {
-  if (!Array.isArray(raw2)) {
-    if (raw2 != null) salvageLog(label, `expected an array, got ${typeof raw2} \u2014 using []`);
-    return [];
-  }
-  const kept = raw2.filter(
-    (el) => el !== null && typeof el === "object" && typeof el[idField] === "string"
-  );
-  if (kept.length !== raw2.length) {
-    salvageLog(label, `dropped ${raw2.length - kept.length} malformed element(s) (missing string '${idField}')`);
-  }
-  return kept;
-}
-function salvageRecord(label, raw2, fallback) {
-  if (raw2 !== null && typeof raw2 === "object" && !Array.isArray(raw2)) return raw2;
-  if (raw2 != null) salvageLog(label, `expected an object, got ${Array.isArray(raw2) ? "array" : typeof raw2} \u2014 using fallback`);
-  return fallback;
-}
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -8230,7 +8171,7 @@ __export(external_exports, {
   minSize: () => _minSize,
   multipleOf: () => _multipleOf,
   nan: () => nan,
-  nanoid: () => nanoid3,
+  nanoid: () => nanoid2,
   nativeEnum: () => nativeEnum,
   negative: () => _negative,
   never: () => never,
@@ -9619,7 +9560,7 @@ __export(regexes_exports, {
   md5_base64: () => md5_base64,
   md5_base64url: () => md5_base64url,
   md5_hex: () => md5_hex,
-  nanoid: () => nanoid2,
+  nanoid: () => nanoid,
   null: () => _null,
   number: () => number,
   rfc5322Email: () => rfc5322Email,
@@ -9652,7 +9593,7 @@ var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
 var xid = /^[0-9a-vA-V]{20}$/;
 var ksuid = /^[A-Za-z0-9]{27}$/;
-var nanoid2 = /^[a-zA-Z0-9_-]{21}$/;
+var nanoid = /^[a-zA-Z0-9_-]{21}$/;
 var duration = /^P(?:(\d+W)|(?!.*W)(?=\d|T\d)(\d+Y)?(\d+M)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+([.,]\d+)?S)?)?)$/;
 var extendedDuration = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
 var guid = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
@@ -10567,7 +10508,7 @@ var $ZodEmoji = /* @__PURE__ */ $constructor("$ZodEmoji", (inst, def) => {
   $ZodStringFormat.init(inst, def);
 });
 var $ZodNanoID = /* @__PURE__ */ $constructor("$ZodNanoID", (inst, def) => {
-  def.pattern ?? (def.pattern = nanoid2);
+  def.pattern ?? (def.pattern = nanoid);
   $ZodStringFormat.init(inst, def);
 });
 var $ZodCUID = /* @__PURE__ */ $constructor("$ZodCUID", (inst, def) => {
@@ -20578,7 +20519,7 @@ __export(schemas_exports2, {
   map: () => map,
   meta: () => meta2,
   nan: () => nan,
-  nanoid: () => nanoid3,
+  nanoid: () => nanoid2,
   nativeEnum: () => nativeEnum,
   never: () => never,
   nonoptional: () => nonoptional,
@@ -21068,7 +21009,7 @@ var ZodNanoID = /* @__PURE__ */ $constructor("ZodNanoID", (inst, def) => {
   $ZodNanoID.init(inst, def);
   ZodStringFormat.init(inst, def);
 });
-function nanoid3(params) {
+function nanoid2(params) {
   return _nanoid(ZodNanoID, params);
 }
 var ZodCUID = /* @__PURE__ */ $constructor("ZodCUID", (inst, def) => {
@@ -22963,6 +22904,26 @@ var CommentTargetSchema = external_exports.object({
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
+var SuggestionStateSchema = external_exports.enum(["pending", "applied", "countered", "insisted"]);
+var SuggestionCounterSchema = external_exports.object({
+  /** The agent's alternative code. Optional — a counter can be reason-only. */
+  replacementText: external_exports.string().optional(),
+  reason: external_exports.string()
+});
+var CommentSuggestionSchema = external_exports.object({
+  originalText: external_exports.string(),
+  replacementText: external_exports.string(),
+  lineStart: external_exports.number().int(),
+  lineEnd: external_exports.number().int(),
+  state: SuggestionStateSchema,
+  /** The artifact version that shipped this edit (set when the agent applies). */
+  appliedInVersion: external_exports.number().int().positive().optional(),
+  counter: SuggestionCounterSchema.optional()
+});
+function suggestionSummary(filePath, lineStart, lineEnd) {
+  const loc = lineEnd > lineStart ? `${lineStart}\u2013${lineEnd}` : `${lineStart}`;
+  return `Suggested edit to ${filePath ?? "code"}:${loc}`;
+}
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -22976,6 +22937,11 @@ var CommentSchema = external_exports.object({
    * the agent should respond with answer_question.
    */
   intent: CommentIntentSchema.optional(),
+  // #172 — a first-class suggested edit (intent === "suggestion"). Optional for
+  // backward compatibility (project rule: all new fields optional); an old
+  // daemon that doesn't understand it treats the comment as a plain comment and
+  // simply ignores this field — graceful degradation, never a crash.
+  suggestion: CommentSuggestionSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -23003,7 +22969,10 @@ var CreateCommentRequestSchema = external_exports.object({
   content: external_exports.string().min(1),
   parentCommentId: external_exports.string().nullable().optional(),
   codeReferences: external_exports.array(CodeReferenceSchema).optional(),
-  intent: CommentIntentSchema.optional()
+  intent: CommentIntentSchema.optional(),
+  // #172 — carry the suggested-edit object on create so a posted suggestion
+  // renders as a first-class card immediately (not a plain comment).
+  suggestion: CommentSuggestionSchema.optional()
 });
 
 // ../shared/dist/schemas/decision.js
@@ -23371,7 +23340,13 @@ var CommentBodySchema = external_exports.object({
    *  don't have to enumerate every renderer's anchor strategy here. */
   target: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
   intent: external_exports.enum(["comment", "question", "suggestion"]).optional(),
-  parentCommentId: external_exports.string().nullable().optional()
+  parentCommentId: external_exports.string().nullable().optional(),
+  // #172 — a first-class suggested edit (intent === "suggestion"). Optional so
+  // older clients keep working through the schema bump.
+  suggestion: CommentSuggestionSchema.optional()
+});
+var SuggestionResolveBodySchema = external_exports.object({
+  action: external_exports.enum(["take_counter", "insist"])
 });
 var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
@@ -23579,6 +23554,67 @@ var PreflightTraceSchema = external_exports.object({
 // ../shared/dist/normalize.js
 function normalizeConceptKey(name) {
   return String(name).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
+import { webcrypto as crypto3 } from "node:crypto";
+
+// ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/url-alphabet/index.js
+var urlAlphabet = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
+
+// ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
+var POOL_SIZE_MULTIPLIER = 128;
+var pool;
+var poolOffset;
+function fillPool(bytes) {
+  if (!pool || pool.length < bytes) {
+    pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER);
+    crypto3.getRandomValues(pool);
+    poolOffset = 0;
+  } else if (poolOffset + bytes > pool.length) {
+    crypto3.getRandomValues(pool);
+    poolOffset = 0;
+  }
+  poolOffset += bytes;
+}
+function nanoid3(size = 21) {
+  fillPool(size |= 0);
+  let id = "";
+  for (let i = poolOffset - size; i < poolOffset; i++) {
+    id += urlAlphabet[pool[i] & 63];
+  }
+  return id;
+}
+
+// src/store/global-store.ts
+import fs4 from "node:fs";
+import os2 from "node:os";
+import path3 from "node:path";
+
+// src/store/salvage.ts
+var salvageLogged = /* @__PURE__ */ new Set();
+function salvageLog(label, message) {
+  if (salvageLogged.has(label)) return;
+  salvageLogged.add(label);
+  console.error(`[deepPairing] ${label}: ${message}`);
+}
+function salvageArray(label, raw2, idField) {
+  if (!Array.isArray(raw2)) {
+    if (raw2 != null) salvageLog(label, `expected an array, got ${typeof raw2} \u2014 using []`);
+    return [];
+  }
+  const kept = raw2.filter(
+    (el) => el !== null && typeof el === "object" && typeof el[idField] === "string"
+  );
+  if (kept.length !== raw2.length) {
+    salvageLog(label, `dropped ${raw2.length - kept.length} malformed element(s) (missing string '${idField}')`);
+  }
+  return kept;
+}
+function salvageRecord(label, raw2, fallback) {
+  if (raw2 !== null && typeof raw2 === "object" && !Array.isArray(raw2)) return raw2;
+  if (raw2 != null) salvageLog(label, `expected an object, got ${Array.isArray(raw2) ? "array" : typeof raw2} \u2014 using fallback`);
+  return fallback;
 }
 
 // src/store/global-store.ts
@@ -24534,7 +24570,7 @@ function addRetrospective(projectRoot2, params) {
     }
     if (!decisions.some((d) => d.decisionId === params.decisionId)) continue;
     const retrospective = {
-      id: `retro_${nanoid(10)}`,
+      id: `retro_${nanoid3(10)}`,
       decisionId: params.decisionId,
       verdict: params.verdict,
       note: params.note?.trim() || void 0,
@@ -25249,6 +25285,9 @@ var FileStore = class _FileStore {
       // FN1 — persist attached code evidence (answer_question). Spread so the
       // field is simply absent when there's none (back-compat with stored data).
       ...params.codeReferences && params.codeReferences.length > 0 ? { codeReferences: params.codeReferences } : {},
+      // #172 — persist the first-class suggested edit. Spread so a plain comment
+      // stays byte-identical on disk.
+      ...params.suggestion ? { suggestion: params.suggestion } : {},
       answeredByCommentId: null,
       acknowledged: params.author === "agent",
       createdAt: new Date(now).toISOString()
@@ -25272,6 +25311,55 @@ var FileStore = class _FileStore {
   }
   getComment(commentId) {
     return this.comments.find((c) => c.id === commentId);
+  }
+  /**
+   * #172 — patch a comment's suggestion state machine. Records the ledger
+   * side-effects when — and only when — a suggestion first gets an
+   * `appliedInVersion` stamp:
+   *
+   *   - APPLIED (verbatim/extension of the HUMAN's edit, no counter) + a genuine
+   *     "why" note → the why becomes an approved pattern (a durable preference).
+   *   - INSISTED (the human overrode the agent's counter) → the override is
+   *     recorded regardless of a note, using the human's reason when present.
+   *   - APPLIED with a `counter` present (the human took the AGENT's counter) →
+   *     nothing recorded: the human's original edit did not win.
+   *
+   * All ledger writes go through recordApprovedPattern, which already honors
+   * demo-session isolation (#193, in-memory only) and the global-ledger publish
+   * gate — so a demo run stays in-memory and no global write happens beyond what
+   * the existing gate allows.
+   */
+  updateCommentSuggestion(commentId, update) {
+    const comment = this.comments.find((c) => c.id === commentId);
+    if (!comment?.suggestion) return void 0;
+    const prev = comment.suggestion;
+    const prevAppliedVersion = prev.appliedInVersion;
+    const next = {
+      ...prev,
+      ...update.state !== void 0 ? { state: update.state } : {},
+      ...update.appliedInVersion !== void 0 ? { appliedInVersion: update.appliedInVersion } : {},
+      ...update.counter !== void 0 ? { counter: update.counter } : {}
+    };
+    comment.suggestion = next;
+    if (update.resetAcknowledged) {
+      comment.acknowledged = false;
+      this.notifyFeedbackWaiters();
+    }
+    const newlyApplied = next.appliedInVersion != null && prevAppliedVersion == null;
+    if (newlyApplied) {
+      const summary = suggestionSummary(comment.target.filePath, next.lineStart, next.lineEnd);
+      const why = comment.content.trim();
+      const hasWhy = why.length > 0 && why !== summary;
+      if (next.state === "insisted") {
+        this.recordApprovedPattern({
+          description: hasWhy ? why : `Human insisted on their exact edit at ${summary.replace(/^Suggested edit to /, "")}`
+        });
+      } else if (!next.counter && hasWhy) {
+        this.recordApprovedPattern({ description: why });
+      }
+    }
+    this.scheduleFlush();
+    return comment;
   }
   // --- Status changes (V-fix) ---
   /**
@@ -25658,7 +25746,7 @@ var FileStore = class _FileStore {
   }
   addAnnotation(params) {
     const annotation = {
-      id: `ann_${nanoid(10)}`,
+      id: `ann_${nanoid3(10)}`,
       sessionId: this.sessionId,
       targetEventId: params.targetEventId,
       note: params.note,
@@ -26701,7 +26789,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = CommentBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { artifactId, content, target, intent, parentCommentId } = parsed.data;
+    const { artifactId, content, target, intent, parentCommentId, suggestion } = parsed.data;
     const targetArtifactId = target?.artifactId;
     const idsToOwn = [artifactId, targetArtifactId].filter(
       (id) => !!id && id !== "__session__"
@@ -26720,7 +26808,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         );
       }
     }
-    const newId = `cmt_${nanoid(10)}`;
+    const newId = `cmt_${nanoid3(10)}`;
     const comment = await store.addComment({
       id: newId,
       artifactId,
@@ -26728,7 +26816,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       author: "human",
       target,
       intent,
-      parentCommentId: parentCommentId ?? null
+      parentCommentId: parentCommentId ?? null,
+      suggestion
     });
     const isNew = comment.id === newId;
     if (isNew) {
@@ -26795,6 +26884,46 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       broadcast({ type: "comment_updated", comment }, sid);
     }
     return c.json({ status: "resolved", commentId, comment: comment ?? null });
+  });
+  app.post("/api/comments/:commentId/suggestion", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const commentId = c.req.param("commentId");
+    const existing = await store.getComment(commentId);
+    if (!existing) {
+      return c.json(
+        {
+          error: "comment_not_in_session",
+          code: "comment_not_in_session",
+          message: "This comment belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (!existing.suggestion || existing.suggestion.state !== "countered") {
+      return c.json(
+        {
+          error: "suggestion_not_countered",
+          code: "suggestion_not_countered",
+          message: "Only a suggestion the agent has countered can be taken or insisted on."
+        },
+        409
+      );
+    }
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = SuggestionResolveBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const comment = await store.updateCommentSuggestion(commentId, {
+      state: parsed.data.action === "insist" ? "insisted" : "applied",
+      resetAcknowledged: true
+    });
+    if (comment) {
+      broadcast({ type: "comment_updated", comment }, sid);
+      broadcast({ type: "feedback_received", commentId, artifactId: comment.target.artifactId, intent: "suggestion" }, sid);
+    }
+    return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
   });
   app.post("/api/decisions/:decisionId", async (c) => {
     const sid = getSessionId(c);
@@ -26892,7 +27021,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     if (feedback) {
       const comment = await store.addComment({
-        id: `cmt_${nanoid(10)}`,
+        id: `cmt_${nanoid3(10)}`,
         artifactId,
         content: feedback,
         author: "human"
@@ -28062,6 +28191,16 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       }
     }
     return c.json({ status: "marked" });
+  });
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const update = parsed.body;
+    const comment = r.store.updateCommentSuggestion(c.req.param("commentId"), update);
+    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
+    return c.json({ comment: comment ?? null });
   });
   app.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));

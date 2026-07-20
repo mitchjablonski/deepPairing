@@ -384,12 +384,12 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "answer_question",
         annotations: { title: "Answer question", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          "Reply to a question comment from the human. Use instead of a plain comment reply so the answer is linked to the question and the UI collapses the pair. Attach `evidence` when the answer points at real code.",
+          "Reply to a question comment from the human. Use instead of a plain comment reply so the answer is linked to the question and the UI collapses the pair. Attach `evidence` when the answer points at real code.\n\n#172 — ALSO the response surface for a SUGGESTED EDIT (a comment with a `suggestion`, delivered by check_feedback). You MUST respond: set `suggestionState:\"applied\"` with `appliedInVersion` after you apply the human's code (verbatim or with an extension you name in `answer`), or `suggestionState:\"countered\"` with your reasoning in `answer` (and optional `counterReplacement`). For an INSISTED suggestion, apply it EXACTLY and pass `suggestionState:\"applied\"` + `appliedInVersion` — do not re-argue.",
         inputSchema: {
           type: "object" as const,
           properties: {
-            commentId: { type: "string", description: "The id of the question comment to answer (cmt_...)" },
-            answer: { type: "string", description: "Your explanation, in markdown" },
+            commentId: { type: "string", description: "The id of the question OR suggestion comment to respond to (cmt_...)" },
+            answer: { type: "string", description: "Your explanation / reply, in markdown. For a countered suggestion this is the reason you're countering." },
             evidence: {
               type: "array",
               description: "Optional code snippets supporting the answer",
@@ -403,6 +403,19 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   explanation: { type: "string" },
                 },
               },
+            },
+            suggestionState: {
+              type: "string",
+              enum: ["applied", "countered"],
+              description: "#172 — set ONLY when responding to a suggested edit. 'applied' = the human's edit now ships; 'countered' = you propose a different edit.",
+            },
+            appliedInVersion: {
+              type: "number",
+              description: "#172 — required with suggestionState:'applied'. The artifact version (number) that now contains the edit.",
+            },
+            counterReplacement: {
+              type: "string",
+              description: "#172 — optional with suggestionState:'countered'. Your alternative code (the human sees it as your counter-proposal).",
             },
           },
           required: ["commentId", "answer"],

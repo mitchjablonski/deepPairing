@@ -86,24 +86,74 @@ describe("CommentableCode", () => {
     expect(body.intent).toBeUndefined();
   });
 
-  it("Suggest mode pre-fills the textarea with the current line", async () => {
+  it("Suggest edit mode pre-fills the mini-editor with the current line", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
     await userEvent.click(commentBtns[1]!); // line 2 → "  return bcrypt.hash(pw, 10);"
-    await userEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Suggest edit$/ }));
 
-    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const textarea = screen.getByTestId("suggestion-editor") as HTMLTextAreaElement;
     expect(textarea.value).toBe("  return bcrypt.hash(pw, 10);");
   });
 
-  it("R2 — span input is hidden in Suggest mode (suggestions stay single-line)", async () => {
+  it("#172 — Suggest edit posts the exact wire shape (intent + suggestion object + why)", async () => {
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    await userEvent.click(commentBtns[1]!); // line 2
+    await userEvent.click(screen.getByRole("button", { name: /^Suggest edit$/ }));
+
+    // Edit the replacement + add a why.
+    const editor = screen.getByTestId("suggestion-editor") as HTMLTextAreaElement;
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "  return argon2.hash(pw);");
+    const why = screen.getByTestId("suggestion-why");
+    await userEvent.type(why, "argon2 over bcrypt rounds");
+
+    // Live changed-line highlight reflects the edit.
+    const preview = screen.getByTestId("suggestion-diff-preview");
+    expect(preview.querySelector('[data-changed="true"]')).not.toBeNull();
+
+    // The #187 hazard: the footer button's onClick must not pass a MouseEvent
+    // into submitComment's options slot. Asserting the exact POST body proves it.
+    await userEvent.click(screen.getByRole("button", { name: /suggest to claude/i }));
+    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    expect(body.intent).toBe("suggestion");
+    expect(body.content).toBe("argon2 over bcrypt rounds");
+    expect(body.target.lineStart).toBe(2);
+    expect(body.target.lineEnd).toBe(2);
+    expect(body.target.filePath).toBe("a.ts");
+    expect(body.suggestion).toMatchObject({
+      originalText: "  return bcrypt.hash(pw, 10);",
+      replacementText: "  return argon2.hash(pw);",
+      lineStart: 2,
+      lineEnd: 2,
+      state: "pending",
+    });
+  });
+
+  it("#172 — Suggest edit with a blank why falls back to the shared summary as content", async () => {
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    await userEvent.click(commentBtns[1]!); // line 2
+    await userEvent.click(screen.getByRole("button", { name: /^Suggest edit$/ }));
+    const editor = screen.getByTestId("suggestion-editor") as HTMLTextAreaElement;
+    await userEvent.clear(editor);
+    await userEvent.type(editor, "  return argon2.hash(pw);");
+    // No why typed.
+    await userEvent.click(screen.getByRole("button", { name: /suggest to claude/i }));
+    const body = JSON.parse((fetch as any).mock.calls[0][1].body);
+    expect(body.content).toBe("Suggested edit to a.ts:2");
+  });
+
+  it("R2 — the comment span input is hidden in Suggest edit mode", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
     await userEvent.click(commentBtns[0]!);
     // Visible in comment mode
     expect(screen.getByLabelText(/comment end line/i)).toBeInTheDocument();
-    // Hidden in suggest mode
-    await userEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    // The comment-span control is hidden in suggest mode (the editor has its
+    // own optional range control).
+    await userEvent.click(screen.getByRole("button", { name: /^Suggest edit$/ }));
     expect(screen.queryByLabelText(/comment end line/i)).not.toBeInTheDocument();
   });
 
@@ -428,7 +478,7 @@ describe("CommentableCode", () => {
     expect(screen.queryByText(/comment from L/i)).not.toBeInTheDocument();
   });
 
-  it("switching between Comment / Ask / Suggest modes changes the active input", async () => {
+  it("switching between Comment / Ask / Suggest edit modes changes the active input", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
     await userEvent.click(commentBtns[0]!);
@@ -441,9 +491,10 @@ describe("CommentableCode", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Ask$/ }));
     expect(screen.getByPlaceholderText(/ask the agent about this line/i)).toBeInTheDocument();
 
-    // Switch to Suggest — textarea replaces input; Submit Suggestion appears
-    await userEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
-    expect(screen.getByRole("button", { name: /submit suggestion/i })).toBeInTheDocument();
+    // Switch to Suggest edit — the mini-editor + "Suggest to Claude" appear.
+    await userEvent.click(screen.getByRole("button", { name: /^Suggest edit$/ }));
+    expect(screen.getByTestId("suggestion-editor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /suggest to claude/i })).toBeInTheDocument();
   });
 
   // Turn-state surfacing on INLINE line comments (LineComments path). These

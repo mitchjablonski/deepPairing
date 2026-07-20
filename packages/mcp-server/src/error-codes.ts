@@ -44,6 +44,8 @@ export const ERROR_CODES = {
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
+  suggestion_not_countered: "suggestion_not_countered",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen

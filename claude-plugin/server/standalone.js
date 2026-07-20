@@ -25698,6 +25698,26 @@ var CommentTargetSchema = external_exports.object({
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
+var SuggestionStateSchema = external_exports.enum(["pending", "applied", "countered", "insisted"]);
+var SuggestionCounterSchema = external_exports.object({
+  /** The agent's alternative code. Optional — a counter can be reason-only. */
+  replacementText: external_exports.string().optional(),
+  reason: external_exports.string()
+});
+var CommentSuggestionSchema = external_exports.object({
+  originalText: external_exports.string(),
+  replacementText: external_exports.string(),
+  lineStart: external_exports.number().int(),
+  lineEnd: external_exports.number().int(),
+  state: SuggestionStateSchema,
+  /** The artifact version that shipped this edit (set when the agent applies). */
+  appliedInVersion: external_exports.number().int().positive().optional(),
+  counter: SuggestionCounterSchema.optional()
+});
+function suggestionSummary(filePath, lineStart, lineEnd) {
+  const loc = lineEnd > lineStart ? `${lineStart}\u2013${lineEnd}` : `${lineStart}`;
+  return `Suggested edit to ${filePath ?? "code"}:${loc}`;
+}
 var CommentSchema = external_exports.object({
   id: external_exports.string(),
   sessionId: external_exports.string(),
@@ -25711,6 +25731,11 @@ var CommentSchema = external_exports.object({
    * the agent should respond with answer_question.
    */
   intent: CommentIntentSchema.optional(),
+  // #172 — a first-class suggested edit (intent === "suggestion"). Optional for
+  // backward compatibility (project rule: all new fields optional); an old
+  // daemon that doesn't understand it treats the comment as a plain comment and
+  // simply ignores this field — graceful degradation, never a crash.
+  suggestion: CommentSuggestionSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: external_exports.string().nullable().optional(),
   /**
@@ -25738,7 +25763,10 @@ var CreateCommentRequestSchema = external_exports.object({
   content: external_exports.string().min(1),
   parentCommentId: external_exports.string().nullable().optional(),
   codeReferences: external_exports.array(CodeReferenceSchema).optional(),
-  intent: CommentIntentSchema.optional()
+  intent: CommentIntentSchema.optional(),
+  // #172 — carry the suggested-edit object on create so a posted suggestion
+  // renders as a first-class card immediately (not a plain comment).
+  suggestion: CommentSuggestionSchema.optional()
 });
 
 // ../shared/dist/schemas/decision.js
@@ -26106,7 +26134,13 @@ var CommentBodySchema = external_exports.object({
    *  don't have to enumerate every renderer's anchor strategy here. */
   target: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
   intent: external_exports.enum(["comment", "question", "suggestion"]).optional(),
-  parentCommentId: external_exports.string().nullable().optional()
+  parentCommentId: external_exports.string().nullable().optional(),
+  // #172 — a first-class suggested edit (intent === "suggestion"). Optional so
+  // older clients keep working through the schema bump.
+  suggestion: CommentSuggestionSchema.optional()
+});
+var SuggestionResolveBodySchema = external_exports.object({
+  action: external_exports.enum(["take_counter", "insist"])
 });
 var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
@@ -27727,6 +27761,8 @@ var ERROR_CODES = {
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
+  /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
+  suggestion_not_countered: "suggestion_not_countered",
   /** POST /api/philosophy/remove targeted a concept the ledger doesn't hold. */
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
@@ -29145,6 +29181,7 @@ Suggested action: ${suggestedAction}`);
   const structuredQuestions = [];
   const structuredComments = [];
   const structuredDecisions = [];
+  const structuredSuggestions = [];
   const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
   const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
   if (sessionMessages.length > 0) {
@@ -29166,9 +29203,55 @@ Adjust your approach based on this guidance.`);
   if (artifactCommentsSorted.length > 0) {
     await store.acknowledgeComments(artifactCommentsSorted.map((c) => c.id));
     const questionLines = [];
+    const suggestionLines = [];
     const otherLines = [];
     const artsForTargets = await store.getArtifacts();
     for (const c of artifactCommentsSorted) {
+      if (c.suggestion) {
+        const s = c.suggestion;
+        const range = s.lineEnd > s.lineStart ? `${s.lineStart}\u2013${s.lineEnd}` : `${s.lineStart}`;
+        const loc2 = `${c.target.filePath ?? "code"}:${range}`;
+        const summary = suggestionSummary(c.target.filePath, s.lineStart, s.lineEnd);
+        const why = c.content.trim();
+        const note = why.length > 0 && why !== summary ? why : void 0;
+        const respond = `answer_question commentId="${c.id}"`;
+        const tookCounter = s.state === "applied" && !!s.counter && s.appliedInVersion == null;
+        if (s.state === "insisted" && s.appliedInVersion == null) {
+          suggestionLines.push(
+            `- \u{1F527} INSISTED EDIT [${loc2}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter \u2014 apply it VERBATIM, do not re-argue:
+${s.replacementText}
+    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`
+          );
+        } else if (tookCounter) {
+          suggestionLines.push(
+            `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 apply your counter-proposal${s.counter?.replacementText ? `:
+${s.counter.replacementText}` : ""} and stamp the version.
+    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`
+          );
+        } else {
+          suggestionLines.push(
+            `- \u{1F527} SUGGESTED EDIT [${loc2}]${commentSecretNote(c)} The human proposes replacing:
+${s.originalText}
+  with:
+${s.replacementText}${note ? `
+  Why: ${note}` : ""}
+    \u2192 Respond via ${respond}: suggestionState:"applied" (+ appliedInVersion) to ship it verbatim or with an extension you name in \`answer\`, OR suggestionState:"countered" (+ your reason in \`answer\`) to propose a different edit.`
+          );
+        }
+        structuredSuggestions.push({
+          commentId: c.id,
+          artifactId: c.target.artifactId,
+          state: s.state,
+          file: c.target.filePath,
+          lineStart: s.lineStart,
+          lineEnd: s.lineEnd,
+          originalText: s.originalText,
+          replacementText: s.replacementText,
+          ...note ? { note } : {},
+          ...s.counter ? { counter: s.counter } : {}
+        });
+        continue;
+      }
       let loc = c.target.artifactId;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
       if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
@@ -29237,6 +29320,10 @@ Adjust your approach based on this guidance.`);
     if (questionLines.length > 0) {
       parts.push(`Human questions (${questionLines.length}) \u2014 answer these before proceeding:
 ${questionLines.join("\n")}`);
+    }
+    if (suggestionLines.length > 0) {
+      parts.push(`\u{1F527} Suggested edits (${suggestionLines.length}) \u2014 you MUST respond to each (apply / apply-with-extension / counter). An unanswered suggestion stays PENDING in the UI as visible debt:
+${suggestionLines.join("\n")}`);
     }
     if (otherLines.length > 0) {
       parts.push(`Human comments (${otherLines.length}):
@@ -29396,6 +29483,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     questions: structuredQuestions,
     comments: structuredComments,
     decisions: structuredDecisions,
+    // #172 — spread ONLY when there are suggestions to act on, so the healthy /
+    // no-suggestion poll payload stays byte-for-byte (contract lock in
+    // check-feedback-ledger-health.test.ts).
+    ...structuredSuggestions.length > 0 ? { suggestions: structuredSuggestions } : {},
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
@@ -29431,6 +29522,40 @@ async function handleAnswerQuestion(ctx, args) {
     return {
       content: [{ type: "text", text: `answer_question: no comment with id ${commentId}.` }],
       isError: true
+    };
+  }
+  const suggestionStateRaw = typeof args?.suggestionState === "string" ? args.suggestionState : void 0;
+  if (parent.suggestion && (suggestionStateRaw === "applied" || suggestionStateRaw === "countered")) {
+    const replyId = `cmt_${nanoid3(10)}`;
+    const reply = await store.addComment({
+      id: replyId,
+      artifactId: parent.target?.artifactId ?? "__session__",
+      content: answer,
+      author: "agent",
+      target: parent.target ?? { artifactId: "__session__" },
+      parentCommentId: commentId
+    });
+    let update;
+    if (suggestionStateRaw === "countered") {
+      const counterReplacement = args?.counterReplacement != null ? String(args.counterReplacement) : void 0;
+      update = { state: "countered", counter: { reason: answer, ...counterReplacement ? { replacementText: counterReplacement } : {} } };
+    } else {
+      const versionRaw = Number(args?.appliedInVersion);
+      const appliedInVersion = Number.isFinite(versionRaw) && versionRaw > 0 ? Math.floor(versionRaw) : void 0;
+      if (appliedInVersion == null) {
+        return {
+          content: [{ type: "text", text: "answer_question: applying a suggestion requires appliedInVersion (the artifact version that now contains the edit)." }],
+          isError: true
+        };
+      }
+      update = parent.suggestion.state === "insisted" ? { appliedInVersion } : { state: "applied", appliedInVersion };
+    }
+    const updated = await store.updateCommentSuggestion(commentId, update);
+    broadcast({ type: "comment_added", comment: reply });
+    if (updated) broadcast({ type: "comment_updated", comment: updated });
+    const verb = suggestionStateRaw === "countered" ? "Countered the suggestion" : `Applied the suggestion${updated?.suggestion?.appliedInVersion ? ` (in v${updated.suggestion.appliedInVersion})` : ""}`;
+    return {
+      content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   const answerId = `cmt_${nanoid3(10)}`;
@@ -30584,12 +30709,12 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "answer_question",
         annotations: { title: "Answer question", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Reply to a question comment from the human. Use instead of a plain comment reply so the answer is linked to the question and the UI collapses the pair. Attach `evidence` when the answer points at real code.",
+        description: 'Reply to a question comment from the human. Use instead of a plain comment reply so the answer is linked to the question and the UI collapses the pair. Attach `evidence` when the answer points at real code.\n\n#172 \u2014 ALSO the response surface for a SUGGESTED EDIT (a comment with a `suggestion`, delivered by check_feedback). You MUST respond: set `suggestionState:"applied"` with `appliedInVersion` after you apply the human\'s code (verbatim or with an extension you name in `answer`), or `suggestionState:"countered"` with your reasoning in `answer` (and optional `counterReplacement`). For an INSISTED suggestion, apply it EXACTLY and pass `suggestionState:"applied"` + `appliedInVersion` \u2014 do not re-argue.',
         inputSchema: {
           type: "object",
           properties: {
-            commentId: { type: "string", description: "The id of the question comment to answer (cmt_...)" },
-            answer: { type: "string", description: "Your explanation, in markdown" },
+            commentId: { type: "string", description: "The id of the question OR suggestion comment to respond to (cmt_...)" },
+            answer: { type: "string", description: "Your explanation / reply, in markdown. For a countered suggestion this is the reason you're countering." },
             evidence: {
               type: "array",
               description: "Optional code snippets supporting the answer",
@@ -30603,6 +30728,19 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   explanation: { type: "string" }
                 }
               }
+            },
+            suggestionState: {
+              type: "string",
+              enum: ["applied", "countered"],
+              description: "#172 \u2014 set ONLY when responding to a suggested edit. 'applied' = the human's edit now ships; 'countered' = you propose a different edit."
+            },
+            appliedInVersion: {
+              type: "number",
+              description: "#172 \u2014 required with suggestionState:'applied'. The artifact version (number) that now contains the edit."
+            },
+            counterReplacement: {
+              type: "string",
+              description: "#172 \u2014 optional with suggestionState:'countered'. Your alternative code (the human sees it as your counter-proposal)."
             }
           },
           required: ["commentId", "answer"]
@@ -31287,6 +31425,10 @@ var DaemonClient = class {
   }
   async markCommentAnswered(commentId, answerCommentId) {
     await this.post(`/comments/${commentId}/answered`, { answerCommentId });
+  }
+  async updateCommentSuggestion(commentId, update) {
+    const data = await this.post(`/comments/${commentId}/suggestion`, update);
+    return data.comment ?? void 0;
   }
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
    *  (the wrapper's broadcast is a no-op in standalone). Never throws. */

@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, DecisionOption, PreflightTrace } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace } from "@deeppairing/shared";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -92,6 +92,22 @@ export interface AddCommentParams {
    *  Must be a first-class param so it survives the DaemonClient HTTP round-trip;
    *  pre-FN1 it was mutated onto the returned object and lost in daemon mode. */
   codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
+  /** #172 — a first-class suggested edit posted with the comment (a plain
+   *  Record so the store doesn't need to import the shared schema type). */
+  suggestion?: CommentSuggestion;
+}
+
+/**
+ * #172 — a partial mutation of a comment's `suggestion`. Fields are applied
+ * over the existing suggestion; omitted fields are preserved. `resetAcknowledged`
+ * re-queues the comment for check_feedback (used by the human take-counter /
+ * insist actions so the agent's next poll picks up the new obligation).
+ */
+export interface SuggestionUpdate {
+  state?: SuggestionState;
+  appliedInVersion?: number;
+  counter?: SuggestionCounter;
+  resetAcknowledged?: boolean;
 }
 
 export interface RecordDecisionParams {
@@ -241,6 +257,14 @@ export interface IStore {
    */
   markCommentHumanResolved(commentId: string, resolvedAt?: string): MaybePromise<void>;
   getComment(commentId: string): MaybePromise<Comment | undefined>;
+  /**
+   * #172 — patch a comment's `suggestion` state machine. Applies `update` over
+   * the existing suggestion, records the ledger side-effects of a newly-applied
+   * suggestion (a genuine "why" → approved pattern; an insisted override →
+   * recorded override), and returns the updated comment (or undefined if the
+   * comment has no suggestion). Both FileStore and DaemonClient implement it.
+   */
+  updateCommentSuggestion(commentId: string, update: SuggestionUpdate): MaybePromise<Comment | undefined>;
 
   // Decisions
   recordDecisionRequest(params: RecordDecisionParams): MaybePromise<void>;

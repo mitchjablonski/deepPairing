@@ -593,6 +593,19 @@ export function createDaemonRoutes(
     return c.json({ status: "marked" });
   });
 
+  // #172 — agent-side suggestion state transitions (apply / counter / stamp the
+  // insist). The MCP tool (answer_question) reaches here via DaemonClient.
+  app.post("/api/internal/sessions/:sessionId/comments/:commentId/suggestion", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const update = parsed.body as import("../store/store-interface.js").SuggestionUpdate;
+    const comment = r.store.updateCommentSuggestion(c.req.param("commentId"), update);
+    if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
+    return c.json({ comment: comment ?? null });
+  });
+
   // F1 — sink for metric events the MCP server knows about but the daemon's
   // broadcast-tap can't see (the wrapper's broadcast is a no-op in standalone).
   // Today: real pre-flight blocks (the demo's synthetic block is daemon-side and

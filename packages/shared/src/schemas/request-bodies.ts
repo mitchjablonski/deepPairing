@@ -16,6 +16,7 @@
  * mean the client has drifted from the contract and we want to know.
  */
 import { z } from "zod";
+import { CommentSuggestionSchema } from "./comment.js";
 
 // POST /api/comments — submit a comment from the web UI.
 export const CommentBodySchema = z.object({
@@ -27,8 +28,19 @@ export const CommentBodySchema = z.object({
   target: z.record(z.string(), z.unknown()).optional(),
   intent: z.enum(["comment", "question", "suggestion"]).optional(),
   parentCommentId: z.string().nullable().optional(),
+  // #172 — a first-class suggested edit (intent === "suggestion"). Optional so
+  // older clients keep working through the schema bump.
+  suggestion: CommentSuggestionSchema.optional(),
 });
 export type CommentBody = z.infer<typeof CommentBodySchema>;
+
+// POST /api/comments/:commentId/suggestion — human resolves a countered
+// suggestion. "take_counter" accepts the agent's counter; "insist" makes the
+// human's exact version authoritative (verbatim, no further round-trip).
+export const SuggestionResolveBodySchema = z.object({
+  action: z.enum(["take_counter", "insist"]),
+});
+export type SuggestionResolveBody = z.infer<typeof SuggestionResolveBodySchema>;
 
 // POST /api/decisions/:decisionId — resolve a decision from the web UI.
 export const DecisionResolveBodySchema = z.object({

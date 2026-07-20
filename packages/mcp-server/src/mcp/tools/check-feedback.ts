@@ -1,6 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
+import { suggestionSummary } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../../version.js";
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
@@ -336,6 +337,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const structuredQuestions: Array<Record<string, unknown>> = [];
   const structuredComments: Array<Record<string, unknown>> = [];
   const structuredDecisions: Array<Record<string, unknown>> = [];
+  // #172 — suggested edits the agent owes a response on.
+  const structuredSuggestions: Array<Record<string, unknown>> = [];
 
   // Unacknowledged comments (reuse the single drain snapshot fetched above)
   const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
@@ -364,9 +367,50 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   if (artifactCommentsSorted.length > 0) {
     await store.acknowledgeComments(artifactCommentsSorted.map((c) => c.id));
     const questionLines: string[] = [];
+    const suggestionLines: string[] = [];
     const otherLines: string[] = [];
     const artsForTargets = await store.getArtifacts();
     for (const c of artifactCommentsSorted) {
+      // #172 — a first-class suggested edit. The agent MUST respond via
+      // answer_question. Deliver it prominently with the full original/
+      // replacement so the response needs no re-derivation from the diff.
+      if (c.suggestion) {
+        const s = c.suggestion;
+        const range = s.lineEnd > s.lineStart ? `${s.lineStart}–${s.lineEnd}` : `${s.lineStart}`;
+        const loc = `${c.target.filePath ?? "code"}:${range}`;
+        const summary = suggestionSummary(c.target.filePath, s.lineStart, s.lineEnd);
+        const why = c.content.trim();
+        const note = why.length > 0 && why !== summary ? why : undefined;
+        const respond = `answer_question commentId="${c.id}"`;
+        const tookCounter = s.state === "applied" && !!s.counter && s.appliedInVersion == null;
+        if (s.state === "insisted" && s.appliedInVersion == null) {
+          suggestionLines.push(
+            `- 🔧 INSISTED EDIT [${loc}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter — apply it VERBATIM, do not re-argue:\n${s.replacementText}\n    → ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`,
+          );
+        } else if (tookCounter) {
+          suggestionLines.push(
+            `- 🔧 COUNTER ACCEPTED [${loc}]${commentSecretNote(c)} The human TOOK YOUR COUNTER — apply your counter-proposal${s.counter?.replacementText ? `:\n${s.counter.replacementText}` : ""} and stamp the version.\n    → ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`,
+          );
+        } else {
+          // pending (the common case)
+          suggestionLines.push(
+            `- 🔧 SUGGESTED EDIT [${loc}]${commentSecretNote(c)} The human proposes replacing:\n${s.originalText}\n  with:\n${s.replacementText}${note ? `\n  Why: ${note}` : ""}\n    → Respond via ${respond}: suggestionState:"applied" (+ appliedInVersion) to ship it verbatim or with an extension you name in \`answer\`, OR suggestionState:"countered" (+ your reason in \`answer\`) to propose a different edit.`,
+          );
+        }
+        structuredSuggestions.push({
+          commentId: c.id,
+          artifactId: c.target.artifactId,
+          state: s.state,
+          file: c.target.filePath,
+          lineStart: s.lineStart,
+          lineEnd: s.lineEnd,
+          originalText: s.originalText,
+          replacementText: s.replacementText,
+          ...(note ? { note } : {}),
+          ...(s.counter ? { counter: s.counter } : {}),
+        });
+        continue;
+      }
       let loc = c.target.artifactId;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
       if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
@@ -444,6 +488,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     }
     if (questionLines.length > 0) {
       parts.push(`Human questions (${questionLines.length}) — answer these before proceeding:\n${questionLines.join("\n")}`);
+    }
+    if (suggestionLines.length > 0) {
+      parts.push(`🔧 Suggested edits (${suggestionLines.length}) — you MUST respond to each (apply / apply-with-extension / counter). An unanswered suggestion stays PENDING in the UI as visible debt:\n${suggestionLines.join("\n")}`);
     }
     if (otherLines.length > 0) {
       parts.push(`Human comments (${otherLines.length}):\n${otherLines.join("\n")}`);
@@ -692,6 +739,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     questions: structuredQuestions,
     comments: structuredComments,
     decisions: structuredDecisions,
+    // #172 — spread ONLY when there are suggestions to act on, so the healthy /
+    // no-suggestion poll payload stays byte-for-byte (contract lock in
+    // check-feedback-ledger-health.test.ts).
+    ...(structuredSuggestions.length > 0 ? { suggestions: structuredSuggestions } : {}),
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;

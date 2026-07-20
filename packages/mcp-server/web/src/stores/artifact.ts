@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Artifact, Comment, ArtifactStatus } from "@deeppairing/shared";
+import type { Artifact, Comment, ArtifactStatus, CommentSuggestion } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
 
@@ -257,8 +257,20 @@ export interface ArtifactState {
     artifactId: string,
     content: string,
     target?: Record<string, unknown>,
-    options?: { intent?: "comment" | "question" | "suggestion"; parentCommentId?: string | null },
+    options?: {
+      intent?: "comment" | "question" | "suggestion";
+      parentCommentId?: string | null;
+      // #172 — a first-class suggested edit posted with the comment.
+      suggestion?: CommentSuggestion;
+    },
   ) => Promise<void>;
+
+  /**
+   * #172 — the human resolves a COUNTERED suggestion. "take_counter" accepts the
+   * agent's counter; "insist" makes the human's exact version authoritative.
+   * Optimistically flips the local suggestion state, then POSTs.
+   */
+  resolveSuggestion: (commentId: string, action: "take_counter" | "insist") => Promise<void>;
 
   /** F6 — the session that owns an artifact (merged stores carry foreign artifacts). */
   owningSession: (artifactId: string) => string | undefined;
@@ -596,6 +608,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       acknowledged: false,
       createdAt: new Date().toISOString(),
       ...(options?.intent ? { intent: options.intent } : {}),
+      ...(options?.suggestion ? { suggestion: options.suggestion } : {}),
     } as Comment;
     useArtifactStore.getState().addComment(provisional);
     try {
@@ -614,6 +627,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           target: { artifactId, ...target },
           intent: options?.intent,
           parentCommentId: options?.parentCommentId ?? null,
+          suggestion: options?.suggestion,
         }),
       });
       // Reconcile: swap the provisional for the real (server-id'd) comment.
@@ -637,6 +651,41 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         },
       }));
       await toastApiError("Send comment", err);
+      throw err;
+    }
+  },
+
+  resolveSuggestion: async (commentId, action) => {
+    assertNotReplay("Resolving a suggestion");
+    // Locate the comment across the per-artifact buckets so we can optimistically
+    // flip its state and roll back on failure.
+    let found: Comment | undefined;
+    for (const list of Object.values(get().comments)) {
+      const hit = list.find((c) => c.id === commentId);
+      if (hit) { found = hit; break; }
+    }
+    if (!found?.suggestion) return;
+    const owner = found.target.artifactId === "__session__" ? undefined : get().owningSession(found.target.artifactId);
+    if (isForeignSession(owner)) await guardForeignOwner("Resolving a suggestion", owner);
+
+    const optimistic: Comment = {
+      ...found,
+      acknowledged: false,
+      suggestion: { ...found.suggestion, state: action === "insist" ? "insisted" : "applied" },
+    };
+    get().updateComment(optimistic);
+    try {
+      const res = await safeFetch(`${apiBase()}/api/comments/${commentId}/suggestion`, {
+        method: "POST",
+        headers: sessionHeaders(owner),
+        body: JSON.stringify({ action }),
+      });
+      let serverComment: Comment | null = null;
+      try { serverComment = (await res.json())?.comment ?? null; } catch { /* keep optimistic */ }
+      if (serverComment) get().updateComment(serverComment);
+    } catch (err) {
+      get().updateComment(found); // roll back to the pre-action comment
+      await toastApiError("Resolve suggestion", err);
       throw err;
     }
   },

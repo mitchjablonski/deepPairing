@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { Comment } from "@deeppairing/shared";
+import type { Comment, CommentSuggestion } from "@deeppairing/shared";
+import { suggestionSummary } from "@deeppairing/shared";
 import { useArtifactStore, commentPriorVersion } from "../stores/artifact";
 import { isSessionLive } from "../stores/connection";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
@@ -388,6 +389,12 @@ interface LineComposerProps {
   /** The new-side source line text, used to pre-fill Suggest mode. Omit to
    *  hide the Suggest tab (e.g. a removed-only diff row has no new line). */
   lineText?: string;
+  /** #172 — the full source lines + their starting line number. When present,
+   *  "Suggest edit" pre-fills a CONTIGUOUS RANGE (lineNum..lineEnd), not just the
+   *  single line. Diff rows omit these (no contiguous source) and fall back to
+   *  the single `lineText`. */
+  sourceLines?: string[];
+  sourceLineStart?: number;
   mode: LineMode;
   setMode: (m: LineMode) => void;
   existingComments: Comment[];
@@ -412,6 +419,8 @@ export function LineComposer({
   artifactId,
   filePath,
   lineText,
+  sourceLines,
+  sourceLineStart,
   mode,
   setMode,
   existingComments,
@@ -420,7 +429,6 @@ export function LineComposer({
 }: LineComposerProps) {
   const submitComment = useArtifactStore((s) => s.submitComment);
   const [commentText, setCommentText] = useState("");
-  const [suggestionText, setSuggestionText] = useState("");
   const [lineEnd, setLineEnd] = useState<number>(lineNum);
   const [submitting, setSubmitting] = useState(false);
 
@@ -428,11 +436,31 @@ export function LineComposer({
   const canSpan = totalLines != null;
   const spanMax = maxLine ?? totalLines ?? lineNum;
 
+  // #172 — the ORIGINAL text of the suggested range. When we have the full
+  // source, slice the contiguous range [lineNum..suggestEnd]; otherwise (diff
+  // rows) fall back to the single new-side line.
+  const canRange = Array.isArray(sourceLines) && sourceLineStart != null;
+  // "Suggest edit" gets its OWN range end so it can span while the range shows
+  // live — independent of the comment/ask span control above.
+  const [suggestEnd, setSuggestEnd] = useState<number>(lineNum);
+  const rangeEnd = canRange ? Math.max(lineNum, Math.min(suggestEnd, spanMax)) : lineNum;
+  const originalRange = canRange
+    ? (sourceLines as string[]).slice(lineNum - (sourceLineStart as number), rangeEnd - (sourceLineStart as number) + 1).join("\n")
+    : (lineText ?? "");
+  // The editable replacement — pre-filled with the original range.
+  const [suggestionText, setSuggestionText] = useState<string | null>(null);
+  const effectiveSuggestion = suggestionText ?? originalRange;
+
+  // Live line-level diff: which editor lines differ from the original range.
+  const originalLines = originalRange.split("\n");
+  const editorLines = effectiveSuggestion.split("\n");
+  const changedLine = (i: number): boolean => editorLines[i] !== (originalLines[i] ?? undefined);
+
   const handleSubmit = async () => {
     if (submitting) return;
     const rawEnd = canSpan ? lineEnd : lineNum;
     const safeEnd = Math.max(lineNum, Math.min(rawEnd, spanMax));
-    if (mode === "suggest" ? !suggestionText.trim() : !commentText.trim()) return;
+    if (mode === "suggest" ? !effectiveSuggestion.trim() : !commentText.trim()) return;
 
     // UX7d — wrap in try/catch/finally: pre-fix a thrown submitComment left
     // `submitting` true forever (composer permanently disabled) and skipped
@@ -441,11 +469,25 @@ export function LineComposer({
     setSubmitting(true);
     try {
       if (mode === "suggest") {
-        const original = lineText ?? "";
+        // #172 — a first-class suggested edit. content = the "why" note, or the
+        // shared summary when blank (the ledger uses that same summary to tell a
+        // genuine why from the fallback). The #187 hazard: `submitComment`'s 4th
+        // arg is an OPTIONS object, never a MouseEvent — handleSubmit takes no
+        // event, so the tab/footer onClick wrappers can't leak one in.
+        const suggestion: CommentSuggestion = {
+          originalText: originalRange,
+          replacementText: effectiveSuggestion,
+          lineStart: lineNum,
+          lineEnd: rangeEnd,
+          state: "pending",
+        };
+        const why = commentText.trim();
+        const content = why || suggestionSummary(filePath, lineNum, rangeEnd);
         await submitComment(
           artifactId,
-          `Suggestion: replace line ${lineNum}\n\`\`\`\n${original}\n\`\`\`\nwith:\n\`\`\`\n${suggestionText}\n\`\`\``,
-          { lineStart: lineNum, lineEnd: lineNum, filePath, suggestion: suggestionText, ...targetContext },
+          content,
+          { lineStart: lineNum, lineEnd: rangeEnd, filePath, ...targetContext },
+          { intent: "suggestion", suggestion },
         );
       } else {
         await submitComment(
@@ -497,15 +539,12 @@ export function LineComposer({
         </button>
         {canSuggest && (
           <button
-            onClick={() => {
-              setMode("suggest");
-              if (!suggestionText) setSuggestionText(lineText ?? "");
-            }}
+            onClick={() => setMode("suggest")}
             className={`px-2 py-0.5 rounded text-2xs font-medium transition-colors ${
               mode === "suggest" ? "bg-accent-green-dim text-accent-green" : "text-text-muted hover:text-text-secondary"
             }`}
           >
-            Suggest
+            Suggest edit
           </button>
         )}
         {mode !== "suggest" && canSpan && (
@@ -531,9 +570,42 @@ export function LineComposer({
       </div>
 
       {mode === "suggest" ? (
-        <div className="space-y-1.5">
+        <div className="space-y-1.5" data-testid="suggest-edit-composer">
+          {/* Which lines you're editing (+ optional range extension). */}
+          <p className="text-2xs text-text-muted">
+            Editing lines{" "}
+            <span className="text-text-secondary font-medium">
+              {lineNum}
+              {rangeEnd > lineNum ? `–${rangeEnd}` : ""}
+            </span>{" "}
+            — your version replaces them if Claude accepts.
+            {canRange && spanMax > lineNum && (
+              <span className="ml-1.5 inline-flex items-center gap-1">
+                <span aria-hidden>·</span>
+                <span>to</span>
+                <input
+                  type="number"
+                  min={lineNum}
+                  max={spanMax}
+                  value={suggestEnd}
+                  onChange={(e) => {
+                    // While the editor is still the untouched pre-fill
+                    // (suggestionText == null), effectiveSuggestion tracks the
+                    // range automatically via originalRange.
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) setSuggestEnd(n);
+                  }}
+                  aria-label="Last line to suggest an edit for"
+                  className="w-14 px-1.5 py-0.5 rounded text-2xs bg-surface-secondary border border-border-default text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-green"
+                />
+              </span>
+            )}
+          </p>
+          {/* Mono mini-editor, pre-filled with the selected lines. */}
           <textarea
-            value={suggestionText}
+            data-testid="suggestion-editor"
+            aria-label="Suggested replacement code"
+            value={effectiveSuggestion}
             onChange={(e) => setSuggestionText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -544,21 +616,65 @@ export function LineComposer({
             }}
             disabled={submitting}
             autoFocus
-            rows={3}
-            className="w-full px-2.5 py-1.5 bg-surface-secondary border border-accent-green/30 rounded text-xs text-text-primary font-mono
-                       resize-none focus:outline-none focus:ring-1 focus:ring-accent-green"
+            rows={Math.min(Math.max(editorLines.length, 3), 12)}
+            spellCheck={false}
+            className="w-full px-2.5 py-1.5 bg-surface-primary border border-border-default rounded text-xs text-text-primary font-mono
+                       resize-y focus:outline-none focus:ring-1 focus:ring-accent-green whitespace-pre overflow-x-auto"
           />
-          <div className="flex gap-1.5">
+          {/* Live changed-line highlight (line-level diff vs original). */}
+          <div
+            data-testid="suggestion-diff-preview"
+            className="rounded border border-border-subtle bg-surface-code font-mono text-2xs leading-[18px] overflow-x-auto"
+            aria-hidden
+          >
+            {editorLines.map((ln, i) => {
+              const isChanged = changedLine(i);
+              return (
+                <div
+                  key={i}
+                  data-changed={isChanged ? "true" : "false"}
+                  className={`px-2 whitespace-pre ${isChanged ? "bg-diff-add-bg text-text-primary" : "text-text-muted"}`}
+                >
+                  {ln || " "}
+                </div>
+              );
+            })}
+          </div>
+          {/* Optional "why" note — feeds the ledger when non-empty. */}
+          <textarea
+            data-testid="suggestion-why"
+            aria-label="Why this edit (optional)"
+            rows={2}
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handleSubmit();
+              }
+              if (e.key === "Escape") onClose();
+            }}
+            disabled={submitting}
+            placeholder="(why, optional but it teaches the ledger)"
+            className="w-full px-2.5 py-1.5 bg-surface-primary border border-border-subtle rounded text-xs text-text-secondary
+                       placeholder-text-muted resize-none focus:outline-none focus:ring-1 focus:ring-accent-green"
+          />
+          {/* Footer: ⌘⏎ hint · Cancel · Suggest to Claude */}
+          <div className="flex items-center gap-2">
+            <span className="text-2xs text-text-muted">
+              <kbd className="font-mono">⌘⏎</kbd> send
+            </span>
+            <span className="flex-1" />
+            <button onClick={onClose} className="px-2.5 py-1.5 text-text-muted text-xs hover:text-text-secondary transition-colors">
+              Cancel
+            </button>
             <button
               onClick={handleSubmit}
-              disabled={!suggestionText.trim() || submitting}
+              disabled={!effectiveSuggestion.trim() || submitting}
               className="px-2.5 py-1.5 bg-accent-green text-white text-xs rounded
                          hover:bg-accent-green/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
             >
-              Submit Suggestion
-            </button>
-            <button onClick={onClose} className="px-2 py-1.5 text-text-muted text-xs hover:text-text-secondary transition-colors">
-              Cancel
+              Suggest to Claude
             </button>
           </div>
         </div>

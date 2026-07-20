@@ -58,6 +58,53 @@ export const CommentAuthorSchema = z.enum(["human", "agent"]);
 export const CommentIntentSchema = z.enum(["comment", "question", "suggestion"]);
 export type CommentIntent = z.infer<typeof CommentIntentSchema>;
 
+// #172 — suggested edits. The human proposes CONCRETE code (not just prose) and
+// the agent MUST respond. This is a first-class negotiable object stored on the
+// comment (distinct from the legacy `target.suggestion` string, which is a
+// one-line hint). Every field the agent needs to act — original vs replacement,
+// the line range, the state, and any counter — lives here so check_feedback can
+// deliver it as structuredContent without re-deriving from the diff.
+//
+// State machine (see file-store.updateCommentSuggestion + check-feedback):
+//   pending   — human proposed; the agent owes a response.
+//   applied   — resolved into a version. appliedInVersion links the version
+//               that contains the human's code (or, when `counter` is present,
+//               the counter the human accepted via "Take the counter").
+//   countered — the agent proposed a different edit; awaiting the human.
+//   insisted  — the human overrode the counter; their EXACT version is
+//               authoritative. The agent applies it verbatim, does not re-argue.
+export const SuggestionStateSchema = z.enum(["pending", "applied", "countered", "insisted"]);
+export type SuggestionState = z.infer<typeof SuggestionStateSchema>;
+
+export const SuggestionCounterSchema = z.object({
+  /** The agent's alternative code. Optional — a counter can be reason-only. */
+  replacementText: z.string().optional(),
+  reason: z.string(),
+});
+export type SuggestionCounter = z.infer<typeof SuggestionCounterSchema>;
+
+export const CommentSuggestionSchema = z.object({
+  originalText: z.string(),
+  replacementText: z.string(),
+  lineStart: z.number().int(),
+  lineEnd: z.number().int(),
+  state: SuggestionStateSchema,
+  /** The artifact version that shipped this edit (set when the agent applies). */
+  appliedInVersion: z.number().int().positive().optional(),
+  counter: SuggestionCounterSchema.optional(),
+});
+export type CommentSuggestion = z.infer<typeof CommentSuggestionSchema>;
+
+/**
+ * The human-readable summary used as a suggestion comment's `content` when the
+ * human leaves the "why" note blank. Shared so the composer (which sets it) and
+ * the ledger (which detects a GENUINE why by comparing against it) can't drift.
+ */
+export function suggestionSummary(filePath: string | undefined, lineStart: number, lineEnd: number): string {
+  const loc = lineEnd > lineStart ? `${lineStart}–${lineEnd}` : `${lineStart}`;
+  return `Suggested edit to ${filePath ?? "code"}:${loc}`;
+}
+
 export const CommentSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
@@ -71,6 +118,11 @@ export const CommentSchema = z.object({
    * the agent should respond with answer_question.
    */
   intent: CommentIntentSchema.optional(),
+  // #172 — a first-class suggested edit (intent === "suggestion"). Optional for
+  // backward compatibility (project rule: all new fields optional); an old
+  // daemon that doesn't understand it treats the comment as a plain comment and
+  // simply ignores this field — graceful degradation, never a crash.
+  suggestion: CommentSuggestionSchema.optional(),
   /** Set when an agent-authored reply has answered this question. */
   answeredByCommentId: z.string().nullable().optional(),
   /**
@@ -102,6 +154,9 @@ export const CreateCommentRequestSchema = z.object({
   parentCommentId: z.string().nullable().optional(),
   codeReferences: z.array(CodeReferenceSchema).optional(),
   intent: CommentIntentSchema.optional(),
+  // #172 — carry the suggested-edit object on create so a posted suggestion
+  // renders as a first-class card immediately (not a plain comment).
+  suggestion: CommentSuggestionSchema.optional(),
 });
 
 export type CreateCommentRequest = z.infer<typeof CreateCommentRequestSchema>;
