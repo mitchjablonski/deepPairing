@@ -19,6 +19,7 @@ const PlanArtifact = lazy(() => import("./artifacts/PlanArtifact").then((m) => (
 const RevisionDiff = lazy(() => import("./RevisionDiff").then((m) => ({ default: m.RevisionDiff })));
 const DecisionArtifactView = lazy(() => import("./DecisionCard").then((m) => ({ default: m.DecisionArtifactView })));
 const CodeChangeArtifact = lazy(() => import("./artifacts/CodeChangeArtifact").then((m) => ({ default: m.CodeChangeArtifact })));
+const ChangesetArtifact = lazy(() => import("./artifacts/ChangesetArtifact").then((m) => ({ default: m.ChangesetArtifact })));
 const ReasoningCard = lazy(() => import("./artifacts/ReasoningCard").then((m) => ({ default: m.ReasoningCard })));
 const SpecArtifact = lazy(() => import("./artifacts/SpecArtifact").then((m) => ({ default: m.SpecArtifact })));
 import { CommentThread } from "./CommentThread";
@@ -94,6 +95,7 @@ const typeLabels: Record<string, string> = {
   plan: "Plans",
   decision: "Decisions",
   code_change: "Code",
+  changeset: "Changesets",
   reasoning: "Reasoning",
 };
 
@@ -255,6 +257,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {artifact.type === "code_change" && (
         <CodeChangeArtifact artifact={artifact} />
       )}
+      {artifact.type === "changeset" && <ChangesetArtifact artifact={artifact} />}
       {artifact.type === "decision" && <DecisionArtifactView artifact={artifact} />}
       </Suspense>
 

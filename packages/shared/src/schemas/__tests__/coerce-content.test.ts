@@ -6,6 +6,7 @@ import {
   coerceDecisionContent,
   coerceCodeChangeContent,
   coerceReasoningContent,
+  coerceChangesetContent,
   coerceArtifactContent,
 } from "../coerce-content.js";
 
@@ -201,10 +202,39 @@ describe("coerceReasoningContent", () => {
   });
 });
 
+describe("coerceChangesetContent (#171)", () => {
+  it("empty → files [] and no throw", () => {
+    expect(coerceChangesetContent({})).toEqual({ files: [] });
+  });
+  it("non-array files → []", () => {
+    expect(coerceChangesetContent({ files: "nope" }).files).toEqual([]);
+  });
+  it("invalid file changeType → 'modified'; invalid hunk-line kind → 'ctx'", () => {
+    const out = coerceChangesetContent({
+      files: [{ path: "a.ts", changeType: "frobnicate", hunks: [{ lines: [{ kind: "zap", content: "x" }] }] }],
+    });
+    expect(out.files[0]!.changeType).toBe("modified");
+    expect(out.files[0]!.hunks[0]!.lines[0]!.kind).toBe("ctx");
+  });
+  it("passes valid content through, including reviewState (dropping junk values)", () => {
+    const out = coerceChangesetContent({
+      summary: "s",
+      risks: ["touches auth", 42],
+      files: [{ path: "a.ts", changeType: "added", stats: { additions: 2, deletions: 0 }, hunks: [{ header: "@@", lines: [{ kind: "add", content: "x", newLine: 1 }] }] }],
+      reviewState: { "a.ts": "reviewed", "b.ts": "bogus" },
+    });
+    expect(out.summary).toBe("s");
+    expect(out.risks).toEqual(["touches auth"]); // non-strings dropped
+    expect(out.files[0]!.stats).toEqual({ additions: 2, deletions: 0 });
+    expect(out.reviewState).toEqual({ "a.ts": "reviewed" }); // junk value dropped
+  });
+});
+
 describe("coerceArtifactContent dispatcher", () => {
   it("routes by type and returns null for an unknown/contentless type", () => {
     expect(coerceArtifactContent({ type: "plan", content: {} })).toEqual({ steps: [], estimatedChanges: 0 });
     expect(coerceArtifactContent({ type: "reasoning" as any, content: { action: "a", reasoning: "r" } })).toMatchObject({ action: "a" });
+    expect(coerceArtifactContent({ type: "changeset", content: {} })).toEqual({ files: [] });
     expect(coerceArtifactContent({ type: "unknown" as any, content: {} })).toBeNull();
   });
 });

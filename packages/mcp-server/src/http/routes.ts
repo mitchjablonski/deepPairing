@@ -29,6 +29,7 @@ import {
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,
   RenameBodySchema,
+  ChangesetReviewBodySchema,
   PreferenceBodySchema,
   RetrospectiveBodySchema,
   formatZodIssues,
@@ -784,9 +785,13 @@ export function createHttpRoutes(
         //      paraphrase gets caught), then
         //   2. AA1 — the artifact's own Y5-style concept (code_change carries
         //      one today; spec/plan may in future), then
-        //   3. the artifact title (legacy fallback).
+        //   3. #171 — for a changeset, the changeset TITLE (it carries no
+        //      top-level concept). This records exactly ONE framing entry —
+        //      NO per-file fan-out, the exact over-block class #195's review
+        //      killed; demo isolation is inherited via recordRejectedApproach.
         const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
-        const concept = humanConcept?.trim() || artConcept || undefined;
+        const changesetFallback = artifact.type === "changeset" ? artifact.title : undefined;
+        const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || undefined,
@@ -869,6 +874,59 @@ export function createHttpRoutes(
     await store.renameArtifact(artifactId, title);
     broadcast({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });
+  });
+
+  // #171 — mark ONE file of a changeset reviewed / skipped (or clear it). This
+  // is review PROGRESS persisted on the artifact content — NOT a decision
+  // record (only approve/revise/reject write decisions). The whole-changeset
+  // Approve stays gated in the UI until every file is reviewed-or-skipped.
+  app.post("/api/artifacts/:artifactId/changeset-review", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifactId = c.req.param("artifactId");
+    // H2-2 (#145) — honest generic 400 on a malformed body; Zod field errors on
+    // a valid-but-wrong-shape body.
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = ChangesetReviewBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { filePath, state } = parsed.data;
+
+    // F6 — same cross-session guard as status/rename: a verdict on an artifact
+    // this store doesn't own must FAIL LOUDLY (the UI rolls back its optimistic
+    // flip), never report success for a write that didn't land.
+    const target = (await store.getArtifacts()).find((a) => a.id === artifactId);
+    if (!target) {
+      return c.json(
+        { error: "artifact_not_in_session", code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+    if (!store.setChangesetFileReview) {
+      return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
+    }
+    const updated = await store.setChangesetFileReview(artifactId, filePath, state);
+    if (!updated) {
+      // Not a changeset, or the path isn't part of it — the caller's mistake,
+      // surfaced honestly rather than a silent 200.
+      return c.json(
+        { error: "not_a_changeset_file", code: "not_a_changeset_file",
+          message: "That artifact is not a changeset, or the file path is not part of it." },
+        400,
+      );
+    }
+    // Persist before the agent's next poll (mirrors the status route's flush).
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
+    }
+    // Full-artifact patch: review state lives in content, so the web store must
+    // replaceArtifact (like plan_progress_updated), not just patch a status.
+    broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
+    return c.json({ status: "updated", artifactId });
   });
 
   // Get comments for an artifact

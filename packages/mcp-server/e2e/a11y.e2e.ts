@@ -195,6 +195,58 @@ test.beforeAll(async () => {
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed suggestion reply failed: ${r.status}`); });
 
+  // #171 — a multi-file CHANGESET, seeded into the a11y session so BOTH theme
+  // scans mount and measure the new review surface (the #187 hollow-net lesson:
+  // openChangeset() below SELECTS it and waits for the gated action bar before
+  // analyzing). Real, token-rich diff hunks (keyword/string/comment/number
+  // families) + a risk chip + a partial reviewState (so the summary strip, the
+  // per-file rail states, and the DISABLED "Approve changeset (N files left)"
+  // button are all in the DOM for the scan).
+  await fetch(`${baseURL}/api/internal/sessions/a11y/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cs_a11y", type: "changeset", title: "Move session-TTL refresh into middleware",
+      content: {
+        summary: "Centralize the sliding-window refresh so every route inherits it.",
+        risks: ["touches auth"],
+        files: [
+          {
+            path: "auth/middleware.ts", changeType: "modified", stats: { additions: 3, deletions: 2 },
+            hunks: [{
+              header: "@@ -24,4 +24,6 @@ export function requireSession(store: SessionStore) {",
+              lines: [
+                { kind: "ctx", content: "    const sid = readSessionCookie(req);", oldLine: 25, newLine: 25 },
+                { kind: "del", content: "    const session = await store.get(sid);", oldLine: 26 },
+                { kind: "add", content: "    const session = await store.getAndTouch(sid); // refreshes TTL", newLine: 26 },
+                { kind: "add", content: "    if (!session || session.expiresAt < Date.now()) return res.status(401).end();", newLine: 27 },
+              ],
+            }],
+          },
+          {
+            path: "auth/session.ts", changeType: "modified", stats: { additions: 1, deletions: 0 },
+            hunks: [{ header: "@@ -10,2 +10,3 @@ export interface Session {", lines: [
+              { kind: "add", content: "  expiresAt: number; // sliding window", newLine: 12 },
+            ] }],
+          },
+        ],
+        reviewState: { "auth/middleware.ts": "reviewed" },
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed changeset failed: ${r.status}`); });
+  // A cross-file comment binding the two anchors — puts the rail's CROSS-FILE
+  // card into the scanned DOM.
+  await fetch(`${baseURL}/api/internal/sessions/a11y/comments`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cmt_a11y_xfile", artifactId: "cs_a11y",
+      content: "TTL constant and the middleware check must stay in sync.",
+      author: "human",
+      target: { artifactId: "cs_a11y", anchors: [
+        { filePath: "auth/session.ts", lineStart: 12 },
+        { filePath: "auth/middleware.ts", lineStart: 26 },
+      ] },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed changeset comment failed: ${r.status}`); });
   // #140 — a SEPARATE single-artifact session whose plan carries a diagram, so
   // it renders directly (like bootstrap's visuals test) and axe can scan the
   // region-comment affordance (drag overlay + keyboard node-list disclosure)
@@ -281,6 +333,28 @@ async function openSuggestionArtifact(page: import("@playwright/test").Page): Pr
   );
 }
 
+/** #171 — mount the CHANGESET review surface for real before scanning (the
+ *  #187 hollow-net lesson: seeding alone never renders the component). Selects
+ *  the changeset, waits for the diff pane AND the gated whole-changeset action
+ *  bar (the "Approve changeset (N files left)" button — the marquee surface),
+ *  then settles finite animations so axe never samples a mid-fade frame. */
+async function openChangeset(page: import("@playwright/test").Page): Promise<void> {
+  await page.click('[data-artifact-item="cs_a11y"]');
+  await page.waitForSelector('[data-artifact-id="cs_a11y"]', { timeout: 15000 });
+  // The gated Approve button proves the changeset renderer's action bar mounted.
+  await page.getByRole("button", { name: /Approve changeset/ }).waitFor({ timeout: 15000 });
+  // The cross-file card in the rail is part of the seeded state.
+  await page.getByText("CROSS-FILE COMMENT").waitFor({ timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
 test("a11y (#172): suggested-edit cards (pending + countered) have no serious/critical axe violations — dark", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
@@ -361,6 +435,13 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
   const qResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   const qSerious = qResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(qSerious, `axe violations (open-question sections):\n${fmt(qSerious)}`).toEqual([]);
+
+  // #171 — third scan with the CHANGESET review surface mounted (summary strip,
+  // file rail states, unified diff, cross-file card, gated action bar).
+  await openChangeset(page);
+  const csResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const csSerious = csResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(csSerious, `axe violations (changeset):\n${fmt(csSerious)}`).toEqual([]);
 });
 
 test("a11y: session view in the LIGHT theme has no serious/critical axe violations (#150)", async ({ page }) => {
@@ -404,6 +485,12 @@ test("a11y: session view in the LIGHT theme has no serious/critical axe violatio
     .analyze();
   const qSerious = qResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(qSerious, `axe violations (open-question sections, light):\n${fmt(qSerious)}`).toEqual([]);
+
+  // #171 — light-theme parity for the changeset review surface.
+  await openChangeset(page);
+  const csResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const csSerious = csResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(csSerious, `axe violations (changeset, light):\n${fmt(csSerious)}`).toEqual([]);
 });
 
 test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {

@@ -80,6 +80,7 @@ export {
   coerceDecisionContent,
   coerceCodeChangeContent,
   coerceReasoningContent,
+  coerceChangesetContent,
 } from "./schemas/coerce-content.js";
 
 export {
@@ -87,6 +88,7 @@ export {
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,
   RenameBodySchema,
+  ChangesetReviewBodySchema,
   PreferenceBodySchema,
   AutonomyLevelSchema,
   DetailDensitySchema,
@@ -101,6 +103,7 @@ export {
   type DecisionResolveBody,
   type StatusUpdateBody,
   type RenameBody,
+  type ChangesetReviewBody,
   type PreferenceBody,
   type AutonomyLevel,
   type DetailDensity,
@@ -200,6 +203,12 @@ export {
   SpecRequirementSchema,
   SpecTaskSchema,
   SpecContentSchema,
+  ChangesetHunkLineSchema,
+  ChangesetHunkSchema,
+  ChangesetFileStatsSchema,
+  ChangesetFileSchema,
+  ChangesetReviewStateSchema,
+  ChangesetContentSchema,
   type Finding,
   type FindingSeverity,
   type ResearchContent,
@@ -216,6 +225,12 @@ export {
   type SpecRequirement,
   type SpecTask,
   type SpecContent,
+  type ChangesetHunkLine,
+  type ChangesetHunk,
+  type ChangesetFileStats,
+  type ChangesetFile,
+  type ChangesetReviewState,
+  type ChangesetContent,
 } from "./schemas/content-types.js";
 export { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./schemas/content-types.js";
 export { normalizeConceptKey } from "./normalize.js";

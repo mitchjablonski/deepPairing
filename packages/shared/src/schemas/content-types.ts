@@ -313,3 +313,71 @@ export const DecisionOptionBaseSchema = z.object({
    *  stack applies. */
   visuals: z.array(PlanVisualSchema).optional(),
 });
+
+// --- Changeset (#171 — multi-file review as ONE artifact) ---
+//
+// The biggest gap vs. competitors: a change spanning files reviewed as a single
+// unit, with per-file review state and comments that can anchor across files.
+// Coexists with `code_change` (single-file); the agent picks changeset for
+// changes spanning 2+ files. Unified-diff only.
+
+/** One line of a unified-diff hunk. `kind` tags it context / addition /
+ *  deletion; `oldLine`/`newLine` are the 1-based numbers shown in the gutter
+ *  (a `del` line has no newLine, an `add` line has no oldLine, `ctx` has both).
+ *  Both optional so a partial hunk still renders. */
+export const ChangesetHunkLineSchema = z.object({
+  kind: z.enum(["ctx", "add", "del"]),
+  content: z.string(),
+  oldLine: z.number().int().optional(),
+  newLine: z.number().int().optional(),
+});
+export type ChangesetHunkLine = z.infer<typeof ChangesetHunkLineSchema>;
+
+/** A unified-diff hunk: the `@@ -a,b +c,d @@` header plus its lines. */
+export const ChangesetHunkSchema = z.object({
+  header: z.string().optional().describe("Unified-diff hunk header, e.g. '@@ -24,9 +24,14 @@ export function requireSession(...)'"),
+  lines: z.array(ChangesetHunkLineSchema),
+});
+export type ChangesetHunk = z.infer<typeof ChangesetHunkSchema>;
+
+/** Per-file add/del tally driving the diffstat bars. Optional (all new fields
+ *  optional per repo convention); the renderer derives it from the hunks when
+ *  absent. */
+export const ChangesetFileStatsSchema = z.object({
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+});
+export type ChangesetFileStats = z.infer<typeof ChangesetFileStatsSchema>;
+
+/** One file in a changeset: its path, how it changed, its unified-diff hunks,
+ *  and an optional add/del stat. */
+export const ChangesetFileSchema = z.object({
+  path: z.string(),
+  changeType: z.enum(["modified", "added", "deleted"]),
+  hunks: z.array(ChangesetHunkSchema),
+  stats: ChangesetFileStatsSchema.optional(),
+});
+export type ChangesetFile = z.infer<typeof ChangesetFileSchema>;
+
+/** Per-file review progress, keyed by file path. HUMAN-driven (set via the
+ *  changeset-review route, NOT by the agent), stored on the artifact content so
+ *  it rides getArtifacts()/check_feedback and the WS full-artifact patch — the
+ *  same in-content pattern update_plan_progress uses for step statuses. A
+ *  Record (not Map) per the frontend-store convention. Optional; absent = no
+ *  file reviewed yet. */
+export const ChangesetReviewStateSchema = z.record(
+  z.string(),
+  z.enum(["reviewed", "skipped"]),
+);
+export type ChangesetReviewState = z.infer<typeof ChangesetReviewStateSchema>;
+
+export const ChangesetContentSchema = z.object({
+  summary: z.string().optional(),
+  files: z.array(ChangesetFileSchema),
+  /** Risk annotations from the agent, per changeset (e.g. "touches auth",
+   *  "migration included") — rendered as chips in the summary strip. */
+  risks: z.array(z.string()).optional(),
+  /** Human review progress (set post-creation via the changeset-review route). */
+  reviewState: ChangesetReviewStateSchema.optional(),
+});
+export type ChangesetContent = z.infer<typeof ChangesetContentSchema>;

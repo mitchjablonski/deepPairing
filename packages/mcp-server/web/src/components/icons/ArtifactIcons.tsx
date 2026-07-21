@@ -69,6 +69,8 @@ export function ArtifactIcon({ type, className = "" }: { type: string; className
     case "plan": return <FileTextIcon className={className} />;
     case "decision": return <ScaleIcon className={className} />;
     case "code_change": return <CodeIcon className={className} />;
+    // #171 — a changeset (a change spanning files) reads as a branch of edits.
+    case "changeset": return <GitBranchIcon className={className} />;
     case "reasoning": return <BrainIcon className={className} />;
     case "spec": return <ListChecklistIcon className={className} />;
     default: return <FileTextIcon className={className} />;

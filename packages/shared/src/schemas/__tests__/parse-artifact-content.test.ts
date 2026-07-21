@@ -104,6 +104,31 @@ describe("parseArtifactContent (U2)", () => {
     expect(r.ok).toBe(true);
   });
 
+  // #171 — changeset content.
+  it("validates a changeset artifact via ChangesetContentSchema", async () => {
+    const r = parseArtifactContent(art("changeset", {
+      summary: "multi-file refactor",
+      risks: ["touches auth"],
+      files: [{
+        path: "a.ts", changeType: "modified",
+        stats: { additions: 1, deletions: 1 },
+        hunks: [{ header: "@@ -1 +1 @@", lines: [
+          { kind: "del", content: "old", oldLine: 1 },
+          { kind: "add", content: "new", newLine: 1 },
+        ] }],
+      }],
+    }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.data as any).files).toHaveLength(1);
+  });
+
+  it("rejects a changeset with an unknown file changeType", async () => {
+    const r = parseArtifactContent(art("changeset", {
+      files: [{ path: "a.ts", changeType: "renamed", hunks: [] }],
+    }));
+    expect(r.ok).toBe(false);
+  });
+
   // Y5 — concepts hoisted into decision options + code_change content.
   it("Y5: validates a decision option carrying a concept", async () => {
     const r = parseArtifactContent(art("decision", {

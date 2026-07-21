@@ -6,6 +6,7 @@ import {
   PlanContentSchema,
   SpecContentSchema,
   ReasoningContentSchema,
+  ChangesetContentSchema,
 } from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
@@ -15,6 +16,9 @@ export const ArtifactTypeSchema = z.enum([
   "code_change",
   "reasoning",
   "spec",
+  // #171 — a change spanning 2+ files, reviewed as one unit (unified diffs +
+  // per-file review state). Single-file changes stay `code_change`.
+  "changeset",
 ]);
 
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>;
@@ -190,7 +194,8 @@ export function parseArtifactContent(
   | ParseResult<import("./content-types.js").ResearchContent>
   | ParseResult<import("./content-types.js").PlanContent>
   | ParseResult<import("./content-types.js").SpecContent>
-  | ParseResult<import("./content-types.js").ReasoningContent> {
+  | ParseResult<import("./content-types.js").ReasoningContent>
+  | ParseResult<import("./content-types.js").ChangesetContent> {
   const schema = (() => {
     switch (artifact.type) {
       case "decision":     return DecisionContentSchema;
@@ -199,6 +204,7 @@ export function parseArtifactContent(
       case "plan":         return PlanContentSchema;
       case "spec":         return SpecContentSchema;
       case "reasoning":    return ReasoningContentSchema;
+      case "changeset":    return ChangesetContentSchema;
     }
   })();
   const result = schema.safeParse(artifact.content);

@@ -9,6 +9,7 @@ import {
   validatePresentPlanInput,
   validatePresentOptionsInput,
   validatePresentCodeChangeInput,
+  validatePresentChangesetInput,
   validateLogReasoningInput,
 } from "../validate-tool-input.js";
 
@@ -24,6 +25,10 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   plan: validatePresentPlanInput,
   decision: validatePresentOptionsInput,
   code_change: validatePresentCodeChangeInput,
+  // #171 — without this entry the lookup returned undefined and a malformed
+  // changeset (e.g. files: "nope") superseded straight to disk as a silently
+  // empty v2 with no error for the agent to self-correct from.
+  changeset: validatePresentChangesetInput,
   reasoning: validateLogReasoningInput,
 };
 
@@ -78,6 +83,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     if (supersedeValidator) {
       const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
       if (!v.ok) return v.error;
+    }
+    // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
+    // v2 changeset must start with FRESH review state: carrying an echoed
+    // reviewState forward would stamp stale ✓ marks onto files whose diff just
+    // changed. The handler persists the RAW `content` (not the validator's
+    // stripped `data`), so drop it here. (present_changeset already ignores it
+    // on the create path.)
+    if (old.type === "changeset" && content && typeof content === "object") {
+      delete (content as Record<string, unknown>).reviewState;
     }
 
     const title = String(args?.title ?? old.title);

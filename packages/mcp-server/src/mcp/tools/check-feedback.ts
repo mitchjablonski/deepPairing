@@ -60,6 +60,34 @@ function commentSecretNote(c: Comment): string {
   return c.secretWarnings?.length ? " ⚠ possible secret in this comment" : "";
 }
 
+/**
+ * #171 — a changeset's per-file review progress, surfaced to the agent so it
+ * can see which files the human has reviewed/skipped and where comments
+ * concentrate. Returns `{ reviewState, filesReviewed, filesTotal }` ONLY for a
+ * changeset with files; `{}` for every other artifact so the pending-entry
+ * shape stays byte-for-byte unchanged for non-changeset drafts.
+ */
+function changesetReviewField(a: Artifact): {
+  reviewState?: Record<string, "reviewed" | "skipped">;
+  filesReviewed?: number;
+  filesTotal?: number;
+} {
+  if (a.type !== "changeset") return {};
+  const content = a.content as { files?: Array<{ path?: string }>; reviewState?: Record<string, unknown> } | null;
+  const files = Array.isArray(content?.files) ? content!.files : [];
+  if (files.length === 0) return {};
+  const raw = content?.reviewState ?? {};
+  const reviewState: Record<string, "reviewed" | "skipped"> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === "reviewed" || v === "skipped") reviewState[k] = v;
+  }
+  const filesReviewed = files.filter((f) => {
+    const s = f.path ? reviewState[f.path] : undefined;
+    return s === "reviewed" || s === "skipped";
+  }).length;
+  return { reviewState, filesReviewed, filesTotal: files.length };
+}
+
 type CommentRegion = { labels?: string[]; elementIds?: string[] } | undefined;
 function describeRegionRef(region: CommentRegion): string {
   if (!region) return "";
@@ -288,7 +316,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const freshlyRejected = allArtifacts.filter(
     (a) =>
       a.status === "rejected" &&
-      ["code_change", "spec", "research", "decision"].includes(a.type) &&
+      // #171 — changeset joins the verdict-reported set (same #195 bug class:
+      // without it, a rejected changeset would fall through to "You may
+      // proceed" the instant the human rejects the approach).
+      ["code_change", "spec", "research", "decision", "changeset"].includes(a.type) &&
       !ctx.state.reportedRejectedVerdicts.has(a.id),
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
@@ -310,6 +341,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     suggestedAction = `Do NOT apply — the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
   } else if (pendingArts.some((a) => a.type === "code_change")) {
     suggestedAction = "Wait for the code change review before applying the edit.";
+  } else if (pendingArts.some((a) => a.type === "changeset")) {
+    suggestedAction = "Wait for the changeset review — the human is reviewing each file — before applying the edits.";
   } else if (pendingArts.some((a) => a.type === "decision")) {
     suggestedAction = "Wait for decision selection before proceeding.";
   } else if (pendingArts.some((a) => a.type === "plan")) {
@@ -418,7 +451,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         continue;
       }
       let loc = c.target.artifactId;
+      // #171 — a changeset line comment carries a file dimension (path + line),
+      // so deliver it as `art_x path/to/file.ts:12` rather than a bare
+      // `art_x:12` the agent can't place across a multi-file change.
+      if (c.target.filePath) loc += ` ${c.target.filePath}`;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+      // #171 — a CROSS-FILE thread (2+ anchors) names every location it binds
+      // so the agent sees the invariant spans files (e.g. session.ts:12 ↔
+      // middleware.ts:31).
+      const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
+      if (anchors.length >= 2) {
+        loc += ` — cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" ↔ ")}`;
+      }
       if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
       // D8 review [BLOCKER] — question answers and requirement comments
       // arrived UNTAGGED: the human clicked Comment on "Which DB?", typed
@@ -453,6 +497,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
           requirementId: c.target.requirementId,
+          // #171 — file dimension for a changeset line comment, and the full
+          // anchor list for a cross-file thread. Spread only when present so
+          // the healthy/no-file payload is byte-for-byte unchanged.
+          ...(c.target.filePath ? { filePath: c.target.filePath } : {}),
+          ...(Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {}),
           // #140 — carry ONLY the human-meaningful labels. The normalized rect
           // and the render-unique `elementIds` (e.g. dp-mmd-7-8-flowchart-A-0)
           // are unactionable to the model — the labels are the part it can find
@@ -493,6 +542,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
         requirementId: c.target.requirementId,
+        // #171 — see structuredQuestions: file dimension + cross-file anchors,
+        // present only when the comment carries them.
+        ...(c.target.filePath ? { filePath: c.target.filePath } : {}),
+        ...(Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {}),
         // #140 — labels only (see structuredQuestions); present only when the
         // region actually named a node.
         ...(c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}),
@@ -747,6 +800,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       ...(a.secretWarnings?.length
         ? { secretWarnings: a.secretWarnings.map((w) => w.label) }
         : {}),
+      // #171 — surface a changeset's per-file review progress so the agent can
+      // see which files the human has reviewed/skipped (and where your comments
+      // concentrate). Spread only for changesets that carry state, so every
+      // other pending entry stays byte-for-byte unchanged.
+      ...changesetReviewField(a),
     })),
     questions: structuredQuestions,
     comments: structuredComments,

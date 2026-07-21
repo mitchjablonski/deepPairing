@@ -88,6 +88,15 @@ export const RenameBodySchema = z.object({
 });
 export type RenameBody = z.infer<typeof RenameBodySchema>;
 
+// #171 — POST /api/artifacts/:artifactId/changeset-review — mark ONE file of a
+// changeset reviewed/skipped (or clear it with state=null). Review PROGRESS,
+// persisted on the artifact content; NOT a decision record.
+export const ChangesetReviewBodySchema = z.object({
+  filePath: z.string().min(1),
+  state: z.enum(["reviewed", "skipped"]).nullable(),
+});
+export type ChangesetReviewBody = z.infer<typeof ChangesetReviewBodySchema>;
+
 // Autonomy level — the single source of truth for the enum. Exported so the
 // internal daemon route validates against the SAME schema as /api/preferences
 // (per the repo convention: schemas, not hand-rolled checks). This dial arms

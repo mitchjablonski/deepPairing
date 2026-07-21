@@ -287,6 +287,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           useArtifactStore.getState().replaceArtifact(data.artifact);
           break;
 
+        case "changeset_review_updated":
+          // #171 — full-artifact patch: per-file review state lives in content
+          // (same shape as plan progress).
+          useArtifactStore.getState().replaceArtifact(data.artifact);
+          break;
+
         case "comment_added":
           store.addComment(data.comment);
           break;

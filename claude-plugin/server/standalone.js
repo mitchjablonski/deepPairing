@@ -25545,6 +25545,36 @@ var DecisionOptionBaseSchema = external_exports.object({
    *  stack applies. */
   visuals: external_exports.array(PlanVisualSchema).optional()
 });
+var ChangesetHunkLineSchema = external_exports.object({
+  kind: external_exports.enum(["ctx", "add", "del"]),
+  content: external_exports.string(),
+  oldLine: external_exports.number().int().optional(),
+  newLine: external_exports.number().int().optional()
+});
+var ChangesetHunkSchema = external_exports.object({
+  header: external_exports.string().optional().describe("Unified-diff hunk header, e.g. '@@ -24,9 +24,14 @@ export function requireSession(...)'"),
+  lines: external_exports.array(ChangesetHunkLineSchema)
+});
+var ChangesetFileStatsSchema = external_exports.object({
+  additions: external_exports.number().int().nonnegative(),
+  deletions: external_exports.number().int().nonnegative()
+});
+var ChangesetFileSchema = external_exports.object({
+  path: external_exports.string(),
+  changeType: external_exports.enum(["modified", "added", "deleted"]),
+  hunks: external_exports.array(ChangesetHunkSchema),
+  stats: ChangesetFileStatsSchema.optional()
+});
+var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "skipped"]));
+var ChangesetContentSchema = external_exports.object({
+  summary: external_exports.string().optional(),
+  files: external_exports.array(ChangesetFileSchema),
+  /** Risk annotations from the agent, per changeset (e.g. "touches auth",
+   *  "migration included") — rendered as chips in the summary strip. */
+  risks: external_exports.array(external_exports.string()).optional(),
+  /** Human review progress (set post-creation via the changeset-review route). */
+  reviewState: ChangesetReviewStateSchema.optional()
+});
 
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
@@ -25553,7 +25583,10 @@ var ArtifactTypeSchema = external_exports.enum([
   "decision",
   "code_change",
   "reasoning",
-  "spec"
+  "spec",
+  // #171 — a change spanning 2+ files, reviewed as one unit (unified diffs +
+  // per-file review state). Single-file changes stay `code_change`.
+  "changeset"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
@@ -25694,7 +25727,19 @@ var CommentTargetSchema = external_exports.object({
     h: external_exports.number(),
     elementIds: external_exports.array(external_exports.string()).optional().describe('Hit-tested g.node ids, e.g. ["flowchart-AuthGate-1"]'),
     labels: external_exports.array(external_exports.string()).optional().describe('Hit-tested node labels, e.g. ["AuthGate"]')
-  }).optional().describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers")
+  }).optional().describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers"),
+  // #171 — cross-file comment anchors for a changeset. A single-file line
+  // comment within a changeset uses `filePath` + `lineStart`/`lineEnd` above
+  // (filePath already existed); a CROSS-FILE thread carries 2+ entries here so
+  // one comment can bind two (or more) locations across files — the thing
+  // single-file review fundamentally can't say (e.g. "this TTL constant and
+  // that middleware check must stay in sync"). All optional; an old comment
+  // with no `anchors` loads unchanged.
+  anchors: external_exports.array(external_exports.object({
+    filePath: external_exports.string(),
+    lineStart: external_exports.number().int(),
+    lineEnd: external_exports.number().int().optional()
+  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -26166,6 +26211,10 @@ var StatusUpdateBodySchema = external_exports.object({
 });
 var RenameBodySchema = external_exports.object({
   title: external_exports.string().min(1)
+});
+var ChangesetReviewBodySchema = external_exports.object({
+  filePath: external_exports.string().min(1),
+  state: external_exports.enum(["reviewed", "skipped"]).nullable()
 });
 var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
 var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
@@ -26800,7 +26849,7 @@ var PROTOCOL_PREAMBLE = [
   "  3. check_feedback \u2014 poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
   "  4. present_options \u2014 surface EACH choice between approaches as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury a decision inside a plan step as an implied default, and never interleave decisions in a plan \u2014 that skips the pros/cons review and the ledger never learns your pick.",
   "  5. present_spec, then present_plan \u2014 for non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (each a stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow \u2014 quote node/edge labels that contain punctuation like ()#: and use `<br/>` not `\\n` for line breaks); 'file_map' (the create/modify/delete set); 'annotated_code' (real `code`+`filePath` with line-anchored `annotations[]` \u2014 point at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. present_code_change BEFORE every Write/Edit \u2014 EVERY change, incl. small follow-ons, new files, and each file of a multi-file change (5 edits = 5 calls). A write straight to disk never reaches the human's review surface. + log_reasoning (name the concept).",
+  "  6. present_code_change BEFORE every Write/Edit \u2014 EVERY change, incl. small follow-ons, new files, and each file of a multi-file change (5 edits = 5 calls). A write straight to disk never reaches the human's review surface. + log_reasoning (name the concept). For a change that spans 2+ FILES reviewed as one unit (a refactor/feature touching several modules), use present_changeset instead \u2014 one artifact with per-file diffs + review state; single-file stays present_code_change.",
   "  7. check_feedback again \u2014 let your pair review each artifact in the UI.",
   "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content \u2014 do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach."
@@ -27781,7 +27830,13 @@ var ERROR_CODES = {
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
    *  (H1-5 write-refusal surfaced as a structured route error). */
-  ledger_frozen: "ledger_frozen"
+  ledger_frozen: "ledger_frozen",
+  /** #171 — a changeset-review write targeted an artifact that isn't a
+   *  changeset, or a file path that isn't part of it. */
+  not_a_changeset_file: "not_a_changeset_file",
+  /** #171 — the store can't persist changeset review state (a read-only /
+   *  non-FileStore implementation lacks setChangesetFileReview). */
+  unsupported: "unsupported"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -27945,6 +28000,30 @@ var EXAMPLE_REASONING = `{
   "concept": { "name": "dependency inversion",
     "oneLineExplanation": "depend on an interface, not a concrete impl" }
 }`;
+var EXAMPLE_CHANGESET = `{
+  "title": "Move session-TTL refresh into middleware",
+  "summary": "Centralize the sliding-window refresh so every route inherits it",
+  "risks": ["touches auth"],
+  "files": [
+    {
+      "path": "auth/middleware.ts",
+      "changeType": "modified",
+      "stats": { "additions": 4, "deletions": 2 },
+      "hunks": [
+        {
+          "header": "@@ -24,4 +24,6 @@",
+          "lines": [
+            { "kind": "ctx", "content": "  const sid = readSessionCookie(req);", "oldLine": 25, "newLine": 25 },
+            { "kind": "del", "content": "  const session = await store.get(sid);", "oldLine": 26 },
+            { "kind": "add", "content": "  const session = await store.getAndTouch(sid);", "newLine": 26 }
+          ]
+        }
+      ]
+    },
+    { "path": "auth/session.ts", "changeType": "modified",
+      "hunks": [ { "lines": [ { "kind": "add", "content": "  expiresAt: number;", "newLine": 12 } ] } ] }
+  ]
+}`;
 function validatePresentFindingsInput(args) {
   const result = ResearchContentSchema.safeParse({
     summary: args?.summary,
@@ -28016,6 +28095,23 @@ function validatePresentCodeChangeInput(args) {
   if (result.success) return { ok: true, data: result.data };
   return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };
 }
+function validatePresentChangesetInput(args) {
+  const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
+  if (!titleParse.success) {
+    return { ok: false, error: formatValidationError("present_changeset", titleParse.error, EXAMPLE_CHANGESET) };
+  }
+  const contentParse = ChangesetContentSchema.safeParse({
+    summary: args?.summary,
+    files: args?.files,
+    risks: args?.risks
+    // reviewState is HUMAN-driven (set via the review route), never taken from
+    // agent input — deliberately not read here.
+  });
+  if (!contentParse.success) {
+    return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET) };
+  }
+  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+}
 function validateLogReasoningInput(args) {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -28051,7 +28147,11 @@ var TOOL_INPUT_SCHEMAS = {
     // of undiscoverability.
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change")
   }),
-  log_reasoning: ReasoningContentSchema
+  log_reasoning: ReasoningContentSchema,
+  // #171 — multi-file changeset. `reviewState` is HUMAN-driven (set via the
+  // review route), so it's omitted from the advertised input — the agent never
+  // sends it.
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true }).extend({ title: ARTIFACT_TITLE })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -28986,8 +29086,8 @@ async function handlePresentOptions(ctx, args) {
 }
 
 // src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change"];
-var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change"];
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
+var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset"];
 
 // src/mcp/tools/check-feedback.ts
 init_version();
@@ -29026,6 +29126,22 @@ function ledgerHealthField() {
 }
 function commentSecretNote(c) {
   return c.secretWarnings?.length ? " \u26A0 possible secret in this comment" : "";
+}
+function changesetReviewField(a) {
+  if (a.type !== "changeset") return {};
+  const content = a.content;
+  const files = Array.isArray(content?.files) ? content.files : [];
+  if (files.length === 0) return {};
+  const raw = content?.reviewState ?? {};
+  const reviewState = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === "reviewed" || v === "skipped") reviewState[k] = v;
+  }
+  const filesReviewed = files.filter((f) => {
+    const s = f.path ? reviewState[f.path] : void 0;
+    return s === "reviewed" || s === "skipped";
+  }).length;
+  return { reviewState, filesReviewed, filesTotal: files.length };
 }
 function describeRegionRef(region) {
   if (!region) return "";
@@ -29160,7 +29276,10 @@ async function handleCheckFeedback(ctx, args) {
   const totalComments = allComments.length;
   const autonomyLabel = await store.getAutonomyLevel();
   const freshlyRejected = allArtifacts.filter(
-    (a) => a.status === "rejected" && ["code_change", "spec", "research", "decision"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
+    (a) => a.status === "rejected" && // #171 — changeset joins the verdict-reported set (same #195 bug class:
+    // without it, a rejected changeset would fall through to "You may
+    // proceed" the instant the human rejects the approach).
+    ["code_change", "spec", "research", "decision", "changeset"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
   let oldestPendingAge = "";
@@ -29177,6 +29296,8 @@ async function handleCheckFeedback(ctx, args) {
     suggestedAction = `Do NOT apply \u2014 the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
   } else if (pendingArts.some((a) => a.type === "code_change")) {
     suggestedAction = "Wait for the code change review before applying the edit.";
+  } else if (pendingArts.some((a) => a.type === "changeset")) {
+    suggestedAction = "Wait for the changeset review \u2014 the human is reviewing each file \u2014 before applying the edits.";
   } else if (pendingArts.some((a) => a.type === "decision")) {
     suggestedAction = "Wait for decision selection before proceeding.";
   } else if (pendingArts.some((a) => a.type === "plan")) {
@@ -29268,7 +29389,12 @@ ${s.replacementText}${note ? `
         continue;
       }
       let loc = c.target.artifactId;
+      if (c.target.filePath) loc += ` ${c.target.filePath}`;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+      const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
+      if (anchors.length >= 2) {
+        loc += ` \u2014 cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" \u2194 ")}`;
+      }
       if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
       if (c.target.questionIndex != null) {
         const art = artsForTargets.find((a) => a.id === c.target.artifactId);
@@ -29292,6 +29418,11 @@ ${s.replacementText}${note ? `
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
           requirementId: c.target.requirementId,
+          // #171 — file dimension for a changeset line comment, and the full
+          // anchor list for a cross-file thread. Spread only when present so
+          // the healthy/no-file payload is byte-for-byte unchanged.
+          ...c.target.filePath ? { filePath: c.target.filePath } : {},
+          ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
           // #140 — carry ONLY the human-meaningful labels. The normalized rect
           // and the render-unique `elementIds` (e.g. dp-mmd-7-8-flowchart-A-0)
           // are unactionable to the model — the labels are the part it can find
@@ -29327,6 +29458,10 @@ ${s.replacementText}${note ? `
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
         requirementId: c.target.requirementId,
+        // #171 — see structuredQuestions: file dimension + cross-file anchors,
+        // present only when the comment carries them.
+        ...c.target.filePath ? { filePath: c.target.filePath } : {},
+        ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
         // #140 — labels only (see structuredQuestions); present only when the
         // region actually named a node.
         ...c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}
@@ -29493,7 +29628,12 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
       id: a.id,
       type: a.type,
       title: a.title,
-      ...a.secretWarnings?.length ? { secretWarnings: a.secretWarnings.map((w) => w.label) } : {}
+      ...a.secretWarnings?.length ? { secretWarnings: a.secretWarnings.map((w) => w.label) } : {},
+      // #171 — surface a changeset's per-file review progress so the agent can
+      // see which files the human has reviewed/skipped (and where your comments
+      // concentrate). Spread only for changesets that carry state, so every
+      // other pending entry stays byte-for-byte unchanged.
+      ...changesetReviewField(a)
     })),
     questions: structuredQuestions,
     comments: structuredComments,
@@ -29713,6 +29853,10 @@ var SUPERSEDE_VALIDATORS = {
   plan: validatePresentPlanInput,
   decision: validatePresentOptionsInput,
   code_change: validatePresentCodeChangeInput,
+  // #171 — without this entry the lookup returned undefined and a malformed
+  // changeset (e.g. files: "nope") superseded straight to disk as a silently
+  // empty v2 with no error for the agent to self-correct from.
+  changeset: validatePresentChangesetInput,
   reasoning: validateLogReasoningInput
 };
 async function handleReviseArtifact(ctx, args) {
@@ -29752,6 +29896,9 @@ async function handleReviseArtifact(ctx, args) {
     if (supersedeValidator) {
       const v = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v.ok) return v.error;
+    }
+    if (old.type === "changeset" && content && typeof content === "object") {
+      delete content.reviewState;
     }
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;
@@ -30207,6 +30354,53 @@ Decline to review the diff at http://localhost:${ctx.port}`
   };
 }
 
+// src/mcp/tools/present-changeset.ts
+async function handlePresentChangeset(ctx, args) {
+  const validated = validatePresentChangesetInput(args);
+  if (!validated.ok) return validated.error;
+  const { title, summary, files, risks } = validated.data;
+  const proposals = [title, summary ?? "", ...risks ?? []].filter(Boolean);
+  const proposalPaths = files.map((f) => f.path).filter(Boolean);
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_changeset", proposals, proposalPaths);
+  if (!pre.ok) return pre.response;
+  const id = `art_${nanoid3(10)}`;
+  const content = {
+    ...summary ? { summary } : {},
+    files,
+    ...risks && risks.length > 0 ? { risks } : {}
+  };
+  const artifact = await ctx.store.createArtifact({
+    id,
+    type: "changeset",
+    title,
+    content,
+    relatedArtifactIds: args?.relatedFindings
+  });
+  const secretMatches = artifact.secretWarnings ?? [];
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
+  notifyResourcesListChanged(ctx.server);
+  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  await ctx.helpers.autoNameSession(artifact.title);
+  const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const nudge = await revisionNudge(ctx.store, "changeset", title, id);
+  const fileCount = files.length;
+  return {
+    content: [{
+      type: "text",
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${ctx.port}. Call check_feedback for their per-file review state, comments, and verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+    }]
+  };
+}
+
 // src/mcp/tools/recall.ts
 async function handleRecall(ctx, args) {
   const { store } = ctx;
@@ -30597,7 +30791,18 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             },
             pendingArtifacts: {
               type: "array",
-              items: { type: "object", properties: { id: { type: "string" }, type: { type: "string" }, title: { type: "string" } } }
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  type: { type: "string" },
+                  title: { type: "string" },
+                  // #171 — changeset per-file review progress.
+                  reviewState: { type: "object", description: "Changeset only \u2014 per-file review state keyed by path ('reviewed'|'skipped')." },
+                  filesReviewed: { type: "number", description: "Changeset only \u2014 count of files marked reviewed or skipped." },
+                  filesTotal: { type: "number", description: "Changeset only \u2014 total files in the changeset." }
+                }
+              }
             },
             questions: {
               type: "array",
@@ -30610,6 +30815,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   content: { type: "string" },
                   lineStart: { type: "number" },
                   findingIndex: { type: "number" },
+                  // #171 — changeset file dimension + cross-file anchors.
+                  filePath: { type: "string", description: "Changeset only \u2014 the file this line comment targets." },
+                  anchors: { type: "array", description: "Cross-file thread \u2014 2+ {filePath, lineStart, lineEnd?} anchors.", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — region-anchored diagram comment: the node labels it
                   // covers (textual; ids/rect are deliberately omitted).
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } }
@@ -30629,6 +30837,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   filePath: { type: "string" },
                   lineStart: { type: "number" },
                   findingIndex: { type: "number" },
+                  // #171 — cross-file thread anchors (a changeset comment binding 2+ locations).
+                  anchors: { type: "array", items: { type: "object", properties: { filePath: { type: "string" }, lineStart: { type: "number" }, lineEnd: { type: "number" } } } },
                   // #140 — see questions.items.region.
                   region: { type: "object", properties: { labels: { type: "array", items: { type: "string" } } } }
                 }
@@ -30678,6 +30888,14 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change)
+      },
+      {
+        name: "present_changeset",
+        annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human reviews each file (marking it reviewed/skipped) and approves the whole changeset in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file review state, comments, and verdict.",
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
       },
       {
         name: "recall",
@@ -31093,6 +31311,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     "present_spec",
     "present_plan",
     "present_code_change",
+    "present_changeset",
     "log_reasoning",
     "revise_artifact",
     "post_pr_review",
@@ -31153,6 +31372,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handleLogReasoning(ctx, args);
           case "present_code_change":
             return handlePresentCodeChange(ctx, args);
+          case "present_changeset":
+            return handlePresentChangeset(ctx, args);
           case "check_feedback":
             return handleCheckFeedback(ctx, args);
           // III12 — case "request_horizon_check" removed. The workflow

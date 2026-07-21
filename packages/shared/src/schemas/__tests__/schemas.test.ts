@@ -24,9 +24,12 @@ import {
 import {
   researchArtifact,
   planArtifact,
+  changesetArtifact,
+  changesetCrossFileComment,
   sampleComment,
   lineComment,
 } from "../../__fixtures__/artifacts.js";
+import { ChangesetContentSchema } from "../content-types.js";
 
 describe("AgentEventSchema", () => {
   it("parses text events", () => {
@@ -225,6 +228,33 @@ describe("ArtifactSchema", () => {
     expect(() =>
       ArtifactSchema.parse({ ...researchArtifact, status: "unknown" }),
     ).toThrow();
+  });
+
+  // #171 — changeset is a first-class artifact type.
+  it("parses a changeset artifact and round-trips its content", () => {
+    const result = ArtifactSchema.parse(changesetArtifact);
+    expect(result.type).toBe("changeset");
+    const content = ChangesetContentSchema.parse(result.content);
+    expect(content.files).toHaveLength(4);
+    expect(content.files[1]?.hunks[0]?.lines.some((l) => l.kind === "add")).toBe(true);
+    expect(content.files[1]?.stats).toEqual({ additions: 24, deletions: 11 });
+    expect(content.risks).toContain("touches auth");
+    expect(content.reviewState?.["auth/session.ts"]).toBe("reviewed");
+  });
+
+  it("rejects a changeset file with an unknown changeType", () => {
+    expect(() =>
+      ChangesetContentSchema.parse({ files: [{ path: "x", changeType: "renamed", hunks: [] }] }),
+    ).toThrow();
+  });
+});
+
+describe("Comment.target.anchors (#171 cross-file)", () => {
+  it("parses a cross-file comment with 2 anchors", () => {
+    const result = CommentSchema.parse(changesetCrossFileComment);
+    expect(result.target.anchors).toHaveLength(2);
+    expect(result.target.anchors?.[0]?.filePath).toBe("auth/session.ts");
+    expect(result.target.anchors?.[1]?.lineStart).toBe(27);
   });
 });
 
