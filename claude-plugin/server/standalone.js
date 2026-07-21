@@ -29162,6 +29162,13 @@ function describeRegionRef(region) {
   if (labels.length > 0) return `[${labels.join(", ")}]`;
   return "";
 }
+function describeDecisionSection(sectionId) {
+  if (sectionId === "decision:question") return "the decision question";
+  const m = /^(pro|con)s?:(\d+)$/.exec(sectionId);
+  if (m) return `${m[1]} #${Number(m[2]) + 1}`;
+  if (sectionId === "summary") return "summary";
+  return sectionId;
+}
 function structuredRegionFields(t) {
   const region = t.region;
   if (!region) return {};
@@ -29440,6 +29447,9 @@ ${s.replacementText}${note ? `
         const opts = art?.content?.options;
         const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
         loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
+      }
+      if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
+        loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
       }
       const regionRef = describeRegionRef(c.target.region);
       if (regionRef) loc += ` \u2014 on region ${regionRef}`;
