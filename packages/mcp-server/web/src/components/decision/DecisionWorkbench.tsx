@@ -71,7 +71,7 @@ function anchorKey(t: { optionId?: string; sectionId?: string }): string {
  * #173 diagram view, not the rail — excluded here so they aren't double-shown.
  * Internal decision sectionIds (revision-request / horizon-check) aren't grain.
  */
-function isGrainComment(c: Comment): boolean {
+export function isGrainComment(c: Comment): boolean {
   const t = c.target;
   if (t.region) return false; // diagram region comment — lives in the zoom view
   if (t.sectionId && t.sectionId.startsWith("decision:")) return true;

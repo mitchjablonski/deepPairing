@@ -115,6 +115,48 @@ describe("#174 — the Discuss affordance opens the workbench", () => {
     render(<DecisionCard event={event} decisionId="dec_store" />);
     expect(screen.queryByRole("button", { name: /Expand to discuss/i })).not.toBeInTheDocument();
   });
+
+  it("the badge count matches the rail: a #173 diagram-REGION comment is NOT counted", () => {
+    // Region comments carry optionId but live in the nested diagram view, not
+    // the workbench rail (isGrainComment excludes them). The card badge must
+    // agree with the rail — a region-only decision shows NO count, not "1".
+    useArtifactStore.getState().addComment({
+      id: "reg1",
+      sessionId: "s",
+      target: {
+        artifactId: "art_dec",
+        optionId: "o1",
+        visualId: "vis_arch",
+        region: { x: 0.1, y: 0.1, w: 0.2, h: 0.2, labels: ["App Server"] },
+      },
+      parentCommentId: null,
+      author: "human",
+      content: "why straight to Redis?",
+      acknowledged: false,
+      createdAt: "2026-07-18T00:00:00.000Z",
+    } as any);
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    // No count in the label (discussCount 0), and no count badge rendered.
+    expect(screen.getByRole("button", { name: "Expand to discuss this decision" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Expand to discuss — /i })).not.toBeInTheDocument();
+  });
+
+  it("a grain comment IS counted alongside a region comment (only the grain one)", () => {
+    // Region comment (not counted) + one grain comment (counted) → badge "1".
+    useArtifactStore.getState().addComment({
+      id: "reg1",
+      sessionId: "s",
+      target: { artifactId: "art_dec", optionId: "o1", visualId: "vis_arch", region: { x: 0, y: 0, w: 0.1, h: 0.1, labels: ["Redis"] } },
+      parentCommentId: null,
+      author: "human",
+      content: "region note",
+      acknowledged: false,
+      createdAt: "2026-07-18T00:00:00.000Z",
+    } as any);
+    seedGrainComment({ id: "g1", optionId: "o1", sectionId: "pro:0", content: "grain note" });
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    expect(screen.getByRole("button", { name: /Expand to discuss — 1 comment$/i })).toBeInTheDocument();
+  });
 });
 
 describe("#174 — options laid out side-by-side with their content", () => {

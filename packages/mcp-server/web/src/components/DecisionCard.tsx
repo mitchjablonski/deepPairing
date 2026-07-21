@@ -15,7 +15,7 @@ import { useReplayStore } from "../stores/replay";
 import { OptionCard } from "./decision/OptionCard";
 import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
 import { DecisionFooter } from "./decision/DecisionFooter";
-import { DecisionWorkbench } from "./decision/DecisionWorkbench";
+import { DecisionWorkbench, isGrainComment } from "./decision/DecisionWorkbench";
 import { useChainComments } from "../hooks/useChainComments";
 import type { InitialResolved } from "./decision/types";
 
@@ -154,17 +154,15 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const [predictOptIn, setPredictOptIn] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // #174 — the Discuss badge count: threads the human has anchored to a part of
-  // this decision (an option question/comment, or a decision-level section).
-  // Excludes the internal revision-request / horizon sectionIds (they aren't
-  // deliberation the workbench hosts). useChainComments aggregates the version
-  // chain so a thread from v1 still counts on v2.
+  // #174 — the Discuss badge count MUST use the SAME predicate the workbench
+  // rail uses (isGrainComment), so the card badge and the rail agree. Reusing
+  // isGrainComment excludes #173 diagram-REGION comments (they carry optionId
+  // but live in the nested diagram view, not the rail) — without this the card
+  // could read "Discuss · 1" while the rail was empty. Also excludes the
+  // internal revision-request / horizon sectionIds. useChainComments aggregates
+  // the version chain so a thread from v1 still counts on v2.
   const decisionComments = useChainComments(artifactId ?? "");
-  const discussCount = artifactId
-    ? decisionComments.filter(
-        (c) => c.target.optionId != null || (c.target.sectionId?.startsWith("decision:") ?? false),
-      ).length
-    : 0;
+  const discussCount = artifactId ? decisionComments.filter(isGrainComment).length : 0;
 
   // Derived flags — keep the read sites readable without sprinkling
   // discriminant checks everywhere.
