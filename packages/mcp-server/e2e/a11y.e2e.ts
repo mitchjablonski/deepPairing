@@ -78,7 +78,11 @@ test.beforeAll(async () => {
       content: {
         context: "Which cache fits?", decisionId: "d_a11y", stakes: "high",
         options: [
-          { id: "a", title: "Redis", description: "d", pros: ["fast"], cons: ["ops"], effort: "low", risk: "low", recommendation: true, concept: { name: "external cache service" } },
+          // #173 — option "a" carries a diagram so the compare grid shows the
+          // "Expand to comment" affordance and the focused region-commenting
+          // dialog (openDecisionDiagramFocus) can be mounted + scanned.
+          { id: "a", title: "Redis", description: "d", pros: ["fast"], cons: ["ops"], effort: "low", risk: "low", recommendation: true, concept: { name: "external cache service" },
+            visuals: [{ id: "vis_cache", kind: "diagram", title: "Architecture", source: "graph LR; AppServer[App Server] --> Redis[Redis]" }] },
           { id: "b", title: "In-proc", description: "d", pros: ["simple"], cons: ["cold"], effort: "low", risk: "low", recommendation: false },
         ],
       },
@@ -354,6 +358,80 @@ async function openChangeset(page: import("@playwright/test").Page): Promise<voi
     ),
   );
 }
+
+/** #173 — mount the DECISION DIAGRAM FOCUSED VIEW for real before scanning
+ *  (the #187 hollow-net lesson: the scan must actually mount the new UI). Waits
+ *  for the compare grid, clicks the option's "Expand to comment" affordance, and
+ *  waits for the focused dialog + its LIVE region layer (real Mermaid SVG +
+ *  aria-hidden drag overlay) before settling animations. */
+async function openDecisionDiagramFocus(page: import("@playwright/test").Page): Promise<void> {
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  // The compare-diagrams grid is shown by default; wait for the option diagram
+  // to render so the card is fully mounted before reaching for the affordance.
+  await page.waitForSelector(".dp-mermaid svg", { timeout: 15000 });
+  await page.getByRole("button", { name: /Expand.*to comment/i }).first().click();
+  // The focused dialog opens with the live region layer over a real SVG.
+  await page.waitForSelector('[data-testid="decision-diagram-focus"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="decision-diagram-focus"] .dp-mermaid svg g.node', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="dp-region-overlay"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#173): the decision diagram FOCUSED VIEW has no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openDecisionDiagramFocus(page);
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    // Zero disabled rules — the focused dialog (role=dialog + aria-modal + focus
+    // trap), its aria-hidden drag overlay, and the keyboard node-list must pass
+    // as-is (notably aria-hidden-focus + nested-interactive).
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (decision diagram focus, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#173): the decision diagram FOCUSED VIEW has no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openDecisionDiagramFocus(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (decision diagram focus, light):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("keyboard (#173): the Expand affordance is reachable and the focused dialog is operable (Esc returns)", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  await page.waitForSelector(".dp-mermaid svg", { timeout: 15000 });
+
+  // The expand affordance is a real, focusable button (kept in the tab order;
+  // focus-visible reveals it) — reachable by keyboard, then activated by Enter.
+  const expand = page.getByRole("button", { name: /Expand.*to comment/i }).first();
+  await expand.focus();
+  await expect(expand).toBeFocused();
+  await expand.press("Enter");
+
+  // The dialog opened and moved focus INSIDE it (focus trap) — never left on the
+  // now-hidden trigger.
+  const dialog = page.locator('[data-testid="decision-diagram-focus"]');
+  await dialog.waitFor({ timeout: 15000 });
+  await expect.poll(() => dialog.evaluate((d) => d.contains(document.activeElement))).toBe(true);
+
+  // Esc closes it and returns to the compare grid (the useModal contract).
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
 
 test("a11y (#172): suggested-edit cards (pending + countered) have no serious/critical axe violations — dark", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);

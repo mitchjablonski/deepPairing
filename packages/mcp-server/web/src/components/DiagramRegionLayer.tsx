@@ -41,11 +41,18 @@ import {
 export function DiagramRegionLayer({
   artifactId,
   visualId,
+  optionId,
   svg,
   hostRef,
 }: {
   artifactId: string;
   visualId: string;
+  // #173 — the decision OPTION this diagram belongs to. When set, a region
+  // comment anchors to optionId + visualId + region together (all three already
+  // in the schema), and existing region comments are scoped to THIS option so
+  // two options that happen to share a visualId can't cross-show each other's
+  // notes. Omitted for plan/spec diagrams — behaves exactly as before.
+  optionId?: string;
   /** The sanitized SVG markup — recompute nodes when it changes (revision). */
   svg: string;
   /** The div that hosts the injected diagram SVG. */
@@ -104,7 +111,11 @@ export function DiagramRegionLayer({
 
   const comments = useChainComments(artifactId);
   const regionComments = comments.filter(
-    (c) => c.target.visualId === visualId && c.target.region,
+    (c) =>
+      c.target.visualId === visualId &&
+      c.target.region &&
+      // #173 — scope to the option when this layer is a decision focused view.
+      (optionId ? c.target.optionId === optionId : true),
   );
 
   // Focus management: opening the composer moves focus INTO it; closing/cancel
@@ -303,7 +314,9 @@ export function DiagramRegionLayer({
           <CommentThread
             artifactId={artifactId}
             comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
-            target={{ visualId, region: active }}
+            // #173 — carry optionId when this is a decision focused view, so the
+            // posted comment anchors to optionId + visualId + region together.
+            target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
           />
         </div>
       )}

@@ -95,6 +95,7 @@ export function VisualBody({
   visual,
   readOnly = false,
   staticPreview = false,
+  optionId,
 }: {
   artifactId: string;
   visual: PlanVisual;
@@ -104,6 +105,12 @@ export function VisualBody({
   // these were once one flag, which wrongly froze live per-option prototypes.
   readOnly?: boolean;
   staticPreview?: boolean;
+  // #173 — the OPTION a decision-diagram region comment anchors to. Folded into
+  // the region target so the comment carries optionId + visualId + region
+  // together (the schema already has all three). Only meaningful when the
+  // diagram is interactive (readOnly off) — the decision focused view; every
+  // existing call site omits it and behaves byte-for-byte as before.
+  optionId?: string;
 }) {
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
@@ -114,7 +121,9 @@ export function VisualBody({
         // #140 — region-comment the diagram ONLY in the live artifact view.
         // readOnly (decision-option preview, revision diff) omits it, so those
         // diagrams render exactly as before and offer no drag affordance.
-        region={readOnly ? undefined : { artifactId, visualId: visual.id }}
+        // #173 — a decision focused view passes optionId, so the region comment
+        // anchors to optionId + visualId + region together.
+        region={readOnly ? undefined : { artifactId, visualId: visual.id, ...(optionId ? { optionId } : {}) }}
       />
     ) : (
       <div className="text-2xs text-text-muted">No diagram source provided.</div>
