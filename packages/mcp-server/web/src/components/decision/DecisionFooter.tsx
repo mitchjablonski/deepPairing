@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { DecisionOption } from "./types";
 
-interface DecisionFooterProps {
+export interface DecisionFooterProps {
   options: DecisionOption[];
   focusedIndex: number;
   /** Artifact id — gates the "None of these fit" send-back trigger. */

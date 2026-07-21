@@ -393,6 +393,76 @@ async function openDecisionDiagramFocus(page: import("@playwright/test").Page): 
   );
 }
 
+/** #174 — mount the DECISION WORKBENCH open for real before scanning (the
+ *  #187 hollow-net lesson: the scan must actually mount the new UI, not assert
+ *  an empty page). Waits for the compare card, clicks the ONE "Discuss"
+ *  affordance, and waits for the workbench dialog + a column diagram (the
+ *  workbench mounts its own read-only VisualBody) before settling animations. */
+async function openDecisionWorkbench(page: import("@playwright/test").Page): Promise<void> {
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  await page.getByRole("button", { name: /Expand to discuss/i }).click();
+  await page.waitForSelector('[data-testid="decision-workbench"]', { timeout: 15000 });
+  // The workbench renders each option's content, incl. option "a"'s diagram —
+  // wait for the real Mermaid SVG so the full surface is mounted before axe runs.
+  await page.waitForSelector('[data-testid="decision-workbench"] .dp-mermaid svg', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#174): the decision WORKBENCH (open) has no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openDecisionWorkbench(page);
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    // Zero disabled rules — the workbench dialog (role=dialog + aria-modal +
+    // focus trap), its grain-comment affordances, the comment rail composers,
+    // and the per-option Choose buttons must all pass as-is.
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (decision workbench, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#174): the decision WORKBENCH (open) has no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openDecisionWorkbench(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (decision workbench, light):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("keyboard (#174): the Discuss affordance is reachable and the workbench is operable (Esc returns)", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+
+  // The Discuss affordance is a real, focusable button — reachable by keyboard,
+  // then activated by Enter.
+  const discuss = page.getByRole("button", { name: /Expand to discuss/i });
+  await discuss.focus();
+  await expect(discuss).toBeFocused();
+  await discuss.press("Enter");
+
+  // The dialog opened and moved focus INSIDE it (focus trap), never left on the
+  // now-hidden trigger.
+  const dialog = page.locator('[data-testid="decision-workbench"]');
+  await dialog.waitFor({ timeout: 15000 });
+  await expect.poll(() => dialog.evaluate((d) => d.contains(document.activeElement))).toBe(true);
+
+  // Esc collapses it back to the card (the useModal contract).
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
 test("a11y (#173): the decision diagram FOCUSED VIEW has no serious/critical axe violations — dark", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
