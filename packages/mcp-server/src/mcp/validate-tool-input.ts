@@ -472,10 +472,10 @@ export const TOOL_INPUT_SCHEMAS = {
       .describe("Artifact IDs of findings that motivated this change"),
   }),
   log_reasoning: ReasoningContentSchema,
-  // #171 — multi-file changeset. `reviewState` is HUMAN-driven (set via the
-  // review route), so it's omitted from the advertised input — the agent never
-  // sends it.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true }).extend({ title: ARTIFACT_TITLE }),
+  // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
+  // HUMAN-driven (set via the review route), so they're omitted from the
+  // advertised input — the agent never sends them.
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's

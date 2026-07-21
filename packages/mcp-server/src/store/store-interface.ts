@@ -277,17 +277,20 @@ export interface IStore {
     updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
   ): MaybePromise<Artifact | null>;
   /**
-   * #171 — mark ONE file of a CHANGESET artifact reviewed/skipped in place
+   * #171/#175 — set ONE file of a CHANGESET artifact's DISPOSITION in place
    * (human review PROGRESS, stored on the artifact content like plan progress —
-   * NOT a decision record). `null` clears the file's state. Returns the updated
-   * artifact for broadcasting, or null when the artifact is missing, not a
-   * changeset, or the path isn't part of it. Optional so non-FileStore
-   * implementations (a read-only replay store) can skip it.
+   * NOT a decision record). `null` clears the file's state. #175 — the
+   * disposition is "reviewed" (looks right) or "needs_changes" (flagged, with an
+   * optional `reason` written to content.reviewReasons; legacy "skipped" is only
+   * read, never written). Returns the updated artifact for broadcasting, or null
+   * when the artifact is missing, not a changeset, or the path isn't part of it.
+   * Optional so non-FileStore implementations (a read-only replay store) can skip it.
    */
   setChangesetFileReview?(
     artifactId: string,
     filePath: string,
-    state: "reviewed" | "skipped" | null,
+    state: "reviewed" | "needs_changes" | "skipped" | null,
+    reason?: string,
   ): MaybePromise<Artifact | null>;
   getArtifacts(): MaybePromise<Artifact[]>;
 

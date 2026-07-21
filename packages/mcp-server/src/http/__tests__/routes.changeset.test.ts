@@ -90,16 +90,34 @@ describe("#171 per-file review-state persistence", () => {
     expect((evt.artifact.content as any).reviewState["auth/middleware.ts"]).toBe("reviewed");
   });
 
-  it("supports skip and clearing a file's state with state=null", async () => {
+  it("#175 — flags a file needs_changes with a reason (persisted to reviewReasons) and clears both with state=null", async () => {
     const id = await createChangeset();
-    await review(id, { filePath: "auth/session.ts", state: "skipped" });
+    await review(id, { filePath: "auth/session.ts", state: "needs_changes", reason: "don't drop the login TTL bump" });
     let art = (await store.getArtifacts()).find((a) => a.id === id)!;
-    expect((art.content as any).reviewState).toEqual({ "auth/session.ts": "skipped" });
+    expect((art.content as any).reviewState).toEqual({ "auth/session.ts": "needs_changes" });
+    expect((art.content as any).reviewReasons).toEqual({ "auth/session.ts": "don't drop the login TTL bump" });
 
+    // Clearing removes BOTH the disposition and the reason.
     const res = await review(id, { filePath: "auth/session.ts", state: null });
     expect(res.status).toBe(200);
     art = (await store.getArtifacts()).find((a) => a.id === id)!;
     expect((art.content as any).reviewState).toEqual({});
+    expect((art.content as any).reviewReasons).toEqual({});
+  });
+
+  it("#175 — flipping a flagged file to reviewed drops its stale reason", async () => {
+    const id = await createChangeset();
+    await review(id, { filePath: "auth/session.ts", state: "needs_changes", reason: "fix this" });
+    await review(id, { filePath: "auth/session.ts", state: "reviewed" });
+    const art = (await store.getArtifacts()).find((a) => a.id === id)!;
+    expect((art.content as any).reviewState).toEqual({ "auth/session.ts": "reviewed" });
+    expect((art.content as any).reviewReasons).toEqual({});
+  });
+
+  it("#175 — the retired 'skipped' disposition is no longer accepted (400)", async () => {
+    const id = await createChangeset();
+    const res = await review(id, { filePath: "auth/session.ts", state: "skipped" });
+    expect(res.status).toBe(400);
   });
 
   it("400s on a file that isn't part of the changeset", async () => {

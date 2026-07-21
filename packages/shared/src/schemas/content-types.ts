@@ -359,17 +359,31 @@ export const ChangesetFileSchema = z.object({
 });
 export type ChangesetFile = z.infer<typeof ChangesetFileSchema>;
 
-/** Per-file review progress, keyed by file path. HUMAN-driven (set via the
+/** Per-file DISPOSITION, keyed by file path. HUMAN-driven (set via the
  *  changeset-review route, NOT by the agent), stored on the artifact content so
  *  it rides getArtifacts()/check_feedback and the WS full-artifact patch — the
  *  same in-content pattern update_plan_progress uses for step statuses. A
  *  Record (not Map) per the frontend-store convention. Optional; absent = no
- *  file reviewed yet. */
+ *  file dispositioned yet.
+ *
+ *  #175 — the disposition is now "reviewed" (looks right) or "needs_changes"
+ *  (flag it with a reason — see reviewReasons). `"skipped"` is a LEGACY value:
+ *  it is no longer PRODUCED (the "Skip for now" toggle is gone), but is kept in
+ *  the enum so pre-#175 on-disk changesets still parse. On read the UI maps a
+ *  legacy "skipped" to PENDING (no disposition) — a skipped file was never a
+ *  real "yes", so it must be re-reviewed rather than silently unlock approval. */
 export const ChangesetReviewStateSchema = z.record(
   z.string(),
-  z.enum(["reviewed", "skipped"]),
+  z.enum(["reviewed", "needs_changes", "skipped"]),
 );
 export type ChangesetReviewState = z.infer<typeof ChangesetReviewStateSchema>;
+
+/** #175 — per-file "needs changes" REASONS, keyed by file path. Set alongside a
+ *  `needs_changes` disposition; the send-back action composes these into the
+ *  revision feedback the agent reads via check_feedback. Optional (all new
+ *  fields optional); a Record per the frontend-store convention. */
+export const ChangesetReviewReasonsSchema = z.record(z.string(), z.string());
+export type ChangesetReviewReasons = z.infer<typeof ChangesetReviewReasonsSchema>;
 
 export const ChangesetContentSchema = z.object({
   summary: z.string().optional(),
@@ -377,7 +391,10 @@ export const ChangesetContentSchema = z.object({
   /** Risk annotations from the agent, per changeset (e.g. "touches auth",
    *  "migration included") — rendered as chips in the summary strip. */
   risks: z.array(z.string()).optional(),
-  /** Human review progress (set post-creation via the changeset-review route). */
+  /** Human per-file disposition (set post-creation via the changeset-review route). */
   reviewState: ChangesetReviewStateSchema.optional(),
+  /** #175 — per-file "needs changes" reasons (set post-creation via the
+   *  changeset-review route), keyed by file path. */
+  reviewReasons: ChangesetReviewReasonsSchema.optional(),
 });
 export type ChangesetContent = z.infer<typeof ChangesetContentSchema>;

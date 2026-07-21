@@ -203,9 +203,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   id: { type: "string" },
                   type: { type: "string" },
                   title: { type: "string" },
-                  // #171 — changeset per-file review progress.
-                  reviewState: { type: "object", description: "Changeset only — per-file review state keyed by path ('reviewed'|'skipped')." },
-                  filesReviewed: { type: "number", description: "Changeset only — count of files marked reviewed or skipped." },
+                  // #171/#175 — changeset per-file disposition.
+                  reviewState: { type: "object", description: "Changeset only — per-file disposition keyed by path ('reviewed'|'needs_changes'; legacy 'skipped' tolerated)." },
+                  reviewReasons: { type: "object", description: "Changeset only — reasons for needs_changes files, keyed by path." },
+                  filesReviewed: { type: "number", description: "Changeset only — count of files with a disposition (reviewed or needs_changes)." },
                   filesTotal: { type: "number", description: "Changeset only — total files in the changeset." },
                 },
               },
@@ -304,7 +305,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         description:
           "Present a change that spans 2+ FILES as ONE reviewable artifact — unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change." +
           "\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch." +
-          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human reviews each file (marking it reviewed/skipped) and approves the whole changeset in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file review state, comments, and verdict.",
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right → approve; any flagged → send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict — a send-back arrives as a `revised` status with feedback naming which files to revise and why.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset),

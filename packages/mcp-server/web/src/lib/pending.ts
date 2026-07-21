@@ -19,8 +19,11 @@ import type { Artifact, Comment } from "@deeppairing/shared";
  */
 
 /** Artifact types whose `draft` state means "the human needs to review this".
- *  `reasoning` is excluded (agent narration, no review cycle). */
-const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change"]);
+ *  `reasoning` is excluded (agent narration, no review cycle). #175 —
+ *  `changeset` joins the set: a draft changeset genuinely awaits your review, so
+ *  the `n` key and the changeset's own post-verdict auto-advance treat it as
+ *  pending (it matches the server's PENDING_DRAFT_TYPES). */
+const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
 
 export function isDraftAwaitingReview(a: Artifact): boolean {
   return a.status === "draft" && REVIEWABLE_TYPES.has(a.type);

@@ -475,7 +475,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // surfaces it as a violet "waiting on the agent" badge. Counting it here made
   // the "waiting on YOU" badge stay lit on something you can't action — see the
   // matching exclusion in lib/pending.ts.
-  const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change"]);
+  // #175 — `changeset` joins the set (a draft changeset awaits your review),
+  // matching lib/pending.ts's REVIEWABLE_TYPES and the MCP PENDING_DRAFT_TYPES so
+  // the in-app "waiting on you" count and this cross-project daemon badge agree.
+  const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
   function computeDaemonPendingCount(): number {
     let n = 0;
     for (const store of sessions.values()) {

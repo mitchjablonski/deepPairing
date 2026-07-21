@@ -61,31 +61,50 @@ function commentSecretNote(c: Comment): string {
 }
 
 /**
- * #171 — a changeset's per-file review progress, surfaced to the agent so it
- * can see which files the human has reviewed/skipped and where comments
- * concentrate. Returns `{ reviewState, filesReviewed, filesTotal }` ONLY for a
- * changeset with files; `{}` for every other artifact so the pending-entry
- * shape stays byte-for-byte unchanged for non-changeset drafts.
+ * #171/#175 — a changeset's per-file DISPOSITION, surfaced to the agent so it
+ * can see which files the human marked look-right vs. flagged for changes (and
+ * WHY, via reviewReasons). Returns `{ reviewState, reviewReasons, filesReviewed,
+ * filesTotal }` ONLY for a changeset with files; `{}` for every other artifact
+ * so the pending-entry shape stays byte-for-byte unchanged for non-changeset
+ * drafts. #175 — "needs_changes" joins "reviewed"; legacy "skipped" is still
+ * counted as dispositioned (so an old in-flight changeset's count is stable).
  */
 function changesetReviewField(a: Artifact): {
-  reviewState?: Record<string, "reviewed" | "skipped">;
+  reviewState?: Record<string, "reviewed" | "needs_changes" | "skipped">;
+  reviewReasons?: Record<string, string>;
   filesReviewed?: number;
   filesTotal?: number;
 } {
   if (a.type !== "changeset") return {};
-  const content = a.content as { files?: Array<{ path?: string }>; reviewState?: Record<string, unknown> } | null;
+  const content = a.content as {
+    files?: Array<{ path?: string }>;
+    reviewState?: Record<string, unknown>;
+    reviewReasons?: Record<string, unknown>;
+  } | null;
   const files = Array.isArray(content?.files) ? content!.files : [];
   if (files.length === 0) return {};
   const raw = content?.reviewState ?? {};
-  const reviewState: Record<string, "reviewed" | "skipped"> = {};
+  const reviewState: Record<string, "reviewed" | "needs_changes" | "skipped"> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (v === "reviewed" || v === "skipped") reviewState[k] = v;
+    if (v === "reviewed" || v === "needs_changes" || v === "skipped") reviewState[k] = v;
+  }
+  const rawReasons = content?.reviewReasons ?? {};
+  const reviewReasons: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawReasons)) {
+    if (typeof v === "string" && v.length > 0) reviewReasons[k] = v;
   }
   const filesReviewed = files.filter((f) => {
     const s = f.path ? reviewState[f.path] : undefined;
-    return s === "reviewed" || s === "skipped";
+    return s === "reviewed" || s === "needs_changes" || s === "skipped";
   }).length;
-  return { reviewState, filesReviewed, filesTotal: files.length };
+  const out: {
+    reviewState: Record<string, "reviewed" | "needs_changes" | "skipped">;
+    reviewReasons?: Record<string, string>;
+    filesReviewed: number;
+    filesTotal: number;
+  } = { reviewState, filesReviewed, filesTotal: files.length };
+  if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
+  return out;
 }
 
 type CommentRegion =

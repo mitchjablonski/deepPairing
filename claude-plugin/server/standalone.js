@@ -25565,15 +25565,19 @@ var ChangesetFileSchema = external_exports.object({
   hunks: external_exports.array(ChangesetHunkSchema),
   stats: ChangesetFileStatsSchema.optional()
 });
-var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "skipped"]));
+var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "needs_changes", "skipped"]));
+var ChangesetReviewReasonsSchema = external_exports.record(external_exports.string(), external_exports.string());
 var ChangesetContentSchema = external_exports.object({
   summary: external_exports.string().optional(),
   files: external_exports.array(ChangesetFileSchema),
   /** Risk annotations from the agent, per changeset (e.g. "touches auth",
    *  "migration included") — rendered as chips in the summary strip. */
   risks: external_exports.array(external_exports.string()).optional(),
-  /** Human review progress (set post-creation via the changeset-review route). */
-  reviewState: ChangesetReviewStateSchema.optional()
+  /** Human per-file disposition (set post-creation via the changeset-review route). */
+  reviewState: ChangesetReviewStateSchema.optional(),
+  /** #175 — per-file "needs changes" reasons (set post-creation via the
+   *  changeset-review route), keyed by file path. */
+  reviewReasons: ChangesetReviewReasonsSchema.optional()
 });
 
 // ../shared/dist/schemas/artifact.js
@@ -26214,7 +26218,9 @@ var RenameBodySchema = external_exports.object({
 });
 var ChangesetReviewBodySchema = external_exports.object({
   filePath: external_exports.string().min(1),
-  state: external_exports.enum(["reviewed", "skipped"]).nullable()
+  state: external_exports.enum(["reviewed", "needs_changes"]).nullable(),
+  /** #175 — reason for a needs_changes flag; ignored for other states. */
+  reason: external_exports.string().optional()
 });
 var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
 var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
@@ -28148,10 +28154,10 @@ var TOOL_INPUT_SCHEMAS = {
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change")
   }),
   log_reasoning: ReasoningContentSchema,
-  // #171 — multi-file changeset. `reviewState` is HUMAN-driven (set via the
-  // review route), so it's omitted from the advertised input — the agent never
-  // sends it.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true }).extend({ title: ARTIFACT_TITLE })
+  // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
+  // HUMAN-driven (set via the review route), so they're omitted from the
+  // advertised input — the agent never sends them.
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -29135,13 +29141,20 @@ function changesetReviewField(a) {
   const raw = content?.reviewState ?? {};
   const reviewState = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (v === "reviewed" || v === "skipped") reviewState[k] = v;
+    if (v === "reviewed" || v === "needs_changes" || v === "skipped") reviewState[k] = v;
+  }
+  const rawReasons = content?.reviewReasons ?? {};
+  const reviewReasons = {};
+  for (const [k, v] of Object.entries(rawReasons)) {
+    if (typeof v === "string" && v.length > 0) reviewReasons[k] = v;
   }
   const filesReviewed = files.filter((f) => {
     const s = f.path ? reviewState[f.path] : void 0;
-    return s === "reviewed" || s === "skipped";
+    return s === "reviewed" || s === "needs_changes" || s === "skipped";
   }).length;
-  return { reviewState, filesReviewed, filesTotal: files.length };
+  const out = { reviewState, filesReviewed, filesTotal: files.length };
+  if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
+  return out;
 }
 function describeRegionRef(region) {
   if (!region) return "";
@@ -30823,9 +30836,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   id: { type: "string" },
                   type: { type: "string" },
                   title: { type: "string" },
-                  // #171 — changeset per-file review progress.
-                  reviewState: { type: "object", description: "Changeset only \u2014 per-file review state keyed by path ('reviewed'|'skipped')." },
-                  filesReviewed: { type: "number", description: "Changeset only \u2014 count of files marked reviewed or skipped." },
+                  // #171/#175 — changeset per-file disposition.
+                  reviewState: { type: "object", description: "Changeset only \u2014 per-file disposition keyed by path ('reviewed'|'needs_changes'; legacy 'skipped' tolerated)." },
+                  reviewReasons: { type: "object", description: "Changeset only \u2014 reasons for needs_changes files, keyed by path." },
+                  filesReviewed: { type: "number", description: "Changeset only \u2014 count of files with a disposition (reviewed or needs_changes)." },
                   filesTotal: { type: "number", description: "Changeset only \u2014 total files in the changeset." }
                 }
               }
@@ -30918,7 +30932,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_changeset",
         annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human reviews each file (marking it reviewed/skipped) and approves the whole changeset in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file review state, comments, and verdict.",
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
