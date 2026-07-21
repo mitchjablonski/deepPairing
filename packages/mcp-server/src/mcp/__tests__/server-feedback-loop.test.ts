@@ -168,6 +168,70 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(q.region.elementIds).toBeUndefined();
     });
 
+    it("#174 — a decision GRAIN comment reaches the agent tagged with the option AND the part", async () => {
+      // The discuss workbench anchors a comment to a specific pro/con of an
+      // option (optionId + sectionId "con:0"). check_feedback must name BOTH so
+      // the agent knows which con the human is reacting to — not just "Redis".
+      await callTool("present_options", {
+        context: "Which session store should we use?",
+        options: [
+          { id: "opt_redis", title: "Redis", description: "external cache", pros: ["fast"], cons: ["adds an ops dependency"], effort: "low", risk: "low", recommendation: true },
+          { id: "opt_pg", title: "Postgres", description: "in the DB", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "gc_1", artifactId: art.id, content: "managed Redis is ~zero ops though", author: "human",
+        target: { artifactId: art.id, optionId: "opt_redis", sectionId: "con:0" },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain('option "Redis"');
+      // The section is delivered too (1-based to match how the human sees it).
+      expect(res.text).toContain("con #1");
+      expect(res.text).toContain("managed Redis is ~zero ops though");
+    });
+
+    it("#174 — a comment on the decision question is delivered as such (sectionId only)", async () => {
+      await callTool("present_options", {
+        context: "Which session store should we use?",
+        options: [
+          { id: "opt_redis", title: "Redis", description: "external cache", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "opt_pg", title: "Postgres", description: "in the DB", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "gc_q", artifactId: art.id, content: "should we even pick a store yet?", author: "human",
+        target: { artifactId: art.id, sectionId: "decision:question" },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain("the decision question");
+      expect(res.text).toContain("should we even pick a store yet?");
+    });
+
+    it("#174 — the internal revision-request sectionId is NOT tagged as a grain section", async () => {
+      // Guard the gating: the send-back path posts sectionId
+      // "decision_revision_requested" (no optionId, not decision:*) — it must
+      // NOT pick up a " — <section>" suffix meant for workbench grain comments.
+      await callTool("present_options", {
+        context: "Which store?",
+        options: [
+          { id: "opt_redis", title: "Redis", description: "cache", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "opt_pg", title: "Postgres", description: "db", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "sb_1", artifactId: art.id, content: "none of these fit", author: "human", intent: "question",
+        target: { artifactId: art.id, sectionId: "decision_revision_requested" },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      expect(res.text).not.toContain("decision_revision_requested");
+    });
+
     it("F1 — warns to WAIT while a code_change is still under review (never 'you may proceed')", async () => {
       // confidence "low" keeps it a draft (no terminal quick-approve) → routed to UI.
       await callTool("present_code_change", {

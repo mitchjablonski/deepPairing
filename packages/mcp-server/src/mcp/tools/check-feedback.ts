@@ -118,6 +118,21 @@ function describeRegionRef(region: CommentRegion): string {
 }
 
 /**
+ * #174 — a decision GRAIN comment (from the "Discuss" workbench) anchors to a
+ * PART of an option (optionId + a `pro:N`/`con:N`/`summary` sectionId) or to the
+ * decision question itself (`decision:question`). Render the section so the
+ * agent knows WHICH pro/con/part the human reacted to — not just the option.
+ * Indices are 1-based in the prose to match how the human sees them.
+ */
+function describeDecisionSection(sectionId: string): string {
+  if (sectionId === "decision:question") return "the decision question";
+  const m = /^(pro|con)s?:(\d+)$/.exec(sectionId);
+  if (m) return `${m[1]} #${Number(m[2]) + 1}`;
+  if (sectionId === "summary") return "summary";
+  return sectionId;
+}
+
+/**
  * #173 — the structured delivery of a region comment, split by artifact kind.
  *
  * A DECISION region comment (target.optionId set — the focused-view region
@@ -546,6 +561,15 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         const opts = (art?.content as { options?: Array<{ id?: string; title?: string }> } | undefined)?.options;
         const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
         loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
+      }
+      // #174 — a decision GRAIN comment names the option PART it anchors to (a
+      // specific pro/con/summary, or the decision question). Kept in its OWN
+      // block (adjacent to #173's optionId block) so slice-1 merges cleanly.
+      // Gated so it fires ONLY for workbench grain sections (optionId + section,
+      // or a `decision:*` section) — never the internal revision-request /
+      // horizon-check sectionIds, which carry neither and stay untouched.
+      if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
+        loc += ` — ${describeDecisionSection(c.target.sectionId)}`;
       }
       // #140 — a region comment names the diagram nodes it covers TEXTUALLY so
       // the agent can find them in the Mermaid source it authored (no image).

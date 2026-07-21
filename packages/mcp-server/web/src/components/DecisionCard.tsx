@@ -15,6 +15,8 @@ import { useReplayStore } from "../stores/replay";
 import { OptionCard } from "./decision/OptionCard";
 import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
 import { DecisionFooter } from "./decision/DecisionFooter";
+import { DecisionWorkbench, isGrainComment } from "./decision/DecisionWorkbench";
+import { useChainComments } from "../hooks/useChainComments";
 import type { InitialResolved } from "./decision/types";
 
 interface DecisionCardProps {
@@ -101,6 +103,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   );
   const inFlightRef = useRef(false);  // sync race-guard
   const [showRepair, setShowRepair] = useState(false);
+  // #174 — the focused "Expand to discuss" workbench. ONE affordance on the
+  // otherwise-clean card opens the side-by-side compare + grain-commenting view.
+  const [showWorkbench, setShowWorkbench] = useState(false);
   // Resolved-card disclosure: review each option's full detail (description,
   // concept, pros/cons) in place, without the heavyweight Re-pair flow.
   const [showOptions, setShowOptions] = useState(false);
@@ -148,6 +153,16 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // option to enter the predicting flow.
   const [predictOptIn, setPredictOptIn] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // #174 — the Discuss badge count MUST use the SAME predicate the workbench
+  // rail uses (isGrainComment), so the card badge and the rail agree. Reusing
+  // isGrainComment excludes #173 diagram-REGION comments (they carry optionId
+  // but live in the nested diagram view, not the rail) — without this the card
+  // could read "Discuss · 1" while the rail was empty. Also excludes the
+  // internal revision-request / horizon sectionIds. useChainComments aggregates
+  // the version chain so a thread from v1 still counts on v2.
+  const decisionComments = useChainComments(artifactId ?? "");
+  const discussCount = artifactId ? decisionComments.filter(isGrainComment).length : 0;
 
   // Derived flags — keep the read sites readable without sprinkling
   // discriminant checks everywhere.
@@ -503,6 +518,37 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         ? "grid-cols-1 min-[900px]:grid-cols-3"
         : "";
 
+  // #174 — the decision-interaction bundle, threaded into the inline footer AND
+  // reused verbatim by the workbench so choose / reject / send-back behave
+  // identically in both surfaces (no duplicated state machine).
+  const footerProps = {
+    options: event.options,
+    focusedIndex,
+    artifactId,
+    stakes,
+    showSendBack,
+    setShowSendBack,
+    sendBackText,
+    setSendBackText,
+    submitSendBack,
+    sendBackSent,
+    showReject,
+    setShowReject,
+    rejectText,
+    setRejectText,
+    rejectConcept,
+    setRejectConcept,
+    submitReject,
+    rejectSent,
+    showReasoning,
+    setShowReasoning,
+    reasoning,
+    setReasoning,
+    onSelect: handleSelect,
+    predictOptIn,
+    setPredictOptIn,
+  };
+
   return (
     <div
       ref={containerRef}
@@ -524,7 +570,30 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             {stakes} stakes
           </span>
         )}
-        <span className="text-2xs text-text-muted ml-auto">↑↓ navigate · Enter selects highlighted</span>
+        {/* #174 — the ONE affordance the clean card gains: expand into the
+            focused discuss workbench (side-by-side compare + grain commenting).
+            Kept out of the option grid so it's misclick-safe. Gated on
+            artifactId — grain comments need something to anchor to. */}
+        {artifactId && (
+          <button
+            type="button"
+            onClick={() => setShowWorkbench(true)}
+            aria-label={
+              discussCount > 0
+                ? `Expand to discuss — ${discussCount} comment${discussCount === 1 ? "" : "s"}`
+                : "Expand to discuss this decision"
+            }
+            className="ml-auto inline-flex items-center gap-1.5 text-2xs font-semibold text-accent-blue bg-accent-blue-dim border border-accent-blue/40 rounded px-2 py-1 hover:bg-accent-blue-dim/80 transition-colors press-scale"
+          >
+            <span aria-hidden="true">💬</span> Discuss
+            {discussCount > 0 && (
+              <span className="bg-accent-blue-strong text-white rounded-full text-[9px] font-bold px-1.5 py-px">
+                {discussCount}
+              </span>
+            )}
+          </button>
+        )}
+        <span className={`text-2xs text-text-muted ${artifactId ? "" : "ml-auto"}`}>↑↓ navigate · Enter selects highlighted</span>
       </div>
       <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
 
@@ -710,33 +779,21 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
       {/* X11 — escape-hatch footer (send-back + reasoning composers, FF9
           prediction opt-in toggle, tertiary affordance row). */}
-      <DecisionFooter
-        options={event.options}
-        focusedIndex={focusedIndex}
-        artifactId={artifactId}
-        stakes={stakes}
-        showSendBack={showSendBack}
-        setShowSendBack={setShowSendBack}
-        sendBackText={sendBackText}
-        setSendBackText={setSendBackText}
-        submitSendBack={submitSendBack}
-        sendBackSent={sendBackSent}
-        showReject={showReject}
-        setShowReject={setShowReject}
-        rejectText={rejectText}
-        setRejectText={setRejectText}
-        rejectConcept={rejectConcept}
-        setRejectConcept={setRejectConcept}
-        submitReject={submitReject}
-        rejectSent={rejectSent}
-        showReasoning={showReasoning}
-        setShowReasoning={setShowReasoning}
-        reasoning={reasoning}
-        setReasoning={setReasoning}
-        onSelect={handleSelect}
-        predictOptIn={predictOptIn}
-        setPredictOptIn={setPredictOptIn}
-      />
+      <DecisionFooter {...footerProps} />
+
+      {/* #174 — the focused discuss workbench. Reuses the same footerProps
+          bundle for its decision-level actions, and nests #173's diagram view
+          as a zoom target. artifactId is guaranteed truthy here (the Discuss
+          affordance only renders when it's set). */}
+      {showWorkbench && artifactId && (
+        <DecisionWorkbench
+          event={event}
+          artifactId={artifactId}
+          stakes={stakes}
+          footerProps={footerProps}
+          onClose={() => setShowWorkbench(false)}
+        />
+      )}
 
       {/* #173 — the focused region-commenting dialog for an option's diagram.
           Self-contained + prop-driven (artifactId is guaranteed truthy here —
