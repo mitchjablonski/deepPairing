@@ -400,13 +400,24 @@ function coerceChangesetFile(v: unknown): ChangesetFile {
   return out;
 }
 
-/** Keep only "reviewed"/"skipped" values (drop junk) so the renderer trusts
- *  the map. */
+/** Keep only known disposition values (drop junk) so the renderer trusts the
+ *  map. #175 — "needs_changes" joins "reviewed"; legacy "skipped" is still
+ *  tolerated on read (the renderer maps it to pending). */
 function coerceReviewState(v: unknown): ChangesetReviewState | undefined {
   if (!isObj(v)) return undefined;
   const out: ChangesetReviewState = {};
   for (const [k, val] of Object.entries(v)) {
-    if (val === "reviewed" || val === "skipped") out[k] = val;
+    if (val === "reviewed" || val === "needs_changes" || val === "skipped") out[k] = val;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** #175 — keep only string reasons keyed by string path. */
+function coerceReviewReasons(v: unknown): Record<string, string> | undefined {
+  if (!isObj(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === "string" && val.length > 0) out[k] = val;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -420,6 +431,8 @@ export function coerceChangesetContent(raw: unknown): ChangesetContent {
   if (Array.isArray(c.risks)) out.risks = strArr(c.risks);
   const reviewState = coerceReviewState(c.reviewState);
   if (reviewState) out.reviewState = reviewState;
+  const reviewReasons = coerceReviewReasons(c.reviewReasons);
+  if (reviewReasons) out.reviewReasons = reviewReasons;
   return out;
 }
 

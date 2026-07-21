@@ -228,6 +228,30 @@ describe("coerceChangesetContent (#171)", () => {
     expect(out.files[0]!.stats).toEqual({ additions: 2, deletions: 0 });
     expect(out.reviewState).toEqual({ "a.ts": "reviewed" }); // junk value dropped
   });
+
+  it("#175 — round-trips needs_changes + reviewReasons and tolerates a legacy 'skipped' value", () => {
+    const out = coerceChangesetContent({
+      files: [
+        { path: "a.ts", changeType: "modified", hunks: [] },
+        { path: "b.ts", changeType: "modified", hunks: [] },
+        { path: "c.ts", changeType: "modified", hunks: [] },
+      ],
+      reviewState: { "a.ts": "reviewed", "b.ts": "needs_changes", "c.ts": "skipped", "d.ts": "bogus" },
+      reviewReasons: { "b.ts": "keep the login TTL", "x.ts": 99 },
+    });
+    // needs_changes + legacy skipped survive on READ (skipped is tolerated, not produced); junk dropped.
+    expect(out.reviewState).toEqual({ "a.ts": "reviewed", "b.ts": "needs_changes", "c.ts": "skipped" });
+    // Only string reasons survive.
+    expect(out.reviewReasons).toEqual({ "b.ts": "keep the login TTL" });
+  });
+
+  it("#175 — omits reviewReasons entirely when none are valid", () => {
+    const out = coerceChangesetContent({
+      files: [{ path: "a.ts", changeType: "modified", hunks: [] }],
+      reviewReasons: { "a.ts": "", "b.ts": 3 },
+    });
+    expect(out.reviewReasons).toBeUndefined();
+  });
 });
 
 describe("coerceArtifactContent dispatcher", () => {

@@ -297,17 +297,18 @@ export interface ArtifactState {
   renameArtifact: (artifactId: string, title: string) => Promise<void>;
 
   /**
-   * #171 — mark ONE file of a changeset reviewed / skipped (or clear it with
+   * #171/#175 — set ONE file's DISPOSITION on a changeset (or clear it with
    * state=null). Review PROGRESS, not a decision — it patches
-   * `content.reviewState` on the artifact. Optimistic: flips the local state
-   * immediately (the WS `changeset_review_updated` broadcast is session-scoped
-   * and may never reach a switched-into project), then POSTs; rolls back the
-   * one file's entry on failure.
+   * `content.reviewState` (and `content.reviewReasons` for a needs_changes
+   * reason) on the artifact. Optimistic: flips the local state immediately (the
+   * WS broadcast is session-scoped and may never reach a switched-into project),
+   * then POSTs; rolls back the one file's entry on failure.
    */
   setChangesetFileReview: (
     artifactId: string,
     filePath: string,
-    state: "reviewed" | "skipped" | null,
+    state: "reviewed" | "needs_changes" | null,
+    reason?: string,
   ) => Promise<void>;
 
   /**
@@ -843,46 +844,59 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     );
   },
 
-  setChangesetFileReview: async (artifactId, filePath, state) => {
+  setChangesetFileReview: async (artifactId, filePath, state, reason) => {
     assertNotReplay("Reviewing a file");
     {
       const owner = get().owningSession(artifactId);
       if (isForeignSession(owner)) await guardForeignOwner("Reviewing a file", owner);
     }
-    // Snapshot the file's prior review state for a surgical rollback, then patch
-    // content.reviewState optimistically (mirrors optimisticArtifactPatch but on
-    // a nested content field, which that helper doesn't cover).
+    // Snapshot the file's prior disposition + reason for a surgical rollback,
+    // then patch content.reviewState / content.reviewReasons optimistically
+    // (mirrors optimisticArtifactPatch but on nested content fields, which that
+    // helper doesn't cover).
     const priorArtifact = get().artifacts.find((a) => a.id === artifactId);
-    const priorState = ((priorArtifact?.content as { reviewState?: Record<string, unknown> } | null)?.reviewState ?? {})[filePath];
-    const patch = (rs: Record<string, unknown>): Record<string, unknown> => {
-      const next = { ...rs };
-      if (state === null) delete next[filePath];
-      else next[filePath] = state;
-      return next;
+    const priorContent = (priorArtifact?.content ?? {}) as { reviewState?: Record<string, unknown>; reviewReasons?: Record<string, unknown> };
+    const priorState = (priorContent.reviewState ?? {})[filePath];
+    const priorReason = (priorContent.reviewReasons ?? {})[filePath];
+    // #175 — a reason belongs only to a needs_changes flag; every other
+    // disposition clears a stale reason (matches the server).
+    const nextReason = state === "needs_changes" && reason && reason.trim() ? reason.trim() : undefined;
+    const patch = (
+      content: Record<string, unknown>,
+    ): Record<string, unknown> => {
+      const rs = { ...((content.reviewState as Record<string, unknown>) ?? {}) };
+      const rr = { ...((content.reviewReasons as Record<string, unknown>) ?? {}) };
+      if (state === null) { delete rs[filePath]; delete rr[filePath]; }
+      else {
+        rs[filePath] = state;
+        if (nextReason !== undefined) rr[filePath] = nextReason;
+        else delete rr[filePath];
+      }
+      return { ...content, reviewState: rs, reviewReasons: rr };
     };
     set((s) => ({
       artifacts: s.artifacts.map((a) =>
-        a.id === artifactId
-          ? { ...a, content: { ...(a.content as Record<string, unknown>), reviewState: patch((a.content as { reviewState?: Record<string, unknown> }).reviewState ?? {}) } }
-          : a,
+        a.id === artifactId ? { ...a, content: patch(a.content as Record<string, unknown>) } : a,
       ),
     }));
     try {
       await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/changeset-review`, {
         method: "POST",
         headers: sessionHeaders(get().owningSession(artifactId)),
-        body: JSON.stringify({ filePath, state }),
+        body: JSON.stringify({ filePath, state, reason: nextReason }),
       });
     } catch (err) {
-      // Roll back only this file's entry against the CURRENT state so a WS
+      // Roll back only this file's entries against the CURRENT state so a WS
       // update that landed mid-request isn't wiped.
       set((s) => ({
         artifacts: s.artifacts.map((a) => {
           if (a.id !== artifactId) return a;
-          const rs = { ...((a.content as { reviewState?: Record<string, unknown> }).reviewState ?? {}) };
-          if (priorState === undefined) delete rs[filePath];
-          else rs[filePath] = priorState;
-          return { ...a, content: { ...(a.content as Record<string, unknown>), reviewState: rs } };
+          const content = a.content as { reviewState?: Record<string, unknown>; reviewReasons?: Record<string, unknown> };
+          const rs = { ...(content.reviewState ?? {}) };
+          const rr = { ...(content.reviewReasons ?? {}) };
+          if (priorState === undefined) delete rs[filePath]; else rs[filePath] = priorState;
+          if (priorReason === undefined) delete rr[filePath]; else rr[filePath] = priorReason;
+          return { ...a, content: { ...(a.content as Record<string, unknown>), reviewState: rs, reviewReasons: rr } };
         }),
       }));
       await toastApiError("Mark file reviewed", err);

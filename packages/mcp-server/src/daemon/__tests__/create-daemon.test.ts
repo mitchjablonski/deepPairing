@@ -117,6 +117,25 @@ describe("#151 — the REAL live-decisions closure (not a replica)", () => {
   });
 });
 
+describe("#175 — daemon pendingCount counts a draft changeset (parity with lib/pending.ts)", () => {
+  it("a draft changeset is reflected in /api/daemon-info pendingCount", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const store = daemon.createSession("s_cs");
+    // A draft changeset genuinely awaits the human's review — the in-app
+    // "waiting on you" count includes it, so the cross-project daemon badge must
+    // too (pre-fix PENDING_REVIEWABLE omitted "changeset" → this returned 0).
+    store.createArtifact({
+      id: "cs1", type: "changeset", title: "Refactor auth",
+      content: { files: [{ path: "auth/session.ts", changeType: "modified", hunks: [] }] },
+    });
+    const res = await daemon.app.request("/api/daemon-info", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).pendingCount).toBe(1);
+  });
+});
+
 describe("applyTopLevelGuards — the 64KB cap actually covers ROOT-level routes", () => {
   it("rejects a >64KB body on /api/evict with 413 before the handler runs", async () => {
     const { tmpDir, daemon } = makeDaemon();

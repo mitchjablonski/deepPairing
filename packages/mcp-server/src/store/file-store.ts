@@ -623,21 +623,36 @@ export class FileStore implements IStore {
   setChangesetFileReview(
     artifactId: string,
     filePath: string,
-    state: "reviewed" | "skipped" | null,
+    state: "reviewed" | "needs_changes" | "skipped" | null,
+    reason?: string,
   ): Artifact | null {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
-    const content = art.content as { files?: Array<{ path?: string }>; reviewState?: Record<string, "reviewed" | "skipped"> };
+    const content = art.content as {
+      files?: Array<{ path?: string }>;
+      reviewState?: Record<string, "reviewed" | "needs_changes" | "skipped">;
+      reviewReasons?: Record<string, string>;
+    };
     // Only accept a path that's actually part of the changeset — a review flag
     // for a phantom file is the caller's bug, not something to persist.
     if (!Array.isArray(content.files) || !content.files.some((f) => f.path === filePath)) return null;
     const reviewState = content.reviewState ?? {};
+    const reviewReasons = content.reviewReasons ?? {};
     if (state === null) {
       delete reviewState[filePath];
+      delete reviewReasons[filePath];
     } else {
       reviewState[filePath] = state;
+      // #175 — a reason belongs only to a needs_changes flag; any other
+      // disposition clears a stale reason so it can't leak into a later send-back.
+      if (state === "needs_changes" && reason && reason.trim()) {
+        reviewReasons[filePath] = reason.trim();
+      } else {
+        delete reviewReasons[filePath];
+      }
     }
     content.reviewState = reviewState;
+    content.reviewReasons = reviewReasons;
     art.updatedAt = new Date().toISOString();
     this.scheduleFlush();
     return art;

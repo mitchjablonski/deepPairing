@@ -22786,15 +22786,19 @@ var ChangesetFileSchema = external_exports.object({
   hunks: external_exports.array(ChangesetHunkSchema),
   stats: ChangesetFileStatsSchema.optional()
 });
-var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "skipped"]));
+var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "needs_changes", "skipped"]));
+var ChangesetReviewReasonsSchema = external_exports.record(external_exports.string(), external_exports.string());
 var ChangesetContentSchema = external_exports.object({
   summary: external_exports.string().optional(),
   files: external_exports.array(ChangesetFileSchema),
   /** Risk annotations from the agent, per changeset (e.g. "touches auth",
    *  "migration included") — rendered as chips in the summary strip. */
   risks: external_exports.array(external_exports.string()).optional(),
-  /** Human review progress (set post-creation via the changeset-review route). */
-  reviewState: ChangesetReviewStateSchema.optional()
+  /** Human per-file disposition (set post-creation via the changeset-review route). */
+  reviewState: ChangesetReviewStateSchema.optional(),
+  /** #175 — per-file "needs changes" reasons (set post-creation via the
+   *  changeset-review route), keyed by file path. */
+  reviewReasons: ChangesetReviewReasonsSchema.optional()
 });
 
 // ../shared/dist/schemas/artifact.js
@@ -23435,7 +23439,9 @@ var RenameBodySchema = external_exports.object({
 });
 var ChangesetReviewBodySchema = external_exports.object({
   filePath: external_exports.string().min(1),
-  state: external_exports.enum(["reviewed", "skipped"]).nullable()
+  state: external_exports.enum(["reviewed", "needs_changes"]).nullable(),
+  /** #175 — reason for a needs_changes flag; ignored for other states. */
+  reason: external_exports.string().optional()
 });
 var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
 var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
@@ -25272,18 +25278,26 @@ var FileStore = class _FileStore {
    *  and the WS full-artifact patch — the same in-content pattern
    *  updatePlanProgress uses. Reversible: passing `null` clears the file's
    *  state (e.g. un-checking "File looks right"). */
-  setChangesetFileReview(artifactId, filePath, state) {
+  setChangesetFileReview(artifactId, filePath, state, reason) {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
     const content = art.content;
     if (!Array.isArray(content.files) || !content.files.some((f) => f.path === filePath)) return null;
     const reviewState = content.reviewState ?? {};
+    const reviewReasons = content.reviewReasons ?? {};
     if (state === null) {
       delete reviewState[filePath];
+      delete reviewReasons[filePath];
     } else {
       reviewState[filePath] = state;
+      if (state === "needs_changes" && reason && reason.trim()) {
+        reviewReasons[filePath] = reason.trim();
+      } else {
+        delete reviewReasons[filePath];
+      }
     }
     content.reviewState = reviewState;
+    content.reviewReasons = reviewReasons;
     art.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     this.scheduleFlush();
     return art;
@@ -27196,7 +27210,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = ChangesetReviewBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { filePath, state } = parsed.data;
+    const { filePath, state, reason } = parsed.data;
     const target = (await store.getArtifacts()).find((a) => a.id === artifactId);
     if (!target) {
       return c.json(
@@ -27211,7 +27225,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!store.setChangesetFileReview) {
       return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
     }
-    const updated = await store.setChangesetFileReview(artifactId, filePath, state);
+    const updated = await store.setChangesetFileReview(artifactId, filePath, state, reason);
     if (!updated) {
       return c.json(
         {
@@ -29063,7 +29077,7 @@ function createDaemon(deps) {
     }
   );
   app.route("/", publicRoutes);
-  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change"]);
+  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
   function computeDaemonPendingCount() {
     let n = 0;
     for (const store of sessions.values()) {

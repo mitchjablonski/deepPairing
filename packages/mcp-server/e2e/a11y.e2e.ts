@@ -199,13 +199,13 @@ test.beforeAll(async () => {
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed suggestion reply failed: ${r.status}`); });
 
-  // #171 — a multi-file CHANGESET, seeded into the a11y session so BOTH theme
-  // scans mount and measure the new review surface (the #187 hollow-net lesson:
-  // openChangeset() below SELECTS it and waits for the gated action bar before
-  // analyzing). Real, token-rich diff hunks (keyword/string/comment/number
-  // families) + a risk chip + a partial reviewState (so the summary strip, the
-  // per-file rail states, and the DISABLED "Approve changeset (N files left)"
-  // button are all in the DOM for the scan).
+  // #171/#175 — a multi-file CHANGESET, seeded into the a11y session so BOTH
+  // theme scans mount and measure the refined review surface (the #187
+  // hollow-net lesson: openChangeset() below SELECTS it, activates the flagged
+  // file, and waits for the needs-changes reason box before analyzing). Real,
+  // token-rich diff hunks + a risk chip + a MIXED disposition (one reviewed, one
+  // needs_changes) so the summary strip, both rail chips, the reason box, and the
+  // DERIVED "Send back" action are all in the DOM for the scan.
   await fetch(`${baseURL}/api/internal/sessions/a11y/artifacts`, {
     method: "POST", headers: h,
     body: JSON.stringify({
@@ -233,7 +233,10 @@ test.beforeAll(async () => {
             ] }],
           },
         ],
-        reviewState: { "auth/middleware.ts": "reviewed" },
+        // #175 — a MIXED disposition so the scan measures BOTH rail chips
+        // (✓ ok / ↻ changes) and the derived "Send back" action for real.
+        reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "needs_changes" },
+        reviewReasons: { "auth/session.ts": "Keep the sliding-window bump on the login path too — OAuth callbacks skip this middleware." },
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed changeset failed: ${r.status}`); });
@@ -337,16 +340,22 @@ async function openSuggestionArtifact(page: import("@playwright/test").Page): Pr
   );
 }
 
-/** #171 — mount the CHANGESET review surface for real before scanning (the
+/** #171/#175 — mount the CHANGESET review surface for real before scanning (the
  *  #187 hollow-net lesson: seeding alone never renders the component). Selects
- *  the changeset, waits for the diff pane AND the gated whole-changeset action
- *  bar (the "Approve changeset (N files left)" button — the marquee surface),
- *  then settles finite animations so axe never samples a mid-fade frame. */
+ *  the changeset, waits for the derived "Send back" action + a rail disposition
+ *  chip, activates the flagged file so its needs-changes reason box mounts, then
+ *  settles finite animations so axe never samples a mid-fade frame. */
 async function openChangeset(page: import("@playwright/test").Page): Promise<void> {
   await page.click('[data-artifact-item="cs_a11y"]');
   await page.waitForSelector('[data-artifact-id="cs_a11y"]', { timeout: 15000 });
-  // The gated Approve button proves the changeset renderer's action bar mounted.
-  await page.getByRole("button", { name: /Approve changeset/ }).waitFor({ timeout: 15000 });
+  // #175 — the DERIVED action (one file flagged → Send back) proves the refined
+  // action bar mounted. The rail carries both disposition chips.
+  await page.getByRole("button", { name: /Send back/ }).waitFor({ timeout: 15000 });
+  await page.getByText("↻ changes").waitFor({ timeout: 15000 });
+  // Activate the flagged file so its needs-changes REASON box mounts for the
+  // scan (the #187 hollow-net lesson — actually render the new state).
+  await page.getByTitle("modified auth/session.ts").click();
+  await page.getByLabel(/Reason this file needs changes/).waitFor({ timeout: 15000 });
   // The cross-file card in the rail is part of the seeded state.
   await page.getByText("CROSS-FILE COMMENT").waitFor({ timeout: 15000 });
   await page.evaluate(() =>
@@ -433,6 +442,18 @@ test("keyboard (#173): the Expand affordance is reachable and the focused dialog
   await expect(dialog).toHaveCount(0);
 });
 
+/** #175 — open the `?` cheat-sheet overlay (it lists the changeset review keys)
+ *  so axe can scan the modal for real. Assumes focus is on a non-input control. */
+async function openCheatSheet(page: import("@playwright/test").Page): Promise<void> {
+  // Move focus off any input (the needs-changes reason box) so App's global `?`
+  // handler isn't suppressed by its editable-target guard.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+  await page.locator("body").press("Shift+Slash"); // Shift+Slash → "?"
+  await page.getByRole("heading", { name: /Keyboard Shortcuts/i }).waitFor({ timeout: 15000 });
+  // The changeset section renders straight from the central keymap.
+  await page.getByText(/Looks right → next file/).waitFor({ timeout: 15000 });
+}
+
 test("a11y (#172): suggested-edit cards (pending + countered) have no serious/critical axe violations — dark", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
@@ -514,12 +535,20 @@ test("a11y: session view with decision + findings has no serious/critical axe vi
   const qSerious = qResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(qSerious, `axe violations (open-question sections):\n${fmt(qSerious)}`).toEqual([]);
 
-  // #171 — third scan with the CHANGESET review surface mounted (summary strip,
-  // file rail states, unified diff, cross-file card, gated action bar).
+  // #171/#175 — third scan with the CHANGESET review surface mounted (summary
+  // strip, rail disposition chips, unified diff, cross-file card, needs-changes
+  // reason box, derived action bar).
   await openChangeset(page);
   const csResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   const csSerious = csResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(csSerious, `axe violations (changeset):\n${fmt(csSerious)}`).toEqual([]);
+
+  // #175 — the `?` cheat-sheet overlay (lists the changeset review keys), dark.
+  await openCheatSheet(page);
+  const chResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const chSerious = chResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(chSerious, `axe violations (cheat-sheet, dark):\n${fmt(chSerious)}`).toEqual([]);
+  await page.keyboard.press("Escape");
 });
 
 test("a11y: session view in the LIGHT theme has no serious/critical axe violations (#150)", async ({ page }) => {
@@ -569,6 +598,13 @@ test("a11y: session view in the LIGHT theme has no serious/critical axe violatio
   const csResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   const csSerious = csResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(csSerious, `axe violations (changeset, light):\n${fmt(csSerious)}`).toEqual([]);
+
+  // #175 — the `?` cheat-sheet overlay, light parity.
+  await openCheatSheet(page);
+  const chResults = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const chSerious = chResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(chSerious, `axe violations (cheat-sheet, light):\n${fmt(chSerious)}`).toEqual([]);
+  await page.keyboard.press("Escape");
 });
 
 test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {

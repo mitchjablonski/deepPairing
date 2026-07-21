@@ -876,10 +876,12 @@ export function createHttpRoutes(
     return c.json({ status: "renamed", artifactId });
   });
 
-  // #171 — mark ONE file of a changeset reviewed / skipped (or clear it). This
-  // is review PROGRESS persisted on the artifact content — NOT a decision
-  // record (only approve/revise/reject write decisions). The whole-changeset
-  // Approve stays gated in the UI until every file is reviewed-or-skipped.
+  // #171/#175 — set ONE file's DISPOSITION: reviewed (looks right) or
+  // needs_changes (flagged, with an optional reason), or clear it. This is
+  // review PROGRESS persisted on the artifact content — NOT a decision record
+  // (only approve/revise/reject write decisions). The whole-changeset action is
+  // DERIVED in the UI from the dispositions (all reviewed → Approve; any flagged
+  // → Send back the flagged files with their reasons).
   app.post("/api/artifacts/:artifactId/changeset-review", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
@@ -891,7 +893,7 @@ export function createHttpRoutes(
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = ChangesetReviewBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { filePath, state } = parsed.data;
+    const { filePath, state, reason } = parsed.data;
 
     // F6 — same cross-session guard as status/rename: a verdict on an artifact
     // this store doesn't own must FAIL LOUDLY (the UI rolls back its optimistic
@@ -907,7 +909,7 @@ export function createHttpRoutes(
     if (!store.setChangesetFileReview) {
       return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
     }
-    const updated = await store.setChangesetFileReview(artifactId, filePath, state);
+    const updated = await store.setChangesetFileReview(artifactId, filePath, state, reason);
     if (!updated) {
       // Not a changeset, or the path isn't part of it — the caller's mistake,
       // surfaced honestly rather than a silent 200.

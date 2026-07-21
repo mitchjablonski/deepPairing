@@ -7,6 +7,7 @@
  * concentrate.
  */
 import { describe, it, expect, beforeEach } from "vitest";
+import { composeSendBackFeedback } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
@@ -77,6 +78,44 @@ describe("check_feedback — per-file review state (#171)", () => {
     expect(entry.filesTotal).toBe(2);
     // The changeset is still a draft awaiting the whole-changeset verdict.
     expect(sc.suggestedAction).toContain("changeset review");
+  });
+
+  it("#175 — surfaces a needs_changes disposition + its reason in pendingArtifacts", async () => {
+    const id = await presentChangeset();
+    await store.setChangesetFileReview!(id, "auth/middleware.ts", "reviewed");
+    await store.setChangesetFileReview!(id, "auth/session.ts", "needs_changes", "widen the Session type");
+    await store.addComment({ id: "cmt_cs175", artifactId: id, content: "see rail", author: "human" } as any);
+
+    const res = await callTool("check_feedback");
+    const sc = res.structuredContent as any;
+    const entry = sc.pendingArtifacts.find((a: any) => a.id === id);
+    expect(entry.reviewState).toEqual({ "auth/middleware.ts": "reviewed", "auth/session.ts": "needs_changes" });
+    expect(entry.reviewReasons).toEqual({ "auth/session.ts": "widen the Session type" });
+    // Both files carry a disposition, so filesReviewed counts both.
+    expect(entry.filesReviewed).toBe(2);
+  });
+
+  it("#175 — send-back wire shape: the revised feedback names ONLY the flagged files + their reasons", async () => {
+    const id = await presentChangeset();
+    // Human: one file looks right, one flagged with a reason (mirrors the UI).
+    await store.setChangesetFileReview!(id, "auth/middleware.ts", "reviewed");
+    await store.setChangesetFileReview!(id, "auth/session.ts", "needs_changes", "keep the login TTL bump");
+
+    // The UI composes the send-back feedback from the SHARED helper and posts it
+    // as the revision feedback (→ a human comment) alongside a `revised` status.
+    const art = store.getArtifacts().find((a) => a.id === id)!;
+    const reasons = (art.content as any).reviewReasons as Record<string, string>;
+    const feedback = composeSendBackFeedback(["auth/session.ts"], reasons);
+    await store.addComment({ id: "cmt_sendback", artifactId: id, content: feedback, author: "human" } as any);
+    await store.updateArtifactStatus(id, "revised", "ui_revise_button" as any);
+
+    const res = await callTool("check_feedback");
+    // The agent reads WHICH file + WHY, and NOT the accepted file.
+    expect(res.text).toContain("auth/session.ts");
+    expect(res.text).toContain("keep the login TTL bump");
+    expect(res.text).toContain("Please revise 1 file");
+    // The look-right file is accepted — it must not appear as something to revise.
+    expect(feedback).not.toContain("auth/middleware.ts");
   });
 
   it("a non-changeset pending entry carries no review-state fields", async () => {

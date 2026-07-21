@@ -208,6 +208,7 @@ export {
   ChangesetFileStatsSchema,
   ChangesetFileSchema,
   ChangesetReviewStateSchema,
+  ChangesetReviewReasonsSchema,
   ChangesetContentSchema,
   type Finding,
   type FindingSeverity,
@@ -230,7 +231,13 @@ export {
   type ChangesetFileStats,
   type ChangesetFile,
   type ChangesetReviewState,
+  type ChangesetReviewReasons,
   type ChangesetContent,
 } from "./schemas/content-types.js";
+export {
+  composeSendBackFeedback,
+  deriveChangesetDisposition,
+  type ChangesetDisposition,
+} from "./changeset-review.js";
 export { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./schemas/content-types.js";
 export { normalizeConceptKey } from "./normalize.js";

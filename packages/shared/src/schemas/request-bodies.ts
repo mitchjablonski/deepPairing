@@ -88,12 +88,17 @@ export const RenameBodySchema = z.object({
 });
 export type RenameBody = z.infer<typeof RenameBodySchema>;
 
-// #171 — POST /api/artifacts/:artifactId/changeset-review — mark ONE file of a
-// changeset reviewed/skipped (or clear it with state=null). Review PROGRESS,
-// persisted on the artifact content; NOT a decision record.
+// #171/#175 — POST /api/artifacts/:artifactId/changeset-review — set ONE file's
+// DISPOSITION (or clear it with state=null). Review PROGRESS, persisted on the
+// artifact content; NOT a decision record. #175 — "needs_changes" joins
+// "reviewed" (the "skipped" toggle is gone — never sent by the current client,
+// only tolerated on READ of legacy on-disk state), and an optional `reason`
+// rides a needs_changes flag so the send-back can name why each file was flagged.
 export const ChangesetReviewBodySchema = z.object({
   filePath: z.string().min(1),
-  state: z.enum(["reviewed", "skipped"]).nullable(),
+  state: z.enum(["reviewed", "needs_changes"]).nullable(),
+  /** #175 — reason for a needs_changes flag; ignored for other states. */
+  reason: z.string().optional(),
 });
 export type ChangesetReviewBody = z.infer<typeof ChangesetReviewBodySchema>;
 
