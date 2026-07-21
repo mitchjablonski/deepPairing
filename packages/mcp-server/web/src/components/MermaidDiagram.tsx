@@ -71,7 +71,9 @@ export function MermaidDiagram({
   // #140 — when present, the diagram becomes region-commentable (drag a rect /
   // pick a node). Passed ONLY for the interactive artifact view; a decision
   // preview or revision diff omits it and the diagram behaves exactly as before.
-  region?: { artifactId: string; visualId: string };
+  // #173 — `optionId` (present only for a decision focused view) rides through
+  // to the region layer so the comment anchors to optionId + visualId + region.
+  region?: { artifactId: string; visualId: string; optionId?: string };
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -170,6 +172,7 @@ export function MermaidDiagram({
           <DiagramRegionLayer
             artifactId={region.artifactId}
             visualId={region.visualId}
+            optionId={region.optionId}
             svg={svg}
             hostRef={hostRef}
           />

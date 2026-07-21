@@ -29149,6 +29149,25 @@ function describeRegionRef(region) {
   if (labels.length > 0) return `[${labels.join(", ")}]`;
   return "";
 }
+function structuredRegionFields(t) {
+  const region = t.region;
+  if (!region) return {};
+  if (t.optionId) {
+    const nearNodes = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
+    return {
+      optionId: t.optionId,
+      ...t.visualId ? { visualId: t.visualId } : {},
+      region: {
+        x: region.x,
+        y: region.y,
+        w: region.w,
+        h: region.h,
+        ...nearNodes.length ? { nearNodes } : {}
+      }
+    };
+  }
+  return region.labels?.length ? { region: { labels: region.labels } } : {};
+}
 function deriveTransition(a) {
   const history = a.statusHistory;
   if (!Array.isArray(history) || history.length === 0) {
@@ -29403,6 +29422,12 @@ ${s.replacementText}${note ? `
         loc += qText ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")` : ` (answers open question #${c.target.questionIndex + 1})`;
       }
       if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
+      if (c.target.optionId) {
+        const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+        const opts = art?.content?.options;
+        const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
+        loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
+      }
       const regionRef = describeRegionRef(c.target.region);
       if (regionRef) loc += ` \u2014 on region ${regionRef}`;
       if (c.intent === "question" && !c.answeredByCommentId) {
@@ -29423,12 +29448,12 @@ ${s.replacementText}${note ? `
           // the healthy/no-file payload is byte-for-byte unchanged.
           ...c.target.filePath ? { filePath: c.target.filePath } : {},
           ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
-          // #140 — carry ONLY the human-meaningful labels. The normalized rect
-          // and the render-unique `elementIds` (e.g. dp-mmd-7-8-flowchart-A-0)
-          // are unactionable to the model — the labels are the part it can find
-          // in the source it authored. Spread only when labels exist, so the
-          // healthy/no-region payload stays byte-for-byte as before.
-          ...c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}
+          // #140/#173 — a plan/spec region comment carries ONLY the human-
+          // meaningful labels (byte-for-byte as before); a DECISION region
+          // comment (optionId set) carries optionId + visualId + rect +
+          // nearNodes so the anchor survives a re-render (#163). See
+          // structuredRegionFields.
+          ...structuredRegionFields(c.target)
         });
         continue;
       }
@@ -29462,9 +29487,10 @@ ${s.replacementText}${note ? `
         // present only when the comment carries them.
         ...c.target.filePath ? { filePath: c.target.filePath } : {},
         ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
-        // #140 — labels only (see structuredQuestions); present only when the
-        // region actually named a node.
-        ...c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}
+        // #140/#173 — plan/spec: labels only (byte-for-byte); decision region
+        // (optionId set): optionId + visualId + rect + nearNodes. See
+        // structuredRegionFields.
+        ...structuredRegionFields(c.target)
       });
     }
     if (questionLines.length > 0) {

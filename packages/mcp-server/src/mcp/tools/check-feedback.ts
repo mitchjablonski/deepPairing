@@ -88,12 +88,52 @@ function changesetReviewField(a: Artifact): {
   return { reviewState, filesReviewed, filesTotal: files.length };
 }
 
-type CommentRegion = { labels?: string[]; elementIds?: string[] } | undefined;
+type CommentRegion =
+  | { x?: number; y?: number; w?: number; h?: number; labels?: string[]; elementIds?: string[] }
+  | undefined;
 function describeRegionRef(region: CommentRegion): string {
   if (!region) return "";
   const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
   if (labels.length > 0) return `[${labels.join(", ")}]`;
   return "";
+}
+
+/**
+ * #173 — the structured delivery of a region comment, split by artifact kind.
+ *
+ * A DECISION region comment (target.optionId set — the focused-view region
+ * layer threads it through) carries the OPTION + VISUAL + normalized RECT plus
+ * label-matched `nearNodes` (the nodes the region covers, by LABEL). mermaid
+ * node ids are render-unique (#163), so the labels are what lets the agent
+ * re-locate the region in the option's diagram after a re-render — that's why
+ * they ride as `nearNodes`, never the ids or the raw rect alone.
+ *
+ * A plan/spec region comment keeps its historical `region: { labels }` shape
+ * (no optionId), byte-for-byte — the healthy-payload contract lock
+ * (check-feedback-ledger-health.test.ts) depends on it.
+ */
+function structuredRegionFields(t: {
+  optionId?: string;
+  visualId?: string;
+  region?: CommentRegion;
+}): Record<string, unknown> {
+  const region = t.region;
+  if (!region) return {};
+  if (t.optionId) {
+    const nearNodes = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
+    return {
+      optionId: t.optionId,
+      ...(t.visualId ? { visualId: t.visualId } : {}),
+      region: {
+        x: region.x,
+        y: region.y,
+        w: region.w,
+        h: region.h,
+        ...(nearNodes.length ? { nearNodes } : {}),
+      },
+    };
+  }
+  return region.labels?.length ? { region: { labels: region.labels } } : {};
 }
 
 /**
@@ -478,6 +518,16 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           : ` (answers open question #${c.target.questionIndex + 1})`;
       }
       if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
+      // #173 — a decision region comment names the OPTION it anchors to, so the
+      // agent knows which option's diagram the region belongs to (the anchor is
+      // optionId + visualId + region together). Resolve the option TITLE from
+      // the decision artifact's content so terse regions stay placeable.
+      if (c.target.optionId) {
+        const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+        const opts = (art?.content as { options?: Array<{ id?: string; title?: string }> } | undefined)?.options;
+        const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
+        loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
+      }
       // #140 — a region comment names the diagram nodes it covers TEXTUALLY so
       // the agent can find them in the Mermaid source it authored (no image).
       // e.g. "— on region [AuthGate, Login]". Labels preferred; ids as a
@@ -502,12 +552,12 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           // the healthy/no-file payload is byte-for-byte unchanged.
           ...(c.target.filePath ? { filePath: c.target.filePath } : {}),
           ...(Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {}),
-          // #140 — carry ONLY the human-meaningful labels. The normalized rect
-          // and the render-unique `elementIds` (e.g. dp-mmd-7-8-flowchart-A-0)
-          // are unactionable to the model — the labels are the part it can find
-          // in the source it authored. Spread only when labels exist, so the
-          // healthy/no-region payload stays byte-for-byte as before.
-          ...(c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}),
+          // #140/#173 — a plan/spec region comment carries ONLY the human-
+          // meaningful labels (byte-for-byte as before); a DECISION region
+          // comment (optionId set) carries optionId + visualId + rect +
+          // nearNodes so the anchor survives a re-render (#163). See
+          // structuredRegionFields.
+          ...structuredRegionFields(c.target),
         });
         continue;
       }
@@ -546,9 +596,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         // present only when the comment carries them.
         ...(c.target.filePath ? { filePath: c.target.filePath } : {}),
         ...(Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {}),
-        // #140 — labels only (see structuredQuestions); present only when the
-        // region actually named a node.
-        ...(c.target.region?.labels?.length ? { region: { labels: c.target.region.labels } } : {}),
+        // #140/#173 — plan/spec: labels only (byte-for-byte); decision region
+        // (optionId set): optionId + visualId + rect + nearNodes. See
+        // structuredRegionFields.
+        ...structuredRegionFields(c.target),
       });
     }
     if (questionLines.length > 0) {

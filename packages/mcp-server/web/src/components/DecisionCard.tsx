@@ -4,11 +4,12 @@ import { useDraft } from "../hooks/useDraft";
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
 import { AnimatePresence } from "motion/react";
-import { type DecisionRequestEvent, type Artifact, coerceDecisionContent } from "@deeppairing/shared";
+import { type DecisionRequestEvent, type Artifact, type PlanVisual, coerceDecisionContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
+import { DecisionDiagramFocus } from "./DecisionDiagramFocus";
 import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 import { useReplayStore } from "../stores/replay";
 import { OptionCard } from "./decision/OptionCard";
@@ -108,6 +109,13 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // drew diagrams they're usually the whole point of the comparison; the bar
   // stays as a collapse toggle for anyone who wants the grid alone.
   const [showDiagrams, setShowDiagrams] = useState(true);
+  // #173 — the diagram opened in the focused region-commenting dialog. The
+  // compare grid stays read-only (its cells are too cramped for reliable
+  // drag-select — the #172/#173 pain); expanding a cell opens THIS full-width
+  // dialog where the region layer goes live. Null = grid only.
+  const [focusedDiagram, setFocusedDiagram] = useState<
+    { optionId: string; optionTitle: string; visual: PlanVisual } | null
+  >(null);
   /** Q3: horizon-check request state — one request per artifact view. */
   const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
   const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
@@ -592,7 +600,25 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
                   <div className="text-2xs font-semibold text-text-muted truncate">{option.title}</div>
                   {Array.isArray(option.visuals) && option.visuals.length > 0 ? (
                     option.visuals.map((v) => (
-                      <div key={v.id} className="bg-surface-secondary rounded-lg border border-white/[0.06] p-2 space-y-1">
+                      <div key={v.id} className="group relative bg-surface-secondary rounded-lg border border-white/[0.06] p-2 space-y-1">
+                        {/* #173 — the ONE affordance the compare grid gains: a
+                            hover/focus button that opens the diagram full-width
+                            in the focused view where region-commenting is live.
+                            The grid itself stays read-only (no drag-select in
+                            cramped cells). Only shown for a diagram when we have
+                            a real artifactId to anchor comments to. Kept in the
+                            tab order (focus-visible reveals it) so it's keyboard
+                            reachable — the a11y contract. */}
+                        {artifactId && v.kind === "diagram" && (
+                          <button
+                            type="button"
+                            onClick={() => setFocusedDiagram({ optionId: option.id, optionTitle: option.title, visual: v })}
+                            aria-label={`Expand the ${option.title} option's ${v.title || "diagram"} to comment`}
+                            className="absolute top-1.5 right-1.5 z-10 inline-flex items-center gap-1 rounded px-1.5 py-1 text-2xs font-semibold text-white bg-accent-blue-strong shadow-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus transition-opacity press-scale"
+                          >
+                            <span aria-hidden="true">⤢</span> Expand to comment
+                          </button>
+                        )}
                         {v.title && <div className="text-2xs text-text-muted">{v.title}</div>}
                         {/* artifactId optional on DecisionCard; VisualBody only
                             uses it for comment anchoring, skipped under readOnly. */}
@@ -711,6 +737,19 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         predictOptIn={predictOptIn}
         setPredictOptIn={setPredictOptIn}
       />
+
+      {/* #173 — the focused region-commenting dialog for an option's diagram.
+          Self-contained + prop-driven (artifactId is guaranteed truthy here —
+          the expand affordance only renders when it's set). */}
+      {focusedDiagram && artifactId && (
+        <DecisionDiagramFocus
+          artifactId={artifactId}
+          optionId={focusedDiagram.optionId}
+          optionTitle={focusedDiagram.optionTitle}
+          visual={focusedDiagram.visual}
+          onClose={() => setFocusedDiagram(null)}
+        />
+      )}
     </div>
   );
 }

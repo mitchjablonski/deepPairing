@@ -135,6 +135,39 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect("region" in sc.comments[0]).toBe(false);
     });
 
+    it("#173 — a DECISION region comment reaches the agent with optionId + visualId + rect + label-matched nearNodes", async () => {
+      await callTool("present_options", {
+        context: "Which session store?",
+        options: [
+          { id: "opt_redis", title: "Redis", description: "external cache", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+          { id: "opt_pg", title: "Postgres", description: "in the DB", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const art = store.getArtifacts()[0];
+      // The focused-view region layer anchors to optionId + visualId + region.
+      store.addComment({
+        id: "drc_1", artifactId: art.id, content: "why straight to Redis?", author: "human", intent: "question",
+        target: {
+          artifactId: art.id,
+          optionId: "opt_redis",
+          visualId: "vis_arch",
+          region: { x: 0.37, y: 0.42, w: 0.29, h: 0.17, elementIds: ["dp-mmd-7-8-flowchart-AppServer-0"], labels: ["App Server", "Redis"] },
+        },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      // Prose names the option + the region's nodes (label-matched).
+      expect(res.text).toContain('option "Redis"');
+      expect(res.text).toContain("on region [App Server, Redis]");
+      // Structured delivery carries the full anchor with re-render-safe nearNodes.
+      const q = (res.structuredContent as any).questions[0];
+      expect(q.optionId).toBe("opt_redis");
+      expect(q.visualId).toBe("vis_arch");
+      expect(q.region).toMatchObject({ x: 0.37, y: 0.42, w: 0.29, h: 0.17, nearNodes: ["App Server", "Redis"] });
+      // nearNodes are LABELS, not the render-unique elementIds (#163).
+      expect(q.region.elementIds).toBeUndefined();
+    });
+
     it("F1 — warns to WAIT while a code_change is still under review (never 'you may proceed')", async () => {
       // confidence "low" keeps it a draft (no terminal quick-approve) → routed to UI.
       await callTool("present_code_change", {
