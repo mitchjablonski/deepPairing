@@ -7980,7 +7980,13 @@ var ERROR_CODES = {
   stance_not_found: "stance_not_found",
   /** A ledger mutation was refused because the on-disk ledger is corrupt/frozen
    *  (H1-5 write-refusal surfaced as a structured route error). */
-  ledger_frozen: "ledger_frozen"
+  ledger_frozen: "ledger_frozen",
+  /** #171 — a changeset-review write targeted an artifact that isn't a
+   *  changeset, or a file path that isn't part of it. */
+  not_a_changeset_file: "not_a_changeset_file",
+  /** #171 — the store can't persist changeset review state (a read-only /
+   *  non-FileStore implementation lacks setChangesetFileReview). */
+  unsupported: "unsupported"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -22760,6 +22766,36 @@ var DecisionOptionBaseSchema = external_exports.object({
    *  stack applies. */
   visuals: external_exports.array(PlanVisualSchema).optional()
 });
+var ChangesetHunkLineSchema = external_exports.object({
+  kind: external_exports.enum(["ctx", "add", "del"]),
+  content: external_exports.string(),
+  oldLine: external_exports.number().int().optional(),
+  newLine: external_exports.number().int().optional()
+});
+var ChangesetHunkSchema = external_exports.object({
+  header: external_exports.string().optional().describe("Unified-diff hunk header, e.g. '@@ -24,9 +24,14 @@ export function requireSession(...)'"),
+  lines: external_exports.array(ChangesetHunkLineSchema)
+});
+var ChangesetFileStatsSchema = external_exports.object({
+  additions: external_exports.number().int().nonnegative(),
+  deletions: external_exports.number().int().nonnegative()
+});
+var ChangesetFileSchema = external_exports.object({
+  path: external_exports.string(),
+  changeType: external_exports.enum(["modified", "added", "deleted"]),
+  hunks: external_exports.array(ChangesetHunkSchema),
+  stats: ChangesetFileStatsSchema.optional()
+});
+var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "skipped"]));
+var ChangesetContentSchema = external_exports.object({
+  summary: external_exports.string().optional(),
+  files: external_exports.array(ChangesetFileSchema),
+  /** Risk annotations from the agent, per changeset (e.g. "touches auth",
+   *  "migration included") — rendered as chips in the summary strip. */
+  risks: external_exports.array(external_exports.string()).optional(),
+  /** Human review progress (set post-creation via the changeset-review route). */
+  reviewState: ChangesetReviewStateSchema.optional()
+});
 
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
@@ -22768,7 +22804,10 @@ var ArtifactTypeSchema = external_exports.enum([
   "decision",
   "code_change",
   "reasoning",
-  "spec"
+  "spec",
+  // #171 — a change spanning 2+ files, reviewed as one unit (unified diffs +
+  // per-file review state). Single-file changes stay `code_change`.
+  "changeset"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
@@ -22909,7 +22948,19 @@ var CommentTargetSchema = external_exports.object({
     h: external_exports.number(),
     elementIds: external_exports.array(external_exports.string()).optional().describe('Hit-tested g.node ids, e.g. ["flowchart-AuthGate-1"]'),
     labels: external_exports.array(external_exports.string()).optional().describe('Hit-tested node labels, e.g. ["AuthGate"]')
-  }).optional().describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers")
+  }).optional().describe("A rectangle selected on a rendered Mermaid diagram (visualId), anchored textually to the nodes it covers"),
+  // #171 — cross-file comment anchors for a changeset. A single-file line
+  // comment within a changeset uses `filePath` + `lineStart`/`lineEnd` above
+  // (filePath already existed); a CROSS-FILE thread carries 2+ entries here so
+  // one comment can bind two (or more) locations across files — the thing
+  // single-file review fundamentally can't say (e.g. "this TTL constant and
+  // that middleware check must stay in sync"). All optional; an old comment
+  // with no `anchors` loads unchanged.
+  anchors: external_exports.array(external_exports.object({
+    filePath: external_exports.string(),
+    lineStart: external_exports.number().int(),
+    lineEnd: external_exports.number().int().optional()
+  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -23381,6 +23432,10 @@ var StatusUpdateBodySchema = external_exports.object({
 });
 var RenameBodySchema = external_exports.object({
   title: external_exports.string().min(1)
+});
+var ChangesetReviewBodySchema = external_exports.object({
+  filePath: external_exports.string().min(1),
+  state: external_exports.enum(["reviewed", "skipped"]).nullable()
 });
 var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
 var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
@@ -25207,6 +25262,28 @@ var FileStore = class _FileStore {
     } else {
       delete art.secretWarnings;
     }
+    art.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.scheduleFlush();
+    return art;
+  }
+  /** #171 — mark ONE file of a changeset reviewed/skipped, in place. See
+   *  store-interface.ts. Human-driven review PROGRESS (not a decision record):
+   *  it lives on the artifact content so it rides getArtifacts()/check_feedback
+   *  and the WS full-artifact patch — the same in-content pattern
+   *  updatePlanProgress uses. Reversible: passing `null` clears the file's
+   *  state (e.g. un-checking "File looks right"). */
+  setChangesetFileReview(artifactId, filePath, state) {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art || art.type !== "changeset") return null;
+    const content = art.content;
+    if (!Array.isArray(content.files) || !content.files.some((f) => f.path === filePath)) return null;
+    const reviewState = content.reviewState ?? {};
+    if (state === null) {
+      delete reviewState[filePath];
+    } else {
+      reviewState[filePath] = state;
+    }
+    content.reviewState = reviewState;
     art.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     this.scheduleFlush();
     return art;
@@ -27047,7 +27124,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       const artifact = artifacts.find((a) => a.id === artifactId);
       if (artifact && artifact.type !== "decision") {
         const artConcept = artifact.content?.concept?.name;
-        const concept = humanConcept?.trim() || artConcept || void 0;
+        const changesetFallback = artifact.type === "changeset" ? artifact.title : void 0;
+        const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || void 0,
@@ -27108,6 +27186,49 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     await store.renameArtifact(artifactId, title);
     broadcast({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });
+  });
+  app.post("/api/artifacts/:artifactId/changeset-review", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifactId = c.req.param("artifactId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = ChangesetReviewBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { filePath, state } = parsed.data;
+    const target = (await store.getArtifacts()).find((a) => a.id === artifactId);
+    if (!target) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (!store.setChangesetFileReview) {
+      return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
+    }
+    const updated = await store.setChangesetFileReview(artifactId, filePath, state);
+    if (!updated) {
+      return c.json(
+        {
+          error: "not_a_changeset_file",
+          code: "not_a_changeset_file",
+          message: "That artifact is not a changeset, or the file path is not part of it."
+        },
+        400
+      );
+    }
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
+    }
+    broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
+    return c.json({ status: "updated", artifactId });
   });
   app.get("/api/artifacts/:artifactId/comments", async (c) => {
     const store = getStore(getSessionId(c));
