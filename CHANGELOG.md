@@ -1,6 +1,57 @@
 # Changelog
 
-## v0.1.14 — 2026-07-19
+## v0.1.15 — 2026-07-20
+
+The review lane, made rich and bidirectional. A change that spans many files is
+now reviewed as one unit, the human can propose concrete code that the agent
+must answer, decision diagrams take region comments, and the changeset review is
+keyboard-first. No breaking changes — every new schema field is optional and an
+old daemon degrades gracefully.
+
+### Added
+- **Multi-file changesets are reviewed as one artifact.** A change spanning 2+
+  files is no longer scattered across single-file `code_change` cards — a new
+  `changeset` artifact (and a 15th MCP tool, `present_changeset`) presents it as
+  a single unit: a file rail with per-file M/A/D marks and diffstat bars, a
+  per-file unified-diff pane reusing the existing inline-comment machinery,
+  cross-file comment anchors that thread a single thought across files, and risk
+  chips on the summary. Rejecting the changeset flows through the one-framing-
+  entry gate (no per-file fan-out), and `check_feedback` reports it with the
+  same "Do NOT apply" posture every rejected type gets. `code_change`
+  (single-file) is unchanged and coexists.
+- **The human can suggest concrete edits — and the agent must answer.** A new
+  suggested-edit lane: select lines, propose replacement code (with an optional
+  "why" that teaches the ledger), and the agent is required to respond via
+  `check_feedback` — apply verbatim, apply-with-extension, or counter with a
+  reason. A countered suggestion gives you Take-the-counter or Insist-on-mine
+  (insist makes your version authoritative and tells the agent to apply exactly,
+  not re-argue). Suggestions are first-class state (pending / applied / countered
+  / insisted) with a state pill and a mini unified diff on the card; an
+  applied-with-why and an insist both record to the ledger.
+- **Comment on a region of a decision diagram.** A decision option's diagram can
+  now be commented on by dragging out a specific region in a focused view — the
+  comment anchors to `optionId` + `visualId` + `region` and survives a
+  re-render by matching on the labels of the nearest nodes rather than raw
+  coordinates.
+
+### Changed
+- **Changeset review is keyboard-first, with a per-file disposition.** Each file
+  gets a **Looks right** (✓) / **Needs changes** (↻, captures a reason)
+  disposition (the earlier "skip" is gone), and the whole-changeset action is
+  *derived* from them: all look-right → **Approve changeset**; any flagged →
+  **Send back N** (only the flagged files, with their reasons, go back through
+  revision — the rest are accepted). A central keymap (`a`/`r`/`j`/`k`/`⏎`/`⇧⏎`),
+  live only while a changeset is focused, drives triage with auto-advance; a
+  reused 3-2-1 confirm-countdown arms the approve when every file reads
+  look-right; `?` shows a cheat-sheet rendered straight from the keymap; and a
+  "Review all" toggle stacks every file's diff in one scroll.
+
+### Fixed
+- **Region drags cover the whole diagram well.** The region-selection overlay
+  was sized to the SVG box, but the well centers a narrow diagram with wide
+  gutters — so the visible (darkened) border and the draggable area disagreed
+  and you couldn't start a drag in the gutter. The overlay now spans the whole
+  well (`inset-0`) and a gutter-started drag clamps to the diagram's edge.
 
 The first-impressions release: the batch from the new-user journey audit. The
 demo survives a cold start, the gate fires from its most natural trigger, no
