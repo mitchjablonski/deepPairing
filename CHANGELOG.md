@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.1.16 — 2026-07-21
+
+The decision discuss workbench. A decision's options used to be readable only
+one-at-a-time in the card; now a single **💬 Discuss** affordance opens a focused
+workbench that lays them out **side-by-side as columns** and makes every part
+commentable at its own grain — a specific pro, a con, an option's summary, the
+whole option, or the decision question itself. Pop one option out to focus it
+full-width when you want to go deep. No schema change — the workbench anchors on
+the decision comment targets already in the schema, and an old daemon degrades
+gracefully.
+
+### Added
+- **Expand a decision to a discuss workbench.** The inline decision card stays
+  clean — one **💬 Discuss** affordance (with a comment count once threads
+  exist), out of the option grid so it's misclick-safe. It opens a focused
+  workbench that lays the options out **side-by-side as columns** — each with its
+  summary, pros/cons, effort/risk chips, concept, and diagram — where **every
+  part is commentable at the right grain**: hover the 💬 (or click the row) on
+  any pro/con, an option's summary, the whole option, or the decision question,
+  and a rail hosts the thread with a Comment/Ask composer. Threads anchor via the
+  decision comment targets already in the schema (`optionId` + `sectionId`), so
+  there's no schema change; decision-level actions (choose / reject / send-back)
+  reuse the same `DecisionFooter` the card threads, and an option's diagram opens
+  the region-comment focus view unchanged. `check_feedback` now names the option
+  part a grain comment anchors to (a specific pro/con, the summary, or the
+  question) so the agent reads a comment at the grain you left it.
+
+### Changed
+- **Pop out to focus one option, or keep the whole grid in view.** A per-option
+  **⤢ pop-out** focuses a single option full-width in place, with a persistent
+  whole-option comment/ask composer below it; **← Back to all options** returns
+  to the compare grid, and Esc is layered (pop-out → grid → close the
+  workbench). The comment rail now stays collapsed until there's actually a
+  discussion — the options get the full width until you start one — and the
+  surface widened to 1280px to hold the columns. The discuss composer is an
+  opt-in roomy mode (taller, resizable, `text-sm`, readable bubbles) that leaves
+  the ~10 other comment call sites dense and unchanged.
+
 ## v0.1.15 — 2026-07-20
 
 The review lane, made rich and bidirectional. A change that spans many files is
