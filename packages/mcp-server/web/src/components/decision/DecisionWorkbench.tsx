@@ -184,9 +184,13 @@ export function computeCarryover(params: {
           artifacts.find((a) => a.id === sourceArtifactId)?.content ?? {},
         ).options.find((o) => o.id === optionId)
       : undefined;
+    // Trim before comparing: a tune REGENERATES content, so a summary re-emitted
+    // with only leading/trailing whitespace difference (or a coerce nudge) is
+    // effectively unchanged — trimming avoids a false STALE alarm. Kept minimal
+    // (edge trim only, NOT interior normalization) so a real edit still shows.
     const sourceText = anchoredText(sourceOpt, sectionId);
     const currentText = anchoredText(liveOpt, sectionId);
-    if (sourceText !== undefined && sourceText === currentText) {
+    if (sourceText !== undefined && sourceText.trim() === currentText?.trim()) {
       return { kind: "carried", from, to };
     }
     return { kind: "stale", from, to, procon: false };

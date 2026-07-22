@@ -23,6 +23,8 @@ const o1v1 = { id: "o1", title: "Redis", description: "External cache with nativ
 const o1v2same = { ...o1v1 };
 const o1v2reword = { ...o1v1, description: "Managed cache with a native TTL." };
 const o1v2retitle = { ...o1v1, title: "Redis (managed)" };
+// A tune re-emits content; a whitespace-only nudge is NOT a real edit.
+const o1v2ws = { ...o1v1, description: `  ${o1v1.description} ` };
 
 function decArt(id: string, version: number, parentId: string | null, options: unknown[]): Artifact {
   return {
@@ -77,6 +79,30 @@ describe("#177 — computeCarryover is a pure, READ-side derivation from the ver
     expect(stale).toEqual({ kind: "stale", from: 1, to: 2, procon: false });
     // The comment object is untouched by either call — no carryover field.
     expect((thread[0] as unknown as Record<string, unknown>).carryover).toBeUndefined();
+  });
+
+  it("a WHITESPACE-ONLY summary difference is CARRIED, not a false STALE alarm (edge-trim)", () => {
+    // The reviewer's probe: "desc" vs "  desc " must NOT flag STALE — a tune
+    // re-emitting the same text with a trailing/leading space is not a real edit.
+    const state = computeCarryover({
+      artifacts: [decArt(V1, 1, null, [o1v1]), decArt(V2, 2, V1, [o1v2ws])],
+      thread: [cmt(V1, "o1", "summary")],
+      currentArtifactId: V2,
+      anchor: { optionId: "o1", sectionId: "summary" },
+      liveOptions: [o1v2ws],
+    });
+    expect(state).toEqual({ kind: "carried", from: 1, to: 2 });
+  });
+
+  it("a GENUINE one-word edit is still STALE (trim doesn't hide a real change)", () => {
+    const state = computeCarryover({
+      artifacts: [decArt(V1, 1, null, [o1v1]), decArt(V2, 2, V1, [{ ...o1v1, description: `${o1v1.description} Managed.` }])],
+      thread: [cmt(V1, "o1", "summary")],
+      currentArtifactId: V2,
+      anchor: { optionId: "o1", sectionId: "summary" },
+      liveOptions: [{ ...o1v1, description: `${o1v1.description} Managed.` }],
+    });
+    expect(state).toEqual({ kind: "stale", from: 1, to: 2, procon: false });
   });
 
   it("ORPHAN: a cross-version thread whose option id no longer matches any live v2 part", () => {
