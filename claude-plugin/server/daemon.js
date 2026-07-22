@@ -23454,6 +23454,16 @@ var RetrospectiveBodySchema = external_exports.object({
   verdict: external_exports.enum(["right", "wrong", "mixed"]),
   note: external_exports.string().max(2e3).optional()
 });
+var RenderFailureBodySchema = external_exports.object({
+  artifactId: external_exports.string().min(1),
+  /** The stable PlanVisual.id of the diagram that failed. */
+  visualId: external_exports.string().min(1),
+  /** A short parser/render error string (bounded; the store redacts it if it
+   *  smells of a secret — a mermaid error can echo a source label). */
+  error: external_exports.string().min(1).max(500),
+  /** The diagram's human title, when it has one. Optional + bounded. */
+  title: external_exports.string().max(200).optional()
+});
 var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
   decisionId: external_exports.string().min(1),
@@ -24849,6 +24859,10 @@ var FileStore = class _FileStore {
   comments = [];
   decisions = /* @__PURE__ */ new Map();
   planReviews = /* @__PURE__ */ new Map();
+  // #176 (Option A) — client-reported Mermaid render failures, keyed in-array by
+  // (artifactId, visualId). Backed by render-failures.json (written only when
+  // non-empty, like metrics.json), so a clean session's dir is byte-unchanged.
+  renderFailures = [];
   flushTimer = null;
   sessionId;
   /**
@@ -24974,6 +24988,16 @@ var FileStore = class _FileStore {
       "artifactId"
     );
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
+    const rawFailures = this.loadJsonFile(path8.join(dir, "render-failures.json"), []);
+    const keyedFailures = (Array.isArray(rawFailures) ? rawFailures : []).map((r) => ({
+      ...r,
+      __key: `${r?.artifactId} ${r?.visualId}`
+    }));
+    this.renderFailures = _FileStore.salvageArray(
+      `${this.sessionId}:render-failures.json`,
+      keyedFailures,
+      "__key"
+    ).map(({ __key, ...r }) => r);
     const rawMetrics = this.loadJsonFile(path8.join(dir, "metrics.json"), []);
     if (Array.isArray(rawMetrics)) {
       const kept = rawMetrics.filter(
@@ -25145,6 +25169,9 @@ var FileStore = class _FileStore {
     if (this.reviewLatencies.length > 0) {
       this.atomicWrite(path8.join(dir, "metrics.json"), this.reviewLatencies);
     }
+    if (this.renderFailures.length > 0) {
+      this.atomicWrite(path8.join(dir, "render-failures.json"), this.renderFailures);
+    }
   }
   /** Force an immediate flush — call before process exit */
   forceFlush() {
@@ -25190,6 +25217,7 @@ var FileStore = class _FileStore {
     };
     this.artifacts.push(artifact);
     if (params.type === "code_change") this.touchCodeChangeMarker(now);
+    if (params.parentId) this.clearRenderFailuresFor(params.parentId);
     this.scheduleFlush();
     return artifact;
   }
@@ -25492,6 +25520,66 @@ var FileStore = class _FileStore {
       }
     }
     this.scheduleFlush();
+  }
+  // --- Render failures (#176, Option A) ---
+  /**
+   * #176 — record a client-reported Mermaid render failure, upserting by
+   * (artifactId, visualId) so a re-report supersedes the prior record and
+   * re-arms it for check_feedback (acknowledged→false). The browser dedupes
+   * per mount, so this fires once per genuinely-broken diagram the human sees.
+   *
+   * AUTHORITATIVE secret scan (mirrors createArtifact's #162 scan): a mermaid
+   * PARSER error commonly echoes the offending source line — which can carry a
+   * node-label secret — and a title is agent-authored text. Either that trips
+   * the scanner is REDACTED before it's stored (and thus before it can reach
+   * the agent via check_feedback). The scanner is a detector, not a surgical
+   * redactor, so on any hit we drop the whole field to a safe placeholder — the
+   * agent still learns WHICH visual broke, just not the sensitive detail.
+   */
+  recordRenderFailure(params) {
+    const safeError = scanForSecrets(params.error).length > 0 ? "[render error withheld \u2014 a secret-shaped value was detected in it]" : params.error;
+    const safeTitle = params.title && scanForSecrets(params.title).length > 0 ? void 0 : params.title;
+    const at = (/* @__PURE__ */ new Date()).toISOString();
+    const existing = this.renderFailures.find(
+      (r) => r.artifactId === params.artifactId && r.visualId === params.visualId
+    );
+    if (existing) {
+      existing.error = safeError;
+      existing.title = safeTitle;
+      existing.at = at;
+      existing.acknowledged = false;
+    } else {
+      this.renderFailures.push({
+        artifactId: params.artifactId,
+        visualId: params.visualId,
+        ...safeTitle ? { title: safeTitle } : {},
+        error: safeError,
+        at,
+        acknowledged: false
+      });
+    }
+    this.scheduleFlush();
+    this.notifyFeedbackWaiters();
+  }
+  getUnacknowledgedRenderFailures() {
+    return this.renderFailures.filter((r) => !r.acknowledged);
+  }
+  acknowledgeRenderFailures(keys) {
+    for (const r of this.renderFailures) {
+      if (keys.some((k) => k.artifactId === r.artifactId && k.visualId === r.visualId)) {
+        r.acknowledged = true;
+      }
+    }
+    this.scheduleFlush();
+  }
+  /** #176 — drop every render-failure record for a superseded artifact id. A
+   *  revise (present a new version) mints a fresh artifact, so the OLD one's
+   *  broken-diagram records are stale — clear them so a resolved diagram can't
+   *  keep haunting check_feedback. No-op when the id has no records. */
+  clearRenderFailuresFor(artifactId) {
+    const before = this.renderFailures.length;
+    this.renderFailures = this.renderFailures.filter((r) => r.artifactId !== artifactId);
+    if (this.renderFailures.length !== before) this.scheduleFlush();
   }
   markCommentAnswered(commentId, answerCommentId) {
     const parent = this.comments.find((c) => c.id === commentId);
@@ -26967,6 +27055,31 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return c.json({ comment });
   });
+  app.post("/api/render-failures", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RenderFailureBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { artifactId, visualId, error: error51, title } = parsed.data;
+    const arts = await store.getArtifacts();
+    if (!arts.some((a) => a.id === artifactId)) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
+    await store.recordRenderFailure({ artifactId, visualId, error: error51, title });
+    broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
+    return c.json({ status: "recorded", artifactId, visualId });
+  });
   app.post("/api/comments/:commentId/mark-resolved", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
@@ -28265,6 +28378,26 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     }
     const { ids } = body;
     r.store.acknowledgeStatusChanges(Array.isArray(ids) ? ids : []);
+    return c.json({ status: "acknowledged" });
+  });
+  app.get("/api/internal/sessions/:sessionId/render-failures", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ failures: r.store.getUnacknowledgedRenderFailures?.() ?? [] });
+  });
+  app.post("/api/internal/sessions/:sessionId/render-failures/acknowledge", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { keys: [{artifactId, visualId}] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { keys } = body;
+    const clean = Array.isArray(keys) ? keys.filter((k) => {
+      const o = k;
+      return !!o && typeof o === "object" && typeof o.artifactId === "string" && typeof o.visualId === "string";
+    }) : [];
+    r.store.acknowledgeRenderFailures?.(clean);
     return c.json({ status: "acknowledged" });
   });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {

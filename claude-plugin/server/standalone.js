@@ -26233,6 +26233,16 @@ var RetrospectiveBodySchema = external_exports.object({
   verdict: external_exports.enum(["right", "wrong", "mixed"]),
   note: external_exports.string().max(2e3).optional()
 });
+var RenderFailureBodySchema = external_exports.object({
+  artifactId: external_exports.string().min(1),
+  /** The stable PlanVisual.id of the diagram that failed. */
+  visualId: external_exports.string().min(1),
+  /** A short parser/render error string (bounded; the store redacts it if it
+   *  smells of a secret — a mermaid error can echo a source label). */
+  error: external_exports.string().min(1).max(500),
+  /** The diagram's human title, when it has one. Optional + bounded. */
+  title: external_exports.string().max(200).optional()
+});
 var PromptBodySchema = external_exports.object({
   content: external_exports.string().min(1),
   decisionId: external_exports.string().min(1),
@@ -29206,6 +29216,7 @@ async function handleCheckFeedback(ctx, args) {
   ) ? waitForRaw : "any";
   const unackComments = await store.getUnacknowledgedComments();
   const resolvedDecs = await store.getResolvedDecisions();
+  const pendingRenderFailuresAtGate = await store.getUnacknowledgedRenderFailures?.() ?? [];
   const allArtsForScope = await store.getArtifacts();
   const decidedPlans = allArtsForScope.filter(
     (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected")
@@ -29228,7 +29239,7 @@ async function handleCheckFeedback(ctx, args) {
         return unackComments.length > 0 || resolvedDecs.length > 0;
     }
   };
-  const hasImmediate = hasImmediateFor(waitForScope);
+  const hasImmediate = hasImmediateFor(waitForScope) || pendingRenderFailuresAtGate.length > 0;
   if (!hasImmediate) {
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
@@ -29285,7 +29296,8 @@ async function handleCheckFeedback(ctx, args) {
           return true;
       }
     })();
-    if (!scopeSatisfied && newComments.length === 0) {
+    const newRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
+    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
       return {
         content: [{
           type: "text",
@@ -29624,6 +29636,27 @@ ${reviewedPlans.join("\n")}`);
     parts.push(`Human review verdicts (${changed.length}) \u2014 resolved BY ID:
 ${lines.join("\n")}`);
   }
+  const renderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
+  const structuredRenderFailures = renderFailures.map((f) => ({
+    artifactId: f.artifactId,
+    visualId: f.visualId,
+    ...f.title ? { title: f.title } : {},
+    error: f.error
+  }));
+  if (renderFailures.length > 0) {
+    await store.acknowledgeRenderFailures?.(
+      renderFailures.map((f) => ({ artifactId: f.artifactId, visualId: f.visualId }))
+    );
+    const lines = renderFailures.map((f) => {
+      const name = f.title ? `"${f.title}"` : `visual ${f.visualId}`;
+      return `- ${name} (${f.visualId}) on artifact ${f.artifactId} failed to render: ${f.error}`;
+    });
+    parts.push(
+      `\u{1F5BC}\uFE0F Diagram render failures (${renderFailures.length}) \u2014 the human sees a broken/repaired diagram:
+${lines.join("\n")}
+Fix the Mermaid source and re-present the affected visual (revise_artifact).`
+    );
+  }
   const draftArtifacts = (await store.getArtifacts()).filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
@@ -29655,7 +29688,9 @@ The human is reviewing in the companion UI. Call check_feedback again to pick up
     parts.push(`\u26A0\uFE0F No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.
 Mention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
   }
-  const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0;
+  const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
+  // should fix + re-present, not sit in 'waiting'.
+  renderFailures.length > 0;
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
@@ -29693,6 +29728,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     ...structuredSuggestions.length > 0 ? { suggestions: structuredSuggestions } : {},
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
+    // #176 — spread `renderFailures` ONLY when a diagram broke, so the healthy
+    // poll payload's top-level key set stays byte-for-byte (contract lock in
+    // check-feedback-ledger-health.test.ts). Never carries source or a secret.
+    ...structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {},
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField()
@@ -31737,6 +31776,17 @@ var DaemonClient = class {
   }
   async acknowledgeStatusChanges(ids) {
     await this.post("/artifacts/status-changes/acknowledge", { ids });
+  }
+  // #176 (Option A) — proxy the render-failure DRAIN to the daemon's FileStore.
+  // In daemon mode check_feedback runs against THIS client, so without these the
+  // agent would never hear about a browser-reported broken diagram. There is no
+  // record proxy: the browser POSTs failures to the daemon's PUBLIC route.
+  async getUnacknowledgedRenderFailures() {
+    const data = await this.get("/render-failures");
+    return data.failures ?? [];
+  }
+  async acknowledgeRenderFailures(keys) {
+    await this.post("/render-failures/acknowledge", { keys });
   }
   // --- Comments ---
   async addComment(params) {

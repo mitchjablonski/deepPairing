@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useModal } from "../hooks/useModal";
 import { DiagramRegionLayer, RegionCommentsFallback } from "./DiagramRegionLayer";
+import { useArtifactStore } from "../stores/artifact";
 
 /**
  * Renders agent-authored Mermaid source to an SVG. Lazy-loads the (sizable)
@@ -66,6 +67,7 @@ export function repairMermaidSource(src: string): string {
 export function MermaidDiagram({
   source,
   region,
+  report,
 }: {
   source: string;
   // #140 — when present, the diagram becomes region-commentable (drag a rect /
@@ -74,6 +76,11 @@ export function MermaidDiagram({
   // #173 — `optionId` (present only for a decision focused view) rides through
   // to the region layer so the comment anchors to optionId + visualId + region.
   region?: { artifactId: string; visualId: string; optionId?: string };
+  // #176 (Option A) — when present, a GENUINE render failure (the #163 repair
+  // pass also failed) POSTs a lightweight report so the agent learns the
+  // diagram is broken. Ids + title only; the source is NEVER sent. Omitted for
+  // contexts with no stable artifact/visual id (nothing to key a report on).
+  report?: { artifactId: string; visualId: string; title?: string };
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -89,15 +96,42 @@ export function MermaidDiagram({
   const { dialogProps } = useModal({ active: fullscreen, onClose: () => setFullscreen(false) });
   // Stable per-instance id prefix so concurrent diagrams don't collide.
   const idPrefix = useRef(`dp-mmd-${++renderSeq}`);
+  // #176 — true once a GENUINE failure has been reported to the agent, so the
+  // fallback can show a subtle "reported" note. Reset per source below.
+  const [reported, setReported] = useState(false);
+  // #176 — dedupe: report ONCE per (artifactId, visualId, source), never per
+  // re-render. Keyed by that tuple so a NEW source (or a re-presented visual)
+  // reports afresh but a StrictMode double-invoke / re-render does not re-POST.
+  const reportedKeyRef = useRef<string | null>(null);
+  // #176 — `report` is a fresh object literal each render; hold it in a ref so
+  // the render effect can read the CURRENT ids without listing `report` in its
+  // deps (which would re-run — and reset — the whole render on every parent
+  // re-render). Values are stable; only the object identity churns.
+  const reportRef = useRef(report);
+  reportRef.current = report;
 
   useEffect(() => {
     let cancelled = false;
     setSvg(null);
     setError(null);
     setRepaired(false);
+    setReported(false);
+    // #176 — report a genuine render failure exactly once for this source. The
+    // repair path is deliberately NOT reported (a successful auto-format isn't a
+    // failure the agent must act on) — only the terminal error branches call it.
+    const fireReport = (msg: string) => {
+      const r = reportRef.current;
+      if (!r || cancelled) return;
+      const key = `${r.artifactId}|${r.visualId}|${source}`;
+      if (reportedKeyRef.current === key) return;
+      reportedKeyRef.current = key;
+      setReported(true);
+      void useArtifactStore.getState().reportRenderFailure(r.artifactId, r.visualId, msg, r.title);
+    };
     const src = (source ?? "").trim();
     if (!src) {
       setError("empty diagram");
+      fireReport("empty diagram");
       return;
     }
     (async () => {
@@ -122,7 +156,15 @@ export function MermaidDiagram({
             /* repair didn't help — fall through to the source fallback */
           }
         }
-        if (!cancelled) setError(firstErr?.message ?? String(firstErr));
+        if (!cancelled) {
+          const msg = firstErr?.message ?? String(firstErr);
+          setError(msg);
+          // Genuine unrenderable diagram (raw failed AND the repair, if any,
+          // failed) — tell the agent. Send only the first line of the error so
+          // a multi-line parser dump can't smuggle much, and the daemon still
+          // secret-scans it.
+          fireReport(String(msg).split("\n")[0] ?? "render failed");
+        }
       }
     })();
     return () => {
@@ -136,6 +178,12 @@ export function MermaidDiagram({
         <div className="text-2xs text-accent-amber">
           Couldn’t render this diagram ({error.split("\n")[0]}) — showing the source.
         </div>
+        {/* #176 — minimal, honest signal that the agent will hear about this. */}
+        {reported && (
+          <div className="text-[10px] text-text-muted italic">
+            Reported to the agent — it’ll fix the diagram source and re-present.
+          </div>
+        )}
         <pre className="text-2xs font-mono bg-surface-code rounded p-2 overflow-x-auto whitespace-pre text-text-secondary">
           {source}
         </pre>

@@ -93,6 +93,7 @@ export {
   AutonomyLevelSchema,
   DetailDensitySchema,
   RetrospectiveBodySchema,
+  RenderFailureBodySchema,
   PromptBodySchema,
   SuggestionResolveBodySchema,
   SuggestionUpdateBodySchema,
@@ -108,6 +109,7 @@ export {
   type AutonomyLevel,
   type DetailDensity,
   type RetrospectiveBody,
+  type RenderFailureBody,
   type PromptBody,
 } from "./schemas/request-bodies.js";
 

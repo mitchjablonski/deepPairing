@@ -32,6 +32,7 @@ import {
   ChangesetReviewBodySchema,
   PreferenceBodySchema,
   RetrospectiveBodySchema,
+  RenderFailureBodySchema,
   formatZodIssues,
   normalizeConceptKey,
 } from "@deeppairing/shared";
@@ -518,6 +519,42 @@ export function createHttpRoutes(
       }
     }
     return c.json({ comment });
+  });
+
+  // #176 (Option A) — the BROWSER reports a Mermaid diagram that genuinely
+  // failed to render (after the #163 repair pass also failed). The browser is
+  // the one place a version-matched mermaid parse actually runs, so this is how
+  // the AGENT learns its diagram is broken (today the client repairs/error-
+  // states locally and the agent never finds out). X-Project-Hash-gated (global
+  // middleware) + bearer-gated (SP1 mutation middleware) + 64KiB body-capped,
+  // exactly like the comment route. Carries NO mermaid source — only ids + a
+  // short error + the title; the store additionally secret-scans error/title.
+  app.post("/api/render-failures", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = RenderFailureBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { artifactId, visualId, error, title } = parsed.data;
+    // F6 — only accept a report for an artifact THIS session owns (merged
+    // cross-session view): a report stored into the wrong session would render
+    // nowhere useful and the owning agent's check_feedback would never see it.
+    const arts = await store.getArtifacts();
+    if (!arts.some((a) => a.id === artifactId)) {
+      return c.json(
+        { error: "artifact_not_in_session", code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+    // A read-only / non-FileStore backing store can't persist these; treat that
+    // as a benign no-op success (nothing to surface, nothing broken).
+    if (!store.recordRenderFailure) return c.json({ status: "ignored", artifactId, visualId });
+    await store.recordRenderFailure({ artifactId, visualId, error, title });
+    broadcast({ type: "render_failure_reported", artifactId, visualId }, sid);
+    return c.json({ status: "recorded", artifactId, visualId });
   });
 
   // Mark a human's OWN unanswered question resolved (human-side "I'm done

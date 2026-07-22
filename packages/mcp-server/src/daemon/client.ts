@@ -11,6 +11,7 @@ import type {
   AddCommentParams,
   RecordDecisionParams,
   RejectedApproach,
+  RenderFailureRecord,
 } from "../store/store-interface.js";
 import { projectHashOf, BASE_PORT } from "../project-root.js";
 
@@ -399,6 +400,19 @@ export class DaemonClient implements IStore {
 
   async acknowledgeStatusChanges(ids: string[]): Promise<void> {
     await this.post("/artifacts/status-changes/acknowledge", { ids });
+  }
+
+  // #176 (Option A) — proxy the render-failure DRAIN to the daemon's FileStore.
+  // In daemon mode check_feedback runs against THIS client, so without these the
+  // agent would never hear about a browser-reported broken diagram. There is no
+  // record proxy: the browser POSTs failures to the daemon's PUBLIC route.
+  async getUnacknowledgedRenderFailures(): Promise<RenderFailureRecord[]> {
+    const data = await this.get<{ failures: RenderFailureRecord[] }>("/render-failures");
+    return data.failures ?? [];
+  }
+
+  async acknowledgeRenderFailures(keys: Array<{ artifactId: string; visualId: string }>): Promise<void> {
+    await this.post("/render-failures/acknowledge", { keys });
   }
 
   // --- Comments ---
