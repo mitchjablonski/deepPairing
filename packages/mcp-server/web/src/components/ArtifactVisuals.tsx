@@ -124,6 +124,11 @@ export function VisualBody({
         // #173 — a decision focused view passes optionId, so the region comment
         // anchors to optionId + visualId + region together.
         region={readOnly ? undefined : { artifactId, visualId: visual.id, ...(optionId ? { optionId } : {}) }}
+        // #176 — report a GENUINE render failure back to the agent from wherever
+        // the human actually views the diagram (interactive OR a readOnly
+        // preview): a broken diagram is broken in both. Keyed by artifactId +
+        // visual.id; the daemon dedupes across the two if they overlap.
+        report={{ artifactId, visualId: visual.id, ...(visual.title ? { title: visual.title } : {}) }}
       />
     ) : (
       <div className="text-2xs text-text-muted">No diagram source provided.</div>

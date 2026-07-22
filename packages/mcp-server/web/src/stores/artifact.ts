@@ -272,6 +272,22 @@ export interface ArtifactState {
    */
   resolveSuggestion: (commentId: string, action: "take_counter" | "insist") => Promise<void>;
 
+  /**
+   * #176 (Option A) — report a Mermaid diagram that genuinely failed to render
+   * so the agent learns via check_feedback. Fire-and-forget: NO optimistic
+   * patch, NO toast on failure (a telemetry POST must never disrupt the review
+   * surface). Routes to the artifact's OWNING session (F6). Sends only the ids +
+   * a short error + the title — never the mermaid source (the daemon also
+   * secret-scans it). MermaidDiagram dedupes per mount, so this fires once per
+   * genuinely-broken diagram.
+   */
+  reportRenderFailure: (
+    artifactId: string,
+    visualId: string,
+    error: string,
+    title?: string,
+  ) => Promise<void>;
+
   /** F6 — the session that owns an artifact (merged stores carry foreign artifacts). */
   owningSession: (artifactId: string) => string | undefined;
   /** F6 — the decision artifact carrying a decisionId (or the artifact-id fallback). */
@@ -727,6 +743,28 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // circular type reference that collapses every selector to `any`.
     const a = get().artifacts.find((x) => x.id === artifactId);
     return a?.sessionId || undefined;
+  },
+
+  reportRenderFailure: async (artifactId, visualId, error, title) => {
+    // Fire-and-forget telemetry: a raw fetch (not safeFetch) so a non-2xx —
+    // e.g. the artifact isn't in this tab's session (404), or no session yet
+    // (409) — is swallowed, never a toast. The human is already looking at the
+    // fallback diagram; a failed REPORT must not add noise on top.
+    try {
+      await fetch(`${apiBase()}/api/render-failures`, {
+        method: "POST",
+        headers: sessionHeaders(get().owningSession(artifactId)),
+        // Trim the error to the schema's 500-char cap; source is NEVER sent.
+        body: JSON.stringify({
+          artifactId,
+          visualId,
+          error: (error || "render failed").slice(0, 500),
+          ...(title ? { title: title.slice(0, 200) } : {}),
+        }),
+      });
+    } catch {
+      /* network blip — the report is best-effort */
+    }
   },
 
   updateArtifactStatus: async (artifactId, status, feedback, concept) => {

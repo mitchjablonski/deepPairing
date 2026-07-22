@@ -13,7 +13,7 @@ import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
 import { listSessions, searchAll, findPastPredictions, addRetrospective, listAllDecisions } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
-import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
+import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 // Re-exported so existing `import { ProjectGuardrail } from "./file-store.js"`
@@ -34,6 +34,10 @@ export class FileStore implements IStore {
   private comments: Comment[] = [];
   private decisions: Map<string, DecisionRecord> = new Map();
   private planReviews: Map<string, PlanReviewRecord> = new Map();
+  // #176 (Option A) — client-reported Mermaid render failures, keyed in-array by
+  // (artifactId, visualId). Backed by render-failures.json (written only when
+  // non-empty, like metrics.json), so a clean session's dir is byte-unchanged.
+  private renderFailures: RenderFailureRecord[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
   /**
@@ -174,6 +178,19 @@ export class FileStore implements IStore {
     const planArr = FileStore.salvageArray<PlanReviewRecord>(
       `${this.sessionId}:plan-reviews.json`, this.loadJsonFile<unknown>(path.join(dir, "plan-reviews.json"), []), "artifactId");
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
+    // #176 — rehydrate render failures. The salvage key is a synthetic
+    // artifactId+visualId compound so a hand-edited duplicate collapses on load;
+    // the compound is stripped back off before the record lands in memory.
+    const rawFailures = this.loadJsonFile<unknown>(path.join(dir, "render-failures.json"), []);
+    const keyedFailures = (Array.isArray(rawFailures) ? (rawFailures as RenderFailureRecord[]) : []).map((r) => ({
+      ...r,
+      __key: `${r?.artifactId} ${r?.visualId}`,
+    }));
+    this.renderFailures = FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
+      `${this.sessionId}:render-failures.json`,
+      keyedFailures,
+      "__key",
+    ).map(({ __key, ...r }) => r);
     // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
     // dropped on every daemon idle-shutdown — review-latency metrics
     // would silently reset to zero and the engagement view in YourTaste
@@ -409,6 +426,13 @@ export class FileStore implements IStore {
     if (this.reviewLatencies.length > 0) {
       this.atomicWrite(path.join(dir, "metrics.json"), this.reviewLatencies);
     }
+    // #176 — persist render failures only when there are any, so a session that
+    // never had a broken diagram keeps a byte-identical dir (same rule as
+    // metrics.json). Low-stakes + append-mostly; skips the U1 external-merge
+    // dance the artifacts/comments files need.
+    if (this.renderFailures.length > 0) {
+      this.atomicWrite(path.join(dir, "render-failures.json"), this.renderFailures);
+    }
   }
 
   /** Force an immediate flush — call before process exit */
@@ -479,6 +503,10 @@ export class FileStore implements IStore {
     };
     this.artifacts.push(artifact);
     if (params.type === "code_change") this.touchCodeChangeMarker(now);
+    // #176 — a revise (supersede) mints this v2 with parentId set; the parent's
+    // render-failure records now describe a version the human no longer sees, so
+    // clear them. The re-presented diagram will report afresh if it's still broken.
+    if (params.parentId) this.clearRenderFailuresFor(params.parentId);
     this.scheduleFlush();
     return artifact;
   }
@@ -906,6 +934,100 @@ export class FileStore implements IStore {
       }
     }
     this.scheduleFlush();
+  }
+
+  // --- Render failures (#176, Option A) ---
+
+  /**
+   * #176 — record a client-reported Mermaid render failure, upserting by
+   * (artifactId, visualId). The browser dedupes per MOUNT, but that ref is
+   * per-component-instance, so a remount (scroll a still-broken diagram out of
+   * view and back, a virtualized-list recycle) spawns a fresh instance that
+   * re-POSTs the SAME error. The store is the only place that can dedupe across
+   * remounts: re-arm for check_feedback ONLY when this is a genuinely-new
+   * failure — the record didn't exist, was still pending (unacknowledged), or
+   * the error CHANGED. A re-report of an ALREADY-acknowledged, UNCHANGED error
+   * leaves the record acknowledged (just refreshes `at`) so the agent isn't
+   * re-notified about a diagram it already heard was broken.
+   *
+   * AUTHORITATIVE secret scan (mirrors createArtifact's #162 scan): a mermaid
+   * PARSER error commonly echoes the offending source line — which can carry a
+   * node-label secret — and a title is agent-authored text. Either that trips
+   * the scanner is REDACTED before it's stored (and thus before it can reach
+   * the agent via check_feedback). The scanner is a detector, not a surgical
+   * redactor, so on any hit we drop the whole field to a safe placeholder — the
+   * agent still learns WHICH visual broke, just not the sensitive detail.
+   *
+   * Redaction is BEST-EFFORT on the same precision-over-recall `scanForSecrets`
+   * (~14 vendor-prefixed shapes) that guards artifact content: a non-prefixed
+   * secret echoed in an error (a `postgres://` URL, a bare high-entropy token)
+   * is NOT caught here. The PRIMARY mitigations live upstream — the client
+   * sends only the error's FIRST line (mermaid's `Parse error on line N:`), so
+   * the echoed source excerpt on the following lines is dropped, and the wire
+   * never carries full source. Broadening the scanner is a separate repo-wide
+   * decision, deliberately out of scope.
+   */
+  recordRenderFailure(params: { artifactId: string; visualId: string; error: string; title?: string }): void {
+    const safeError = scanForSecrets(params.error).length > 0
+      ? "[render error withheld — a secret-shaped value was detected in it]"
+      : params.error;
+    const safeTitle = params.title && scanForSecrets(params.title).length > 0 ? undefined : params.title;
+    const at = new Date().toISOString();
+    const existing = this.renderFailures.find(
+      (r) => r.artifactId === params.artifactId && r.visualId === params.visualId,
+    );
+    if (existing) {
+      // Re-arm only for a genuinely-new failure: still pending, or the error
+      // changed. A remount re-POSTing the SAME already-acknowledged error must
+      // NOT re-deliver — refresh the timestamp and leave it acknowledged.
+      const isNewFailure = !existing.acknowledged || existing.error !== safeError;
+      existing.error = safeError;
+      existing.title = safeTitle;
+      existing.at = at;
+      if (isNewFailure) {
+        existing.acknowledged = false;
+        this.scheduleFlush();
+        this.notifyFeedbackWaiters();
+      } else {
+        this.scheduleFlush();
+      }
+      return;
+    }
+    this.renderFailures.push({
+      artifactId: params.artifactId,
+      visualId: params.visualId,
+      ...(safeTitle ? { title: safeTitle } : {}),
+      error: safeError,
+      at,
+      acknowledged: false,
+    });
+    this.scheduleFlush();
+    // Wake any parked check_feedback long-poll (same as a human comment) so the
+    // agent hears about the broken diagram promptly, not on the next 30s tick.
+    this.notifyFeedbackWaiters();
+  }
+
+  getUnacknowledgedRenderFailures(): RenderFailureRecord[] {
+    return this.renderFailures.filter((r) => !r.acknowledged);
+  }
+
+  acknowledgeRenderFailures(keys: Array<{ artifactId: string; visualId: string }>): void {
+    for (const r of this.renderFailures) {
+      if (keys.some((k) => k.artifactId === r.artifactId && k.visualId === r.visualId)) {
+        r.acknowledged = true;
+      }
+    }
+    this.scheduleFlush();
+  }
+
+  /** #176 — drop every render-failure record for a superseded artifact id. A
+   *  revise (present a new version) mints a fresh artifact, so the OLD one's
+   *  broken-diagram records are stale — clear them so a resolved diagram can't
+   *  keep haunting check_feedback. No-op when the id has no records. */
+  private clearRenderFailuresFor(artifactId: string): void {
+    const before = this.renderFailures.length;
+    this.renderFailures = this.renderFailures.filter((r) => r.artifactId !== artifactId);
+    if (this.renderFailures.length !== before) this.scheduleFlush();
   }
 
   markCommentAnswered(commentId: string, answerCommentId: string): void {

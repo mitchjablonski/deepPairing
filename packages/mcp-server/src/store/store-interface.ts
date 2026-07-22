@@ -167,6 +167,28 @@ export interface RecordDecisionParams {
   stakes?: "low" | "medium" | "high";
 }
 
+/**
+ * #176 (Option A) — a client-reported Mermaid RENDER FAILURE. The browser is
+ * the one place a version-matched mermaid parse actually runs, so when a
+ * diagram genuinely fails to render there (after the #163 repair pass), it
+ * POSTs this back so the agent learns via check_feedback. Keyed by
+ * artifactId + visualId (one live record per diagram; a re-report supersedes).
+ * Carries NO mermaid source — only the ids + a redacted-if-secret error + the
+ * title — so a credential hidden in a node label can't leak back to the agent.
+ */
+export interface RenderFailureRecord {
+  artifactId: string;
+  visualId: string;
+  /** The diagram's title, when it has one (dropped if it smells of a secret). */
+  title?: string;
+  /** Short parser/render error (redacted to a placeholder if secret-shaped). */
+  error: string;
+  /** ISO timestamp of the latest report for this (artifactId, visualId). */
+  at: string;
+  /** V-fix-style drain flag: check_feedback reports once, then acknowledges. */
+  acknowledged?: boolean;
+}
+
 export interface RejectedApproach {
   description: string;
   reason?: string;
@@ -477,6 +499,33 @@ export interface IStore {
    */
   recordPreflightTrace?(artifactId: string, trace: PreflightTrace): MaybePromise<void>;
   getPreflightTrace?(artifactId: string): MaybePromise<PreflightTrace | null>;
+
+  /**
+   * #176 (Option A) — client-reported Mermaid render failures.
+   *
+   * `recordRenderFailure` upserts by (artifactId, visualId): a re-report
+   * supersedes the prior record and re-arms it for check_feedback. The store
+   * secret-scans `error`/`title` AUTHORITATIVELY (mirroring createArtifact's
+   * #162 scan) so a credential echoed by a mermaid parser error — or hidden in
+   * a title — can never reach the agent's context.
+   *
+   * `getUnacknowledgedRenderFailures` / `acknowledgeRenderFailures` are the
+   * check_feedback drain (report once, then ack), mirroring the comment +
+   * status-change pattern. All three are OPTIONAL on the interface so test
+   * fakes and read-only stores don't have to implement them; FileStore backs
+   * the real record + drain, and DaemonClient proxies the drain (the record
+   * path is the browser's public route straight onto the daemon's FileStore).
+   */
+  recordRenderFailure?(params: {
+    artifactId: string;
+    visualId: string;
+    error: string;
+    title?: string;
+  }): MaybePromise<void>;
+  getUnacknowledgedRenderFailures?(): MaybePromise<RenderFailureRecord[]>;
+  acknowledgeRenderFailures?(
+    keys: Array<{ artifactId: string; visualId: string }>,
+  ): MaybePromise<void>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;

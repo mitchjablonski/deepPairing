@@ -132,6 +132,25 @@ export const RetrospectiveBodySchema = z.object({
 });
 export type RetrospectiveBody = z.infer<typeof RetrospectiveBodySchema>;
 
+// #176 (Option A) — POST /api/render-failures. The BROWSER reports a Mermaid
+// diagram that genuinely failed to render (after the client's #163 repair pass
+// also failed) so the AGENT learns its diagram is broken — today the client
+// repairs/error-states locally and the agent never finds out. Deliberately
+// carries ONLY the ids + a short error + the diagram TITLE — NEVER the mermaid
+// SOURCE: a secret could hide in a node label, so the wire payload is metadata
+// only (the daemon additionally secret-scans the error/title before persisting).
+export const RenderFailureBodySchema = z.object({
+  artifactId: z.string().min(1),
+  /** The stable PlanVisual.id of the diagram that failed. */
+  visualId: z.string().min(1),
+  /** A short parser/render error string (bounded; the store redacts it if it
+   *  smells of a secret — a mermaid error can echo a source label). */
+  error: z.string().min(1).max(500),
+  /** The diagram's human title, when it has one. Optional + bounded. */
+  title: z.string().max(200).optional(),
+});
+export type RenderFailureBody = z.infer<typeof RenderFailureBodySchema>;
+
 // POST /api/prompts — save a repair prompt for a decision.
 export const PromptBodySchema = z.object({
   content: z.string().min(1),

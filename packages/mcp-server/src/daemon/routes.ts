@@ -456,6 +456,36 @@ export function createDaemonRoutes(
     return c.json({ status: "acknowledged" });
   });
 
+  // #176 (Option A) — render-failure drain (mirrors status-changes above).
+  // check_feedback reads pending client-reported diagram failures once, then
+  // acks so the agent gets the "visual X on artifact Y failed to render" signal
+  // exactly once. The RECORD path is the browser's PUBLIC /api/render-failures
+  // route straight onto the daemon's FileStore — no internal record route.
+  app.get("/api/internal/sessions/:sessionId/render-failures", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ failures: r.store.getUnacknowledgedRenderFailures?.() ?? [] });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/render-failures/acknowledge", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { keys: [{artifactId, visualId}] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { keys } = body as { keys?: unknown };
+    const clean = Array.isArray(keys)
+      ? keys.filter((k): k is { artifactId: string; visualId: string } => {
+          const o = k as Record<string, unknown> | null;
+          return !!o && typeof o === "object" &&
+            typeof o.artifactId === "string" && typeof o.visualId === "string";
+        })
+      : [];
+    r.store.acknowledgeRenderFailures?.(clean);
+    return c.json({ status: "acknowledged" });
+  });
+
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");

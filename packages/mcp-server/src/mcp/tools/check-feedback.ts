@@ -228,6 +228,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // If no immediate feedback exists, long-poll for up to 30 seconds
   const unackComments = await store.getUnacknowledgedComments();
   const resolvedDecs = await store.getResolvedDecisions();
+  // #176 — a pending client-reported render failure is actionable feedback
+  // (the human is looking at a broken diagram), so it must satisfy the entry
+  // gate exactly like a human comment — otherwise check_feedback would sit in
+  // the 30s long-poll while a fix is already owed. Optional method → [].
+  const pendingRenderFailuresAtGate = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
   const allArtsForScope = await store.getArtifacts();
   const decidedPlans = allArtsForScope.filter(
     (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
@@ -257,7 +262,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         return unackComments.length > 0 || resolvedDecs.length > 0;
     }
   };
-  const hasImmediate = hasImmediateFor(waitForScope);
+  // #176 — a pending render failure satisfies EVERY scope (like a human
+  // comment): a broken diagram the human sees is always triageable.
+  const hasImmediate = hasImmediateFor(waitForScope) || pendingRenderFailuresAtGate.length > 0;
 
   if (!hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action
@@ -339,10 +346,14 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         default: return true;
       }
     })();
+    // #176 — a render failure that woke this poll must also fall through to the
+    // reporting path, never be stranded by a narrow scope's early-return.
+    const newRenderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
     // Belt-and-suspenders: even if some future scope logic forgets comments,
     // NEVER early-return (and strand human input with a comments:[] payload)
-    // while unacknowledged comments exist. Fall through to the reporting path.
-    if (!scopeSatisfied && newComments.length === 0) {
+    // while unacknowledged comments (or render failures) exist. Fall through to
+    // the reporting path.
+    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
       return {
         content: [{
           type: "text",
@@ -796,6 +807,34 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     parts.push(`Human review verdicts (${changed.length}) — resolved BY ID:\n${lines.join("\n")}`);
   }
 
+  // #176 (Option A) — client-reported Mermaid RENDER FAILURES. The browser is
+  // the only place a version-matched mermaid parse runs, so when a diagram
+  // genuinely fails to render there (after the #163 repair pass), it POSTs a
+  // report back. Surface it so the agent learns its diagram is broken — the
+  // human is looking at a fallback/broken diagram right now. Report ONCE, then
+  // acknowledge (drain), mirroring the status-change path above. NO source /
+  // secret ever rides here: the store redacted a secret-shaped error/title
+  // before persisting. Old stores without the drain simply yield [].
+  const renderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
+  const structuredRenderFailures = renderFailures.map((f) => ({
+    artifactId: f.artifactId,
+    visualId: f.visualId,
+    ...(f.title ? { title: f.title } : {}),
+    error: f.error,
+  }));
+  if (renderFailures.length > 0) {
+    await store.acknowledgeRenderFailures?.(
+      renderFailures.map((f) => ({ artifactId: f.artifactId, visualId: f.visualId })),
+    );
+    const lines = renderFailures.map((f) => {
+      const name = f.title ? `"${f.title}"` : `visual ${f.visualId}`;
+      return `- ${name} (${f.visualId}) on artifact ${f.artifactId} failed to render: ${f.error}`;
+    });
+    parts.push(
+      `🖼️ Diagram render failures (${renderFailures.length}) — the human sees a broken/repaired diagram:\n${lines.join("\n")}\nFix the Mermaid source and re-present the affected visual (revise_artifact).`,
+    );
+  }
+
   // Check for draft artifacts still awaiting human review
   const draftArtifacts = (await store.getArtifacts()).filter(
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
@@ -869,7 +908,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // status to 'feedback'/proceed rather than stay 'waiting'. Fold
   // changed.length into the signal alongside comments/rejected/plan verdicts.
   const hasActionableFeedback =
-    hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0;
+    hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 ||
+    // #176 — a broken diagram the human is staring at is actionable: the agent
+    // should fix + re-present, not sit in 'waiting'.
+    renderFailures.length > 0;
   const structuredContent = {
     status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
     suggestedAction,
@@ -909,6 +951,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     ...(structuredSuggestions.length > 0 ? { suggestions: structuredSuggestions } : {}),
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
+    // #176 — spread `renderFailures` ONLY when a diagram broke, so the healthy
+    // poll payload's top-level key set stays byte-for-byte (contract lock in
+    // check-feedback-ledger-health.test.ts). Never carries source or a secret.
+    ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField(),
