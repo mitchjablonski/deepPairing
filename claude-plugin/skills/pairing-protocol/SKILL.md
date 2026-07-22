@@ -120,6 +120,11 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
     clean before/after diff (the whole point of the review loop). Pass the
     original's `artifactId` — find it via the `deeppairing://` resources or
     `recall` if you don't have it in hand.
+    - When superseding a **decision**, REUSE each surviving option's `id`
+      (mint a new id only for a genuinely new option). The human's discussion
+      threads anchor to the option `id`, so reusing it carries a thread on an
+      option's summary or whole-option forward to the tuned version; a fresh id
+      orphans it.
   - `mode: "retract"` → marks the artifact retracted with your reason. Use
     when you realize mid-flight you shouldn't have presented something.
     Graceful exit without breaking the polling loop.

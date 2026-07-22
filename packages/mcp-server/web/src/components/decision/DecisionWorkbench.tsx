@@ -1,8 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { DecisionRequestEvent, PlanVisual, Comment, CommentTarget } from "@deeppairing/shared";
+import type { Artifact, DecisionRequestEvent, PlanVisual, Comment, CommentTarget } from "@deeppairing/shared";
+import { coerceDecisionContent } from "@deeppairing/shared";
 import { useModal } from "../../hooks/useModal";
 import { useChainComments } from "../../hooks/useChainComments";
+import { useArtifactStore, commentPriorVersion } from "../../stores/artifact";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
 import { CommentThread } from "../CommentThread";
@@ -34,12 +36,26 @@ import { badgeColors, type DecisionOption } from "./types";
  *   - a real dialog via the app-wide useModal contract (focus trap + Esc +
  *     restore).
  *
- * SLICE 2 (deliberately deferred — gated on a separate stable-id prototype):
- *   version-aware thread carryover across a tune. Today a thread anchors to the
- *   version's artifactId (chain-aggregated on read), which is fine for slice 1.
- *   >>> CARRYOVER HOOK: when the decision supersedes to v2, this is where a
- *   thread whose (optionId + sectionId) still exists in v2 would re-anchor
- *   forward with a CARRIED marker. Not implemented in slice 1. <<<
+ * SLICE 2a (#177 — SHIPPED): version-aware thread carryover across a tune.
+ *   A grain thread already renders on v2 because it buckets by (optionId +
+ *   sectionId) IGNORING target.artifactId (useChainComments aggregates the
+ *   chain on read). This slice makes the carry HONEST — each thread computes a
+ *   read-side carryover state from the version chain and shows a marker:
+ *     - CARRIED (green) — a cross-version thread whose part still lives in v2
+ *       AND whose anchored text is UNCHANGED across the tune (stable option id
+ *       makes this reliable for whole-option + summary + the decision question).
+ *     - STALE (amber) — same, but the anchored text CHANGED (reworded summary,
+ *       retitled option) — "does your comment still apply?". A read-side text
+ *       diff, NO persisted field.
+ *     - ORPHAN (red) — a carried thread whose (optionId) no longer matches any
+ *       live v2 part (option removed / id changed) — "from v1 · no longer in
+ *       this decision", replacing the confusing raw-id degraded label.
+ *   See computeCarryover / CarryoverBadge below.
+ *   >>> CARRYOVER HOOK: slice 2a done here. SLICE 2b (still gated on a schema
+ *   change) — reliable per-PRO/CON re-anchor. Pros/cons are `string[]` anchored
+ *   POSITIONALLY (optionId|pro:N), so a cross-version pro/con comment is treated
+ *   as STALE/uncertain (never confident CARRIED). Turning that green requires
+ *   pros/cons → {id,text} + a migration — OUT OF SCOPE here. <<<
  */
 
 /** A commentable part of the decision — the grain a comment anchors to. */
@@ -83,6 +99,162 @@ export function isGrainComment(c: Comment): boolean {
   return false;
 }
 
+/**
+ * #177 SLICE 2a — the read-side carryover state of a grain thread across a tune.
+ *   - `none`   — no cross-version comment; a thread native to the current
+ *                version. No marker.
+ *   - `carried`— a cross-version thread whose part still lives in v2 and whose
+ *                anchored text is UNCHANGED. Confident green.
+ *   - `stale`  — cross-version, part still live, but the anchored text CHANGED
+ *                (`procon: true` marks the honest handling of a positional
+ *                pro/con grain — uncertain, never confidently carried).
+ *   - `orphan` — cross-version, but the option id no longer matches any live
+ *                v2 part (removed / id changed).
+ */
+export type CarryoverState =
+  | { kind: "none" }
+  | { kind: "carried"; from: number; to: number }
+  | { kind: "stale"; from: number; to: number; procon: boolean }
+  | { kind: "orphan"; from: number };
+
+/** The text a grain's carryover diff compares across a tune (read-side, no
+ *  persisted field). Summary → the option description; whole-option → the
+ *  option's title (its human-facing identity). Undefined when the option is
+ *  missing so the caller degrades to "uncertain" rather than false-confident. */
+function anchoredText(
+  opt: { title?: string; description?: string } | undefined,
+  sectionId: string | undefined,
+): string | undefined {
+  if (!opt) return undefined;
+  if (sectionId === "summary") return opt.description ?? "";
+  if (!sectionId) return opt.title ?? ""; // whole option — identity is the title
+  return opt.title ?? "";
+}
+
+/**
+ * Compute a grain thread's carryover state from the version chain — a pure,
+ * READ-side derivation (no schema change, no persisted field). `thread` is the
+ * bucket of comments anchored to `anchor`; comments carry `target.artifactId`,
+ * so an ancestor comment is one posted on an earlier version (commentPriorVersion).
+ */
+export function computeCarryover(params: {
+  artifacts: Artifact[];
+  thread: Comment[];
+  currentArtifactId: string;
+  anchor: { optionId?: string; sectionId?: string };
+  liveOptions: ReadonlyArray<{ id: string; title?: string; description?: string }>;
+}): CarryoverState {
+  const { artifacts, thread, currentArtifactId, anchor, liveOptions } = params;
+
+  // Earliest ANCESTOR version any comment in the thread was posted on. No
+  // ancestor comment → a thread native to the current version → no marker.
+  let from: number | undefined;
+  let sourceArtifactId: string | undefined;
+  for (const c of thread) {
+    const v = commentPriorVersion(artifacts, c, currentArtifactId);
+    if (v !== undefined && (from === undefined || v < from)) {
+      from = v;
+      sourceArtifactId = c.target.artifactId;
+    }
+  }
+  if (from === undefined) return { kind: "none" };
+  const to = artifacts.find((a) => a.id === currentArtifactId)?.version ?? from;
+
+  const { optionId, sectionId } = anchor;
+
+  // The decision question is a permanent part of the decision — it always
+  // survives a tune, so a cross-version question thread is always CARRIED.
+  if (sectionId === "decision:question") return { kind: "carried", from, to };
+
+  if (optionId) {
+    const liveOpt = liveOptions.find((o) => o.id === optionId);
+    // The option id no longer matches any live part → orphaned by the tune.
+    if (!liveOpt) return { kind: "orphan", from };
+    // Pro/con anchor POSITIONALLY (optionId|pro:N); position is not stable
+    // identity across a tune, so a cross-version pro/con can NEVER be confidently
+    // CARRIED — flag it uncertain (slice 2b gates reliable re-anchor on a schema
+    // change). Honest handling of the deferred grain: visible, not false-green.
+    if (sectionId && /^(pro|con)/.test(sectionId)) {
+      return { kind: "stale", from, to, procon: true };
+    }
+    // Summary / whole-option carry reliably on the stable id — CARRIED only when
+    // the anchored text is UNCHANGED across the tune; otherwise STALE.
+    const sourceOpt = sourceArtifactId
+      ? coerceDecisionContent(
+          artifacts.find((a) => a.id === sourceArtifactId)?.content ?? {},
+        ).options.find((o) => o.id === optionId)
+      : undefined;
+    // Trim before comparing: a tune REGENERATES content, so a summary re-emitted
+    // with only leading/trailing whitespace difference (or a coerce nudge) is
+    // effectively unchanged — trimming avoids a false STALE alarm. Kept minimal
+    // (edge trim only, NOT interior normalization) so a real edit still shows.
+    const sourceText = anchoredText(sourceOpt, sectionId);
+    const currentText = anchoredText(liveOpt, sectionId);
+    if (sourceText !== undefined && sourceText.trim() === currentText?.trim()) {
+      return { kind: "carried", from, to };
+    }
+    return { kind: "stale", from, to, procon: false };
+  }
+  return { kind: "none" };
+}
+
+/** A generic grain label for an ORPHAN thread — WITHOUT the raw option id (the
+ *  option is gone, so `optionTitleFor` would leak the bare id). Names only the
+ *  grain type so the human still knows what the thread was about. */
+function orphanGrainLabel(sectionId: string | undefined): string {
+  if (!sectionId) return "an option";
+  if (sectionId === "summary") return "an option summary";
+  if (sectionId.startsWith("pro")) return "an option's pro";
+  if (sectionId.startsWith("con")) return "an option's con";
+  return "an option part";
+}
+
+/**
+ * The carryover marker shown on a grain thread (rail card + inline pop-out
+ * composer). Artifact-voice, second-person copy — it talks TO the human about
+ * THEIR thread, not about "the user". Themed via accent tokens (light + dark).
+ */
+function CarryoverBadge({ state }: { state: CarryoverState }) {
+  if (state.kind === "none") return null;
+  if (state.kind === "carried") {
+    return (
+      <span
+        data-testid="carryover-badge"
+        data-carryover="carried"
+        className="inline-flex items-center gap-1 text-2xs font-semibold text-accent-green bg-accent-green-dim rounded px-1.5 py-0.5 mb-1.5"
+        title="Your thread followed this part across the agent's tune — the text it anchors to is unchanged, so it still applies."
+      >
+        <span aria-hidden="true">✓</span> CARRIED v{state.from}→v{state.to}
+      </span>
+    );
+  }
+  if (state.kind === "stale") {
+    const msg = state.procon
+      ? `this was on a pro/con of v${state.from}; the list may have changed — verify it still applies`
+      : `the agent changed this — does your comment still apply?`;
+    return (
+      <span
+        data-testid="carryover-badge"
+        data-carryover="stale"
+        className="inline-flex items-start gap-1 text-2xs font-semibold text-accent-amber bg-accent-amber-dim rounded px-1.5 py-0.5 mb-1.5"
+        title={msg}
+      >
+        <span aria-hidden="true">⚠</span> <span>{msg}</span>
+      </span>
+    );
+  }
+  return (
+    <span
+      data-testid="carryover-badge"
+      data-carryover="orphan"
+      className="inline-flex items-center gap-1 text-2xs font-semibold text-accent-red bg-accent-red-dim rounded px-1.5 py-0.5 mb-1.5"
+      title="This thread was on a part of an earlier version that's no longer in this decision — the option was removed or its id changed across the tune."
+    >
+      from v{state.from} · no longer in this decision
+    </span>
+  );
+}
+
 export interface DecisionWorkbenchProps {
   event: DecisionRequestEvent;
   /** Required — grain comments + the nested diagram view anchor to it. */
@@ -109,6 +281,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
   // Pop-out — one option focused full-width (compare grid ⇄ dwell on one).
   const [focusedOptionId, setFocusedOptionId] = useState<string | null>(null);
 
+  const artifacts = useArtifactStore((s) => s.artifacts);
   const allComments = useChainComments(artifactId);
   const grainComments = allComments.filter(isGrainComment);
 
@@ -121,6 +294,18 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
 
   const countFor = (t: { optionId?: string; sectionId?: string }): number =>
     threadsByAnchor[anchorKey(t)]?.length ?? 0;
+
+  // #177 slice 2a — the read-side carryover state of a grain thread across a
+  // tune (CARRIED / STALE / ORPHAN / none). Derived from the version chain +
+  // the live v2 options; no persisted field.
+  const carryoverFor = (anchor: { optionId?: string; sectionId?: string }): CarryoverState =>
+    computeCarryover({
+      artifacts,
+      thread: threadsByAnchor[anchorKey(anchor)] ?? [],
+      currentArtifactId: artifactId,
+      anchor,
+      liveOptions: event.options,
+    });
 
   const isAnchorActive = (a: GrainAnchor): boolean =>
     activeAnchor?.optionId === a.optionId && activeAnchor?.sectionId === a.sectionId;
@@ -295,6 +480,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                 <div className="text-2xs uppercase tracking-wide text-text-muted font-semibold mb-2">
                   Comment or ask about {focusedOption.title}
                 </div>
+                <CarryoverBadge state={carryoverFor({ optionId: focusedOption.id })} />
                 <CommentThread
                   artifactId={artifactId}
                   comments={threadsByAnchor[`${focusedOption.id}|`] ?? []}
@@ -350,17 +536,31 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                 const target = { artifactId, ...anchorTarget(anchor) };
                 const key = anchorKey(anchor);
                 const isActive = activeAnchor != null && anchorKey(activeAnchor) === key;
+                const carryover = carryoverFor(anchor);
+                const isOrphan = carryover.kind === "orphan";
                 return (
                   <div
                     key={key}
                     data-testid="workbench-thread"
+                    data-carryover={carryover.kind}
                     className={`rounded-lg border p-2.5 ${
                       isActive ? "border-border-focus bg-surface-elevated" : "border-border-default bg-surface-elevated"
                     }`}
                   >
-                    <div className="font-mono text-2xs text-accent-blue mb-1.5 truncate" title={anchor.label}>
-                      ◈ {anchor.label}
-                    </div>
+                    {/* ORPHAN: the option is gone, so `anchor.label` leaks the
+                        raw option id (optionTitleFor's degraded fallback). Show a
+                        generic grain label + the red "no longer in this decision"
+                        badge instead — never the confusing raw id. */}
+                    {isOrphan ? (
+                      <div className="font-mono text-2xs text-accent-red mb-1.5 truncate" data-testid="orphan-label">
+                        ◈ {orphanGrainLabel(anchor.sectionId)}
+                      </div>
+                    ) : (
+                      <div className="font-mono text-2xs text-accent-blue mb-1.5 truncate" title={anchor.label}>
+                        ◈ {anchor.label}
+                      </div>
+                    )}
+                    <CarryoverBadge state={carryover} />
                     <CommentThread
                       artifactId={artifactId}
                       comments={threadsByAnchor[key] ?? []}

@@ -25531,7 +25531,7 @@ var DecisionOptionConceptSchema = external_exports.object({
   oneLineExplanation: external_exports.string().optional().describe("Plain-English so the human learns the pattern, not just the option")
 });
 var DecisionOptionBaseSchema = external_exports.object({
-  id: external_exports.string(),
+  id: external_exports.string().describe("Stable id \u2014 discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
   title: external_exports.string(),
   description: external_exports.string(),
   pros: external_exports.array(external_exports.string()),
@@ -28052,7 +28052,7 @@ function validatePresentFindingsInput(args) {
 var PresentOptionsInputSchema = external_exports.object({
   context: external_exports.string().min(1),
   options: external_exports.array(DecisionOptionBaseSchema.extend({
-    id: external_exports.string().min(1),
+    id: external_exports.string().min(1).describe("Stable id \u2014 discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
     title: external_exports.string().min(1),
     visuals: external_exports.array(PlanVisualSchema.extend({ id: external_exports.string().optional() })).optional()
   })).min(2).max(4),

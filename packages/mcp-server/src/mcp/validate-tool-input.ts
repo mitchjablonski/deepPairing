@@ -326,7 +326,7 @@ export function validatePresentFindingsInput(args: any): ValidationResult<z.infe
 const PresentOptionsInputSchema = z.object({
   context: z.string().min(1),
   options: z.array(DecisionOptionBaseSchema.extend({
-    id: z.string().min(1),
+    id: z.string().min(1).describe("Stable id — discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
     title: z.string().min(1),
     visuals: z.array(PlanVisualSchema.extend({ id: z.string().optional() })).optional(),
   })).min(2).max(4),

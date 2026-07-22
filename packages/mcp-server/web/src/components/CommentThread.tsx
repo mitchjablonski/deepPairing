@@ -100,7 +100,10 @@ function CommentBubble({ comment, fromVersion, roomy }: { comment: Comment; from
               it subtly so the merged thread stays legible. */}
           {fromVersion != null && (
             <span
-              className="text-2xs text-text-muted/80 italic"
+              // Full text-muted (not /80): the aggregated-thread chip renders on
+              // bg-surface-elevated (the decision workbench rail), where /80
+              // measured 3.54:1 — under AA. Full muted is 4.73/5.48 (dark/light).
+              className="text-2xs text-text-muted italic"
               title="Posted on an earlier version of this artifact"
             >
               from v{fromVersion}
@@ -120,7 +123,7 @@ function CommentBubble({ comment, fromVersion, roomy }: { comment: Comment; from
               </span>
             )
             : (
-              <span className="text-accent-blue/70 text-2xs" title="Delivered to the session — the agent will see it the next time it checks in">
+              <span className="text-accent-blue text-2xs" title="Delivered to the session — the agent will see it the next time it checks in">
                 {/* U8 — only a QUESTION leaves the agent owing a reply; a plain
                     comment/suggestion is just delivered, so don't imply the
                     agent is on the hook for it. */}
