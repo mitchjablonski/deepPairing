@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.1.17 — 2026-07-22
+
+The loop stays honest across change. Two follow-ups that keep the human↔agent
+conversation truthful when the thing under discussion moves: a diagram that
+**reports back when it breaks** — instead of the agent never learning its
+Mermaid render failed — and decision-comment threads that **follow a tune** from
+v1 to v2 with a plain read-side marker for whether your comment still applies. No
+breaking changes — every new field is optional and an old daemon degrades
+gracefully.
+
+### Added
+- **A broken diagram reports itself back to the agent.** The companion UI is the
+  one place a version-matched Mermaid render actually runs, so when a decision or
+  plan diagram genuinely fails to render — *after* the existing #163 client
+  repair pass has also failed — the browser now POSTs a lightweight failure
+  report (`artifactId`, `visualId`, a short `error`, the `title`) so the agent
+  finds out. It **never sends the Mermaid source** (a secret can hide in a node
+  label), and the store authoritatively secret-scans and redacts the error and
+  title before persisting. `check_feedback` surfaces pending render failures in
+  prose and in `structuredContent.renderFailures` (spread only when present, so
+  the healthy-payload contract is untouched) so the agent is told to fix and
+  re-present. Reports drain once, clear when the artifact is superseded, and a
+  re-arm guard keeps a remounted still-broken diagram from re-nagging — a
+  verify-*after* belt, since a prior spike proved verify-before on the stdio path
+  infeasible.
+- **Decision-comment threads follow a tune, with a marker for whether they still
+  apply.** When the agent tunes a decision (`revise_artifact` supersedes v1→v2),
+  your grain-comment threads now carry to the matching part of v2 and each one
+  wears an honest read-side badge: **CARRIED** (green — the part is still live and
+  its text is unchanged), **STALE** (amber — the part survived but the agent
+  changed the words: "does your comment still apply?"), or **ORPHAN** (red — the
+  option is gone from v2, shown as "from v1 · no longer in this decision" instead
+  of a raw id). The decision question carries unconditionally; question,
+  whole-option, and summary grains carry reliably. This rides a new stable-option
+  -id convention — a `KEEP IT ACROSS REVISIONS` note on the option id plus a
+  `SKILL.md` line telling the agent to reuse each surviving option's id when
+  superseding, mirroring the shipped `PlanVisual.id` pattern. Pro/con threads are
+  deliberately shown as uncertain (never a confident CARRIED) across versions —
+  reliable pro/con carryover is deferred to slice 2b behind a `pros/cons →
+  {id,text}` schema change.
+
+### Fixed
+- **Aggregated-thread chips now meet AA contrast.** The new carryover axe scan
+  caught a latent sub-AA contrast in `CommentThread`'s `from vN` and `delivered`
+  chips on an elevated surface (3.54 / 3.44:1); dropping the `/80` and `/70`
+  opacity restores full `text-muted` and `accent-blue` (≥4.7:1) in both themes,
+  with no token changes and zero disabled rules.
+
 ## v0.1.16 — 2026-07-21
 
 The decision discuss workbench. A decision's options used to be readable only
