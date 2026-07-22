@@ -271,6 +271,62 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed plan failed: ${r.status}`); });
+
+  // #177 slice 2a — a SUPERSEDED decision chain so the workbench mounts REAL
+  // carryover markers (CARRIED / STALE / ORPHAN) for the axe scans (the #187
+  // hollow-net lesson: actually render the new states). v1 is superseded (so the
+  // filtered visible list renders only v2's card), v2 keeps option `a`'s id + text
+  // (CARRIED), rewords `b`'s summary (STALE), and drops `c` (ORPHAN). v1-anchored
+  // grain threads then carry forward onto v2's rail via useChainComments.
+  const regCarry = await fetch(`${baseURL}/api/internal/sessions/a11ycarry/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regCarry.ok) throw new Error(`seed carry register failed: ${regCarry.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11ycarry/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "dec_carry_v1", type: "decision", title: "Pick a store", version: 1, parentId: null,
+      content: {
+        context: "Which session store should we use?", decisionId: "d_carry",
+        options: [
+          { id: "a", title: "Redis", description: "External cache with native TTL.", pros: ["Native per-key TTL"], cons: ["Adds an ops dependency"], effort: "medium", risk: "low", recommendation: true },
+          { id: "b", title: "Postgres", description: "Reuse the primary DB.", pros: ["No new infra"], cons: ["Needs a sweep"], effort: "low", risk: "low", recommendation: false },
+          { id: "c", title: "In-memory", description: "An LRU map in the process.", pros: ["Zero latency"], cons: ["Lost on restart"], effort: "low", risk: "high", recommendation: false },
+        ],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed carry v1 failed: ${r.status}`); });
+  // v1 grain threads (anchored to dec_carry_v1) — these carry forward onto v2.
+  for (const cmt of [
+    { id: "cc_carry_sum", optionId: "a", sectionId: "summary", content: "TTL is exactly what we need" }, // CARRIED (a unchanged)
+    { id: "cc_carry_stale", optionId: "b", sectionId: "summary", content: "does the sweep run often enough?" }, // STALE (b reworded)
+    { id: "cc_carry_orphan", optionId: "c", sectionId: "summary", content: "restart loss is a dealbreaker" }, // ORPHAN (c removed)
+    { id: "cc_carry_q", sectionId: "decision:question", content: "are we sure we need a store at all?" }, // CARRIED (question is permanent)
+  ]) {
+    await fetch(`${baseURL}/api/internal/sessions/a11ycarry/comments`, {
+      method: "POST", headers: h,
+      body: JSON.stringify({
+        id: cmt.id, artifactId: "dec_carry_v1", author: "human", content: cmt.content,
+        target: { artifactId: "dec_carry_v1", ...(cmt.optionId ? { optionId: cmt.optionId } : {}), ...(cmt.sectionId ? { sectionId: cmt.sectionId } : {}) },
+      }),
+    }).then((r) => { if (!r.ok) throw new Error(`seed carry comment ${cmt.id} failed: ${r.status}`); });
+  }
+  // Supersede v1 → the visible list drops it, so only v2's card renders.
+  await fetch(`${baseURL}/api/internal/sessions/a11ycarry/artifacts/dec_carry_v1/status`, {
+    method: "POST", headers: h, body: JSON.stringify({ status: "superseded", reason: "tuned" }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed carry supersede failed: ${r.status}`); });
+  await fetch(`${baseURL}/api/internal/sessions/a11ycarry/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "dec_carry_v2", type: "decision", title: "Pick a store", version: 2, parentId: "dec_carry_v1",
+      content: {
+        context: "Which session store should we use?", decisionId: "d_carry",
+        options: [
+          { id: "a", title: "Redis", description: "External cache with native TTL.", pros: ["Native per-key TTL"], cons: ["Adds an ops dependency"], effort: "medium", risk: "low", recommendation: true }, // unchanged → CARRIED
+          { id: "b", title: "Postgres", description: "Reuse the primary Postgres DB and add a sweep job.", pros: ["No new infra"], cons: ["Needs a sweep"], effort: "low", risk: "low", recommendation: false }, // reworded → STALE
+          // c dropped → its v1 threads ORPHAN
+        ],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed carry v2 failed: ${r.status}`); });
 });
 
 test.afterAll(async () => {
@@ -539,6 +595,45 @@ test("keyboard (#174): the ⤢ pop-out and the ← Back button are reachable + o
   await expect(page.locator('[data-testid="workbench-focused-option"]')).toHaveCount(0);
   // Back in the grid — the pop-out buttons are present again.
   await expect(page.locator('[data-testid="option-popout"]').first()).toBeVisible();
+});
+
+/** #177 slice 2a — mount the workbench of a SUPERSEDED decision so the carryover
+ *  markers (CARRIED / STALE / ORPHAN) are in the scanned DOM for real (the #187
+ *  hollow-net lesson). Waits for the workbench dialog, then for BOTH a green
+ *  CARRIED badge and a red ORPHAN badge (the two ends of the treatment) before
+ *  settling animations — a hollow scan of an empty rail can't "pass". */
+async function openCarryoverWorkbench(page: import("@playwright/test").Page): Promise<void> {
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  await page.getByRole("button", { name: /Expand to discuss/i }).click();
+  await page.waitForSelector('[data-testid="decision-workbench"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="carryover-badge"][data-carryover="carried"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="carryover-badge"][data-carryover="stale"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="carryover-badge"][data-carryover="orphan"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#177): the workbench carryover markers (CARRIED/STALE/ORPHAN) have no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11ycarry`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openCarryoverWorkbench(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (workbench carryover, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#177): the workbench carryover markers have no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11ycarry`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openCarryoverWorkbench(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (workbench carryover, light):\n${fmt(serious)}`).toEqual([]);
 });
 
 test("a11y (#173): the decision diagram FOCUSED VIEW has no serious/critical axe violations — dark", async ({ page }) => {

@@ -299,7 +299,7 @@ export const DecisionOptionConceptSchema = z.object({
 });
 
 export const DecisionOptionBaseSchema = z.object({
-  id: z.string(),
+  id: z.string().describe("Stable id — discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
   title: z.string(),
   description: z.string(),
   pros: z.array(z.string()),

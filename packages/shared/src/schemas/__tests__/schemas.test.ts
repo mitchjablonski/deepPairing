@@ -29,7 +29,7 @@ import {
   sampleComment,
   lineComment,
 } from "../../__fixtures__/artifacts.js";
-import { ChangesetContentSchema } from "../content-types.js";
+import { ChangesetContentSchema, DecisionOptionBaseSchema } from "../content-types.js";
 
 describe("AgentEventSchema", () => {
   it("parses text events", () => {
@@ -159,6 +159,17 @@ describe("DecisionRequestSchema", () => {
         options: tooMany,
       }),
     ).toThrow();
+  });
+
+  // #177 slice 2a — the option `id` carries a stable-id directive (mirroring
+  // PlanVisual.id) so the agent KEEPS it across a tune and the human's
+  // discussion threads carry forward. Pin the describe text so it can't be
+  // silently dropped (which would quietly break option/summary carryover).
+  it("#177: DecisionOptionBaseSchema.id documents the stable-id-across-revisions convention", () => {
+    const desc = DecisionOptionBaseSchema.shape.id.description;
+    expect(desc).toBeDefined();
+    expect(desc).toContain("KEEP IT ACROSS REVISIONS");
+    expect(desc).toMatch(/discussion threads anchor to it/i);
   });
 
   // Z5a — wire-shape DecisionOption now carries `concept` so DecisionCard
