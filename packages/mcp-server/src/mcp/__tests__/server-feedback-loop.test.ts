@@ -192,6 +192,34 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(res.text).toContain("managed Redis is ~zero ops though");
     });
 
+    it("#174 — a WHOLE-OPTION comment (optionId, NO sectionId) reaches the agent named by option, with no section suffix", async () => {
+      // The pop-out's inline composer anchors to the option itself (optionId,
+      // no sectionId). check_feedback must name the OPTION and must NOT crash or
+      // append a grain " — <section>" suffix (there's no section to describe).
+      await callTool("present_options", {
+        context: "Which session store should we use?",
+        options: [
+          { id: "opt_redis", title: "Redis", description: "external cache", pros: ["fast"], cons: ["ops"], effort: "low", risk: "low", recommendation: true },
+          { id: "opt_pg", title: "Postgres", description: "in the DB", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+        ],
+      });
+      const art = store.getArtifacts()[0];
+      store.addComment({
+        id: "gc_whole", artifactId: art.id, content: "managed Redis is ~zero ops as a whole", author: "human",
+        target: { artifactId: art.id, optionId: "opt_redis" },
+      } as any);
+
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain('option "Redis"');
+      expect(res.text).toContain("managed Redis is ~zero ops as a whole");
+      // No grain-section suffix for a whole-option comment (nothing after the
+      // option clause on that line).
+      expect(res.text).not.toContain('option "Redis") — ');
+      const sc = res.structuredContent as any;
+      const wholeComment = sc.comments.find((c: any) => c.id === "gc_whole");
+      expect(wholeComment).toBeTruthy();
+    });
+
     it("#174 — a comment on the decision question is delivered as such (sectionId only)", async () => {
       await callTool("present_options", {
         context: "Which session store should we use?",
