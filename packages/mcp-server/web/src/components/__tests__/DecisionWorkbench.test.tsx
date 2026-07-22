@@ -355,23 +355,39 @@ describe("workbench interaction pass — per-option ⤢ pop-out (focus one optio
     expect(body.target.artifactId).toBe("art_dec");
   });
 
-  it("a WHOLE-OPTION comment is EXCLUDED from the rail (railKeys drops the bare-option key) and lives in the inline composer", async () => {
-    // optionId, NO sectionId → key "o1|", which railKeys filters out. It's the
-    // only grain comment, so the rail never renders; the comment surfaces in the
-    // pop-out's inline composer instead. If the "|"-suffix filter were reverted,
-    // the rail WOULD render a thread for it and this test fails.
+  it("GRID mode: a whole-option comment stays in the rail (its thread) — the head 💬 is the grid's whole-option entry point", async () => {
+    // optionId, NO sectionId → key "o1|". In the compare GRID this is NOT
+    // filtered out: the rail is the whole-option surface here (mode-coherent
+    // with the pop-out, where the inline composer owns it).
     seedGrainComment({ id: "wo1", optionId: "o1", content: "whole-option note here" });
     const user = userEvent.setup();
     render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
     const dialog = await openWorkbench(user);
 
-    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
-    expect(within(dialog).queryByTestId("workbench-thread")).not.toBeInTheDocument();
+    expect(within(dialog).getByTestId("decision-workbench-rail")).toBeInTheDocument();
+    const thread = within(dialog).getByTestId("workbench-thread");
+    expect(within(thread).getByText("whole-option note here")).toBeInTheDocument();
+  });
 
-    // It DOES show in the focused option's inline composer.
+  it("POP-OUT mode: a whole-option comment renders EXACTLY ONCE (inline) — no rail double-show (reviewer's 2-render repro)", async () => {
+    // Pop out an option that already has a whole-option comment. Pre-fix, the
+    // focused column still rendered the head whole-option 💬 whose activeAnchor
+    // re-added the bare-option key to the rail → the SAME comment rendered twice
+    // (inline composer + rail). Fix: suppress the head 💬 in the focused column
+    // and exclude "opt|" keys from the rail in pop-out — inline is the sole
+    // whole-option surface, so it shows once.
+    seedGrainComment({ id: "wo1", optionId: "o1", content: "whole-option note here" });
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
     await user.click(within(dialog).getAllByTestId("option-popout")[0]!);
     const focused = within(dialog).getByTestId("workbench-focused-option");
-    expect(within(focused).getByText("whole-option note here")).toBeInTheDocument();
+
+    // The head whole-option 💬 (the double-show trigger) is gone in the pop-out.
+    expect(within(focused).queryByRole("button", { name: /whole option/i })).not.toBeInTheDocument();
+    // The comment renders exactly once (inline), and the rail doesn't double it.
+    expect(within(dialog).getAllByText("whole-option note here")).toHaveLength(1);
+    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
   });
 });
 
@@ -425,6 +441,24 @@ describe("workbench interaction pass — layered Esc + click-to-comment rows", (
     // The explicit button path opens the same composer as the row click.
     await user.click(within(dialog).getByRole("button", { name: /Comment on Redis · pro/i }));
     expect(within(dialog).getByRole("textbox", { name: /Comment on Redis · pro/i })).toBeInTheDocument();
+  });
+
+  it("← Back clears a section composer activated while popped out (no stray rail lingering in the grid)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    await user.click(within(dialog).getAllByTestId("option-popout")[0]!);
+    const focused = within(dialog).getByTestId("workbench-focused-option");
+
+    // Activate a SECTION composer while popped out → the rail opens alongside.
+    await user.click(within(focused).getByText("Adds an ops dependency"));
+    expect(within(dialog).getByTestId("decision-workbench-rail")).toBeInTheDocument();
+
+    // Back to the grid — activeAnchor is cleared too, so the composer doesn't
+    // linger as a stray rail over the compare grid (pre-fix it would).
+    await user.click(within(dialog).getByRole("button", { name: /Back to all options/i }));
+    expect(within(dialog).queryByTestId("workbench-focused-option")).not.toBeInTheDocument();
+    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
   });
 
   it("the workbench modal is the wider 1280px surface", async () => {

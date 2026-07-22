@@ -153,12 +153,24 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
       ? "grid-cols-1 min-[820px]:grid-cols-3"
       : "grid-cols-1 min-[820px]:grid-cols-2";
 
-  // The anchors to surface in the rail: any SECTION anchor with comments, plus
-  // the active one. Whole-option comments (key ends with "|", no section) are
-  // excluded — they live in the pop-out's inline "comment on this option"
-  // composer, not the rail, so they never double-show.
-  const railKeys = new Set<string>(Object.keys(threadsByAnchor).filter((k) => !k.endsWith("|")));
-  if (activeAnchor) railKeys.add(anchorKey(activeAnchor));
+  // The anchors to surface in the rail — MODE-COHERENT with the pop-out so a
+  // whole-option comment never shows in two places at once:
+  //   - GRID mode: every anchor with comments (INCLUDING whole-option "opt|"
+  //     keys) plus the active one. The column-head 💬 is the whole-option entry
+  //     point in the grid, so whole-option threads belong in the rail here.
+  //   - POP-OUT mode: whole-option "opt|" keys are excluded — the focused view's
+  //     inline "Comment or ask about {option}" composer is their SOLE surface,
+  //     so they can't double-show (rail + inline). Section keys are unaffected.
+  const railKeys = new Set<string>(
+    Object.keys(threadsByAnchor).filter((k) => !(focusedOptionId != null && k.endsWith("|"))),
+  );
+  // Guard the active-anchor re-add: a bare-optionId (whole-option) anchor must
+  // NOT rejoin the rail while popped out even if some path set it — the inline
+  // composer owns it there. (The head 💬 that could set it is itself suppressed
+  // in the focused column, so this is defensive.)
+  if (activeAnchor && !(focusedOptionId != null && !activeAnchor.sectionId)) {
+    railKeys.add(anchorKey(activeAnchor));
+  }
   const railAnchors: GrainAnchor[] = Array.from(railKeys).map((k) => {
     const [optionId, sectionId] = k.split("|");
     // Prefer the active anchor's label (freshest); else derive from a comment.
@@ -198,6 +210,9 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
             e.preventDefault();
             e.stopPropagation();
             setFocusedOptionId(null);
+            // Drop any composer opened while popped out so it doesn't linger in
+            // the grid rail after returning (same cleanup as ← Back).
+            setActiveAnchor(null);
             return;
           }
           dialogProps.onKeyDown(e);
@@ -245,7 +260,13 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
           {focusedOption ? (
             <div className="flex flex-col min-w-0" data-testid="workbench-focused-option">
               <button
-                onClick={() => setFocusedOptionId(null)}
+                onClick={() => {
+                  // Return to the grid AND drop any composer activated while
+                  // popped out, so a stray section composer doesn't linger in
+                  // the grid rail after Back / when re-popping a different option.
+                  setFocusedOptionId(null);
+                  setActiveAnchor(null);
+                }}
                 className="self-start m-2 text-2xs font-semibold text-text-secondary hover:text-accent-blue border border-border-default rounded px-2 py-1 bg-surface-elevated transition-colors press-scale"
               >
                 ← Back to all options
@@ -255,6 +276,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                 option={focusedOption}
                 artifactId={artifactId}
                 lastInRow
+                focused
                 commentCount={optionCommentCount(focusedOption.id)}
                 onChoose={() => {
                   footerProps.onSelect(focusedOption.id);
@@ -443,6 +465,11 @@ interface WorkbenchColumnProps {
   /** Pop this option out to a focused, full-width view. Omitted when the
    *  column IS the focused view (so it doesn't offer to focus itself). */
   onFocus?: () => void;
+  /** True when this column IS the focused (popped-out) view. Suppresses the
+   *  column-head WHOLE-OPTION 💬 affordance — in the pop-out the persistent
+   *  inline "Comment or ask about {option}" composer is the sole whole-option
+   *  surface, so the head 💬 (which opened a rail composer) would double it. */
+  focused?: boolean;
 }
 
 /**
@@ -461,6 +488,7 @@ function WorkbenchColumn({
   onExpandDiagram,
   onFocus,
   onActivateAnchor,
+  focused,
 }: WorkbenchColumnProps) {
   const title = option.title;
   return (
@@ -501,9 +529,14 @@ function WorkbenchColumn({
         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
           <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>effort: {option.effort}</span>
           <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>{option.risk} risk</span>
-          <span className="group inline-flex ml-auto">
-            {renderAffordance({ optionId: option.id, label: `${title} · whole option` })}
-          </span>
+          {/* Whole-option 💬 — the grid's entry point for a comment on the option
+              as a whole. Suppressed in the focused (pop-out) column, where the
+              persistent inline composer below is the sole whole-option surface. */}
+          {!focused && (
+            <span className="group inline-flex ml-auto">
+              {renderAffordance({ optionId: option.id, label: `${title} · whole option` })}
+            </span>
+          )}
         </div>
         {option.concept?.name && (
           <div className="mt-2">
