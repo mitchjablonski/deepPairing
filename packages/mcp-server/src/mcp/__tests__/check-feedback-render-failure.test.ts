@@ -74,6 +74,34 @@ describe("check_feedback surfaces render failures (#176)", () => {
     expect(store.getUnacknowledgedRenderFailures()).toHaveLength(0);
   });
 
+  it("does NOT re-deliver an already-reported, UNCHANGED failure after a remount re-report", async () => {
+    const store = new FileStore(tmpDir, "s_remount");
+    store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });
+    store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom" });
+
+    // First poll delivers + drains it.
+    const res1 = await handleCheckFeedback(makeCtx(store), {});
+    expect((res1.structuredContent as { renderFailures?: unknown[] }).renderFailures).toHaveLength(1);
+
+    // A remount re-POSTs the SAME still-broken error. A human comment makes the
+    // NEXT poll return promptly (the pending draft would otherwise long-poll).
+    store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom" });
+    store.addComment({ id: "cmt_x", artifactId: "__session__", content: "ok", author: "human" });
+
+    const res2 = await handleCheckFeedback(makeCtx(store), {});
+    // The agent already heard about this diagram — it must NOT be re-delivered.
+    expect("renderFailures" in (res2.structuredContent as Record<string, unknown>)).toBe(false);
+    expect((res2.content[0] as { text: string }).text).not.toContain("Diagram render failures");
+
+    // But a CHANGED error IS a new failure and re-delivers.
+    store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "different boom" });
+    store.addComment({ id: "cmt_y", artifactId: "__session__", content: "ok", author: "human" });
+    const res3 = await handleCheckFeedback(makeCtx(store), {});
+    expect((res3.structuredContent as { renderFailures?: Array<{ error: string }> }).renderFailures).toEqual([
+      { artifactId: "plan_1", visualId: "vis_a", error: "different boom" },
+    ]);
+  });
+
   it("never leaks a secret through the error/title path", async () => {
     const store = new FileStore(tmpDir, "s2");
     store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });

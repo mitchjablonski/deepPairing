@@ -69,15 +69,31 @@ describe("FileStore render failures (#176)", () => {
     expect(store.getUnacknowledgedRenderFailures()).toHaveLength(2);
   });
 
-  it("drains via acknowledge (report once) and re-arms on a fresh report", () => {
+  it("drains via acknowledge (report once) and re-arms on a CHANGED report", () => {
     const store = seededStore();
     store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom" });
     expect(store.getUnacknowledgedRenderFailures()).toHaveLength(1);
     store.acknowledgeRenderFailures([{ artifactId: "plan_1", visualId: "vis_a" }]);
     expect(store.getUnacknowledgedRenderFailures()).toHaveLength(0);
-    // A later re-report (page reload, still broken) re-surfaces it.
+    // A later re-report with a DIFFERENT error (a new failure) re-surfaces it.
     store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom again" });
     expect(store.getUnacknowledgedRenderFailures()).toHaveLength(1);
+  });
+
+  it("does NOT re-arm an already-acknowledged, UNCHANGED error (remount spam guard)", () => {
+    const store = seededStore();
+    store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom" });
+    store.acknowledgeRenderFailures([{ artifactId: "plan_1", visualId: "vis_a" }]);
+    expect(store.getUnacknowledgedRenderFailures()).toHaveLength(0);
+    // A component remount re-POSTs the SAME still-broken error — the agent
+    // already heard about it, so it must stay acknowledged (no re-delivery),
+    // and there is still exactly ONE upserted record (no duplicate).
+    store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom" });
+    expect(store.getUnacknowledgedRenderFailures()).toHaveLength(0);
+    store.acknowledgeRenderFailures([]); // no-op; assert the single record survives
+    store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_b", error: "x" });
+    // One drained (vis_a) + one live (vis_b) — proves vis_a wasn't duplicated.
+    expect(store.getUnacknowledgedRenderFailures().map((r) => r.visualId)).toEqual(["vis_b"]);
   });
 
   it("REDACTS a secret-shaped error and drops a secret-shaped title (parity with content scan)", () => {

@@ -25524,9 +25524,15 @@ var FileStore = class _FileStore {
   // --- Render failures (#176, Option A) ---
   /**
    * #176 — record a client-reported Mermaid render failure, upserting by
-   * (artifactId, visualId) so a re-report supersedes the prior record and
-   * re-arms it for check_feedback (acknowledged→false). The browser dedupes
-   * per mount, so this fires once per genuinely-broken diagram the human sees.
+   * (artifactId, visualId). The browser dedupes per MOUNT, but that ref is
+   * per-component-instance, so a remount (scroll a still-broken diagram out of
+   * view and back, a virtualized-list recycle) spawns a fresh instance that
+   * re-POSTs the SAME error. The store is the only place that can dedupe across
+   * remounts: re-arm for check_feedback ONLY when this is a genuinely-new
+   * failure — the record didn't exist, was still pending (unacknowledged), or
+   * the error CHANGED. A re-report of an ALREADY-acknowledged, UNCHANGED error
+   * leaves the record acknowledged (just refreshes `at`) so the agent isn't
+   * re-notified about a diagram it already heard was broken.
    *
    * AUTHORITATIVE secret scan (mirrors createArtifact's #162 scan): a mermaid
    * PARSER error commonly echoes the offending source line — which can carry a
@@ -25535,6 +25541,15 @@ var FileStore = class _FileStore {
    * the agent via check_feedback). The scanner is a detector, not a surgical
    * redactor, so on any hit we drop the whole field to a safe placeholder — the
    * agent still learns WHICH visual broke, just not the sensitive detail.
+   *
+   * Redaction is BEST-EFFORT on the same precision-over-recall `scanForSecrets`
+   * (~14 vendor-prefixed shapes) that guards artifact content: a non-prefixed
+   * secret echoed in an error (a `postgres://` URL, a bare high-entropy token)
+   * is NOT caught here. The PRIMARY mitigations live upstream — the client
+   * sends only the error's FIRST line (mermaid's `Parse error on line N:`), so
+   * the echoed source excerpt on the following lines is dropped, and the wire
+   * never carries full source. Broadening the scanner is a separate repo-wide
+   * decision, deliberately out of scope.
    */
   recordRenderFailure(params) {
     const safeError = scanForSecrets(params.error).length > 0 ? "[render error withheld \u2014 a secret-shaped value was detected in it]" : params.error;
@@ -25544,20 +25559,27 @@ var FileStore = class _FileStore {
       (r) => r.artifactId === params.artifactId && r.visualId === params.visualId
     );
     if (existing) {
+      const isNewFailure = !existing.acknowledged || existing.error !== safeError;
       existing.error = safeError;
       existing.title = safeTitle;
       existing.at = at;
-      existing.acknowledged = false;
-    } else {
-      this.renderFailures.push({
-        artifactId: params.artifactId,
-        visualId: params.visualId,
-        ...safeTitle ? { title: safeTitle } : {},
-        error: safeError,
-        at,
-        acknowledged: false
-      });
+      if (isNewFailure) {
+        existing.acknowledged = false;
+        this.scheduleFlush();
+        this.notifyFeedbackWaiters();
+      } else {
+        this.scheduleFlush();
+      }
+      return;
     }
+    this.renderFailures.push({
+      artifactId: params.artifactId,
+      visualId: params.visualId,
+      ...safeTitle ? { title: safeTitle } : {},
+      error: safeError,
+      at,
+      acknowledged: false
+    });
     this.scheduleFlush();
     this.notifyFeedbackWaiters();
   }
