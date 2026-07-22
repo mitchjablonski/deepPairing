@@ -106,6 +106,8 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
   const [focusedDiagram, setFocusedDiagram] = useState<
     { optionId: string; optionTitle: string; visual: PlanVisual } | null
   >(null);
+  // Pop-out — one option focused full-width (compare grid ⇄ dwell on one).
+  const [focusedOptionId, setFocusedOptionId] = useState<string | null>(null);
 
   const allComments = useChainComments(artifactId);
   const grainComments = allComments.filter(isGrainComment);
@@ -151,10 +153,24 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
       ? "grid-cols-1 min-[820px]:grid-cols-3"
       : "grid-cols-1 min-[820px]:grid-cols-2";
 
-  // The anchors to surface in the rail: any anchor with comments, plus the
-  // active one (so its composer appears even before the first comment).
-  const railKeys = new Set<string>(Object.keys(threadsByAnchor));
-  if (activeAnchor) railKeys.add(anchorKey(activeAnchor));
+  // The anchors to surface in the rail — MODE-COHERENT with the pop-out so a
+  // whole-option comment never shows in two places at once:
+  //   - GRID mode: every anchor with comments (INCLUDING whole-option "opt|"
+  //     keys) plus the active one. The column-head 💬 is the whole-option entry
+  //     point in the grid, so whole-option threads belong in the rail here.
+  //   - POP-OUT mode: whole-option "opt|" keys are excluded — the focused view's
+  //     inline "Comment or ask about {option}" composer is their SOLE surface,
+  //     so they can't double-show (rail + inline). Section keys are unaffected.
+  const railKeys = new Set<string>(
+    Object.keys(threadsByAnchor).filter((k) => !(focusedOptionId != null && k.endsWith("|"))),
+  );
+  // Guard the active-anchor re-add: a bare-optionId (whole-option) anchor must
+  // NOT rejoin the rail while popped out even if some path set it — the inline
+  // composer owns it there. (The head 💬 that could set it is itself suppressed
+  // in the focused column, so this is defensive.)
+  if (activeAnchor && !(focusedOptionId != null && !activeAnchor.sectionId)) {
+    railKeys.add(anchorKey(activeAnchor));
+  }
   const railAnchors: GrainAnchor[] = Array.from(railKeys).map((k) => {
     const [optionId, sectionId] = k.split("|");
     // Prefer the active anchor's label (freshest); else derive from a comment.
@@ -166,6 +182,16 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
     };
   });
 
+  const focusedOption = focusedOptionId
+    ? event.options.find((o) => o.id === focusedOptionId) ?? null
+    : null;
+
+  // The comment rail only claims width once there's actually something to
+  // discuss (a thread, or a composer the human just opened). Empty, it would
+  // squish the options — so before the first comment the options get the full
+  // width (like the inline card), and the rail slides in when you start one.
+  const hasRail = railAnchors.length > 0;
+
   return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-3 sm:p-6 overflow-auto"
@@ -175,7 +201,22 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
         {...dialogProps}
         aria-label="Discuss this decision"
         data-testid="decision-workbench"
-        className="relative w-full max-w-[1040px] bg-surface-primary border border-border-default rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className="relative w-full max-w-[1280px] bg-surface-primary border border-border-default rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        onKeyDown={(e) => {
+          // Layered Esc: from a popped-out option, first return to the compare
+          // grid; only from the grid does Esc collapse the workbench. Override
+          // useModal's onKeyDown and delegate to it only when NOT focused.
+          if (e.key === "Escape" && focusedOptionId) {
+            e.preventDefault();
+            e.stopPropagation();
+            setFocusedOptionId(null);
+            // Drop any composer opened while popped out so it doesn't linger in
+            // the grid rail after returning (same cleanup as ← Back).
+            setActiveAnchor(null);
+            return;
+          }
+          dialogProps.onKeyDown(e);
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Breadcrumb header — Decision ▸ Discuss + the question (commentable). */}
@@ -215,31 +256,88 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
         </div>
 
         {/* Body — option columns on the left, comment rail on the right. */}
-        <div className="flex-1 min-h-0 overflow-auto grid grid-cols-1 min-[820px]:grid-cols-[1fr_300px]">
-          <div className={`grid ${gridCols}`}>
-            {event.options.map((option, idx) => (
+        <div className={`flex-1 min-h-0 overflow-auto grid grid-cols-1 ${hasRail ? "min-[820px]:grid-cols-[1fr_384px]" : ""}`}>
+          {focusedOption ? (
+            <div className="flex flex-col min-w-0" data-testid="workbench-focused-option">
+              <button
+                onClick={() => {
+                  // Return to the grid AND drop any composer activated while
+                  // popped out, so a stray section composer doesn't linger in
+                  // the grid rail after Back / when re-popping a different option.
+                  setFocusedOptionId(null);
+                  setActiveAnchor(null);
+                }}
+                className="self-start m-2 text-2xs font-semibold text-text-secondary hover:text-accent-blue border border-border-default rounded px-2 py-1 bg-surface-elevated transition-colors press-scale"
+              >
+                ← Back to all options
+              </button>
               <WorkbenchColumn
-                key={option.id}
-                option={option}
+                key={focusedOption.id}
+                option={focusedOption}
                 artifactId={artifactId}
-                lastInRow={idx === event.options.length - 1}
-                commentCount={optionCommentCount(option.id)}
+                lastInRow
+                focused
+                commentCount={optionCommentCount(focusedOption.id)}
                 onChoose={() => {
-                  // Reuse the card's exact selection handler, then collapse —
-                  // the card behind resolves (or shows the high-stakes
-                  // prediction capture) with the workbench out of the way.
-                  footerProps.onSelect(option.id);
+                  footerProps.onSelect(focusedOption.id);
                   onClose();
                 }}
                 renderAffordance={affordance}
                 onExpandDiagram={(visual) =>
-                  setFocusedDiagram({ optionId: option.id, optionTitle: option.title, visual })
+                  setFocusedDiagram({ optionId: focusedOption.id, optionTitle: focusedOption.title, visual })
                 }
+                onActivateAnchor={setActiveAnchor}
               />
-            ))}
-          </div>
+              {/* Whole-option comment/ask — a persistent composer below the
+                  focused option (not hover-gated), anchored to the option
+                  itself (optionId, no section). */}
+              <div className="px-3.5 py-3 border-t border-border-subtle">
+                <div className="text-2xs uppercase tracking-wide text-text-muted font-semibold mb-2">
+                  Comment or ask about {focusedOption.title}
+                </div>
+                <CommentThread
+                  artifactId={artifactId}
+                  comments={threadsByAnchor[`${focusedOption.id}|`] ?? []}
+                  target={{ artifactId, optionId: focusedOption.id }}
+                  placeholder={`Comment on ${focusedOption.title} as a whole — the agent sees it on this option…`}
+                  submitLabel="Comment"
+                  textareaLabel={`Comment on ${focusedOption.title}`}
+                  secondarySubmitLabel="Ask"
+                  secondarySubmitTitle={`Ask the agent a question about ${focusedOption.title}`}
+                  roomy
+                />
+              </div>
+            </div>
+          ) : (
+            <div className={`grid ${gridCols}`}>
+              {event.options.map((option, idx) => (
+                <WorkbenchColumn
+                  key={option.id}
+                  option={option}
+                  artifactId={artifactId}
+                  lastInRow={idx === event.options.length - 1}
+                  commentCount={optionCommentCount(option.id)}
+                  onChoose={() => {
+                    // Reuse the card's exact selection handler, then collapse —
+                    // the card behind resolves (or shows the high-stakes
+                    // prediction capture) with the workbench out of the way.
+                    footerProps.onSelect(option.id);
+                    onClose();
+                  }}
+                  renderAffordance={affordance}
+                  onExpandDiagram={(visual) =>
+                    setFocusedDiagram({ optionId: option.id, optionTitle: option.title, visual })
+                  }
+                  onFocus={() => setFocusedOptionId(option.id)}
+                  onActivateAnchor={setActiveAnchor}
+                />
+              ))}
+            </div>
+          )}
 
-          {/* Comment rail — grain threads + the active composer. */}
+          {/* Comment rail — only claims width once there's a thread/composer;
+              before that the options get the full width (see hasRail). */}
+          {hasRail && (
           <div
             className="border-t min-[820px]:border-t-0 min-[820px]:border-l border-border-subtle bg-surface-secondary flex flex-col min-w-0"
             data-testid="decision-workbench-rail"
@@ -248,12 +346,6 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
               Comments
             </div>
             <div className="flex-1 overflow-auto px-3 pb-3 space-y-3">
-              {railAnchors.length === 0 && (
-                <p className="text-2xs text-text-muted italic">
-                  Hover any part — a pro, a con, the question — and hit 💬 to start a thread the agent
-                  sees attached to that exact thing.
-                </p>
-              )}
               {railAnchors.map((anchor) => {
                 const target = { artifactId, ...anchorTarget(anchor) };
                 const key = anchorKey(anchor);
@@ -278,12 +370,14 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                       textareaLabel={`Comment on ${anchor.label}`}
                       secondarySubmitLabel="Ask"
                       secondarySubmitTitle="Ask the agent a question anchored to this part"
+                      roomy
                     />
                   </div>
                 );
               })}
             </div>
           </div>
+          )}
         </div>
 
         {/* Decision-level actions — reuse DecisionFooter verbatim. */}
@@ -364,7 +458,18 @@ interface WorkbenchColumnProps {
   commentCount: number;
   onChoose: () => void;
   renderAffordance: (anchor: GrainAnchor, className?: string) => ReactNode;
+  /** Click anywhere on a section row to open its composer (mouse convenience;
+   *  the 💬 button inside each row stays the keyboard/SR-accessible trigger). */
+  onActivateAnchor?: (anchor: GrainAnchor) => void;
   onExpandDiagram: (visual: PlanVisual) => void;
+  /** Pop this option out to a focused, full-width view. Omitted when the
+   *  column IS the focused view (so it doesn't offer to focus itself). */
+  onFocus?: () => void;
+  /** True when this column IS the focused (popped-out) view. Suppresses the
+   *  column-head WHOLE-OPTION 💬 affordance — in the pop-out the persistent
+   *  inline "Comment or ask about {option}" composer is the sole whole-option
+   *  surface, so the head 💬 (which opened a rail composer) would double it. */
+  focused?: boolean;
 }
 
 /**
@@ -381,14 +486,17 @@ function WorkbenchColumn({
   onChoose,
   renderAffordance,
   onExpandDiagram,
+  onFocus,
+  onActivateAnchor,
+  focused,
 }: WorkbenchColumnProps) {
   const title = option.title;
   return (
     <div className={`flex flex-col min-w-0 ${lastInRow ? "" : "min-[820px]:border-r"} border-border-subtle`}>
       {/* Column head — name, recommended chip, per-option comment count, chips. */}
       <div className="px-3.5 pt-3 pb-2.5 border-b border-border-subtle">
-        <div className="flex items-center gap-2">
-          <h4 className="text-sm font-semibold text-text-primary truncate">{title}</h4>
+        <div className="flex items-center gap-2 min-w-0">
+          <h4 className="flex-1 min-w-0 text-sm font-semibold text-text-primary truncate">{title}</h4>
           {option.recommendation && (
             <span
               className="text-2xs font-bold tracking-wide text-accent-violet bg-accent-violet-dim rounded px-1.5 py-0.5 shrink-0"
@@ -399,20 +507,36 @@ function WorkbenchColumn({
           )}
           {commentCount > 0 && (
             <span
-              className="ml-auto text-2xs font-semibold text-accent-blue bg-accent-blue-dim rounded px-1.5 py-0.5 shrink-0"
+              className="text-2xs font-semibold text-accent-blue bg-accent-blue-dim rounded px-1.5 py-0.5 shrink-0"
               title={`${commentCount} comment${commentCount === 1 ? "" : "s"} on this option`}
               data-testid="option-comment-count"
             >
               {commentCount} 💬
             </span>
           )}
+          {onFocus && (
+            <button
+              onClick={onFocus}
+              aria-label="Pop out this option to a focused, full-width view"
+              title="Pop out this option to a focused, full-width view"
+              data-testid="option-popout"
+              className="shrink-0 inline-flex items-center justify-center w-6 h-6 text-xs text-text-secondary hover:text-accent-blue border border-border-default hover:border-accent-blue rounded bg-surface-elevated transition-colors press-scale"
+            >
+              ⤢
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
           <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.effort]}`}>effort: {option.effort}</span>
           <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>{option.risk} risk</span>
-          <span className="group inline-flex ml-auto">
-            {renderAffordance({ optionId: option.id, label: `${title} · whole option` })}
-          </span>
+          {/* Whole-option 💬 — the grid's entry point for a comment on the option
+              as a whole. Suppressed in the focused (pop-out) column, where the
+              persistent inline composer below is the sole whole-option surface. */}
+          {!focused && (
+            <span className="group inline-flex ml-auto">
+              {renderAffordance({ optionId: option.id, label: `${title} · whole option` })}
+            </span>
+          )}
         </div>
         {option.concept?.name && (
           <div className="mt-2">
@@ -436,7 +560,11 @@ function WorkbenchColumn({
           <div className="text-2xs uppercase tracking-wide text-text-muted font-semibold mb-1">Pros</div>
           <div className="space-y-0.5">
             {option.pros.map((pro, i) => (
-              <div key={i} className="group flex items-start gap-1.5 text-xs -mx-1 px-1 rounded hover:bg-surface-hover">
+              <div
+                key={i}
+                onClick={() => onActivateAnchor?.({ optionId: option.id, sectionId: `pro:${i}`, label: `${title} · pro` })}
+                className="group flex items-start gap-1.5 text-xs -mx-1 px-1 rounded hover:bg-surface-hover cursor-pointer"
+              >
                 <span className="text-accent-green shrink-0 mt-0.5" aria-hidden="true">✓</span>
                 <span className="text-text-secondary flex-1 min-w-0">{pro}</span>
                 {renderAffordance({ optionId: option.id, sectionId: `pro:${i}`, label: `${title} · pro` })}
@@ -452,7 +580,11 @@ function WorkbenchColumn({
           <div className="text-2xs uppercase tracking-wide text-text-muted font-semibold mb-1">Cons</div>
           <div className="space-y-0.5">
             {option.cons.map((con, i) => (
-              <div key={i} className="group flex items-start gap-1.5 text-xs -mx-1 px-1 rounded hover:bg-surface-hover">
+              <div
+                key={i}
+                onClick={() => onActivateAnchor?.({ optionId: option.id, sectionId: `con:${i}`, label: `${title} · con` })}
+                className="group flex items-start gap-1.5 text-xs -mx-1 px-1 rounded hover:bg-surface-hover cursor-pointer"
+              >
                 <span className="text-accent-red shrink-0 mt-0.5" aria-hidden="true">✗</span>
                 <span className="text-text-secondary flex-1 min-w-0">{con}</span>
                 {renderAffordance({ optionId: option.id, sectionId: `con:${i}`, label: `${title} · con` })}

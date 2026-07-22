@@ -415,6 +415,32 @@ async function openDecisionWorkbench(page: import("@playwright/test").Page): Pro
   );
 }
 
+/** #174 interaction pass — mount the POPPED-OUT option + its persistent inline
+ *  whole-option composer for real before scanning (the #187 hollow-net lesson:
+ *  actually render the NEW states, never assert an empty scan). Opens the
+ *  workbench, clicks the first option's ⤢ pop-out, and waits for the focused
+ *  option column + its roomy comment/ask composer (whose textarea's exact
+ *  accessible name is the bare option title). The clickable pro/con rows
+ *  (cursor-pointer divs with onClick, the 💬 button still the announced control)
+ *  are in this scanned subtree, so a new axe violation from them would fail. */
+async function openWorkbenchPoppedOut(page: import("@playwright/test").Page): Promise<void> {
+  await openDecisionWorkbench(page);
+  await page.locator('[data-testid="decision-workbench"] [data-testid="option-popout"]').first().click();
+  await page.waitForSelector('[data-testid="workbench-focused-option"]', { timeout: 15000 });
+  // The inline whole-option composer is anchored to the option itself — its
+  // textarea's accessible name is the bare option title (exact, so the grain
+  // "· pro/con/summary/whole option" affordance buttons don't collide).
+  await page.getByLabel("Comment on Redis", { exact: true }).waitFor({ timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
 test("a11y (#174): the decision WORKBENCH (open) has no serious/critical axe violations — dark", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
@@ -461,6 +487,58 @@ test("keyboard (#174): the Discuss affordance is reachable and the workbench is 
   // Esc collapses it back to the card (the useModal contract).
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+});
+
+test("a11y (#174): the workbench POPPED-OUT option + inline whole-option composer — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openWorkbenchPoppedOut(page);
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    // Zero disabled rules — the focused option column, its ← Back button, the
+    // roomy inline whole-option comment/ask composer, the grain affordances, and
+    // the clickable pro/con rows (non-role divs; the 💬 button is the announced
+    // control) must all pass as-is.
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (workbench popped-out, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#174): the workbench POPPED-OUT option + inline whole-option composer — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openWorkbenchPoppedOut(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (workbench popped-out, light):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("keyboard (#174): the ⤢ pop-out and the ← Back button are reachable + operable", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  await page.getByRole("button", { name: /Expand to discuss/i }).click();
+  await page.waitForSelector('[data-testid="decision-workbench"]', { timeout: 15000 });
+
+  // The per-option ⤢ pop-out is a real focusable button — reach it, activate by Enter.
+  const popout = page.locator('[data-testid="option-popout"]').first();
+  await popout.focus();
+  await expect(popout).toBeFocused();
+  await popout.press("Enter");
+
+  // The focused option column mounted (with its inline composer).
+  await page.waitForSelector('[data-testid="workbench-focused-option"]', { timeout: 15000 });
+
+  // The ← Back button is reachable + operable, returning to the compare grid.
+  const back = page.getByRole("button", { name: /Back to all options/i });
+  await back.focus();
+  await expect(back).toBeFocused();
+  await back.press("Enter");
+  await expect(page.locator('[data-testid="workbench-focused-option"]')).toHaveCount(0);
+  // Back in the grid — the pop-out buttons are present again.
+  await expect(page.locator('[data-testid="option-popout"]').first()).toBeVisible();
 });
 
 test("a11y (#173): the decision diagram FOCUSED VIEW has no serious/critical axe violations — dark", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
@@ -276,5 +276,195 @@ describe("#174 — decision-level actions work from the workbench", () => {
     await openWorkbench(user);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByTestId("decision-workbench")).not.toBeInTheDocument());
+  });
+});
+
+describe("workbench interaction pass — the comment rail COLLAPSES until there's discussion", () => {
+  it("with no comments and no active anchor, the rail is NOT rendered (options get the full width)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    // Empty deliberation → no rail (before this pass an empty 384px rail
+    // squished the columns).
+    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
+  });
+
+  it("activating a part (its 💬 affordance) slides the rail in with that composer", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /Comment on the decision question/i }));
+    // Now there's a live composer → the rail claims its column.
+    expect(within(dialog).getByTestId("decision-workbench-rail")).toBeInTheDocument();
+  });
+
+  it("a pre-existing grain comment renders the rail on open (a thread exists to show)", async () => {
+    seedGrainComment({ id: "g1", optionId: "o1", sectionId: "pro:0", content: "love this TTL" });
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    expect(within(dialog).getByTestId("decision-workbench-rail")).toBeInTheDocument();
+  });
+});
+
+describe("workbench interaction pass — per-option ⤢ pop-out (focus one option full-width)", () => {
+  it("clicking an option's ⤢ shows ONLY that option; 'Back to all options' returns to the grid", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+
+    // The compare grid shows every option, each with a pop-out button.
+    const popouts = within(dialog).getAllByTestId("option-popout");
+    expect(popouts).toHaveLength(3);
+    expect(within(dialog).getByRole("heading", { name: "Postgres" })).toBeInTheDocument();
+
+    // Pop out the FIRST option (Redis, o1) → only it remains, full-width.
+    await user.click(popouts[0]!);
+    const focused = within(dialog).getByTestId("workbench-focused-option");
+    expect(within(focused).getByRole("heading", { name: "Redis" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: "Postgres" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: "In-memory" })).not.toBeInTheDocument();
+    // The focused column doesn't offer to focus itself (no pop-out button in it).
+    expect(within(dialog).queryByTestId("option-popout")).not.toBeInTheDocument();
+
+    // Back returns to the full compare grid.
+    await user.click(within(dialog).getByRole("button", { name: /Back to all options/i }));
+    expect(within(dialog).queryByTestId("workbench-focused-option")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "Postgres" })).toBeInTheDocument();
+    expect(within(dialog).getAllByTestId("option-popout")).toHaveLength(3);
+  });
+
+  it("the pop-out inline composer posts a WHOLE-OPTION comment (bare optionId, NO sectionId, roomy)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    await user.click(within(dialog).getAllByTestId("option-popout")[0]!);
+
+    // The persistent inline composer is anchored to the OPTION itself — its
+    // textarea's accessible name is the bare option title (no "· pro/con").
+    const box = within(dialog).getByRole("textbox", { name: "Comment on Redis" });
+    await user.type(box, "managed Redis is basically zero ops though");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body);
+    expect(body.target.optionId).toBe("o1");
+    expect(body.target.sectionId).toBeUndefined();
+    expect(body.target.artifactId).toBe("art_dec");
+  });
+
+  it("GRID mode: a whole-option comment stays in the rail (its thread) — the head 💬 is the grid's whole-option entry point", async () => {
+    // optionId, NO sectionId → key "o1|". In the compare GRID this is NOT
+    // filtered out: the rail is the whole-option surface here (mode-coherent
+    // with the pop-out, where the inline composer owns it).
+    seedGrainComment({ id: "wo1", optionId: "o1", content: "whole-option note here" });
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+
+    expect(within(dialog).getByTestId("decision-workbench-rail")).toBeInTheDocument();
+    const thread = within(dialog).getByTestId("workbench-thread");
+    expect(within(thread).getByText("whole-option note here")).toBeInTheDocument();
+  });
+
+  it("POP-OUT mode: a whole-option comment renders EXACTLY ONCE (inline) — no rail double-show (reviewer's 2-render repro)", async () => {
+    // Pop out an option that already has a whole-option comment. Pre-fix, the
+    // focused column still rendered the head whole-option 💬 whose activeAnchor
+    // re-added the bare-option key to the rail → the SAME comment rendered twice
+    // (inline composer + rail). Fix: suppress the head 💬 in the focused column
+    // and exclude "opt|" keys from the rail in pop-out — inline is the sole
+    // whole-option surface, so it shows once.
+    seedGrainComment({ id: "wo1", optionId: "o1", content: "whole-option note here" });
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    await user.click(within(dialog).getAllByTestId("option-popout")[0]!);
+    const focused = within(dialog).getByTestId("workbench-focused-option");
+
+    // The head whole-option 💬 (the double-show trigger) is gone in the pop-out.
+    expect(within(focused).queryByRole("button", { name: /whole option/i })).not.toBeInTheDocument();
+    // The comment renders exactly once (inline), and the rail doesn't double it.
+    expect(within(dialog).getAllByText("whole-option note here")).toHaveLength(1);
+    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
+  });
+});
+
+describe("workbench interaction pass — layered Esc + click-to-comment rows", () => {
+  it("layered Esc: from a popped-out option Esc returns to the grid (stays OPEN); from the grid Esc closes", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    await user.click(within(dialog).getAllByTestId("option-popout")[0]!);
+    expect(within(dialog).getByTestId("workbench-focused-option")).toBeInTheDocument();
+
+    // Esc #1 (focusedOptionId set) — un-focus back to the compare grid; the
+    // workbench must STAY open (onClose NOT called). Fire on the panel directly
+    // so the assertion doesn't hinge on where focus landed after the unmount.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByTestId("decision-workbench")).toBeInTheDocument();
+    expect(screen.queryByTestId("workbench-focused-option")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("decision-workbench")).getByRole("heading", { name: "Postgres" })).toBeInTheDocument();
+
+    // Esc #2 (no focusedOptionId) — delegates to useModal's onKeyDown → onClose.
+    fireEvent.keyDown(screen.getByTestId("decision-workbench"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("decision-workbench")).not.toBeInTheDocument());
+  });
+
+  it("clicking a con ROW opens that anchor's composer with the EXACT anchor {optionId, sectionId} (a #187 payload, not a MouseEvent)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+
+    // Click the con ROW text itself (the clickable div), NOT the 💬 button.
+    await user.click(within(dialog).getByText("Adds an ops dependency"));
+
+    // The row dispatched the exact grain anchor, so the rail opened THIS
+    // composer (labelled for Redis · con). A MouseEvent-as-anchor bug would open
+    // a bare "option" composer and the POST would carry no optionId/sectionId.
+    const box = within(dialog).getByRole("textbox", { name: /Comment on Redis · con/i });
+    await user.type(box, "how much ops really?");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const body = JSON.parse((fetch as any).mock.calls.at(-1)[1].body);
+    expect(body.target.optionId).toBe("o1");
+    expect(body.target.sectionId).toBe("con:0");
+    expect(body.target.artifactId).toBe("art_dec");
+  });
+
+  it("the 💬 row button still works as the keyboard/SR trigger (click-to-comment is additive)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    // The explicit button path opens the same composer as the row click.
+    await user.click(within(dialog).getByRole("button", { name: /Comment on Redis · pro/i }));
+    expect(within(dialog).getByRole("textbox", { name: /Comment on Redis · pro/i })).toBeInTheDocument();
+  });
+
+  it("← Back clears a section composer activated while popped out (no stray rail lingering in the grid)", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    await user.click(within(dialog).getAllByTestId("option-popout")[0]!);
+    const focused = within(dialog).getByTestId("workbench-focused-option");
+
+    // Activate a SECTION composer while popped out → the rail opens alongside.
+    await user.click(within(focused).getByText("Adds an ops dependency"));
+    expect(within(dialog).getByTestId("decision-workbench-rail")).toBeInTheDocument();
+
+    // Back to the grid — activeAnchor is cleared too, so the composer doesn't
+    // linger as a stray rail over the compare grid (pre-fix it would).
+    await user.click(within(dialog).getByRole("button", { name: /Back to all options/i }));
+    expect(within(dialog).queryByTestId("workbench-focused-option")).not.toBeInTheDocument();
+    expect(within(dialog).queryByTestId("decision-workbench-rail")).not.toBeInTheDocument();
+  });
+
+  it("the workbench modal is the wider 1280px surface", async () => {
+    const user = userEvent.setup();
+    render(<DecisionCard event={event} decisionId="dec_store" artifactId="art_dec" />);
+    const dialog = await openWorkbench(user);
+    expect(dialog.className).toContain("max-w-[1280px]");
   });
 });

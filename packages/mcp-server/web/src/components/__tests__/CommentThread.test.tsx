@@ -126,6 +126,82 @@ describe("AskTrigger popover — U3 outside-click / Escape dismiss", () => {
   });
 });
 
+describe("roomy composer — opt-in, OFF by default (the decision workbench)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  // The markdown body of a posted bubble carries `text-text-primary space-y-1`
+  // in BOTH modes; the size class in front of it (text-xs vs text-sm) is what
+  // roomy flips. Selecting on that stable pair isolates the bubble from the
+  // composer textarea (which also has text-text-primary, but not space-y-1).
+  const bubbleOf = (container: HTMLElement) =>
+    container.querySelector(".text-text-primary.space-y-1") as HTMLElement;
+
+  it("default (roomy omitted): dense composer — rows=2, text-xs, INLINE buttons, text-xs bubbles", () => {
+    const bubble = mk({ id: "b1", author: "human", content: "posted bubble" });
+    const { container } = render(
+      <CommentThread
+        artifactId="art_1"
+        comments={[bubble]}
+        submitLabel="Comment"
+        secondarySubmitLabel="Ask"
+        textareaLabel="dense composer"
+      />,
+    );
+
+    const ta = screen.getByRole("textbox", { name: "dense composer" });
+    expect(ta).toHaveAttribute("rows", "2");
+    expect(ta.className).toContain("text-xs");
+    expect(ta.className).toContain("resize-none");
+    expect(ta.className).not.toContain("resize-y");
+
+    // Buttons sit INLINE beside the textarea: the composer row is `items-end`
+    // and the button wrapper is a `contents` pass-through (no stacking box).
+    expect(ta.parentElement?.className).toContain("items-end");
+    expect(ta.parentElement?.className).not.toContain("flex-col");
+    const send = screen.getByRole("button", { name: "Comment" });
+    expect(send.parentElement?.className).toContain("contents");
+
+    // Posted bubble is the dense text-xs (not the roomy text-sm).
+    expect(bubbleOf(container).className).toContain("text-xs");
+    expect(bubbleOf(container).className).not.toContain("text-sm");
+  });
+
+  it("roomy: taller composer — rows=4, text-sm + resize-y + min-height, STACKED buttons, text-sm bubbles", () => {
+    const bubble = mk({ id: "b1", author: "human", content: "posted bubble" });
+    const { container } = render(
+      <CommentThread
+        artifactId="art_1"
+        comments={[bubble]}
+        submitLabel="Comment"
+        secondarySubmitLabel="Ask"
+        textareaLabel="roomy composer"
+        roomy
+      />,
+    );
+
+    const ta = screen.getByRole("textbox", { name: "roomy composer" });
+    expect(ta).toHaveAttribute("rows", "4");
+    expect(ta.className).toContain("text-sm");
+    expect(ta.className).toContain("resize-y");
+    expect(ta.className).toContain("min-h-[6.5rem]");
+    expect(ta.className).not.toContain("resize-none");
+
+    // Buttons STACK BELOW the textarea: the composer is a `flex-col` column and
+    // the buttons live in their own right-aligned row (not a `contents` inline).
+    expect(ta.parentElement?.className).toContain("flex-col");
+    expect(ta.parentElement?.className).not.toContain("items-end");
+    const send = screen.getByRole("button", { name: "Comment" });
+    expect(send.parentElement?.className).toContain("justify-end");
+    expect(send.parentElement?.className).not.toContain("contents");
+
+    // Posted bubble is the readable text-sm.
+    expect(bubbleOf(container).className).toContain("text-sm");
+    expect(bubbleOf(container).className).not.toContain("text-xs");
+  });
+});
+
 describe("F7 — depth-2 replies render (they used to visibly vanish)", () => {
   it("a reply to a reply appears in the thread", () => {
     const mk = (id: string, parentCommentId: string | null, content: string) =>

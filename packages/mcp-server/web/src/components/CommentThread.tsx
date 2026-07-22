@@ -31,6 +31,11 @@ interface CommentThreadProps {
   // no separate popover to reach the ask path.
   secondarySubmitLabel?: string;
   secondarySubmitTitle?: string;
+  // Roomier layout for a narrow side-rail (the decision workbench): a taller,
+  // auto-growing, larger-text composer stacked above its buttons, and posted
+  // comments in readable `text-sm`. Off everywhere else, so the dense inline
+  // threads (line comments, plan/spec) stay byte-for-byte unchanged.
+  roomy?: boolean;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -49,7 +54,7 @@ function Avatar({ author }: { author: string }) {
 }
 
 
-function CommentBubble({ comment, fromVersion }: { comment: Comment; fromVersion?: number }) {
+function CommentBubble({ comment, fromVersion, roomy }: { comment: Comment; fromVersion?: number; roomy?: boolean }) {
   const isHuman = comment.author === "human";
   const refs = (comment as any).codeReferences as Array<{
     filePath: string;
@@ -125,7 +130,7 @@ function CommentBubble({ comment, fromVersion }: { comment: Comment; fromVersion
         </div>
         {/* Render markdown (the agent writes **bold**, `code`, lists) instead of
             plain text — pre-this it showed the literal asterisks. */}
-        <SimpleMarkdown text={comment.content} className="text-xs text-text-primary space-y-1" />
+        <SimpleMarkdown text={comment.content} className={`${roomy ? "text-sm leading-relaxed" : "text-xs"} text-text-primary space-y-1`} />
 
         {/* Code reference blocks */}
         {refs && refs.length > 0 && (
@@ -156,6 +161,7 @@ export function CommentThread({
   textareaLabel,
   secondarySubmitLabel,
   secondarySubmitTitle,
+  roomy,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -210,11 +216,11 @@ export function CommentThread({
       {threads.map(({ root: comment, replies }) => {
         return (
           <div key={comment.id} className="space-y-2">
-            <CommentBubble comment={comment} fromVersion={fromVersion(comment)} />
+            <CommentBubble comment={comment} fromVersion={fromVersion(comment)} roomy={roomy} />
             {replies.length > 0 && (
               <div className="ml-7 space-y-2 border-l border-border-subtle pl-3">
                 {replies.map((reply) => (
-                  <CommentBubble key={reply.id} comment={reply} fromVersion={fromVersion(reply)} />
+                  <CommentBubble key={reply.id} comment={reply} fromVersion={fromVersion(reply)} roomy={roomy} />
                 ))}
               </div>
             )}
@@ -222,9 +228,9 @@ export function CommentThread({
         );
       })}
 
-      <div className="flex gap-1.5 items-end">
+      <div className={roomy ? "flex flex-col gap-2" : "flex gap-1.5 items-end"}>
         <textarea
-          rows={2}
+          rows={roomy ? 4 : 2}
           placeholder={placeholder ?? "Add a comment… (⌘⏎ to send, Enter for newline)"}
           aria-label={textareaLabel}
           value={input}
@@ -236,10 +242,11 @@ export function CommentThread({
             }
           }}
           disabled={submitting}
-          className="flex-1 px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
-                     placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue
-                     disabled:opacity-50 resize-none"
+          className={`flex-1 px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-text-primary
+                     placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue disabled:opacity-50
+                     ${roomy ? "text-sm leading-relaxed resize-y min-h-[6.5rem]" : "text-xs resize-none"}`}
         />
+        <div className={roomy ? "flex gap-1.5 justify-end" : "contents"}>
         {secondarySubmitLabel && (
           <button
             onClick={() => handleSubmit("question")}
@@ -261,6 +268,7 @@ export function CommentThread({
         >
           {submitLabel ?? "Send"}
         </button>
+        </div>
       </div>
     </div>
   );
