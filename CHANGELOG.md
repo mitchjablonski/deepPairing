@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.1.18 — 2026-07-22
+
+The stale-signal shows everywhere a carried comment does. A fast-follow to
+v0.1.17: the CARRIED/STALE/ORPHAN carryover markers that answer *"the agent
+changed this — does your comment still apply?"* now render on the **default**
+decision surfaces, not only the Discuss workbench. Before this, a carried
+decision comment on the inline card showed with just a generic "from v1" chip and
+the stale-signal was hidden unless you opened Discuss. No schema change — the
+signal is derived read-side and an old daemon degrades gracefully.
+
+### Fixed
+- **Carryover markers render wherever a carried decision comment does.** The
+  CARRIED (green — part still live, text unchanged), STALE (amber — the part
+  survived but the agent changed the words), and ORPHAN (red — the option is gone
+  from v2) badges shipped in v0.1.17 only inside the Discuss workbench, yet a
+  decision's carried comments also surface on the inline **DecisionCard**, the
+  **OptionCard**, and the **ArtifactPanel** decision "Comments" view — where they
+  wore only a generic "from vN" chip that buried the "your comment may be stale
+  now" signal. The same honest badge now shows on all of them: a per-option
+  aggregate badge on `OptionCard`, a new lazy `DecisionGeneralComments` view in
+  the ArtifactPanel, and inline via the DecisionCard's option cards. `CommentThread`
+  gained an optional `carryoverFor` prop — when a comment carries, the richer badge
+  renders and the generic "from vN" chip is suppressed; the workbench doesn't pass
+  it, so its rail is byte-unchanged. Pro/con threads stay deliberately uncertain
+  (STALE, never a confident green) in the new surfaces too. Decision-only; no
+  other artifact type is touched.
+
+### Changed
+- **`computeCarryover` and `CarryoverBadge` are now a single shared source.** Both
+  were extracted verbatim out of `DecisionWorkbench` into `decision/carryover.ts`
+  and `decision/CarryoverBadge.tsx`, which the workbench now re-imports with
+  behavior byte-unchanged, so every default surface and the workbench compute the
+  marker from one implementation. A single-source identity test fails any future
+  fork.
+
 ## v0.1.17 — 2026-07-22
 
 The loop stays honest across change. Two follow-ups that keep the human↔agent
