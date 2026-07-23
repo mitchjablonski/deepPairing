@@ -24,6 +24,14 @@ function loadMermaid() {
         theme: "dark",
         securityLevel: "strict",
         fontFamily: "inherit",
+        // On a bad diagram mermaid otherwise injects its OWN "Syntax error" bomb
+        // graphic into document.body, which leaks to the bottom of the page —
+        // pure noise, since we already show a clean fallback AND report the
+        // failure to the agent (#176). With this set mermaid THROWS instead of
+        // drawing it, and the existing catch below handles the throw (fallback +
+        // report) unchanged. It also makes mermaid self-clean its temp layout
+        // node before throwing (belt: we also remove ours in the catch).
+        suppressErrorRendering: true,
       });
       return m.default;
     });
@@ -32,6 +40,22 @@ function loadMermaid() {
 }
 
 let renderSeq = 0;
+
+/**
+ * BELT — orphan cleanup. `mermaid.render(id, src)` appends a temp layout node —
+ * `#d<id>` (an enclosing div) wrapping `#<id>` (the svg) — to document.body to
+ * measure the diagram. On a SUCCESSFUL render, and (with suppressErrorRendering)
+ * on a THROW, mermaid removes it itself. This is a defensive net for the throw
+ * paths in case a future mermaid change leaves the node behind: removing the
+ * enclosing `d`-prefixed div takes its child svg with it; we drop the bare svg id
+ * too for safety. Scoped to the EXACT id this component minted, so no unrelated
+ * diagram's node is ever touched.
+ */
+function removeMermaidOrphan(id: string): void {
+  if (typeof document === "undefined") return;
+  document.getElementById(`d${id}`)?.remove();
+  document.getElementById(id)?.remove();
+}
 
 /**
  * Best-effort repair for the Mermaid mistakes agents make most: `\n` where they
@@ -136,17 +160,22 @@ export function MermaidDiagram({
     }
     (async () => {
       const mermaid = await loadMermaid();
+      const rawId = `${idPrefix.current}-${++renderSeq}`;
       try {
-        const { svg } = await mermaid.render(`${idPrefix.current}-${++renderSeq}`, src);
+        const { svg } = await mermaid.render(rawId, src);
         if (!cancelled) setSvg(svg);
         return;
       } catch (firstErr: any) {
+        // suppressErrorRendering makes mermaid THROW here (no bomb graphic) and
+        // self-clean its temp node — remove ours too as a belt (scoped to our id).
+        removeMermaidOrphan(rawId);
         // Fuzzy-safe repair pass: agents commonly ship unquoted-punctuation
         // labels / `\n` breaks. Try once with a repaired source before giving up.
         const fixed = repairMermaidSource(src);
         if (fixed !== src) {
+          const fixedId = `${idPrefix.current}-${++renderSeq}`;
           try {
-            const { svg } = await mermaid.render(`${idPrefix.current}-${++renderSeq}`, fixed);
+            const { svg } = await mermaid.render(fixedId, fixed);
             if (!cancelled) {
               setSvg(svg);
               setRepaired(true);
@@ -154,6 +183,7 @@ export function MermaidDiagram({
             return;
           } catch {
             /* repair didn't help — fall through to the source fallback */
+            removeMermaidOrphan(fixedId);
           }
         }
         if (!cancelled) {

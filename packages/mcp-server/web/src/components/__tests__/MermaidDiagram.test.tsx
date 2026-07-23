@@ -7,8 +7,9 @@ import { useOverlayStore } from "../../stores/overlay";
 // Mermaid needs real SVG layout, so mock it: control render() per test to
 // exercise both the success path and the fuzzy-safe fallback.
 const renderMock = vi.hoisted(() => vi.fn());
+const initializeMock = vi.hoisted(() => vi.fn());
 vi.mock("mermaid", () => ({
-  default: { initialize: vi.fn(), render: renderMock },
+  default: { initialize: initializeMock, render: renderMock },
 }));
 
 beforeEach(() => {
@@ -66,6 +67,44 @@ describe("MermaidDiagram", () => {
     expect(screen.queryByText(/Couldn.t render this diagram/i)).not.toBeInTheDocument();
     // The repaired source (quoted label) was what got re-rendered.
     expect(renderMock).toHaveBeenLastCalledWith(expect.any(String), expect.stringContaining('A["Curse: Weak (x), #79"]'));
+  });
+
+  it("initializes mermaid with suppressErrorRendering so it never draws its own 'Syntax error' graphic", async () => {
+    // The bomb graphic leaks to the bottom of the page; suppressing it makes
+    // mermaid THROW instead (the existing catch shows the fallback + reports).
+    renderMock.mockResolvedValue({ svg: "<svg aria-label='diagram'><text>ok</text></svg>" });
+    render(<MermaidDiagram source="graph TD; A-->B" />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    expect(initializeMock).toHaveBeenCalled();
+    const cfg = initializeMock.mock.calls[0]![0] as Record<string, unknown>;
+    // The suppression flag is present; the strict sanitization is untouched.
+    expect(cfg).toMatchObject({ suppressErrorRendering: true, securityLevel: "strict" });
+  });
+
+  it("removes mermaid's temp layout node from the DOM when a render fails (no orphan leak)", async () => {
+    // Real mermaid.render(id, src) appends `#d<id>` wrapping `#<id>` to
+    // document.body to lay the diagram out. Simulate that, then throw like a bad
+    // diagram does — the component must remove the node it minted so nothing
+    // leaks to the bottom of the page.
+    const seenIds: string[] = [];
+    renderMock.mockImplementation(async (id: string) => {
+      seenIds.push(id);
+      const wrap = document.createElement("div");
+      wrap.id = `d${id}`;
+      const svgNode = document.createElement("div");
+      svgNode.id = id;
+      wrap.appendChild(svgNode);
+      document.body.appendChild(wrap);
+      throw new Error("Parse error on line 2");
+    });
+    render(<MermaidDiagram source="graph TD; A-->B" />);
+    await waitFor(() => expect(screen.getByText(/Couldn.t render this diagram/i)).toBeInTheDocument());
+    expect(seenIds.length).toBeGreaterThan(0);
+    // Failure still sets the error fallback (unchanged) AND leaves no orphan.
+    for (const id of seenIds) {
+      expect(document.getElementById(id)).toBeNull();
+      expect(document.getElementById(`d${id}`)).toBeNull();
+    }
   });
 
   it("degrades to the source (fuzzy-safe) instead of crashing when it can't render", async () => {
