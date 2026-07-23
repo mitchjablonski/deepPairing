@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { buildThreads } from "../lib/threading";
 import { formatClockTime as formatTime } from "../lib/time";
 import { useDraft } from "../hooks/useDraft";
@@ -9,6 +9,12 @@ import { useChainComments } from "../hooks/useChainComments";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { isSessionLive } from "../stores/connection";
+// #180 — the SHARED carryover marker. Value import of the PRESENTATIONAL badge
+// only (never computeCarryover), so the entry chunk stays free of the Zod
+// coercion the read-model needs — the D6 lazy-Zod split. `CarryoverState` is a
+// type-only import (erased at build).
+import { CarryoverBadge } from "./decision/CarryoverBadge";
+import type { CarryoverState } from "./decision/carryover";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -36,6 +42,14 @@ interface CommentThreadProps {
   // comments in readable `text-sm`. Off everywhere else, so the dense inline
   // threads (line comments, plan/spec) stay byte-for-byte unchanged.
   roomy?: boolean;
+  // #180 — an optional per-comment carryover resolver. Passed ONLY by the
+  // default decision surfaces (the ArtifactPanel decision-comment thread); when
+  // it returns a non-`none` state for a comment, the richer CARRIED / STALE /
+  // ORPHAN badge renders in place of the generic "from vN" chip (no two
+  // conflicting version indicators). Omitted everywhere else, so every other
+  // thread — including the workbench's own rail, which shows its marker at the
+  // anchor level — is byte-for-byte unchanged.
+  carryoverFor?: (comment: Comment) => CarryoverState;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -165,6 +179,7 @@ export function CommentThread({
   secondarySubmitLabel,
   secondarySubmitTitle,
   roomy,
+  carryoverFor,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -217,14 +232,30 @@ export function CommentThread({
   return (
     <div className="space-y-3">
       {threads.map(({ root: comment, replies }) => {
+        // #180 — the carryover marker SUBSUMES the "from vN" chip: when a comment
+        // carries a state, show the richer badge and suppress the chip so there
+        // aren't two version indicators. `none` (or no resolver) → chip as before.
+        const co = carryoverFor?.(comment);
+        const carried = co != null && co.kind !== "none";
         return (
           <div key={comment.id} className="space-y-2">
-            <CommentBubble comment={comment} fromVersion={fromVersion(comment)} roomy={roomy} />
+            {carried && <CarryoverBadge state={co} />}
+            <CommentBubble comment={comment} fromVersion={carried ? undefined : fromVersion(comment)} roomy={roomy} />
             {replies.length > 0 && (
               <div className="ml-7 space-y-2 border-l border-border-subtle pl-3">
-                {replies.map((reply) => (
-                  <CommentBubble key={reply.id} comment={reply} fromVersion={fromVersion(reply)} roomy={roomy} />
-                ))}
+                {replies.map((reply) => {
+                  const rco = carryoverFor?.(reply);
+                  const rCarried = rco != null && rco.kind !== "none";
+                  // Fragment (not a wrapper div) so a reply with no carryover
+                  // marker renders EXACTLY as before — the parent's space-y-2
+                  // still targets the bubbles as direct children.
+                  return (
+                    <Fragment key={reply.id}>
+                      {rCarried && <CarryoverBadge state={rco} />}
+                      <CommentBubble comment={reply} fromVersion={rCarried ? undefined : fromVersion(reply)} roomy={roomy} />
+                    </Fragment>
+                  );
+                })}
               </div>
             )}
           </div>

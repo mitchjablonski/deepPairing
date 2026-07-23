@@ -22,6 +22,10 @@ const CodeChangeArtifact = lazy(() => import("./artifacts/CodeChangeArtifact").t
 const ChangesetArtifact = lazy(() => import("./artifacts/ChangesetArtifact").then((m) => ({ default: m.ChangesetArtifact })));
 const ReasoningCard = lazy(() => import("./artifacts/ReasoningCard").then((m) => ({ default: m.ReasoningCard })));
 const SpecArtifact = lazy(() => import("./artifacts/SpecArtifact").then((m) => ({ default: m.SpecArtifact })));
+// #180 — the decision-comment thread with carryover markers. LAZY so its Zod
+// coercion (coerceDecisionContent) stays out of the entry chunk; only decision
+// artifacts mount it (every other type keeps the plain CommentThread below).
+const DecisionGeneralComments = lazy(() => import("./decision/DecisionGeneralComments").then((m) => ({ default: m.DecisionGeneralComments })));
 import { CommentThread } from "./CommentThread";
 import { useChainComments } from "../hooks/useChainComments";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
@@ -266,7 +270,17 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
         <h4 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
           Comments
         </h4>
-        <CommentThread artifactId={artifact.id} comments={generalComments} />
+        {/* #180 — for a DECISION artifact, the flat thread's grain comments get
+            the carryover marker (CARRIED / STALE / ORPHAN) instead of the bare
+            "from vN" chip. Lazy + decision-only so non-decision types keep the
+            plain thread unchanged and the entry chunk stays Zod-free. */}
+        {artifact.type === "decision" ? (
+          <Suspense fallback={<div className="h-16 rounded bg-surface-elevated animate-pulse" aria-label="Loading comments" role="status" />}>
+            <DecisionGeneralComments artifact={artifact} comments={generalComments} />
+          </Suspense>
+        ) : (
+          <CommentThread artifactId={artifact.id} comments={generalComments} />
+        )}
       </div>
     </m.div>
   );

@@ -6,6 +6,10 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { AskTrigger } from "../CommentThread";
 import { ConceptBadge } from "../ConceptBadge";
 import { badgeColors, type DecisionOption } from "./types";
+import { useArtifactStore } from "../../stores/artifact";
+import { useChainComments } from "../../hooks/useChainComments";
+import { optionCarryover } from "./carryover";
+import { CarryoverBadge } from "./CarryoverBadge";
 
 interface OptionCardProps {
   option: DecisionOption;
@@ -23,6 +27,17 @@ interface OptionCardProps {
 }
 
 export function OptionCard({ option, index, focused, submitting, artifactId, onSelect, onFocus, selectButtonRef }: OptionCardProps) {
+  // #180 — the inline card is a DEFAULT decision surface: a comment you left on
+  // this option carries onto the tuned version here too (useChainComments), so
+  // show the SAME carryover signal the workbench does instead of leaving it
+  // hidden behind Discuss. One aggregate badge per option (the loudest of its
+  // threads — a STALE thread outranks a CARRIED one); `optionCarryover` reuses
+  // the shared read-model. Gated on artifactId (no anchor → no comments).
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const chainComments = useChainComments(artifactId ?? "");
+  const carryover = artifactId
+    ? optionCarryover({ artifacts, comments: chainComments, currentArtifactId: artifactId, option })
+    : { kind: "none" as const };
   return (
     <m.div
       layout
@@ -80,6 +95,10 @@ export function OptionCard({ option, index, focused, submitting, artifactId, onS
           </div>
         )}
       </div>
+
+      {/* #180 — carryover marker for THIS option's carried comment(s). Renders
+          null unless a comment carried across a tune (CarryoverBadge). */}
+      <CarryoverBadge state={carryover} />
 
       {/* Description */}
       <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
