@@ -616,6 +616,48 @@ async function openCarryoverWorkbench(page: import("@playwright/test").Page): Pr
   );
 }
 
+/** #180 — mount the DEFAULT (non-workbench) decision surfaces of the SAME
+ *  superseded chain so the carryover markers are scanned WITHOUT opening the
+ *  Discuss workbench (the #187 hollow-net lesson: render the new states for
+ *  real). The inline OptionCards carry per-option markers and the flat "Comments"
+ *  thread carries per-comment ones; waits for BOTH a green CARRIED and a red
+ *  ORPHAN badge (ORPHAN only exists in the flat thread — a removed option has no
+ *  card) before settling animations, so a hollow scan can't "pass". */
+async function openCarryoverDefaultSurfaces(page: import("@playwright/test").Page): Promise<void> {
+  // The inline decision card mounts its Select buttons + the OptionCard markers.
+  await page.waitForSelector("button[data-select-option]", { timeout: 15000 });
+  // Workbench stays CLOSED — every badge here is a default-surface badge.
+  await expect(page.locator('[data-testid="decision-workbench"]')).toHaveCount(0);
+  await page.waitForSelector('[data-testid="carryover-badge"][data-carryover="carried"]', { timeout: 15000 });
+  // ORPHAN lives in the flat ArtifactPanel decision-comment thread (lazy chunk).
+  await page.waitForSelector('[data-testid="carryover-badge"][data-carryover="orphan"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#180): the DEFAULT decision carryover markers (OptionCard + flat thread) have no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11ycarry`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openCarryoverDefaultSurfaces(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (default carryover surfaces, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#180): the DEFAULT decision carryover markers have no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11ycarry`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openCarryoverDefaultSurfaces(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (default carryover surfaces, light):\n${fmt(serious)}`).toEqual([]);
+});
+
 test("a11y (#177): the workbench carryover markers (CARRIED/STALE/ORPHAN) have no serious/critical axe violations — dark", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11ycarry`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
