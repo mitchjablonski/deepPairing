@@ -272,6 +272,26 @@ test.beforeAll(async () => {
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed plan failed: ${r.status}`); });
 
+  // #181 — a plan carrying a GENUINELY-BROKEN diagram (an unclosed `{` rhombus:
+  // repairMermaidSource can't quote a label with no closing brace, so the repair
+  // is a no-op and the render is terminal). Its own session so this pathological
+  // source never disturbs the axe scans above. The #181 test mounts it and
+  // asserts mermaid's OWN "Syntax error" bomb graphic never leaks to document.body
+  // (suppressErrorRendering) while the component's clean fallback still renders.
+  const regBad = await fetch(`${baseURL}/api/internal/sessions/a11ymermaidbad/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regBad.ok) throw new Error(`seed bad-mermaid register failed: ${regBad.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11ymermaidbad/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "plan_mbad", type: "plan", title: "Plan with a broken diagram",
+      content: {
+        steps: [{ description: "wire it up", reasoning: "because" }],
+        estimatedChanges: 1,
+        visuals: [{ id: "arch_mbad", kind: "diagram", title: "Broken", source: "flowchart LR\n  A --> B{Valid?\n  B --> C" }],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed bad-mermaid plan failed: ${r.status}`); });
+
   // #177 slice 2a — a SUPERSEDED decision chain so the workbench mounts REAL
   // carryover markers (CARRIED / STALE / ORPHAN) for the axe scans (the #187
   // hollow-net lesson: actually render the new states). v1 is superseded (so the
@@ -1046,4 +1066,43 @@ test("a11y: the Ledger drawer with a stance row + armed remove confirm has no se
     .analyze();
   const armedSerious = armed.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(armedSerious, `axe violations (drawer, armed confirm):\n${fmt(armedSerious)}`).toEqual([]);
+});
+
+/**
+ * #181 — a genuinely-broken diagram must degrade to the component's clean
+ * fallback WITHOUT leaking mermaid's own "Syntax error" bomb graphic to the
+ * bottom of the page. This runs against REAL mermaid (not the unit-test mock):
+ * suppressErrorRendering makes mermaid throw instead of drawing the bomb, and
+ * the existing catch shows the source fallback + reports the failure (#176).
+ *
+ * PRE-FIX EVIDENCE: without `suppressErrorRendering: true` in loadMermaid()'s
+ * initialize config, mermaid draws its error diagram into a temp `#d<id>` node
+ * appended to document.body and throws BEFORE removing it — so the body-level
+ * assertions below (no `.error-icon`, no "Syntax error in text") FAIL: the leak
+ * is present. With the flag they pass.
+ */
+async function assertNoMermaidErrorLeak(page: import("@playwright/test").Page): Promise<void> {
+  // The component's clean fallback renders (source shown, honest message).
+  await page.getByText(/Couldn.t render this diagram/i).waitFor({ timeout: 15000 });
+  // Mermaid's OWN error graphic must be nowhere in the DOM: no bomb icon/text,
+  // and no orphaned temp render node (its enclosing div is id `d` + the minted
+  // `dp-mmd-*` id) left dangling at document.body.
+  await expect(page.locator(".error-icon")).toHaveCount(0);
+  await expect(page.locator(".error-text")).toHaveCount(0);
+  await expect(page.getByText("Syntax error in text")).toHaveCount(0);
+  await expect(page.locator('[id^="ddp-mmd"], [id^="dp-mmd"]')).toHaveCount(0);
+}
+
+test("#181: a broken diagram degrades to the fallback with NO mermaid error-graphic leak — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11ymermaidbad`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await assertNoMermaidErrorLeak(page);
+});
+
+test("#181: a broken diagram degrades to the fallback with NO mermaid error-graphic leak — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11ymermaidbad`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await assertNoMermaidErrorLeak(page);
 });
