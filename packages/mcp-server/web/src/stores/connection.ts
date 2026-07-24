@@ -490,6 +490,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // streaming on the same socket so the browser never knew its
           // optimistic state may be stale; the daemon broadcasts this so
           // we can refetch full state + toast the user.
+          // #182 KNOWN ASYMMETRY: this path still uses the old expiring info
+          // toast, NOT the persistent reload prompt the `connected`-restart path
+          // now uses — because here the SAME socket kept streaming, so the tab's
+          // bundle/token aren't necessarily stale. If a write DOES 401 after a
+          // resume, toastApiError's 401 identity check is the safety net that
+          // upgrades it to the reload toast. Left intentionally.
           fetch(`${apiBase()}/api/state`, {
             headers: { ...sessionHeaders(), "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
           })

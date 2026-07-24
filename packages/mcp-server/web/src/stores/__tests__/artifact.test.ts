@@ -442,6 +442,24 @@ describe("#182 — daemon-restart-under-tab (401-on-write identity check)", () =
     expect(toasts.some((t) => t.title === "Daemon restarted")).toBe(false);
     expect(toasts[0]!.title).toBe("Send comment failed");
   });
+
+  it("a BURST of 401 writes against the SAME restarted daemon fires the reload toast exactly ONCE (latch, not the toast queue)", async () => {
+    // Load-bearing dedup: the toast store's push() does NOT dedupe, so the
+    // once-per-restart latch (restartToastFiredFor) is the SOLE guard against a
+    // flurry of failed writes stacking N identical reload toasts. Two writes
+    // fail 401 against the same restarted daemon (both confirm daemon-B) → ONE
+    // reload toast, and BOTH raw auth errors suppressed. Neuter the latch and
+    // the second write adds a second toast → this goes red.
+    stubAuthFailWithDaemonInfo("daemon-B");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "one")).rejects.toMatchObject({ name: "ApiError" });
+    await expect(s.submitComment("a1", "two")).rejects.toMatchObject({ name: "ApiError" });
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.filter((t) => t.title === "Daemon restarted")).toHaveLength(1);
+    expect(toasts.some((t) => t.title === "Send comment failed")).toBe(false);
+  });
 });
 
 describe("D9 (M10) — WS echo replaces the optimistic provisional", () => {

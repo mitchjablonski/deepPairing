@@ -633,30 +633,58 @@ describe("connection store — daemon-restart detection (U4)", () => {
     expect(restart!.action?.label).toBe("Reload");
   });
 
-  it("#182 — fires the reload toast ONCE across repeated reconnects to the same NEW daemon (dedupe on startedAt)", async () => {
+  it("#182 — CROSS-PATH dedupe: a 401-confirmed restart AND the WS `connected` detection for the SAME new startedAt toast ONCE (shared latch)", async () => {
+    // The load-bearing job of restartToastFiredFor. NOTE: a pure-WS "A→B→B"
+    // reconnect can't prove the latch — U4's own `previousStartedAt !== new`
+    // store guard already suppresses the repeat, so that test would stay green
+    // even with the latch removed. The genuine race the latch exists for is
+    // CROSS-PATH: a write 401s and confirms the restart (toast #1) BEFORE the WS
+    // reconnect delivers the new `connected`. At that point the WS store guard
+    // does NOT suppress (the tab still knows daemon A), so the ONLY thing
+    // stopping a second toast is the latch shared between the two call sites.
+    // Neuter restartToastFiredFor → the WS path adds a second toast → red.
     const { useToastStore } = await import("../toast");
+    const { __resetDaemonRestartToast } = await import("../../lib/daemon-restart");
     useToastStore.getState().dismissAll();
+    __resetDaemonRestartToast();
+
     useConnectionStore.getState().connect();
-    // Daemon A boots the tab.
+    // Daemon A booted the tab (baseline — first connect never toasts).
     activeAdapter.emit({
-      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T12:00:00.000Z",
+      type: "connected", projectRoot: "/p", daemonStartedAt: "daemon-A",
       state: { sessionId: "s1", artifacts: [], comments: [] },
     });
     await flush();
-    // Daemon B takes over — and the reconnect loop re-delivers `connected` for
-    // the SAME new daemon (a WS blip during the new daemon's life).
+    expect(useToastStore.getState().toasts.filter((t) => t.title === "Daemon restarted")).toHaveLength(0);
+
+    // A write 401s BEFORE the WS reconnect reconciled: the tab still knows
+    // daemon A (window-exposed identity), /api/daemon-info reports daemon B → the
+    // 401 path confirms the restart and fires the reload toast (#1). (web-node:
+    // stub the window-exposed connection identity + fetch.)
+    vi.stubGlobal("window", {
+      __dpConnectionStore: { getState: () => ({ daemonStartedAt: "daemon-A", sessionId: "s1" }) },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: any) => {
+      if (String(url).includes("/api/daemon-info")) {
+        return new Response(JSON.stringify({ startedAt: "daemon-B" }),
+          { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(
+        JSON.stringify({ error: "Authorization required for this action.", code: "daemon_auth_required" }),
+        { status: 401, headers: { "Content-Type": "application/json" } });
+    }));
+    await expect(useArtifactStore.getState().submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
+    expect(useToastStore.getState().toasts.filter((t) => t.title === "Daemon restarted")).toHaveLength(1);
+
+    // NOW the WS reconnect delivers daemon B's `connected`. Its store guard
+    // (previous=daemon-A !== daemon-B) does NOT suppress — only the shared latch
+    // stops a second toast.
     activeAdapter.emit({
-      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T13:00:00.000Z",
+      type: "connected", projectRoot: "/p", daemonStartedAt: "daemon-B",
       state: { sessionId: "s1", artifacts: [], comments: [] },
     });
     await flush();
-    activeAdapter.emit({
-      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T13:00:00.000Z",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
-    });
-    await flush();
-    const restarts = useToastStore.getState().toasts.filter((t) => t.title.includes("Daemon restarted"));
-    expect(restarts).toHaveLength(1);
+    expect(useToastStore.getState().toasts.filter((t) => t.title === "Daemon restarted")).toHaveLength(1);
   });
 
   it("does NOT toast when reconnect carries the SAME daemonStartedAt (normal WS reconnect)", async () => {
