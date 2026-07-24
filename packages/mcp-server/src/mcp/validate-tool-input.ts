@@ -72,7 +72,10 @@ function formatValidationError(
   const text =
     `INPUT_VALIDATION_FAILED: ${toolName} refused — your input doesn't match the schema:\n` +
     issues.join("\n") + more + "\n\n" +
-    `Expected shape (minimal example):\n${example}\n\n` +
+    // #183 — self-label the sample so a confused agent doesn't replay it as
+    // real content. The echo guard (checkExampleEcho, below) is the real net;
+    // this label is the cheap first line of defense.
+    `Expected shape (EXAMPLE — replace EVERY value with your real content):\n${example}\n\n` +
     `Fix the input and call ${toolName} again. The artifact was NOT created.`;
   return {
     content: [{ type: "text", text }],
@@ -303,6 +306,218 @@ const EXAMPLE_CHANGESET = `{
   ]
 }`;
 
+// ---------------------------------------------------------------------------
+// #183 — EXAMPLE-ECHO GUARD.
+//
+// Field bug this closes: an agent's present_options call failed schema
+// validation; the INPUT_VALIDATION_FAILED message embeds the EXAMPLE_OPTIONS
+// payload ("Which cache layer?" / Redis / In-memory LRU) to teach the shape.
+// The confused agent echoed that example VERBATIM as a REAL call — twice —
+// minting junk "Which cache layer?" draft decisions in the user's real
+// session. An example realistic enough to teach the shape is realistic enough
+// to be replayed as content.
+//
+// The guard runs AFTER schema validation passes (the shape is valid — this is
+// a CONTENT problem, not a shape problem) and BEFORE the artifact is created.
+// It compares the payload's DISTINCTIVE content against fingerprints derived
+// straight from the example JSON (so they never drift from the teaching text).
+//
+// Precision over recall: the match rule is exact/trim/case only — NEVER fuzzy.
+// A real artifact that merely mentions caches / Redis / "cache layer" in prose
+// but carries a different context/options is ADMITTED. Each fingerprint keys
+// off a field distinctive enough that no real artifact collides with it (the
+// example titles/contexts/statements were chosen to be memorable, which is
+// exactly why they make good — and safe — fingerprints).
+
+/** Read a property from an unknown value without asserting `any` — returns
+ *  undefined for non-objects, keeping the guard total and lint-clean. */
+const prop = (v: unknown, key: string): unknown =>
+  v && typeof v === "object" ? (v as Record<string, unknown>)[key] : undefined;
+/** Trim + lowercase; non-strings normalize to "" (never match). */
+const normEcho = (v: unknown): string => (typeof v === "string" ? v.trim().toLowerCase() : "");
+/** Pluck a field off each element of a list-valued property, normalized to a
+ *  sorted set of non-empty terms. */
+const pluckSet = (v: unknown, listKey: string, field: string): string[] => {
+  const list = prop(v, listKey);
+  const items = Array.isArray(list) ? list : [];
+  return items.map((x) => normEcho(prop(x, field))).filter((s) => s.length > 0).sort();
+};
+/** Two sets are equal (order-independent) and BOTH non-empty. An empty
+ *  candidate set never matches — an artifact with no options/findings/steps
+ *  can't be an echo of an example that has them. */
+const echoSetEq = (a: string[], b: string[]): boolean =>
+  a.length > 0 && a.length === b.length && a.every((v, i) => v === b[i]);
+
+// Parse the examples ONCE into objects so every fingerprint is derived from the
+// same source string the error message emits. Edit an example → its fingerprint
+// tracks it automatically. (JSON.parse yields untyped values read only through
+// the `prop`/`normEcho` helpers above.)
+const EX_OPTIONS: unknown = JSON.parse(EXAMPLE_OPTIONS);
+const EX_FINDINGS: unknown = JSON.parse(EXAMPLE_FINDINGS);
+const EX_SPEC: unknown = JSON.parse(EXAMPLE_SPEC);
+const EX_PLAN: unknown = JSON.parse(EXAMPLE_PLAN);
+const EX_CODE_CHANGE: unknown = JSON.parse(EXAMPLE_CODE_CHANGE);
+const EX_REASONING: unknown = JSON.parse(EXAMPLE_REASONING);
+const EX_CHANGESET: unknown = JSON.parse(EXAMPLE_CHANGESET);
+
+const optionTitles = (o: unknown): string[] => pluckSet(o, "options", "title");
+const findingTitles = (o: unknown): string[] => pluckSet(o, "findings", "title");
+const reqStatements = (o: unknown): string[] => pluckSet(o, "requirements", "statement");
+const stepDescriptions = (o: unknown): string[] => pluckSet(o, "steps", "description");
+
+/**
+ * Per-tool echo matchers. Each returns true iff `data` (already schema-valid)
+ * reproduces the tool's example distinctively enough to be a verbatim replay.
+ * Keyed by the SAME toolName strings the validators pass to
+ * formatValidationError, so a new tool with an embedded example just adds a
+ * matcher here.
+ *
+ * Field choices (and why they're false-positive-safe):
+ *  - options:   context OR the option-title set. A real cache decision with a
+ *               different question or different option titles is admitted.
+ *  - findings:  summary OR the finding-title set. ("Two issues in auth.ts" is
+ *               the example summary — no real audit reuses it verbatim.)
+ *  - spec:      title OR the requirement-statement set. NOT objective —
+ *               "Block credential stuffing" is reused by real spec tests, so
+ *               matching on it would be a false positive.
+ *  - plan:      title OR the step-description set.
+ *  - code_change: filePath AND before AND after must ALL match — the fully
+ *               distinctive tuple (a bcrypt 4→12 fix in that exact file is the
+ *               example; any single field alone is a plausible real change).
+ *  - reasoning: action OR reasoning (both example sentences are distinctive;
+ *               a real note mentioning Redis in different words is admitted).
+ *  - changeset: title ONLY. A real changeset test reuses the example SUMMARY
+ *               with a different title — matching on summary would false-fire.
+ */
+const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
+  present_options: (d) =>
+    normEcho(prop(d, "context")) === normEcho(prop(EX_OPTIONS, "context")) ||
+    echoSetEq(optionTitles(d), optionTitles(EX_OPTIONS)),
+  present_findings: (d) =>
+    normEcho(prop(d, "summary")) === normEcho(prop(EX_FINDINGS, "summary")) ||
+    echoSetEq(findingTitles(d), findingTitles(EX_FINDINGS)),
+  present_spec: (d) =>
+    normEcho(prop(d, "title")) === normEcho(prop(EX_SPEC, "title")) ||
+    echoSetEq(reqStatements(d), reqStatements(EX_SPEC)),
+  present_plan: (d) =>
+    normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) ||
+    echoSetEq(stepDescriptions(d), stepDescriptions(EX_PLAN)),
+  present_code_change: (d) =>
+    normEcho(prop(d, "filePath")) === normEcho(prop(EX_CODE_CHANGE, "filePath")) &&
+    normEcho(prop(d, "before")) === normEcho(prop(EX_CODE_CHANGE, "before")) &&
+    normEcho(prop(d, "after")) === normEcho(prop(EX_CODE_CHANGE, "after")),
+  log_reasoning: (d) =>
+    normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) ||
+    normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
+  present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
+};
+
+/** The pointed, second-person-to-the-agent rejection. Fail-loud, in the grain
+ *  of the rejection gate: name what went wrong, name the fix, confirm no
+ *  artifact was created. */
+function formatExampleEchoError(toolName: string): ToolErrorResponse {
+  const code = TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED;
+  const text =
+    `${code}: ${toolName} refused — this is the EXAMPLE payload from the validation-error message, ` +
+    `not your real content. That sample only shows the SHAPE. Replace every value with your actual ` +
+    `content (your real decision/context, findings, plan, or change) and call ${toolName} again. ` +
+    `The artifact was NOT created.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true as const,
+    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] },
+  };
+}
+
+/**
+ * The single chokepoint. Called by every per-tool validator on the success
+ * path (and therefore by revise_artifact too, which reuses these validators):
+ * if the schema-valid `data` echoes the tool's teaching example, return the
+ * rejection; otherwise null (admit). Tools with no registered matcher (no
+ * embedded example) are always admitted.
+ */
+export function checkExampleEcho(toolName: string, data: unknown): ToolErrorResponse | null {
+  const matcher = ECHO_MATCHERS[toolName];
+  if (matcher && matcher(data)) return formatExampleEchoError(toolName);
+  return null;
+}
+
+/** Success-path wrapper: run the echo guard, then admit. Every validator ends
+ *  through here so the guard is applied uniformly (and impossible to forget). */
+function admit<T>(toolName: string, data: T): ValidationResult<T> {
+  const echo = checkExampleEcho(toolName, data);
+  if (echo) return { ok: false, error: echo };
+  return { ok: true, data };
+}
+
+// ---------------------------------------------------------------------------
+// #184 — TRUNCATED TOOL-CALL detection (the ROOT cause upstream of the echo).
+//
+// A #184 spike root-caused the field failure that PRECEDED the example-echo:
+// no server size cap exists (contexts to ~60KB pass; only the 64KiB body cap
+// trips, with a clear PAYLOAD_TOO_LARGE). The real failure was an
+// UPSTREAM-TRUNCATED tool call — `context` streams before `options`, the
+// model's turn was cut off mid-call, so args arrived with `context` present
+// but `options` absent. The generic Zod "options: expected array, received
+// undefined" mis-taught the agent (it invented a "1KB cap" AND replayed the
+// embedded example → the junk artifacts this PR's echo guard also nets).
+//
+// Detection signature: a required ARRAY field is `undefined` while a scalar
+// sibling the schema streams BEFORE it is a non-empty string. That specific
+// shape is what a mid-stream cutoff produces. We return a dedicated
+// TOOL_CALL_TRUNCATED error that — crucially — embeds NO example (the echo-able
+// example is exactly what burned us), so this path can't seed a replay. The
+// generic example-bearing error stays for every OTHER schema mismatch (e.g. a
+// present-but-wrong-type field, or the earlier sibling ALSO missing → the agent
+// simply malformed the call).
+//
+// Applied only where the signature is meaningful (justified per-tool in the PR
+// body): present_options (context→options) and present_findings
+// (summary→findings). Skipped for present_plan (its required array `steps` is
+// the FIRST advertised field — nothing streams before it), and for
+// present_spec / present_changeset (their required `title` is advertised LAST
+// via .extend and validated first, so a truncation reaching the required array
+// already surfaces as the title-missing path — and the echo guard still nets
+// any replay from it).
+
+function formatTruncationError(
+  toolName: string,
+  missingArray: string,
+  presentField: string,
+): ToolErrorResponse {
+  const code = TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED;
+  const text =
+    `${code}: ${toolName} refused — your tool call appears to have been TRUNCATED in transit: ` +
+    `\`${missingArray}\` is missing while \`${presentField}\` is present. This usually means the ` +
+    `arguments were cut off mid-message (more likely with a long ${presentField}). Retry with a ` +
+    `shorter ${presentField} or split the call. Do NOT resubmit any example payload as your ` +
+    `content. The artifact was NOT created.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true as const,
+    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] },
+  };
+}
+
+/** Return a TOOL_CALL_TRUNCATED error iff the truncation signature holds:
+ *  `presentField` is a non-empty string AND `missingArray` is undefined.
+ *  Otherwise null (let the caller fall through to the generic error). A
+ *  present-but-wrong-type array (e.g. `findings: "..."`) is NOT truncation —
+ *  it stays on the generic path. */
+function detectTruncatedCall(
+  toolName: string,
+  args: unknown,
+  presentField: string,
+  missingArray: string,
+): ToolErrorResponse | null {
+  const present = prop(args, presentField);
+  const missing = prop(args, missingArray);
+  if (typeof present === "string" && present.length > 0 && missing === undefined) {
+    return formatTruncationError(toolName, missingArray, presentField);
+  }
+  return null;
+}
+
 // Per-tool input adapters: pull the relevant args fields, run the matching
 // content schema. The schemas live in @deeppairing/shared and are already
 // the source of truth for what the daemon stores.
@@ -313,7 +528,10 @@ export function validatePresentFindingsInput(args: any): ValidationResult<z.infe
     findings: args?.findings,
     openQuestions: args?.openQuestions,
   });
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("present_findings", result.data);
+  // #184 — truncation preempts the example-bearing generic error.
+  const truncated = detectTruncatedCall("present_findings", args, "summary", "findings");
+  if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS) };
 }
 
@@ -335,7 +553,11 @@ const PresentOptionsInputSchema = z.object({
 
 export function validatePresentOptionsInput(args: any): ValidationResult<z.infer<typeof PresentOptionsInputSchema>> {
   const result = PresentOptionsInputSchema.safeParse(args);
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("present_options", result.data);
+  // #184 — the exact field bug: context streamed, options truncated away.
+  // Return the truncation error (no embedded example) BEFORE the generic one.
+  const truncated = detectTruncatedCall("present_options", args, "context", "options");
+  if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS) };
 }
 
@@ -357,7 +579,7 @@ export function validatePresentSpecInput(args: any): ValidationResult<z.infer<ty
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC) };
   }
-  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+  return admit("present_spec", { title: titleParse.data.title, ...contentParse.data });
 }
 
 export function validatePresentPlanInput(args: any): ValidationResult<z.infer<typeof PlanContentSchema> & { title: string }> {
@@ -373,7 +595,7 @@ export function validatePresentPlanInput(args: any): ValidationResult<z.infer<ty
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };
   }
-  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+  return admit("present_plan", { title: titleParse.data.title, ...contentParse.data });
 }
 
 export function validatePresentCodeChangeInput(args: any): ValidationResult<z.infer<typeof CodeChangeContentSchema>> {
@@ -387,7 +609,7 @@ export function validatePresentCodeChangeInput(args: any): ValidationResult<z.in
     // Y5 — pass the agent-supplied concept through so the artifact carries it.
     concept: args?.concept,
   });
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("present_code_change", result.data);
   return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };
 }
 
@@ -407,7 +629,7 @@ export function validatePresentChangesetInput(args: any): ValidationResult<z.inf
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET) };
   }
-  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+  return admit("present_changeset", { title: titleParse.data.title, ...contentParse.data });
 }
 
 export function validateLogReasoningInput(args: any): ValidationResult<z.infer<typeof ReasoningContentSchema>> {
@@ -421,7 +643,7 @@ export function validateLogReasoningInput(args: any): ValidationResult<z.infer<t
     alternativeDetails: args?.alternativeDetails,
     confidence: args?.confidence,
   });
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("log_reasoning", result.data);
   return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING) };
 }
 

@@ -7996,6 +7996,22 @@ var USER_FACING_ERROR_CODES = [
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
   INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
+  /** #183 — the agent replayed a validation-error EXAMPLE payload verbatim as
+   *  real content (the "Which cache layer?" field bug: a confused agent echoed
+   *  the minimal example embedded in an INPUT_VALIDATION_FAILED message back as
+   *  a real present_options call, twice, minting junk draft decisions). This is
+   *  NOT a schema failure — the shape is valid; the CONTENT is the teaching
+   *  sample. Agent should replace every value with real content and retry. */
+  EXAMPLE_ECHO_REJECTED: "EXAMPLE_ECHO_REJECTED",
+  /** #184 — the ROOT cause that preceded the echo: a tool call truncated in
+   *  transit. `context`/`summary` streams before the required array
+   *  (`options`/`findings`), the model's turn was cut off mid-call, so the
+   *  args arrived with the earlier field present but the required array
+   *  absent. A generic Zod "expected array, received undefined" mis-taught the
+   *  agent (it invented a "1KB cap" AND echoed the embedded example). This code
+   *  names the real failure so the agent retries with a shorter/split call
+   *  instead of resubmitting an example. */
+  TOOL_CALL_TRUNCATED: "TOOL_CALL_TRUNCATED",
   /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
   REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
   /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
@@ -8009,6 +8025,12 @@ var TOOL_ERROR_CODES = {
 };
 var TOOL_ERROR_RETRYABLE = {
   [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
+  // #183 — retryable: the agent can fix the call by substituting real content
+  // for the echoed example, so its retry reflex should fire (same grain as
+  // INPUT_VALIDATION_FAILED).
+  [TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED]: true,
+  // #184 — retryable: a truncated call can succeed on a shorter/split retry.
+  [TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED]: true,
   [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
   [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
   [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
