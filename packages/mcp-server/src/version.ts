@@ -14,7 +14,7 @@
  * enforced by src/__tests__/version-lockstep.test.ts, which fails a release
  * bump that updates this literal without the manifests (or vice-versa).
  */
-export const SERVER_VERSION = "0.1.18";
+export const SERVER_VERSION = "0.1.19";
 
 /**
  * Parse a semver-ish version string into [major, minor, patch]. Returns null
