@@ -355,6 +355,95 @@ describe("artifact store — mutation error surfacing (U3)", () => {
   });
 });
 
+describe("#182 — daemon-restart-under-tab (401-on-write identity check)", () => {
+  // Field bug: the daemon restarted while a tab was open. The WS reconnected
+  // (reads work) but the page's bearer token is stale, so a write 401s with a
+  // raw "Authorization required" toast. A 401/403 must trigger an identity
+  // check (/api/daemon-info) — only a CONFIRMED restart swaps the raw error for
+  // the actionable reload toast; a genuine auth error keeps its own message.
+  beforeEach(async () => {
+    // This test file runs in the web-node env (no jsdom window). The tab
+    // "booted" knowing daemon A's identity — expose it the way the real
+    // connection store does, on window.__dpConnectionStore. Cleaned up by the
+    // file-level afterEach (vi.unstubAllGlobals()).
+    vi.stubGlobal("window", {
+      __dpConnectionStore: { getState: () => ({ daemonStartedAt: "daemon-A", sessionId: "s1" }) },
+    });
+    // Clear the once-per-restart dedup latch so cases don't leak into each other
+    // (this file does not resetModules between tests).
+    const { __resetDaemonRestartToast } = await import("../../lib/daemon-restart");
+    __resetDaemonRestartToast();
+  });
+
+  /** A fetch that 401s writes (stale bearer) but answers /api/daemon-info with
+   *  `liveStartedAt`. */
+  function stubAuthFailWithDaemonInfo(liveStartedAt: string) {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: any) => {
+      if (String(url).includes("/api/daemon-info")) {
+        return new Response(
+          JSON.stringify({ pid: 2, startedAt: liveStartedAt, projectHash: "h" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: "Authorization required for this action.", code: "daemon_auth_required" }),
+        { status: 401, headers: { "Content-Type": "application/json" } },
+      );
+    }));
+  }
+
+  it("a 401 write + identity-CONFIRMED restart shows the reload toast (not the raw auth error)", async () => {
+    // daemon-info reports a DIFFERENT startedAt than the tab knows → restart.
+    stubAuthFailWithDaemonInfo("daemon-B");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]!.title).toBe("Daemon restarted");
+    expect(toasts[0]!.ttl).toBe(0); // persistent
+    expect(toasts[0]!.body).toMatch(/reload this tab/i);
+    expect(toasts[0]!.action?.label).toBe("Reload");
+    // The raw "Send comment failed" auth toast is NOT shown.
+    expect(toasts.some((t) => t.title === "Send comment failed")).toBe(false);
+  });
+
+  it("a 401 write with the SAME daemon identity keeps the original auth error (genuine permissions issue)", async () => {
+    // daemon-info reports the SAME startedAt the tab knows → not a restart.
+    stubAuthFailWithDaemonInfo("daemon-A");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    // Original error preserved — no restart toast.
+    expect(toasts[0]!.title).toBe("Send comment failed");
+    expect(toasts[0]!.body).toMatch(/authorization required/i);
+    expect(toasts.some((t) => t.title === "Daemon restarted")).toBe(false);
+  });
+
+  it("does NOT restart-toast when the identity probe itself fails (daemon genuinely down)", async () => {
+    // Write 401s AND /api/daemon-info is unreachable → cannot confirm a restart,
+    // so we must not falsely claim one; the raw auth error stands.
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: any) => {
+      if (String(url).includes("/api/daemon-info")) throw new TypeError("Failed to fetch");
+      return new Response(
+        JSON.stringify({ error: "Authorization required for this action.", code: "daemon_auth_required" }),
+        { status: 401, headers: { "Content-Type": "application/json" } },
+      );
+    }));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const s = useArtifactStore.getState();
+    await expect(s.submitComment("a1", "hi")).rejects.toMatchObject({ name: "ApiError" });
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.some((t) => t.title === "Daemon restarted")).toBe(false);
+    expect(toasts[0]!.title).toBe("Send comment failed");
+  });
+});
+
 describe("D9 (M10) — WS echo replaces the optimistic provisional", () => {
   it("a server comment matching a local_ provisional (author+content) replaces it in place", () => {
     const store = useArtifactStore.getState();

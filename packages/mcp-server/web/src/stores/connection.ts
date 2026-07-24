@@ -3,6 +3,7 @@ import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter
 import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
+import { pushDaemonRestartToast } from "../lib/daemon-restart";
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -221,14 +222,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           set({ hydrated: true });
 
           if (daemonRestarted) {
-            import("./toast").then(({ useToastStore }) => {
-              useToastStore.getState().push({
-                kind: "info",
-                title: "Daemon restarted — session reloaded",
-                body: "The deepPairing daemon was restarted. Anything you submitted in the last few seconds may need to be retried.",
-                ttl: 8000,
-              });
-            });
+            // #182 — a PERSISTENT, dismissible "reload to reconnect" toast, NOT
+            // the old expiring info toast. A restart under an open tab leaves
+            // this page running the pre-restart JS bundle with a now-stale
+            // bearer token: the WS re-attached so reads + live broadcasts still
+            // work, but every WRITE 401s until a hard reload re-mints the token
+            // and reloads the bundle. Rehydrating above keeps reads honest;
+            // this tells the human the one thing that actually fixes writes.
+            // Deduped by newStartedAt (in pushDaemonRestartToast) so the
+            // reconnect loop's retries and the 401-on-write identity check
+            // never double-toast the same restart.
+            pushDaemonRestartToast(newStartedAt);
           }
           break;
         }

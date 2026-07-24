@@ -621,9 +621,42 @@ describe("connection store — daemon-restart detection (U4)", () => {
     expect(arts.map((a) => a.id)).toEqual(["a_new"]);
     expect(useConnectionStore.getState().daemonStartedAt).toBe("2026-04-25T13:00:00.000Z");
 
-    // And the user is told.
+    // And the user is told — #182: a PERSISTENT (ttl 0), dismissible error toast
+    // with a Reload button, NOT the old expiring info toast. Reads reconnected
+    // but the stale bundle + bearer token only recover on a hard reload.
     const toasts = useToastStore.getState().toasts;
-    expect(toasts.some((t) => t.title.includes("Daemon restarted"))).toBe(true);
+    const restart = toasts.find((t) => t.title.includes("Daemon restarted"));
+    expect(restart).toBeDefined();
+    expect(restart!.kind).toBe("error");
+    expect(restart!.ttl).toBe(0); // persistent — survives until dismissed/reloaded
+    expect(restart!.body).toMatch(/reload this tab/i);
+    expect(restart!.action?.label).toBe("Reload");
+  });
+
+  it("#182 — fires the reload toast ONCE across repeated reconnects to the same NEW daemon (dedupe on startedAt)", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    // Daemon A boots the tab.
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T12:00:00.000Z",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    // Daemon B takes over — and the reconnect loop re-delivers `connected` for
+    // the SAME new daemon (a WS blip during the new daemon's life).
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T13:00:00.000Z",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T13:00:00.000Z",
+      state: { sessionId: "s1", artifacts: [], comments: [] },
+    });
+    await flush();
+    const restarts = useToastStore.getState().toasts.filter((t) => t.title.includes("Daemon restarted"));
+    expect(restarts).toHaveLength(1);
   });
 
   it("does NOT toast when reconnect carries the SAME daemonStartedAt (normal WS reconnect)", async () => {

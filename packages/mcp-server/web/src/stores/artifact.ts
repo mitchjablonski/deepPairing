@@ -162,6 +162,22 @@ async function toastApiError(action: string, err: unknown): Promise<void> {
     });
     return;
   }
+  // #182 — a 401/403 auth failure can mean the daemon restarted UNDER this tab:
+  // the bearer token minted at page load is stale against the NEW process, so a
+  // write 401s even though the WS reconnect made reads look healthy. Confirm the
+  // restart with an authoritative /api/daemon-info identity check before blaming
+  // the user — a GENUINE permissions error (same daemon identity, or no known
+  // baseline) falls through to keep its own message. Runs AFTER the
+  // project_hash_mismatch branch above, so the cross-project case never reaches
+  // here. Shares the connected-path dedup so the reload toast fires once.
+  if (apiErr && (apiErr.status === 401 || apiErr.status === 403)) {
+    const { confirmDaemonRestart, pushDaemonRestartToast } = await import("../lib/daemon-restart");
+    const liveStartedAt = await confirmDaemonRestart();
+    if (liveStartedAt) {
+      pushDaemonRestartToast(liveStartedAt);
+      return;
+    }
+  }
   useToastStore.getState().push({
     kind: "error",
     title: `${action} failed`,

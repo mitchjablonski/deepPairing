@@ -55,6 +55,29 @@ describe("ToastLayer", () => {
     expect(screen.queryByText("Dismiss me")).not.toBeInTheDocument();
   });
 
+  it("#182 — the daemon-restart toast is announced (role=alert), has a reachable Reload button, and is dismissible", async () => {
+    // Mount the REAL restart-toast state (persistent error + Reload action), not
+    // a hollow stand-in, so a11y coverage exercises what actually ships.
+    const reload = vi.fn();
+    push("error", {
+      title: "Daemon restarted",
+      body: "Reload this tab to reconnect.",
+      ttl: 0,
+      action: { label: "Reload", onClick: reload },
+    });
+    render(<ToastLayer />);
+    // Assertive announcement — error toasts render role=alert / aria-live=assertive.
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Daemon restarted");
+    expect(alert).toHaveTextContent(/reload this tab to reconnect/i);
+    // The Reload action is a real button and invokes the handler.
+    await userEvent.click(screen.getByRole("button", { name: /^reload$/i }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    // And it is dismissible (persistent toasts must have a manual exit).
+    await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(screen.queryByText("Daemon restarted")).not.toBeInTheDocument();
+  });
+
   describe("preflight-block hero (O2)", () => {
     it("renders the hero card shape with concept, reason, and source attribution (session)", () => {
       push("preflight-block", { title: "x", hero: heroOf({ source: "session" }) });
