@@ -1,5 +1,77 @@
 # Changelog
 
+## v0.1.19 — 2026-07-23
+
+The field-day release. Three rough edges the user hit while actually *using* the
+product — polish and honesty from real use. A bad diagram no longer leaks
+Mermaid's own error-graphic bomb to the bottom of the page; a tab whose daemon
+restarted underneath it stops half-working in silence and tells you to reload;
+and a truncated tool call now names its real cause instead of teaching the agent
+to echo the validation example back as junk artifacts. No schema change — every
+fix is read-side or in the shared validation chokepoint, and an old daemon
+degrades gracefully.
+
+### Fixed
+- **A broken diagram no longer leaks Mermaid's own error graphic.** When an
+  agent-authored diagram has a syntax error, Mermaid v11 rendered its *own*
+  "Syntax error" bomb graphic into a temp node appended to `document.body` and
+  threw *before* removing it — so the error diagram leaked to the bottom of the
+  page even though `MermaidDiagram` already catches the throw, shows a clean
+  "Couldn't render… showing the source" fallback, and reports the failure back
+  to the agent (#176). Adding `suppressErrorRendering: true` to the
+  `mermaid.initialize(...)` config makes Mermaid throw *without* drawing the
+  bomb (and self-clean its temp node first); the existing catch + fallback +
+  #176 report path is unchanged, and `securityLevel: "strict"` sanitization plus
+  the repair pass are untouched. A belt-and-suspenders orphan cleanup on both
+  terminal catch paths removes any stray temp render node (`#d<id>` wrapping
+  `#<id>`), scoped to the exact `dp-mmd-*` id this component minted, should a
+  future Mermaid change leave one behind. The clean fallback and the agent
+  report are the only two surfaces now — pinned by a real-Mermaid e2e in both
+  themes that asserts no `.error-icon` node survives at `document.body`.
+- **A tab whose daemon restarted underneath it now tells you to reload.** When
+  the daemon restarts under an open companion tab, the tab looks alive — the WS
+  reconnect loop reattaches to the new process, so reads and live broadcasts
+  keep flowing — but two things are silently stale that only a hard reload
+  fixes: the bearer token minted at page load (the new process re-minted it, so
+  every **write 401s** with a raw "Authorization required" error — the user hit
+  this on mark-file-reviewed) and the JS bundle itself. The tab now shows **one
+  persistent, dismissible "Daemon restarted — reload this tab" toast with a
+  Reload button** — on both the WS-reconnect path (a *new* `daemonStartedAt`)
+  and the 401-on-write path (gated behind an authoritative `/api/daemon-info`
+  identity check, so only a *confirmed* restart swaps the raw auth error). A
+  genuine permissions error keeps its own message; sleep-recovery to the *same*
+  daemon stays silent; the toast fires once per restart (deduped across both
+  paths) and never collides with the project-hash-mismatch toast. No auto-reload
+  — an unsaved composer draft must survive. Server-side unchanged: the WS
+  `connected` frame already carries `daemonStartedAt` and `/api/daemon-info`
+  already returns `startedAt`.
+- **A truncated tool call names its real cause instead of teaching the agent to
+  echo the example.** In a real session an agent's `present_options` call failed
+  schema validation; the `INPUT_VALIDATION_FAILED` message embeds a minimal
+  teaching **example** (`"context": "Which cache layer?"`, options Redis /
+  In-memory LRU), and the confused agent echoed that example **verbatim as a
+  real call, twice** — minting junk "Which cache layer?" draft decisions in the
+  user's real session. A spike proved there is **no** server-side size cap
+  (contexts to ~60KB pass; only the 64KiB body cap trips, with a clear
+  `PAYLOAD_TOO_LARGE`) — the field failure was an **upstream-truncated** tool
+  call whose `context` streamed before `options`, so args arrived with `context`
+  present but `options` absent → a generic Zod error the agent misdiagnosed *and*
+  echoed. Two guards now live in the shared per-tool validators
+  (`validate-tool-input.ts`), belt and suspenders: (a) a dedicated
+  **`TOOL_CALL_TRUNCATED`** error fires when a required array is absent while a
+  scalar the schema streams *before* it is present (`present_options`,
+  `present_findings`) — and it embeds **no** example on that burned path; and
+  (b) an **`EXAMPLE_ECHO_REJECTED`** guard bounces any verbatim replay of a
+  teaching example (exact / trim / case only — never fuzzy), fingerprinted by
+  `JSON.parse`-ing the example constants so it can't drift. After an adversarial
+  review executed four false positives, the matchers are tightened so a match
+  always **requires the distinctive scalar** (context / summary / title) and
+  item-sets only narrow, never suffice alone — so a real decision whose options
+  happen to be titled Redis / In-memory LRU, or a real "Weak password hash"
+  finding, or a real "Add rate limiting" plan, is always admitted. Both codes
+  are retryable and registered; `revise_artifact` is covered for free through
+  the same validators.
+
 ## v0.1.18 — 2026-07-22
 
 The stale-signal shows everywhere a carried comment does. A fast-follow to
