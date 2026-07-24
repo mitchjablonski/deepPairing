@@ -26,9 +26,11 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
     // the machine-readable contract above the prose without changing
     // the agent-visible message.
     it("validation failure carries _meta.code=INPUT_VALIDATION_FAILED + retryable=true", async () => {
-      // present_findings without the required `findings` array trips
-      // validate-tool-input.
-      const r = await callTool("present_findings", { summary: "x" });
+      // present_findings with a present-but-wrong-type `findings` (a string,
+      // not an array) trips the generic schema path. #184 — deliberately NOT
+      // `{ summary: "x" }` (findings absent), which now routes to the dedicated
+      // TOOL_CALL_TRUNCATED lane; a wrong-TYPE field is a real schema mismatch.
+      const r = await callTool("present_findings", { summary: "x", findings: "not-an-array" });
       expect(r.isError).toBe(true);
       expect(r.text).toMatch(/INPUT_VALIDATION_FAILED/);
       expect(r._meta?.code).toBe("INPUT_VALIDATION_FAILED");

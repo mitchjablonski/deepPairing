@@ -906,7 +906,12 @@ describe("MCP Tool Handlers — firstCallHint", () => {
       // A protocol-blind agent whose opener fails validation should still get
       // oriented — but with a single line, not the 4KB onboarding hint III1
       // keeps off error responses.
-      const { text, isError } = await callTool("present_findings", { summary: "x" } /* no findings → invalid */);
+      // #184 — findings present-but-wrong-type (a real schema mismatch, so the
+      // example-bearing INPUT_VALIDATION_FAILED path — which the one-liner rides
+      // by referencing "the example above"). `{ summary: "x" }` alone now routes
+      // to the example-less TOOL_CALL_TRUNCATED lane, which deliberately carries
+      // no example and therefore no "example above" one-liner.
+      const { text, isError } = await callTool("present_findings", { summary: "x", findings: "nope" } /* wrong type → invalid */);
       expect(isError).toBe(true);
       // The one-liner rides the error.
       expect(text).toMatch(/New to deepPairing\? A valid minimal call/);

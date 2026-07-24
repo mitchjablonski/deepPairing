@@ -320,3 +320,348 @@ describe("Tool-input validation at the write boundary", () => {
     expect(content.visuals?.[0]).toMatchObject({ id: "flow", source: "sequenceDiagram; Client->>API: login" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #183 — EXAMPLE-ECHO GUARD.
+//
+// Field bug (hit in a real session): the agent's present_options failed schema
+// validation, the INPUT_VALIDATION_FAILED message embedded the EXAMPLE_OPTIONS
+// sample ("Which cache layer?" / Redis / In-memory LRU), and the agent echoed
+// that sample VERBATIM as a real call — twice — minting junk draft decisions.
+// The guard rejects a schema-valid payload whose distinctive content matches a
+// teaching example, WITHOUT blocking real artifacts that merely mention the
+// same domain (caches/Redis) in prose.
+// ---------------------------------------------------------------------------
+
+// The EXAMPLE_OPTIONS payload, exactly as an echoing agent would replay it.
+const OPTIONS_EXAMPLE_ARGS = {
+  context: "Which cache layer?",
+  options: [
+    { id: "a", title: "Redis", description: "...", pros: ["fast"], cons: ["another service"], effort: "medium", risk: "low", recommendation: true, concept: { name: "external cache service", oneLineExplanation: "in-process is faster but loses on multi-instance" } },
+    { id: "b", title: "In-memory LRU", description: "...", pros: ["simple"], cons: ["per-instance"], effort: "low", risk: "medium", recommendation: false, concept: { name: "in-process LRU", oneLineExplanation: "no network hop; each instance keeps its own copy" } },
+  ],
+};
+
+describe("#183 — example-echo guard", () => {
+  it("REJECTS a verbatim echo of the present_options example with a pointed message and creates NO artifact", async () => {
+    const { text, isError } = await call("present_options", OPTIONS_EXAMPLE_ARGS);
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    // Pointed, second-person-to-the-agent phrasing.
+    expect(text).toMatch(/this is the EXAMPLE payload/i);
+    expect(text).toMatch(/not your real content/i);
+    expect(text).toMatch(/replace every value with your actual/i);
+    expect(text).toMatch(/artifact was NOT created/i);
+    // The junk draft decision the real bug created must NOT exist.
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("attaches _meta.code = EXAMPLE_ECHO_REJECTED (retryable) so MCP clients can branch", async () => {
+    const res = await client.callTool({ name: "present_options", arguments: OPTIONS_EXAMPLE_ARGS });
+    const meta = (res as { _meta?: { code?: string; retryable?: boolean } })._meta;
+    expect(meta?.code).toBe("EXAMPLE_ECHO_REJECTED");
+    expect(meta?.retryable).toBe(true);
+  });
+
+  it("REJECTS a trivially-normalized echo: same context different case, different options", async () => {
+    const { isError, text } = await call("present_options", {
+      context: "  WHICH CACHE LAYER?  ", // trim + case only
+      options: [
+        { id: "x", title: "Totally different", description: "d", pros: ["p"], cons: ["c"], effort: "low", risk: "low", recommendation: true },
+        { id: "y", title: "Also different", description: "d", pros: ["p"], cons: ["c"], effort: "low", risk: "low", recommendation: false },
+      ],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("still REJECTS the incident's follow-up call: SAME context, an extra Memcached option added (context scalar catches it)", async () => {
+    // The real incident's call #2 kept the echoed context and appended a third
+    // option. The context scalar alone must still catch it — this is exactly
+    // why the (removed) option-title-set arm was never load-bearing.
+    const { isError, text } = await call("present_options", {
+      context: "Which cache layer?", // verbatim example context
+      options: [
+        { id: "a", title: "Redis", description: "d", pros: ["fast"], cons: ["svc"], effort: "medium", risk: "low", recommendation: true },
+        { id: "b", title: "In-memory LRU", description: "d", pros: ["simple"], cons: ["per-instance"], effort: "low", risk: "medium", recommendation: false },
+        { id: "c", title: "Memcached", description: "added on retry", pros: ["mature"], cons: ["fewer types"], effort: "medium", risk: "low", recommendation: false },
+      ],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a REAL decision with a genuinely different context whose options are titled EXACTLY Redis + In-memory LRU (A1 — the canonical cache card, NOT an echo)", async () => {
+    // Post-review probe A1: the two-option caching decision is the single most
+    // common real decision in the wild — options titled exactly Redis /
+    // In-memory LRU. With a real, different question it MUST be admitted; the
+    // old option-title-set arm bounced this legitimate human card.
+    const { isError } = await call("present_options", {
+      context: "Where should the rate-limiter counter store live for our multi-instance API?",
+      options: [
+        { id: "a", title: "Redis", description: "shared counter across instances", pros: ["consistent"], cons: ["network hop"], effort: "medium", risk: "low", recommendation: true },
+        { id: "b", title: "In-memory LRU", description: "per-instance counter", pros: ["fast"], cons: ["drifts across instances"], effort: "low", risk: "medium", recommendation: false },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a REAL cache decision that mentions Redis/caches in prose but has a different context AND options", async () => {
+    const { isError } = await call("present_options", {
+      context: "Should the session cache be Redis, Postgres, or DynamoDB for our multi-region rollout?",
+      options: [
+        { id: "a", title: "Redis Cluster", description: "sharded redis for the cache layer", pros: ["fast"], cons: ["ops"], effort: "medium", risk: "low", recommendation: true },
+        { id: "b", title: "Postgres UNLOGGED table", description: "reuse the db as a cache", pros: ["one system"], cons: ["slower"], effort: "low", risk: "medium", recommendation: false },
+        { id: "c", title: "DynamoDB", description: "managed cache", pros: ["no ops"], cons: ["cost"], effort: "low", risk: "low", recommendation: false },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a two-option cache decision when neither the context NOR the option-title set matches the example", async () => {
+    const { isError } = await call("present_options", {
+      context: "Which cache eviction policy for the LRU?", // mentions cache + LRU, different question
+      options: [
+        { id: "a", title: "LFU eviction", description: "least frequently used", pros: ["hit rate"], cons: ["complex"], effort: "medium", risk: "low", recommendation: true },
+        { id: "b", title: "TTL-only", description: "simple expiry", pros: ["simple"], cons: ["cold"], effort: "low", risk: "low", recommendation: false },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("REJECTS the present_findings example (summary AND finding-title set both match) end-to-end", async () => {
+    const { text, isError } = await call("present_findings", {
+      title: "Auth audit",
+      summary: "Two issues in auth.ts",
+      findings: [{ category: "security", title: "Weak password hash", detail: "bcrypt rounds=4 is too low", evidence: "auth.ts L23 uses bcrypt.hash(pw, 4)", significance: "high", recommendation: "raise to 12+" }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real auth finding that discusses bcrypt but isn't the example", async () => {
+    const { isError } = await call("present_findings", {
+      summary: "One real weakness in the password path",
+      findings: [{ category: "security", title: "Timing-unsafe compare", detail: "== on the bcrypt hash leaks timing", significance: "medium" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real audit with a DIFFERENT summary but a single finding titled exactly 'Weak password hash' (A3 — title set alone must not suffice)", async () => {
+    // Post-review probe A3: reusing just a finding title (a genuinely common
+    // one) with a real, different summary must be admitted.
+    const { isError } = await call("present_findings", {
+      summary: "Password storage review of the new signup flow",
+      findings: [{ category: "security", title: "Weak password hash", detail: "argon2 params below OWASP floor", significance: "high" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("REJECTS the present_plan example (title AND step-description set both match) end-to-end", async () => {
+    const { text, isError } = await call("present_plan", {
+      title: "Add rate limiting",
+      estimatedChanges: 3,
+      steps: [{ description: "Install limiter middleware", reasoning: "...", files: ["packages/api/middleware/limit.ts"] }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real plan titled exactly 'Add rate limiting' with DIFFERENT steps (A4 — the common title must not suffice alone)", async () => {
+    // Post-review probe A4: "Add rate limiting" is an extremely common exact
+    // title. A real plan with different steps must be admitted.
+    const { isError } = await call("present_plan", {
+      title: "Add rate limiting",
+      estimatedChanges: 2,
+      steps: [
+        { description: "Add a token-bucket to the API gateway", reasoning: "central chokepoint" },
+        { description: "Wire per-tenant quotas from config", reasoning: "fairness" },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real plan whose single step is exactly 'Install limiter middleware' under a DIFFERENT title (A5 — step set alone must not suffice)", async () => {
+    // Post-review probe A5: reusing the example step under a real, different
+    // title must be admitted.
+    const { isError } = await call("present_plan", {
+      title: "Harden the public API surface",
+      estimatedChanges: 1,
+      steps: [{ description: "Install limiter middleware", reasoning: "block abusive clients" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("REJECTS the present_code_change example (filePath+before+after tuple) end-to-end", async () => {
+    const { text, isError } = await call("present_code_change", {
+      filePath: "packages/api/auth.ts",
+      changeType: "modify",
+      before: "bcrypt.hash(pw, 4)",
+      after: "bcrypt.hash(pw, 12)",
+      reasoning: "Raise cost factor; rounds=4 is brute-forceable in <1 day",
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real code_change that shares the example's before/after but a DIFFERENT file (AND-tuple precision)", async () => {
+    const { isError } = await call("present_code_change", {
+      filePath: "services/worker/hash.ts", // not the example file
+      changeType: "modify",
+      before: "bcrypt.hash(pw, 4)",
+      after: "bcrypt.hash(pw, 12)",
+      reasoning: "same class of fix, real different file",
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("REJECTS the log_reasoning example (action fingerprint) end-to-end", async () => {
+    const { text, isError } = await call("log_reasoning", {
+      action: "extract DI for the cache",
+      reasoning: "tests need to swap Redis for an in-memory fake",
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("REJECTS the present_spec example (title AND requirement-statement set both match) end-to-end", async () => {
+    const { text, isError } = await call("present_spec", {
+      title: "Rate limit auth endpoints",
+      objective: "Block credential stuffing",
+      requirements: [{ id: "REQ-1", statement: "Limit /login to 5 attempts/min per IP", rationale: "Slows brute-force without harming real users", acceptanceCriteria: ["6th attempt within 60s returns 429"] }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real spec that reuses the example OBJECTIVE but has a different title + requirements (objective is NOT a fingerprint)", async () => {
+    const { isError } = await call("present_spec", {
+      title: "Harden the login endpoint", // not the example title
+      objective: "Block credential stuffing", // deliberately the example objective
+      requirements: [{ id: "R1", statement: "Add a CAPTCHA after 3 failures", rationale: "raise attacker cost", acceptanceCriteria: ["CAPTCHA shown on 4th attempt"] }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real spec that reuses the example TITLE but has different requirements (title alone must not suffice)", async () => {
+    // Post-review consistency: spec now requires title AND the requirement set,
+    // so reusing just the title with real requirements is admitted.
+    const { isError } = await call("present_spec", {
+      title: "Rate limit auth endpoints", // deliberately the example title
+      objective: "Stop token-endpoint abuse",
+      requirements: [{ id: "R1", statement: "Cap /oauth/token to 20/min per client_id", rationale: "protect the IdP", acceptanceCriteria: ["21st call in 60s returns 429"] }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("REJECTS the present_changeset example (title fingerprint) end-to-end", async () => {
+    const { text, isError } = await call("present_changeset", {
+      title: "Move session-TTL refresh into middleware",
+      summary: "anything",
+      files: [{ path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 1 }] }] }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real changeset that reuses the example SUMMARY but a different title (summary is NOT a fingerprint)", async () => {
+    const { isError } = await call("present_changeset", {
+      title: "Move TTL refresh into middleware", // no "session-" — differs from the example title
+      summary: "Centralize the sliding-window refresh", // deliberately the example summary
+      files: [{ path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 1 }] }] }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #184 — TRUNCATED tool-call detection (the ROOT cause upstream of the echo).
+//
+// `context`/`summary` streams before the required array; the model's turn is
+// cut off mid-call → the earlier field arrives, the array is undefined. That
+// specific shape gets a dedicated TOOL_CALL_TRUNCATED error carrying NO
+// embedded example (so it can't seed the echo). Every OTHER schema mismatch
+// keeps the generic, example-bearing INPUT_VALIDATION_FAILED error.
+// ---------------------------------------------------------------------------
+describe("#184 — truncated tool-call detection", () => {
+  const LONG_CONTEXT =
+    "We need to choose a caching strategy for the session store given our " +
+    "multi-region rollout and the read-heavy access pattern, weighing latency, " +
+    "operational cost, and consistency across instances.".repeat(3);
+
+  it("REJECTS present_options with context present but options TRUNCATED away — TOOL_CALL_TRUNCATED, NO embedded example", async () => {
+    const { text, isError } = await call("present_options", {
+      context: LONG_CONTEXT,
+      // options truncated away mid-stream
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("TOOL_CALL_TRUNCATED");
+    expect(text).toMatch(/truncated in transit/i);
+    expect(text).toMatch(/`options` is missing while `context` is present/);
+    // CRUCIAL: the echo-able example must NOT be in this path.
+    expect(text).not.toContain("Which cache layer?");
+    expect(text).not.toContain("In-memory LRU");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("attaches _meta.code = TOOL_CALL_TRUNCATED (retryable)", async () => {
+    const res = await client.callTool({ name: "present_options", arguments: { context: LONG_CONTEXT } });
+    const meta = (res as { _meta?: { code?: string; retryable?: boolean } })._meta;
+    expect(meta?.code).toBe("TOOL_CALL_TRUNCATED");
+    expect(meta?.retryable).toBe(true);
+  });
+
+  it("KEEPS the generic example-bearing error when BOTH context AND options are missing (agent just malformed the call)", async () => {
+    const { text, isError } = await call("present_options", {
+      // neither context nor options — not a truncation signature
+      stakes: "low",
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).not.toContain("TOOL_CALL_TRUNCATED");
+    // The generic path still teaches the shape with the example.
+    expect(text).toContain("Which cache layer?");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("REJECTS present_findings with summary present but findings TRUNCATED away — TOOL_CALL_TRUNCATED (second tool)", async () => {
+    const { text, isError } = await call("present_findings", {
+      summary: "A long audit summary describing several issues in the auth subsystem",
+      // findings truncated away
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("TOOL_CALL_TRUNCATED");
+    expect(text).toMatch(/`findings` is missing while `summary` is present/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("does NOT treat a present-but-wrong-type array as truncation (findings as a string → generic example error)", async () => {
+    const { text, isError } = await call("present_findings", {
+      summary: "x",
+      findings: "26/26 selfies passed face detection", // present, wrong type — the classic field bug
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).not.toContain("TOOL_CALL_TRUNCATED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+});

@@ -1697,11 +1697,11 @@ var require_defaults = __commonJS({
       }
     }
     exports.assignDefaults = assignDefaults;
-    function assignDefault(it, prop, defaultValue) {
+    function assignDefault(it, prop2, defaultValue) {
       const { gen, compositeRule, data, opts } = it;
       if (defaultValue === void 0)
         return;
-      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop)}`;
+      const childData = (0, codegen_1._)`${data}${(0, codegen_1.getProperty)(prop2)}`;
       if (compositeRule) {
         (0, util_1.checkStrictMode)(it, `default is ignored for: ${childData}`);
         return;
@@ -1725,16 +1725,16 @@ var require_code2 = __commonJS({
     var util_1 = require_util();
     var names_1 = require_names();
     var util_2 = require_util();
-    function checkReportMissingProp(cxt, prop) {
+    function checkReportMissingProp(cxt, prop2) {
       const { gen, data, it } = cxt;
-      gen.if(noPropertyInData(gen, data, prop, it.opts.ownProperties), () => {
-        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop}` }, true);
+      gen.if(noPropertyInData(gen, data, prop2, it.opts.ownProperties), () => {
+        cxt.setParams({ missingProperty: (0, codegen_1._)`${prop2}` }, true);
         cxt.error();
       });
     }
     exports.checkReportMissingProp = checkReportMissingProp;
     function checkMissingProp({ gen, data, it: { opts } }, properties, missing) {
-      return (0, codegen_1.or)(...properties.map((prop) => (0, codegen_1.and)(noPropertyInData(gen, data, prop, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop}`)));
+      return (0, codegen_1.or)(...properties.map((prop2) => (0, codegen_1.and)(noPropertyInData(gen, data, prop2, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop2}`)));
     }
     exports.checkMissingProp = checkMissingProp;
     function reportMissingProp(cxt, missing) {
@@ -2156,8 +2156,8 @@ var require_json_schema_traverse = __commonJS({
             }
           } else if (key in traverse.propsKeywords) {
             if (sch && typeof sch == "object") {
-              for (var prop in sch)
-                _traverse(opts, pre, post, sch[prop], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop), rootSchema, jsonPtr, key, schema, prop);
+              for (var prop2 in sch)
+                _traverse(opts, pre, post, sch[prop2], jsonPtr + "/" + key + "/" + escapeJsonPtr(prop2), rootSchema, jsonPtr, key, schema, prop2);
             }
           } else if (key in traverse.keywords || opts.allKeys && !(key in traverse.skipKeywords)) {
             _traverse(opts, pre, post, sch, jsonPtr + "/" + key, rootSchema, jsonPtr, key, schema);
@@ -4841,8 +4841,8 @@ var require_required = __commonJS({
           if (useLoop || $data) {
             cxt.block$data(codegen_1.nil, loopAllRequired);
           } else {
-            for (const prop of schema) {
-              (0, code_1.checkReportMissingProp)(cxt, prop);
+            for (const prop2 of schema) {
+              (0, code_1.checkReportMissingProp)(cxt, prop2);
             }
           }
         }
@@ -4859,9 +4859,9 @@ var require_required = __commonJS({
           }
         }
         function loopAllRequired() {
-          gen.forOf("prop", schemaCode, (prop) => {
-            cxt.setParams({ missingProperty: prop });
-            gen.if((0, code_1.noPropertyInData)(gen, data, prop, opts.ownProperties), () => cxt.error());
+          gen.forOf("prop", schemaCode, (prop2) => {
+            cxt.setParams({ missingProperty: prop2 });
+            gen.if((0, code_1.noPropertyInData)(gen, data, prop2, opts.ownProperties), () => cxt.error());
           });
         }
         function loopUntilMissing(missing, valid) {
@@ -5406,13 +5406,13 @@ var require_dependencies = __commonJS({
       if (Object.keys(propertyDeps).length === 0)
         return;
       const missing = gen.let("missing");
-      for (const prop in propertyDeps) {
-        const deps = propertyDeps[prop];
+      for (const prop2 in propertyDeps) {
+        const deps = propertyDeps[prop2];
         if (deps.length === 0)
           continue;
-        const hasProperty = (0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties);
+        const hasProperty = (0, code_1.propertyInData)(gen, data, prop2, it.opts.ownProperties);
         cxt.setParams({
-          property: prop,
+          property: prop2,
           depsCount: deps.length,
           deps: deps.join(", ")
         });
@@ -5433,13 +5433,13 @@ var require_dependencies = __commonJS({
     function validateSchemaDeps(cxt, schemaDeps = cxt.schema) {
       const { gen, data, keyword, it } = cxt;
       const valid = gen.name("valid");
-      for (const prop in schemaDeps) {
-        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop]))
+      for (const prop2 in schemaDeps) {
+        if ((0, util_1.alwaysValidSchema)(it, schemaDeps[prop2]))
           continue;
         gen.if(
-          (0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties),
+          (0, code_1.propertyInData)(gen, data, prop2, it.opts.ownProperties),
           () => {
-            const schCxt = cxt.subschema({ keyword, schemaProp: prop }, valid);
+            const schCxt = cxt.subschema({ keyword, schemaProp: prop2 }, valid);
             cxt.mergeValidEvaluated(schCxt, valid);
           },
           () => gen.var(valid, true)
@@ -5621,8 +5621,8 @@ var require_properties = __commonJS({
           additionalProperties_1.default.code(new validate_1.KeywordCxt(it, additionalProperties_1.default, "additionalProperties"));
         }
         const allProps = (0, code_1.allSchemaProperties)(schema);
-        for (const prop of allProps) {
-          it.definedProperties.add(prop);
+        for (const prop2 of allProps) {
+          it.definedProperties.add(prop2);
         }
         if (it.opts.unevaluated && allProps.length && it.props !== true) {
           it.props = util_1.mergeEvaluated.props(gen, (0, util_1.toHash)(allProps), it.props);
@@ -5631,27 +5631,27 @@ var require_properties = __commonJS({
         if (properties.length === 0)
           return;
         const valid = gen.name("valid");
-        for (const prop of properties) {
-          if (hasDefault(prop)) {
-            applyPropertySchema(prop);
+        for (const prop2 of properties) {
+          if (hasDefault(prop2)) {
+            applyPropertySchema(prop2);
           } else {
-            gen.if((0, code_1.propertyInData)(gen, data, prop, it.opts.ownProperties));
-            applyPropertySchema(prop);
+            gen.if((0, code_1.propertyInData)(gen, data, prop2, it.opts.ownProperties));
+            applyPropertySchema(prop2);
             if (!it.allErrors)
               gen.else().var(valid, true);
             gen.endIf();
           }
-          cxt.it.definedProperties.add(prop);
+          cxt.it.definedProperties.add(prop2);
           cxt.ok(valid);
         }
-        function hasDefault(prop) {
-          return it.opts.useDefaults && !it.compositeRule && schema[prop].default !== void 0;
+        function hasDefault(prop2) {
+          return it.opts.useDefaults && !it.compositeRule && schema[prop2].default !== void 0;
         }
-        function applyPropertySchema(prop) {
+        function applyPropertySchema(prop2) {
           cxt.subschema({
             keyword: "properties",
-            schemaProp: prop,
-            dataProp: prop
+            schemaProp: prop2,
+            dataProp: prop2
           }, valid);
         }
       }
@@ -5702,9 +5702,9 @@ var require_patternProperties = __commonJS({
           }
         }
         function checkMatchingProperties(pat) {
-          for (const prop in checkProperties) {
-            if (new RegExp(pat).test(prop)) {
-              (0, util_1.checkStrictMode)(it, `property ${prop} matches pattern ${pat} (use allowMatchingProperties)`);
+          for (const prop2 in checkProperties) {
+            if (new RegExp(pat).test(prop2)) {
+              (0, util_1.checkStrictMode)(it, `property ${prop2} matches pattern ${pat} (use allowMatchingProperties)`);
             }
           }
         }
@@ -7900,8 +7900,8 @@ function defineLazy(object3, key, getter) {
 function objectClone(obj2) {
   return Object.create(Object.getPrototypeOf(obj2), Object.getOwnPropertyDescriptors(obj2));
 }
-function assignProp(target, prop, value) {
-  Object.defineProperty(target, prop, {
+function assignProp(target, prop2, value) {
+  Object.defineProperty(target, prop2, {
     value,
     writable: true,
     enumerable: true,
@@ -8086,33 +8086,33 @@ function normalizeParams(_params) {
 function createTransparentProxy(getter) {
   let target;
   return new Proxy({}, {
-    get(_, prop, receiver) {
+    get(_, prop2, receiver) {
       target ?? (target = getter());
-      return Reflect.get(target, prop, receiver);
+      return Reflect.get(target, prop2, receiver);
     },
-    set(_, prop, value, receiver) {
+    set(_, prop2, value, receiver) {
       target ?? (target = getter());
-      return Reflect.set(target, prop, value, receiver);
+      return Reflect.set(target, prop2, value, receiver);
     },
-    has(_, prop) {
+    has(_, prop2) {
       target ?? (target = getter());
-      return Reflect.has(target, prop);
+      return Reflect.has(target, prop2);
     },
-    deleteProperty(_, prop) {
+    deleteProperty(_, prop2) {
       target ?? (target = getter());
-      return Reflect.deleteProperty(target, prop);
+      return Reflect.deleteProperty(target, prop2);
     },
     ownKeys(_) {
       target ?? (target = getter());
       return Reflect.ownKeys(target);
     },
-    getOwnPropertyDescriptor(_, prop) {
+    getOwnPropertyDescriptor(_, prop2) {
       target ?? (target = getter());
-      return Reflect.getOwnPropertyDescriptor(target, prop);
+      return Reflect.getOwnPropertyDescriptor(target, prop2);
     },
-    defineProperty(_, prop, descriptor) {
+    defineProperty(_, prop2, descriptor) {
       target ?? (target = getter());
-      return Reflect.defineProperty(target, prop, descriptor);
+      return Reflect.defineProperty(target, prop2, descriptor);
     }
   });
 }
@@ -27862,6 +27862,22 @@ var USER_FACING_ERROR_CODES = [
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
   INPUT_VALIDATION_FAILED: "INPUT_VALIDATION_FAILED",
+  /** #183 — the agent replayed a validation-error EXAMPLE payload verbatim as
+   *  real content (the "Which cache layer?" field bug: a confused agent echoed
+   *  the minimal example embedded in an INPUT_VALIDATION_FAILED message back as
+   *  a real present_options call, twice, minting junk draft decisions). This is
+   *  NOT a schema failure — the shape is valid; the CONTENT is the teaching
+   *  sample. Agent should replace every value with real content and retry. */
+  EXAMPLE_ECHO_REJECTED: "EXAMPLE_ECHO_REJECTED",
+  /** #184 — the ROOT cause that preceded the echo: a tool call truncated in
+   *  transit. `context`/`summary` streams before the required array
+   *  (`options`/`findings`), the model's turn was cut off mid-call, so the
+   *  args arrived with the earlier field present but the required array
+   *  absent. A generic Zod "expected array, received undefined" mis-taught the
+   *  agent (it invented a "1KB cap" AND echoed the embedded example). This code
+   *  names the real failure so the agent retries with a shorter/split call
+   *  instead of resubmitting an example. */
+  TOOL_CALL_TRUNCATED: "TOOL_CALL_TRUNCATED",
   /** Preflight matched a stance the user has rejected — agent must revise approach, not retry. */
   REJECTED_APPROACH_BLOCKED: "REJECTED_APPROACH_BLOCKED",
   /** H1-6 — the artifact payload exceeded the daemon's body cap (413). Agent
@@ -27875,6 +27891,12 @@ var TOOL_ERROR_CODES = {
 };
 var TOOL_ERROR_RETRYABLE = {
   [TOOL_ERROR_CODES.INPUT_VALIDATION_FAILED]: true,
+  // #183 — retryable: the agent can fix the call by substituting real content
+  // for the echoed example, so its retry reflex should fire (same grain as
+  // INPUT_VALIDATION_FAILED).
+  [TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED]: true,
+  // #184 — retryable: a truncated call can succeed on a shorter/split retry.
+  [TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED]: true,
   [TOOL_ERROR_CODES.REJECTED_APPROACH_BLOCKED]: false,
   [TOOL_ERROR_CODES.PAYLOAD_TOO_LARGE]: true,
   [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
@@ -27891,7 +27913,7 @@ function formatValidationError(toolName, err, example) {
   const text = `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 your input doesn't match the schema:
 ` + issues.join("\n") + more + `
 
-Expected shape (minimal example):
+Expected shape (EXAMPLE \u2014 replace EVERY value with your real content):
 ${example}
 
 Fix the input and call ${toolName} again. The artifact was NOT created.`;
@@ -28040,13 +28062,78 @@ var EXAMPLE_CHANGESET = `{
       "hunks": [ { "lines": [ { "kind": "add", "content": "  expiresAt: number;", "newLine": 12 } ] } ] }
   ]
 }`;
+var prop = (v, key) => v && typeof v === "object" ? v[key] : void 0;
+var normEcho = (v) => typeof v === "string" ? v.trim().toLowerCase() : "";
+var pluckSet = (v, listKey, field) => {
+  const list = prop(v, listKey);
+  const items = Array.isArray(list) ? list : [];
+  return items.map((x) => normEcho(prop(x, field))).filter((s) => s.length > 0).sort();
+};
+var echoSetEq = (a, b) => a.length > 0 && a.length === b.length && a.every((v, i) => v === b[i]);
+var EX_OPTIONS = JSON.parse(EXAMPLE_OPTIONS);
+var EX_FINDINGS = JSON.parse(EXAMPLE_FINDINGS);
+var EX_SPEC = JSON.parse(EXAMPLE_SPEC);
+var EX_PLAN = JSON.parse(EXAMPLE_PLAN);
+var EX_CODE_CHANGE = JSON.parse(EXAMPLE_CODE_CHANGE);
+var EX_REASONING = JSON.parse(EXAMPLE_REASONING);
+var EX_CHANGESET = JSON.parse(EXAMPLE_CHANGESET);
+var findingTitles = (o) => pluckSet(o, "findings", "title");
+var reqStatements = (o) => pluckSet(o, "requirements", "statement");
+var stepDescriptions = (o) => pluckSet(o, "steps", "description");
+var ECHO_MATCHERS = {
+  present_options: (d) => normEcho(prop(d, "context")) === normEcho(prop(EX_OPTIONS, "context")),
+  present_findings: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_FINDINGS, "summary")) && echoSetEq(findingTitles(d), findingTitles(EX_FINDINGS)),
+  present_spec: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_SPEC, "title")) && echoSetEq(reqStatements(d), reqStatements(EX_SPEC)),
+  present_plan: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) && echoSetEq(stepDescriptions(d), stepDescriptions(EX_PLAN)),
+  present_code_change: (d) => normEcho(prop(d, "filePath")) === normEcho(prop(EX_CODE_CHANGE, "filePath")) && normEcho(prop(d, "before")) === normEcho(prop(EX_CODE_CHANGE, "before")) && normEcho(prop(d, "after")) === normEcho(prop(EX_CODE_CHANGE, "after")),
+  log_reasoning: (d) => normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) || normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
+  present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title"))
+};
+function formatExampleEchoError(toolName) {
+  const code = TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED;
+  const text = `${code}: ${toolName} refused \u2014 this is the EXAMPLE payload from the validation-error message, not your real content. That sample only shows the SHAPE. Replace every value with your actual content (your real decision/context, findings, plan, or change) and call ${toolName} again. The artifact was NOT created.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true,
+    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
+  };
+}
+function checkExampleEcho(toolName, data) {
+  const matcher = ECHO_MATCHERS[toolName];
+  if (matcher && matcher(data)) return formatExampleEchoError(toolName);
+  return null;
+}
+function admit(toolName, data) {
+  const echo = checkExampleEcho(toolName, data);
+  if (echo) return { ok: false, error: echo };
+  return { ok: true, data };
+}
+function formatTruncationError(toolName, missingArray, presentField) {
+  const code = TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED;
+  const text = `${code}: ${toolName} refused \u2014 your tool call appears to have been TRUNCATED in transit: \`${missingArray}\` is missing while \`${presentField}\` is present. This usually means the arguments were cut off mid-message (more likely with a long ${presentField}). Retry with a shorter ${presentField} or split the call. Do NOT resubmit any example payload as your content. The artifact was NOT created.`;
+  return {
+    content: [{ type: "text", text }],
+    isError: true,
+    _meta: { code, retryable: TOOL_ERROR_RETRYABLE[code] }
+  };
+}
+function detectTruncatedCall(toolName, args, presentField, missingArray) {
+  const present = prop(args, presentField);
+  const missing = prop(args, missingArray);
+  if (typeof present === "string" && present.length > 0 && missing === void 0) {
+    return formatTruncationError(toolName, missingArray, presentField);
+  }
+  return null;
+}
 function validatePresentFindingsInput(args) {
   const result = ResearchContentSchema.safeParse({
     summary: args?.summary,
     findings: args?.findings,
     openQuestions: args?.openQuestions
   });
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("present_findings", result.data);
+  const truncated = detectTruncatedCall("present_findings", args, "summary", "findings");
+  if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS) };
 }
 var PresentOptionsInputSchema = external_exports.object({
@@ -28060,7 +28147,9 @@ var PresentOptionsInputSchema = external_exports.object({
 });
 function validatePresentOptionsInput(args) {
   const result = PresentOptionsInputSchema.safeParse(args);
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("present_options", result.data);
+  const truncated = detectTruncatedCall("present_options", args, "context", "options");
+  if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS) };
 }
 function validatePresentSpecInput(args) {
@@ -28080,7 +28169,7 @@ function validatePresentSpecInput(args) {
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC) };
   }
-  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+  return admit("present_spec", { title: titleParse.data.title, ...contentParse.data });
 }
 function validatePresentPlanInput(args) {
   const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
@@ -28095,7 +28184,7 @@ function validatePresentPlanInput(args) {
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };
   }
-  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+  return admit("present_plan", { title: titleParse.data.title, ...contentParse.data });
 }
 function validatePresentCodeChangeInput(args) {
   const result = CodeChangeContentSchema.safeParse({
@@ -28108,7 +28197,7 @@ function validatePresentCodeChangeInput(args) {
     // Y5 — pass the agent-supplied concept through so the artifact carries it.
     concept: args?.concept
   });
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("present_code_change", result.data);
   return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };
 }
 function validatePresentChangesetInput(args) {
@@ -28126,7 +28215,7 @@ function validatePresentChangesetInput(args) {
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET) };
   }
-  return { ok: true, data: { title: titleParse.data.title, ...contentParse.data } };
+  return admit("present_changeset", { title: titleParse.data.title, ...contentParse.data });
 }
 function validateLogReasoningInput(args) {
   const result = ReasoningContentSchema.safeParse({
@@ -28139,7 +28228,7 @@ function validateLogReasoningInput(args) {
     alternativeDetails: args?.alternativeDetails,
     confidence: args?.confidence
   });
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) return admit("log_reasoning", result.data);
   return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING) };
 }
 var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
@@ -28698,7 +28787,7 @@ var severityEmoji = {
 };
 function buildGitHubReviewPayload(state, opts = {}) {
   const comments = [];
-  const findingTitles = [];
+  const findingTitles2 = [];
   const researchArtifacts = state.artifacts.filter(
     (a) => a.type === "research" && a.status !== "rejected" && a.status !== "retracted" && a.status !== "superseded"
   );
@@ -28714,7 +28803,7 @@ function buildGitHubReviewPayload(state, opts = {}) {
       const sev = finding.severity ?? "info";
       const chip = severityEmoji[sev] ?? "\u26AA";
       const title2 = finding.title ? `**${finding.title}**` : `**${finding.category ?? "Finding"}**`;
-      if (finding.title) findingTitles.push(finding.title);
+      if (finding.title) findingTitles2.push(finding.title);
       for (const ev of structured) {
         const bodyLines = [];
         bodyLines.push(`${chip} ${title2} \u2014 ${sev.toUpperCase()}${finding.category ? ` \xB7 ${finding.category}` : ""}`);
@@ -28755,10 +28844,10 @@ function buildGitHubReviewPayload(state, opts = {}) {
     bodyParts.push("_No reviewable findings with structured evidence in this pairing session._");
   } else {
     bodyParts.push(`${comments.length} inline comment${comments.length === 1 ? "" : "s"} from this pairing session.`);
-    if (findingTitles.length > 0) {
+    if (findingTitles2.length > 0) {
       bodyParts.push("");
       bodyParts.push("**Findings:**");
-      for (const t of findingTitles) bodyParts.push(`- ${t}`);
+      for (const t of findingTitles2) bodyParts.push(`- ${t}`);
     }
   }
   bodyParts.push("");

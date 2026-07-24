@@ -203,19 +203,22 @@ describe("H1-6 — the dispatch wrapper returns isError, not a protocol error", 
 
   it("an oversized-but-valid present_findings returns a clean isError result with _meta.code (call does NOT reject)", async () => {
     // Zod-valid input — validation passes, then createArtifact throws the 413.
+    // #183 — deliberately NOT the EXAMPLE_FINDINGS payload: that would trip the
+    // example-echo guard before the store is ever reached. This test is about
+    // the 413 → PAYLOAD_TOO_LARGE contract, so the content is real (non-example).
     const result = await client.callTool({
       name: "present_findings",
       arguments: {
-        title: "Audit",
-        summary: "Two issues in auth.ts",
+        title: "Session audit",
+        summary: "One issue in the session store",
         findings: [
           {
             category: "security",
-            title: "Weak password hash",
-            detail: "bcrypt rounds=4 is too low",
-            evidence: "auth.ts L23 uses bcrypt.hash(pw, 4)",
+            title: "Session id is predictable",
+            detail: "the session id is a monotonic counter",
+            evidence: "session.ts L40 uses ++counter",
             significance: "high",
-            recommendation: "raise to 12+",
+            recommendation: "use a CSPRNG token",
           },
         ],
       },

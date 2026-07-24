@@ -17,7 +17,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ERROR_CODES, USER_FACING_ERROR_CODES } from "../error-codes.js";
+import { ERROR_CODES, USER_FACING_ERROR_CODES, TOOL_ERROR_CODES, TOOL_ERROR_RETRYABLE } from "../error-codes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../../..");
@@ -26,6 +26,31 @@ describe("IV7 — ERROR_CODES drift protection", () => {
   it("ERROR_CODES keys and values are identical (no typo'd const value)", () => {
     for (const [key, value] of Object.entries(ERROR_CODES)) {
       expect(value).toBe(key);
+    }
+  });
+
+  it("TOOL_ERROR_CODES keys and values are identical (no typo'd const value)", () => {
+    for (const [key, value] of Object.entries(TOOL_ERROR_CODES)) {
+      expect(value).toBe(key);
+    }
+  });
+
+  it("#183 — EXAMPLE_ECHO_REJECTED is registered with a retryability entry", () => {
+    expect(TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED).toBe("EXAMPLE_ECHO_REJECTED");
+    // The Record<ToolErrorCode, boolean> type forces an entry at compile time;
+    // pin the value (retryable — the agent can substitute real content) too.
+    expect(TOOL_ERROR_RETRYABLE[TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED]).toBe(true);
+  });
+
+  it("#184 — TOOL_CALL_TRUNCATED is registered with a retryability entry", () => {
+    expect(TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED).toBe("TOOL_CALL_TRUNCATED");
+    expect(TOOL_ERROR_RETRYABLE[TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED]).toBe(true);
+  });
+
+  it("every TOOL_ERROR_CODES code has a TOOL_ERROR_RETRYABLE entry (no drift)", () => {
+    for (const code of Object.values(TOOL_ERROR_CODES)) {
+      expect(TOOL_ERROR_RETRYABLE).toHaveProperty(code);
+      expect(typeof TOOL_ERROR_RETRYABLE[code]).toBe("boolean");
     }
   });
 
