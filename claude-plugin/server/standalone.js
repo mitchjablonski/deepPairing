@@ -28077,15 +28077,14 @@ var EX_PLAN = JSON.parse(EXAMPLE_PLAN);
 var EX_CODE_CHANGE = JSON.parse(EXAMPLE_CODE_CHANGE);
 var EX_REASONING = JSON.parse(EXAMPLE_REASONING);
 var EX_CHANGESET = JSON.parse(EXAMPLE_CHANGESET);
-var optionTitles = (o) => pluckSet(o, "options", "title");
 var findingTitles = (o) => pluckSet(o, "findings", "title");
 var reqStatements = (o) => pluckSet(o, "requirements", "statement");
 var stepDescriptions = (o) => pluckSet(o, "steps", "description");
 var ECHO_MATCHERS = {
-  present_options: (d) => normEcho(prop(d, "context")) === normEcho(prop(EX_OPTIONS, "context")) || echoSetEq(optionTitles(d), optionTitles(EX_OPTIONS)),
-  present_findings: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_FINDINGS, "summary")) || echoSetEq(findingTitles(d), findingTitles(EX_FINDINGS)),
-  present_spec: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_SPEC, "title")) || echoSetEq(reqStatements(d), reqStatements(EX_SPEC)),
-  present_plan: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) || echoSetEq(stepDescriptions(d), stepDescriptions(EX_PLAN)),
+  present_options: (d) => normEcho(prop(d, "context")) === normEcho(prop(EX_OPTIONS, "context")),
+  present_findings: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_FINDINGS, "summary")) && echoSetEq(findingTitles(d), findingTitles(EX_FINDINGS)),
+  present_spec: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_SPEC, "title")) && echoSetEq(reqStatements(d), reqStatements(EX_SPEC)),
+  present_plan: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) && echoSetEq(stepDescriptions(d), stepDescriptions(EX_PLAN)),
   present_code_change: (d) => normEcho(prop(d, "filePath")) === normEcho(prop(EX_CODE_CHANGE, "filePath")) && normEcho(prop(d, "before")) === normEcho(prop(EX_CODE_CHANGE, "before")) && normEcho(prop(d, "after")) === normEcho(prop(EX_CODE_CHANGE, "after")),
   log_reasoning: (d) => normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) || normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
   present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title"))

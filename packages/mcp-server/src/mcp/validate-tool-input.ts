@@ -360,7 +360,9 @@ const EX_CODE_CHANGE: unknown = JSON.parse(EXAMPLE_CODE_CHANGE);
 const EX_REASONING: unknown = JSON.parse(EXAMPLE_REASONING);
 const EX_CHANGESET: unknown = JSON.parse(EXAMPLE_CHANGESET);
 
-const optionTitles = (o: unknown): string[] => pluckSet(o, "options", "title");
+// NOTE: no `optionTitles` — present_options matches on the context scalar
+// alone (the option-title set was a false-positive-prone arm, removed in the
+// post-review tightening; see ECHO_MATCHERS).
 const findingTitles = (o: unknown): string[] => pluckSet(o, "findings", "title");
 const reqStatements = (o: unknown): string[] => pluckSet(o, "requirements", "statement");
 const stepDescriptions = (o: unknown): string[] => pluckSet(o, "steps", "description");
@@ -372,35 +374,53 @@ const stepDescriptions = (o: unknown): string[] => pluckSet(o, "steps", "descrip
  * formatValidationError, so a new tool with an embedded example just adds a
  * matcher here.
  *
+ * GUIDING RULE (post-review tightening): a match ALWAYS requires the
+ * DISTINCTIVE SCALAR (context/summary/title) to match. Item-sets (option
+ * titles, finding titles, step descriptions, requirement statements) only ever
+ * NARROW a scalar match — they never suffice on their own. An adversarial
+ * review executed four false positives where a lone set-arm bounced legitimate
+ * real content that is byte-indistinguishable from an example (e.g. a real
+ * two-option caching decision titled exactly Redis / In-memory LRU — THE
+ * canonical cache card). Those arms added ~zero marginal protection: the real
+ * incident (call #1 verbatim, call #2 = same context + an extra Memcached
+ * option) is fully caught by the context scalar alone.
+ *
  * Field choices (and why they're false-positive-safe):
- *  - options:   context OR the option-title set. A real cache decision with a
- *               different question or different option titles is admitted.
- *  - findings:  summary OR the finding-title set. ("Two issues in auth.ts" is
- *               the example summary — no real audit reuses it verbatim.)
- *  - spec:      title OR the requirement-statement set. NOT objective —
- *               "Block credential stuffing" is reused by real spec tests, so
- *               matching on it would be a false positive.
- *  - plan:      title OR the step-description set.
+ *  - options:   context ONLY. The option-title set is NOT an arm — Redis /
+ *               In-memory LRU is a real human's card, and the context scalar
+ *               already catches both incident calls. A real decision with a
+ *               different question is admitted no matter its option titles.
+ *  - findings:  summary AND the finding-title set. Reusing just the summary, or
+ *               just a finding title ("Weak password hash"), is admitted; only
+ *               the full replay (both) is caught.
+ *  - spec:      title AND the requirement-statement set. NOT objective —
+ *               "Block credential stuffing" is reused by real spec tests. A
+ *               real spec reusing only the title or only a statement is admitted.
+ *  - plan:      title AND the step-description set. "Add rate limiting" is an
+ *               extremely common exact title, so it cannot suffice alone; a
+ *               real plan with that title but different steps, or the example
+ *               step under a different title, is admitted.
  *  - code_change: filePath AND before AND after must ALL match — the fully
  *               distinctive tuple (a bcrypt 4→12 fix in that exact file is the
  *               example; any single field alone is a plausible real change).
- *  - reasoning: action OR reasoning (both example sentences are distinctive;
- *               a real note mentioning Redis in different words is admitted).
- *  - changeset: title ONLY. A real changeset test reuses the example SUMMARY
- *               with a different title — matching on summary would false-fire.
+ *  - reasoning: action OR reasoning — each is a full distinctive sentence (not
+ *               a set arm); a real note mentioning Redis in different words is
+ *               admitted.
+ *  - changeset: title ONLY — the example title is a full, highly specific
+ *               sentence. A real changeset reusing the example SUMMARY with a
+ *               different title is admitted (summary is not an arm).
  */
 const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
   present_options: (d) =>
-    normEcho(prop(d, "context")) === normEcho(prop(EX_OPTIONS, "context")) ||
-    echoSetEq(optionTitles(d), optionTitles(EX_OPTIONS)),
+    normEcho(prop(d, "context")) === normEcho(prop(EX_OPTIONS, "context")),
   present_findings: (d) =>
-    normEcho(prop(d, "summary")) === normEcho(prop(EX_FINDINGS, "summary")) ||
+    normEcho(prop(d, "summary")) === normEcho(prop(EX_FINDINGS, "summary")) &&
     echoSetEq(findingTitles(d), findingTitles(EX_FINDINGS)),
   present_spec: (d) =>
-    normEcho(prop(d, "title")) === normEcho(prop(EX_SPEC, "title")) ||
+    normEcho(prop(d, "title")) === normEcho(prop(EX_SPEC, "title")) &&
     echoSetEq(reqStatements(d), reqStatements(EX_SPEC)),
   present_plan: (d) =>
-    normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) ||
+    normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) &&
     echoSetEq(stepDescriptions(d), stepDescriptions(EX_PLAN)),
   present_code_change: (d) =>
     normEcho(prop(d, "filePath")) === normEcho(prop(EX_CODE_CHANGE, "filePath")) &&

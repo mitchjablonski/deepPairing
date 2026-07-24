@@ -376,16 +376,37 @@ describe("#183 — example-echo guard", () => {
     expect(store.getArtifacts()).toHaveLength(0);
   });
 
-  it("REJECTS a trivially-normalized echo: option-title SET reordered/recased, different context", async () => {
-    const { isError } = await call("present_options", {
-      context: "Some genuinely different question about storage?",
+  it("still REJECTS the incident's follow-up call: SAME context, an extra Memcached option added (context scalar catches it)", async () => {
+    // The real incident's call #2 kept the echoed context and appended a third
+    // option. The context scalar alone must still catch it — this is exactly
+    // why the (removed) option-title-set arm was never load-bearing.
+    const { isError, text } = await call("present_options", {
+      context: "Which cache layer?", // verbatim example context
       options: [
-        { id: "b", title: "in-memory lru", description: "d", pros: ["p"], cons: ["c"], effort: "low", risk: "medium", recommendation: false },
-        { id: "a", title: "REDIS", description: "d", pros: ["p"], cons: ["c"], effort: "medium", risk: "low", recommendation: true },
+        { id: "a", title: "Redis", description: "d", pros: ["fast"], cons: ["svc"], effort: "medium", risk: "low", recommendation: true },
+        { id: "b", title: "In-memory LRU", description: "d", pros: ["simple"], cons: ["per-instance"], effort: "low", risk: "medium", recommendation: false },
+        { id: "c", title: "Memcached", description: "added on retry", pros: ["mature"], cons: ["fewer types"], effort: "medium", risk: "low", recommendation: false },
       ],
     });
     expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
     expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a REAL decision with a genuinely different context whose options are titled EXACTLY Redis + In-memory LRU (A1 — the canonical cache card, NOT an echo)", async () => {
+    // Post-review probe A1: the two-option caching decision is the single most
+    // common real decision in the wild — options titled exactly Redis /
+    // In-memory LRU. With a real, different question it MUST be admitted; the
+    // old option-title-set arm bounced this legitimate human card.
+    const { isError } = await call("present_options", {
+      context: "Where should the rate-limiter counter store live for our multi-instance API?",
+      options: [
+        { id: "a", title: "Redis", description: "shared counter across instances", pros: ["consistent"], cons: ["network hop"], effort: "medium", risk: "low", recommendation: true },
+        { id: "b", title: "In-memory LRU", description: "per-instance counter", pros: ["fast"], cons: ["drifts across instances"], effort: "low", risk: "medium", recommendation: false },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
   });
 
   it("ADMITS a REAL cache decision that mentions Redis/caches in prose but has a different context AND options", async () => {
@@ -413,7 +434,7 @@ describe("#183 — example-echo guard", () => {
     expect(store.getArtifacts()).toHaveLength(1);
   });
 
-  it("REJECTS the present_findings example (summary fingerprint) end-to-end", async () => {
+  it("REJECTS the present_findings example (summary AND finding-title set both match) end-to-end", async () => {
     const { text, isError } = await call("present_findings", {
       title: "Auth audit",
       summary: "Two issues in auth.ts",
@@ -433,7 +454,18 @@ describe("#183 — example-echo guard", () => {
     expect(store.getArtifacts()).toHaveLength(1);
   });
 
-  it("REJECTS the present_plan example (title fingerprint) end-to-end", async () => {
+  it("ADMITS a real audit with a DIFFERENT summary but a single finding titled exactly 'Weak password hash' (A3 — title set alone must not suffice)", async () => {
+    // Post-review probe A3: reusing just a finding title (a genuinely common
+    // one) with a real, different summary must be admitted.
+    const { isError } = await call("present_findings", {
+      summary: "Password storage review of the new signup flow",
+      findings: [{ category: "security", title: "Weak password hash", detail: "argon2 params below OWASP floor", significance: "high" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("REJECTS the present_plan example (title AND step-description set both match) end-to-end", async () => {
     const { text, isError } = await call("present_plan", {
       title: "Add rate limiting",
       estimatedChanges: 3,
@@ -442,6 +474,33 @@ describe("#183 — example-echo guard", () => {
     expect(isError).toBe(true);
     expect(text).toContain("EXAMPLE_ECHO_REJECTED");
     expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real plan titled exactly 'Add rate limiting' with DIFFERENT steps (A4 — the common title must not suffice alone)", async () => {
+    // Post-review probe A4: "Add rate limiting" is an extremely common exact
+    // title. A real plan with different steps must be admitted.
+    const { isError } = await call("present_plan", {
+      title: "Add rate limiting",
+      estimatedChanges: 2,
+      steps: [
+        { description: "Add a token-bucket to the API gateway", reasoning: "central chokepoint" },
+        { description: "Wire per-tenant quotas from config", reasoning: "fairness" },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real plan whose single step is exactly 'Install limiter middleware' under a DIFFERENT title (A5 — step set alone must not suffice)", async () => {
+    // Post-review probe A5: reusing the example step under a real, different
+    // title must be admitted.
+    const { isError } = await call("present_plan", {
+      title: "Harden the public API surface",
+      estimatedChanges: 1,
+      steps: [{ description: "Install limiter middleware", reasoning: "block abusive clients" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
   });
 
   it("REJECTS the present_code_change example (filePath+before+after tuple) end-to-end", async () => {
@@ -479,7 +538,7 @@ describe("#183 — example-echo guard", () => {
     expect(store.getArtifacts()).toHaveLength(0);
   });
 
-  it("REJECTS the present_spec example (title fingerprint) end-to-end", async () => {
+  it("REJECTS the present_spec example (title AND requirement-statement set both match) end-to-end", async () => {
     const { text, isError } = await call("present_spec", {
       title: "Rate limit auth endpoints",
       objective: "Block credential stuffing",
@@ -495,6 +554,18 @@ describe("#183 — example-echo guard", () => {
       title: "Harden the login endpoint", // not the example title
       objective: "Block credential stuffing", // deliberately the example objective
       requirements: [{ id: "R1", statement: "Add a CAPTCHA after 3 failures", rationale: "raise attacker cost", acceptanceCriteria: ["CAPTCHA shown on 4th attempt"] }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real spec that reuses the example TITLE but has different requirements (title alone must not suffice)", async () => {
+    // Post-review consistency: spec now requires title AND the requirement set,
+    // so reusing just the title with real requirements is admitted.
+    const { isError } = await call("present_spec", {
+      title: "Rate limit auth endpoints", // deliberately the example title
+      objective: "Stop token-endpoint abuse",
+      requirements: [{ id: "R1", statement: "Cap /oauth/token to 20/min per client_id", rationale: "protect the IdP", acceptanceCriteria: ["21st call in 60s returns 429"] }],
     });
     expect(isError).toBeFalsy();
     expect(store.getArtifacts()).toHaveLength(1);
