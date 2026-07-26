@@ -412,16 +412,21 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
           return rect(0, 0);
         });
     }
-    function addRegion(id: string, region: Record<string, unknown>, optionId?: string) {
+    function addRegion(
+      id: string,
+      region: Record<string, unknown>,
+      optionId?: string,
+      opts?: { author?: "human" | "agent"; createdAt?: string },
+    ) {
       useArtifactStore.getState().addComment({
         id,
         sessionId: "s",
         target: { artifactId: "a", visualId: "vis_1", region, ...(optionId ? { optionId } : {}) },
         parentCommentId: null,
-        author: "human",
+        author: opts?.author ?? "human",
         content: `c-${id}`,
         acknowledged: false,
-        createdAt: "2026-06-18T00:00:00.000Z",
+        createdAt: opts?.createdAt ?? "2026-06-18T00:00:00.000Z",
       } as any);
     }
     const DRAG_HANDLE = "Drag to move this comment box";
@@ -456,7 +461,7 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       expect(popover.style.top).toBe("0px");
       // Drag the header down 40px → dragOffset.dy=40 → the popover follows.
       fireEvent.pointerDown(handle, { pointerId: 5, clientX: 0, clientY: 0 });
-      fireEvent.pointerMove(handle, { pointerId: 5, clientX: 0, clientY: 40 });
+      fireEvent.pointerMove(handle, { pointerId: 5, clientX: 0, clientY: 40 , buttons: 1 });
       fireEvent.pointerUp(handle, { pointerId: 5, clientX: 0, clientY: 40 });
       expect(popover.style.top).toBe("40px");
     });
@@ -470,7 +475,7 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       // pointerdown lands on Cancel (stops propagation, so the header never
       // captures a drag-start); a subsequent header move must NOT move the box.
       fireEvent.pointerDown(cancel, { pointerId: 6, clientX: 0, clientY: 0 });
-      fireEvent.pointerMove(handle, { pointerId: 6, clientX: 0, clientY: 80 });
+      fireEvent.pointerMove(handle, { pointerId: 6, clientX: 0, clientY: 80 , buttons: 1 });
       expect(popover.style.top).toBe("0px");
     });
 
@@ -496,7 +501,7 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       await screen.findByTestId("dp-region-popover");
       const handle = screen.getByTitle(DRAG_HANDLE);
       fireEvent.pointerDown(handle, { pointerId: 7, clientX: 0, clientY: 0 });
-      fireEvent.pointerMove(handle, { pointerId: 7, clientX: 0, clientY: 200 });
+      fireEvent.pointerMove(handle, { pointerId: 7, clientX: 0, clientY: 200 , buttons: 1 });
       const movedTop = screen.getByTestId("dp-region-popover").style.top;
       completeDrag(p1.overlay, B_FROM, B_TO);
       const bAfterDrag = screen.getByTestId("dp-region-popover").style.top;
@@ -524,7 +529,7 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       const handle = screen.getByTitle(DRAG_HANDLE);
       // Pull the header far DOWN. New bound: top ≤ wellHeight + 320.
       fireEvent.pointerDown(handle, { pointerId: 8, clientX: 0, clientY: 0 });
-      fireEvent.pointerMove(handle, { pointerId: 8, clientX: 0, clientY: 5000 });
+      fireEvent.pointerMove(handle, { pointerId: 8, clientX: 0, clientY: 5000 , buttons: 1 });
       // top saturates at wellHeight(120) + DRAG_BELOW(320) = 440 — well BELOW the
       // 120px-tall well (the whole point of the loosened bound).
       expect(popover.style.top).toBe("440px");
@@ -540,12 +545,12 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       // Far LEFT: left ≥ -(width-64) = -(400-64) = -336 → 64px of the 400px box
       // still pokes past x=0 into the well.
       fireEvent.pointerDown(handle, { pointerId: 9, clientX: 1000, clientY: 1000 });
-      fireEvent.pointerMove(handle, { pointerId: 9, clientX: -5000, clientY: 1000 });
+      fireEvent.pointerMove(handle, { pointerId: 9, clientX: -5000, clientY: 1000 , buttons: 1 });
       expect(popover.style.left).toBe("-336px");
       expect(-336 + 400).toBeGreaterThanOrEqual(64);
       // Far RIGHT: left ≤ wellWidth-64 = 800-64 = 736 → 64px still inside the well.
       fireEvent.pointerDown(handle, { pointerId: 9, clientX: 0, clientY: 0 });
-      fireEvent.pointerMove(handle, { pointerId: 9, clientX: 12000, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 9, clientX: 12000, clientY: 0 , buttons: 1 });
       expect(popover.style.left).toBe("736px");
       expect(800 - 736).toBeGreaterThanOrEqual(64);
     });
@@ -615,6 +620,109 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       // <body> and doing nothing.
       await user.keyboard("{Escape}");
       expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+    });
+
+    // --- Fix (review): focus-after-send must not STEAL focus -----------------
+    // The active region for a zero-geometry drag is the label-less {0,0,0,0}
+    // rect, so a comment posted on that same rect threads onto it (sameRegion).
+    const ACTIVE_REGION = { x: 0, y: 0, w: 0, h: 0 };
+
+    async function openPopoverThenAddComment() {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-popover");
+      return overlay;
+    }
+
+    it("FOCUS-STEAL GUARD: an AGENT reply growing the active region's thread never steals focus from a sibling field", async () => {
+      await openPopoverThenAddComment();
+      // The human has clicked into another field and is typing there.
+      const sibling = document.createElement("input");
+      document.body.appendChild(sibling);
+      sibling.focus();
+      expect(sibling).toHaveFocus();
+      // An agent reply arrives over WS — it inherits the parent's region target
+      // (answer-question), so it passes the regionComments filter + grows the
+      // count. Focus must NOT be yanked into the popover.
+      act(() =>
+        addRegion("rc_agent_reply", ACTIVE_REGION, undefined, {
+          author: "agent",
+          createdAt: "2026-06-19T00:00:00.000Z",
+        }),
+      );
+      expect(sibling).toHaveFocus();
+      sibling.remove();
+    });
+
+    it("FOCUS-STEAL GUARD: a HUMAN comment landing while the user has moved to another field does not steal focus back", async () => {
+      await openPopoverThenAddComment();
+      const sibling = document.createElement("input");
+      document.body.appendChild(sibling);
+      sibling.focus();
+      expect(sibling).toHaveFocus();
+      // Even a HUMAN-authored growth must not reclaim focus the user has since
+      // moved elsewhere (activeElement is neither <body> nor inside the popover).
+      act(() =>
+        addRegion("rc_human_late", ACTIVE_REGION, undefined, {
+          author: "human",
+          createdAt: "2026-06-19T00:00:00.000Z",
+        }),
+      );
+      expect(sibling).toHaveFocus();
+      sibling.remove();
+    });
+
+    it("FOCUS-STEAL GUARD: a HUMAN comment landing while focus fell to <body> DOES reclaim the composer (original fix, still pinned)", async () => {
+      await openPopoverThenAddComment();
+      const box = screen.getByPlaceholderText(/add a comment/i);
+      // The send's disabled-textarea blur drops focus to <body>.
+      box.blur();
+      expect(box).not.toHaveFocus();
+      act(() =>
+        addRegion("rc_human_send", ACTIVE_REGION, undefined, {
+          author: "human",
+          createdAt: "2026-06-19T00:00:00.000Z",
+        }),
+      );
+      // Focus was LOST by the send, so reclaiming it is correct.
+      expect(box).toHaveFocus();
+    });
+
+    // --- Fix (review): an interrupted drag must not make the popover chase ----
+    it("DRAG INTERRUPTION: a pointercancel aborts the drag so a later stray HOVER does not move the popover", async () => {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      expect(popover.style.top).toBe("0px");
+      fireEvent.pointerDown(handle, { pointerId: 11, clientX: 0, clientY: 0 });
+      // The browser reclaims the pointer mid-drag (OS gesture / pen takeover)…
+      fireEvent.pointerCancel(handle, { pointerId: 11 });
+      // …then a stray HOVER over the header (no button held) must NOT resume the
+      // drag from the interrupted start.
+      fireEvent.pointerMove(handle, { pointerId: 11, clientX: 0, clientY: 300, buttons: 0 });
+      expect(popover.style.top).toBe("0px");
+    });
+
+    it("DRAG INTERRUPTION: a plain hover (no button held) over the header never moves the popover (buttons guard)", async () => {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      fireEvent.pointerDown(handle, { pointerId: 12, clientX: 0, clientY: 0 });
+      // buttons===0 → a hover, not a drag: the belt heals the stale start.
+      fireEvent.pointerMove(handle, { pointerId: 12, clientX: 0, clientY: 250, buttons: 0 });
+      expect(popover.style.top).toBe("0px");
+    });
+
+    it("DRAG INTERRUPTION: a normal button-held drag (buttons=1) still moves the popover", async () => {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      fireEvent.pointerDown(handle, { pointerId: 13, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 13, clientX: 0, clientY: 90, buttons: 1 });
+      expect(popover.style.top).toBe("90px");
     });
   });
 

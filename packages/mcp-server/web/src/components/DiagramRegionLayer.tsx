@@ -247,11 +247,26 @@ export function DiagramRegionLayer({
     [dragOffset.dx, dragOffset.dy],
   );
   const onHandlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Belt: pointermove ALSO fires on a plain hover. If no button is held
+    // (buttons === 0) this is a hover, not a drag — so heal any stale dragStart
+    // (left behind by a pointercancel, an Esc-mid-drag, or a remount) and bail,
+    // rather than letting the popover chase the cursor.
+    if (e.buttons === 0) {
+      dragStart.current = null;
+      return;
+    }
     const s = dragStart.current;
     if (!s) return;
     setDragOffset({ dx: s.dx + (e.clientX - s.px), dy: s.dy + (e.clientY - s.py) });
   }, []);
   const onHandlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragStart.current = null;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+  }, []);
+  const onHandlePointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // The browser reclaiming the pointer (OS gesture, touch/pen takeover) aborts
+    // the drag cleanly — mirror pointerup so a LATER hover over the header can't
+    // resume moving the popover from the interrupted drag's stale start.
     dragStart.current = null;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
   }, []);
@@ -285,9 +300,24 @@ export function DiagramRegionLayer({
   // per active region so opening a region that already has comments doesn't
   // steal focus (that's the open-focus effect's job); only a growth in the
   // active region's own thread while it stays selected re-focuses.
-  const activeThreadCount = active
-    ? regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active)).length
-    : 0;
+  //
+  // TWO guards keep this from STEALING focus (review): re-focus ONLY when
+  //  (a) the growth is a HUMAN-authored comment — an AGENT reply arriving over
+  //      WS (answer-question inherits the parent's region target, so it passes
+  //      the regionComments filter and grows the count) must never move focus
+  //      while the human types elsewhere; AND
+  //  (b) focus is still RECLAIMABLE — activeElement is <body> (the send's own
+  //      disabled-textarea blur) or already inside the popover — never yank
+  //      focus the user has since moved into another field.
+  const activeRegionComments = active
+    ? regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))
+    : [];
+  const activeThreadCount = activeRegionComments.length;
+  // Author of the most-recently-created comment in this thread (ISO timestamps
+  // sort lexicographically; a human send's provisional carries `now`).
+  const newestAuthor = activeThreadCount
+    ? activeRegionComments.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)).author
+    : null;
   const sentBaseline = useRef<{ key: string; count: number }>({ key: activeKey, count: activeThreadCount });
   useEffect(() => {
     const base = sentBaseline.current;
@@ -296,11 +326,16 @@ export function DiagramRegionLayer({
       sentBaseline.current = { key: activeKey, count: activeThreadCount };
       return;
     }
-    if (activeThreadCount > base.count) {
-      composerRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    if (activeThreadCount > base.count && newestAuthor === "human") {
+      const ae = typeof document !== "undefined" ? document.activeElement : null;
+      const popover = composerRef.current;
+      // Reclaim focus ONLY if the send lost it (fell to <body>) or it's still in
+      // the popover — never if the user has moved into some other field.
+      const reclaimable = !ae || ae === document.body || (popover != null && popover.contains(ae));
+      if (reclaimable) popover?.querySelector("textarea")?.focus({ preventScroll: true });
     }
     sentBaseline.current = { key: activeKey, count: activeThreadCount };
-  }, [activeKey, activeThreadCount]);
+  }, [activeKey, activeThreadCount, newestAuthor]);
 
   // --- #185 reverse navigation: click a posted region thread → find it --------
   // Clicking a region thread's anchor header scrolls the diagram so the region
@@ -432,6 +467,7 @@ export function DiagramRegionLayer({
               onPointerDown: onHandlePointerDown,
               onPointerMove: onHandlePointerMove,
               onPointerUp: onHandlePointerUp,
+              onPointerCancel: onHandlePointerCancel,
               title: "Drag to move this comment box",
             }
           : {})}
