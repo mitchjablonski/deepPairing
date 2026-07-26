@@ -69,10 +69,13 @@ surface; the web UI is read + steer.
 ## "Why not just use MCP elicitation?"
 
 We do — for the part it fits. When the only question is "approve
-this here or review it in the UI?", deepPairing sends a native
+this here or review it in the UI?", deepPairing *can* send a native
 elicitation request (a single boolean; see
-[`elicit.ts`](../packages/mcp-server/src/mcp/elicit.ts)) and takes
-the answer inline. Protocol-native where the protocol suffices.
+[`elicit.ts`](../packages/mcp-server/src/mcp/elicit.ts)) and take the
+answer inline — an opt-in terminal shortcut
+(`DEEPPAIRING_TERMINAL_APPROVE=1`), off by default precisely because
+the companion UI, not the terminal, is where review belongs.
+Protocol-native where the protocol suffices.
 
 Two things elicitation deliberately *doesn't* do, though:
 
@@ -90,7 +93,7 @@ Two things elicitation deliberately *doesn't* do, though:
    Server-initiated MCP requests went non-blocking/stateless in the
    [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
    ([SEP-2322 "Multi Round-Trip Requests"](https://modelcontextprotocol.io/seps/2322-MRTR)),
-   and Claude Code already auto-backgrounds long MCP calls. We speak
+   and Claude Code backgrounds long-running tool calls. We speak
    that protocol; we don't claim it as ours. (As of this writing the
    shipped Claude Code still runs the older blocking elicitation
    flow; MRTR is spec-final, not yet client-landed.)

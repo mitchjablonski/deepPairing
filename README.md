@@ -174,8 +174,8 @@ the collaboration, not the headline:
   protocol now — server-initiated requests went non-blocking in the
   [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
   ([SEP-2322 MRTR](https://modelcontextprotocol.io/seps/2322-MRTR)), and
-  deepPairing speaks it, native elicitation included for the trivial
-  approve-here case. But elicitation's *content* model is flat by design
+  deepPairing speaks it, native elicitation supported (opt-in) for the
+  trivial approve-here case. But elicitation's *content* model is flat by design
   ("flat objects with primitive properties only … nested structures, arrays
   of objects … intentionally not supported" — [Final spec](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)),
   so the protocol's native surface can't host the review that is
