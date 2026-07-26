@@ -366,6 +366,258 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
     });
   });
 
+  // --- #185 FEEL ROUND: roomy popover · draggable · click-region-to-reopen ---
+  //
+  // The four approved behaviors (live-iterated + screenshot-verified on the
+  // branch) plus the focus-after-send fix found during verification. happy-dom
+  // returns all-zero rects, so geometry-dependent behaviors (loose bounds, the
+  // click hit-test, distinct regions for the reset) mock getBoundingClientRect
+  // for the diagram SVG (its box) and the well (the overlay's ancestor); the
+  // rest ride the pure clamp/offset math, which is screen-honest without layout.
+  describe("#185 feel round", () => {
+    afterEach(() => {
+      // Restore the getBoundingClientRect / focus spies these tests install
+      // (vitest has no restoreMocks here; the matchMedia stub is untouched).
+      vi.restoreAllMocks();
+    });
+
+    async function mountInteractive(opts?: { narrow?: boolean; optionId?: string }) {
+      if (opts?.narrow) mockMatchMedia(true);
+      const region = { artifactId: "a", visualId: "vis_1", ...(opts?.optionId ? { optionId: opts.optionId } : {}) };
+      const utils = render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={region} />);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      return { overlay: screen.getByTestId("dp-region-overlay"), ...utils };
+    }
+    function completeDrag(overlay: HTMLElement, from = { x: 10, y: 10 }, to = { x: 200, y: 150 }) {
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: from.x, clientY: from.y });
+      fireEvent.pointerMove(overlay, { pointerId: 1, clientX: to.x, clientY: to.y });
+      fireEvent.pointerUp(overlay, { pointerId: 1, clientX: to.x, clientY: to.y });
+    }
+    // A CLICK (sub-4px) on the overlay — exercises finishDrag's isClickDrag arm.
+    function clickAt(overlay: HTMLElement, x: number, y: number) {
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 2, clientX: x, clientY: y });
+      fireEvent.pointerUp(overlay, { pointerId: 2, clientX: x + 1, clientY: y });
+    }
+    // Non-zero rects for the diagram SVG (== its box) and the well (any ancestor
+    // of the overlay). Everything else stays zero — so the overlay's own rect is
+    // {0,0} and click coords map straight to well-local px.
+    function mockGeometry(W: number, H: number) {
+      const rect = (w: number, h: number) =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: w, bottom: h, width: w, height: h, toJSON() {} }) as DOMRect;
+      return vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+          if (this.getAttribute?.("aria-label") === "diagram") return rect(W, H);
+          if (this.querySelector?.('[data-testid="dp-region-overlay"]')) return rect(W, H);
+          return rect(0, 0);
+        });
+    }
+    function addRegion(id: string, region: Record<string, unknown>, optionId?: string) {
+      useArtifactStore.getState().addComment({
+        id,
+        sessionId: "s",
+        target: { artifactId: "a", visualId: "vis_1", region, ...(optionId ? { optionId } : {}) },
+        parentCommentId: null,
+        author: "human",
+        content: `c-${id}`,
+        acknowledged: false,
+        createdAt: "2026-06-18T00:00:00.000Z",
+      } as any);
+    }
+    const DRAG_HANDLE = "Drag to move this comment box";
+
+    // --- Behavior 1: roomy popover -----------------------------------------
+    it("ROOMY: the popover is 400px wide and its CommentThread is roomy (rows=4)", async () => {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      // POPOVER_WIDTH 288→400 (well width is 0 in happy-dom, so the clamp keeps
+      // the fixed 400, not the well).
+      expect(popover.style.width).toBe("400px");
+      // The region CommentThread now gets `roomy` → a 4-row auto-growing composer.
+      expect(screen.getByPlaceholderText(/add a comment/i)).toHaveAttribute("rows", "4");
+    });
+
+    it("ROOMY: the narrow-viewport fallback composer is ALSO roomy (shared renderComposerInner)", async () => {
+      const { overlay } = await mountInteractive({ narrow: true });
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-composer-block");
+      expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+      // roomy is passed by BOTH placements (they share renderComposerInner).
+      expect(screen.getByPlaceholderText(/add a comment/i)).toHaveAttribute("rows", "4");
+    });
+
+    // --- Behavior 2: draggable by header -----------------------------------
+    it("DRAGGABLE: a pointerdown→move→up sequence on the header moves the popover", async () => {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      expect(popover.style.top).toBe("0px");
+      // Drag the header down 40px → dragOffset.dy=40 → the popover follows.
+      fireEvent.pointerDown(handle, { pointerId: 5, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 5, clientX: 0, clientY: 40 });
+      fireEvent.pointerUp(handle, { pointerId: 5, clientX: 0, clientY: 40 });
+      expect(popover.style.top).toBe("40px");
+    });
+
+    it("DRAGGABLE: clicking Cancel never starts a drag (its pointerdown stops propagation)", async () => {
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      const cancel = screen.getByRole("button", { name: /cancel region comment/i });
+      // pointerdown lands on Cancel (stops propagation, so the header never
+      // captures a drag-start); a subsequent header move must NOT move the box.
+      fireEvent.pointerDown(cancel, { pointerId: 6, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 6, clientX: 0, clientY: 80 });
+      expect(popover.style.top).toBe("0px");
+    });
+
+    it("DRAGGABLE: the narrow-fallback header is NOT a drag handle (pointer-only affordance stays off)", async () => {
+      const { overlay } = await mountInteractive({ narrow: true });
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-composer-block");
+      expect(screen.queryByTitle(DRAG_HANDLE)).not.toBeInTheDocument();
+      // No grab cursor / drag styling on the fallback header either.
+      expect(document.querySelector(".cursor-grab")).toBeNull();
+    });
+
+    it("DRAGGABLE: selecting a NEW region RESETS the drag offset (each selection re-anchors)", async () => {
+      mockGeometry(800, 600); // distinct regions need a real SVG box
+      const A_FROM = { x: 100, y: 100 };
+      const A_TO = { x: 300, y: 300 };
+      const B_FROM = { x: 400, y: 60 };
+      const B_TO = { x: 560, y: 160 };
+
+      // Phase 1: open A, DRAG the popover, then select a DIFFERENT region B.
+      const p1 = await mountInteractive();
+      completeDrag(p1.overlay, A_FROM, A_TO);
+      await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      fireEvent.pointerDown(handle, { pointerId: 7, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 7, clientX: 0, clientY: 200 });
+      const movedTop = screen.getByTestId("dp-region-popover").style.top;
+      completeDrag(p1.overlay, B_FROM, B_TO);
+      const bAfterDrag = screen.getByTestId("dp-region-popover").style.top;
+      p1.unmount();
+
+      // Phase 2: open A then B with NO drag between — the clean baseline for B.
+      const p2 = await mountInteractive();
+      completeDrag(p2.overlay, A_FROM, A_TO);
+      await screen.findByTestId("dp-region-popover");
+      completeDrag(p2.overlay, B_FROM, B_TO);
+      const bClean = screen.getByTestId("dp-region-popover").style.top;
+
+      // The Phase-1 drag must NOT have leaked into B's placement (offset reset).
+      expect(bAfterDrag).toBe(bClean);
+      // …and the drag genuinely moved the box (guards a vacuous test).
+      expect(movedTop).not.toBe(bClean);
+    });
+
+    // --- Behavior 3: loose drag bounds (short well) ------------------------
+    it("LOOSE BOUNDS: a SHORT well lets the box be pulled BELOW the well (top can exceed wellHeight)", async () => {
+      mockGeometry(800, 120); // short well: an in-well clamp would collapse dy to ~0
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      // Pull the header far DOWN. New bound: top ≤ wellHeight + 320.
+      fireEvent.pointerDown(handle, { pointerId: 8, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 8, clientX: 0, clientY: 5000 });
+      // top saturates at wellHeight(120) + DRAG_BELOW(320) = 440 — well BELOW the
+      // 120px-tall well (the whole point of the loosened bound).
+      expect(popover.style.top).toBe("440px");
+      expect(parseFloat(popover.style.top)).toBeGreaterThan(120);
+    });
+
+    it("LOOSE BOUNDS: horizontal overhang stops with ≥64px of the box still reachable", async () => {
+      mockGeometry(800, 120);
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const handle = screen.getByTitle(DRAG_HANDLE);
+      // Far LEFT: left ≥ -(width-64) = -(400-64) = -336 → 64px of the 400px box
+      // still pokes past x=0 into the well.
+      fireEvent.pointerDown(handle, { pointerId: 9, clientX: 1000, clientY: 1000 });
+      fireEvent.pointerMove(handle, { pointerId: 9, clientX: -5000, clientY: 1000 });
+      expect(popover.style.left).toBe("-336px");
+      expect(-336 + 400).toBeGreaterThanOrEqual(64);
+      // Far RIGHT: left ≤ wellWidth-64 = 800-64 = 736 → 64px still inside the well.
+      fireEvent.pointerDown(handle, { pointerId: 9, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(handle, { pointerId: 9, clientX: 12000, clientY: 0 });
+      expect(popover.style.left).toBe("736px");
+      expect(800 - 736).toBeGreaterThanOrEqual(64);
+    });
+
+    // --- Behavior 4: click a posted region highlight → reopen its thread ----
+    it("CLICK-TO-REOPEN: clicking inside a posted region re-opens that region's thread", async () => {
+      mockGeometry(800, 600);
+      // region covers well-local x∈[80,240], y∈[90,210].
+      addRegion("rc_hit", { x: 0.1, y: 0.15, w: 0.2, h: 0.2, labels: ["Target"] });
+      const { overlay } = await mountInteractive();
+      expect(screen.queryByText(/Commenting on/)).not.toBeInTheDocument();
+      clickAt(overlay, 150, 130); // inside the region
+      expect(screen.getByText(/Commenting on \[Target\]/)).toBeInTheDocument();
+    });
+
+    it("CLICK-TO-REOPEN: clicking EMPTY well space opens nothing", async () => {
+      mockGeometry(800, 600);
+      addRegion("rc_hit", { x: 0.1, y: 0.15, w: 0.2, h: 0.2, labels: ["Target"] });
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 10, 10); // outside the region
+      expect(screen.queryByText(/Commenting on/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+    });
+
+    it("CLICK-TO-REOPEN: with overlapping regions, the SMALLEST containing region wins", async () => {
+      mockGeometry(800, 600);
+      // Outer covers x[40,440] y[30,330]; Inner covers x[80,160] y[60,120].
+      addRegion("rc_outer", { x: 0.05, y: 0.05, w: 0.5, h: 0.5, labels: ["Outer"] });
+      addRegion("rc_inner", { x: 0.1, y: 0.1, w: 0.1, h: 0.1, labels: ["Inner"] });
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 120, 90); // inside BOTH — smallest (Inner) must win
+      expect(screen.getByText(/Commenting on \[Inner\]/)).toBeInTheDocument();
+      expect(screen.queryByText(/Commenting on \[Outer\]/)).not.toBeInTheDocument();
+    });
+
+    it("CLICK-TO-REOPEN: the hit-test cannot cross OPTIONS — another option's region opens nothing (#173)", async () => {
+      mockGeometry(800, 600);
+      // A posted region that belongs to a DIFFERENT decision option.
+      addRegion("rc_other_opt", { x: 0.1, y: 0.15, w: 0.2, h: 0.2, labels: ["Other"] }, "opt_2");
+      // This layer is scoped to opt_1 → regionComments excludes opt_2's comment,
+      // so the hit-test can't even see it (no highlight, nothing to reopen).
+      const { overlay } = await mountInteractive({ optionId: "opt_1" });
+      expect(screen.queryByTestId("dp-region-highlight")).not.toBeInTheDocument();
+      clickAt(overlay, 150, 130); // dead-center of the OTHER option's rect
+      expect(screen.queryByText(/Commenting on/)).not.toBeInTheDocument();
+    });
+
+    // --- Fix: focus-after-send dead zone -----------------------------------
+    it("FOCUS-AFTER-SEND: sending from the popover returns focus to the composer, so Escape still closes it", async () => {
+      const user = userEvent.setup();
+      const focusSpy = vi.spyOn(HTMLTextAreaElement.prototype, "focus");
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-popover");
+      const box = screen.getByPlaceholderText(/add a comment/i);
+      await user.type(box, "needs a retry");
+      const callsBeforeSend = focusSpy.mock.calls.length;
+      await user.keyboard("{Meta>}{Enter}{/Meta}"); // send through the shared path
+      await waitFor(() => expect(fetch).toHaveBeenCalled());
+      // The dead-zone fix: after the send lands (a provisional comment appears
+      // for the active region) focus is pulled back to the composer's textarea,
+      // with the same preventScroll contract as the open-focus effect.
+      await waitFor(() => expect(focusSpy.mock.calls.length).toBeGreaterThan(callsBeforeSend));
+      expect(focusSpy).toHaveBeenLastCalledWith({ preventScroll: true });
+      // With focus back inside the popover, Escape reaches the composer's
+      // onKeyDown and closes it (the layered-Esc contract) instead of hitting
+      // <body> and doing nothing.
+      await user.keyboard("{Escape}");
+      expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+    });
+  });
+
   it("DEGRADATION: when the SVG fails to render (source fallback), no drag affordance appears but region comments still show as text", async () => {
     addRegionComment({
       id: "rc_fb",

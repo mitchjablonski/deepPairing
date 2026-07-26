@@ -275,6 +275,33 @@ export function DiagramRegionLayer({
       }
     : null;
 
+  // #185 feel round — focus-after-send dead zone. Sending from the popover
+  // clears + briefly disables the textarea, so the browser blurs it and
+  // activeElement falls to <body>: a follow-up Escape then hit nothing (it
+  // neither closed the popover nor, in a modal host, the host modal). When a
+  // NEW comment lands for the ACTIVE region, pull focus back to the composer's
+  // textarea — preventScroll, the same contract as the open-focus effect — so
+  // the layered-Esc dismissal and keep-typing both survive a send. Baselined
+  // per active region so opening a region that already has comments doesn't
+  // steal focus (that's the open-focus effect's job); only a growth in the
+  // active region's own thread while it stays selected re-focuses.
+  const activeThreadCount = active
+    ? regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active)).length
+    : 0;
+  const sentBaseline = useRef<{ key: string; count: number }>({ key: activeKey, count: activeThreadCount });
+  useEffect(() => {
+    const base = sentBaseline.current;
+    if (base.key !== activeKey) {
+      // A different region (or closed): re-baseline; open-focus handles focus.
+      sentBaseline.current = { key: activeKey, count: activeThreadCount };
+      return;
+    }
+    if (activeThreadCount > base.count) {
+      composerRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    }
+    sentBaseline.current = { key: activeKey, count: activeThreadCount };
+  }, [activeKey, activeThreadCount]);
+
   // --- #185 reverse navigation: click a posted region thread → find it --------
   // Clicking a region thread's anchor header scrolls the diagram so the region
   // is in view and briefly flash-highlights its rect (arrival-glow family). The

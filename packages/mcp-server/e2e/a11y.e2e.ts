@@ -1017,6 +1017,21 @@ test("a11y (#185): the region-comment POPOVER (open) has no serious/critical axe
   expect(serious, `axe violations (region popover, light):\n${fmt(serious)}`).toEqual([]);
 });
 
+test("a11y (#185 feel round): the popover is a titled drag handle, and keyboard dismissal (Esc) is unaffected by it", async ({ page }) => {
+  // The two axe scans above already run against the roomy/draggable popover;
+  // this asserts the feel-round affordance is DISCOVERABLE (titled handle) and
+  // that adding a pointer-only drag introduced no keyboard trap — Esc still
+  // closes the composer (drag is pointer-only; keyboard users never drag).
+  await page.goto(`${baseURL}/?session=a11yplan`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openRegionPopover(page);
+  const handle = page.locator('[data-testid="dp-region-popover"] [title="Drag to move this comment box"]');
+  await expect(handle).toBeVisible();
+  // Esc closes the popover — the layered-Esc contract survives the drag handle.
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-testid="dp-region-popover"]')).toHaveCount(0);
+});
+
 test("#185: reverse navigation — clicking a posted region thread flash-highlights its rect on the diagram", async ({ page }) => {
   await page.goto(`${baseURL}/?session=a11yplan`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
