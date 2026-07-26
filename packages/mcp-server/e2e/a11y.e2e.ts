@@ -966,6 +966,82 @@ test("a11y: a plan diagram's region-comment affordance has no serious/critical a
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });
 
+/** #185 — open the region-comment POPOVER for real before scanning (the #187
+ *  hollow-net lesson: actually mount the new UI). Drags a marquee over a rendered
+ *  node so the composer opens as the anchored popover (not the legacy block —
+ *  Playwright's default 1280px viewport is wide, so useIsNarrowViewport is false),
+ *  then settles finite animations. Coordinates come from boundingBox() at run
+ *  time — never hardcoded pixels. */
+async function openRegionPopover(page: import("@playwright/test").Page): Promise<void> {
+  await page.waitForSelector(".dp-mermaid svg g.node", { timeout: 15000 });
+  const node = page.locator(".dp-mermaid svg g.node").first();
+  const nb = await node.boundingBox();
+  if (!nb) throw new Error("region node has no geometry");
+  await page.mouse.move(nb.x + 5, nb.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(nb.x + nb.width - 5, nb.y + nb.height - 5, { steps: 10 });
+  await page.mouse.up();
+  // The anchored popover composer (not the below-diagram block) is now open.
+  await page.waitForSelector('[data-testid="dp-region-popover"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#185): the region-comment POPOVER (open) has no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11yplan`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openRegionPopover(page);
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    // Zero disabled rules — the anchored popover composer (the same CommentThread
+    // textarea + Cancel control, now floating over the well) must pass as-is.
+    .analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (region popover, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#185): the region-comment POPOVER (open) has no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11yplan`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openRegionPopover(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (region popover, light):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("#185: reverse navigation — clicking a posted region thread flash-highlights its rect on the diagram", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11yplan`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  // Post a region comment through the anchored popover (the real drag → compose
+  // → send path), so a posted thread exists to navigate back FROM.
+  await openRegionPopover(page);
+  const composerInput = page.locator("textarea:focus");
+  await composerInput.waitFor({ timeout: 10000 });
+  await composerInput.fill("does this gate need a timeout?");
+  await composerInput.press("Control+Enter");
+  const highlight = page.locator('[data-testid="dp-region-highlight"]');
+  await expect(highlight).toHaveCount(1, { timeout: 10000 });
+  await expect(highlight).toHaveAttribute("data-region-flash", "false");
+
+  // Click the thread's anchor header (a real, keyboard-operable button) — the
+  // region rect flashes. The flash attribute flips true, then the timeout clears
+  // it (nothing lingers). The scrollInto.. + smooth scroll can't be asserted
+  // headlessly, but the flash cue proves the reverse-nav handler ran on the
+  // right comment.
+  await page.getByTestId("dp-region-thread-anchor").click();
+  await expect(highlight).toHaveAttribute("data-region-flash", "true");
+  // The pulse clears (REGION_FLASH_MS ≈ 1.6s) — assert it un-flashes on its own.
+  await expect(highlight).toHaveAttribute("data-region-flash", "false", { timeout: 5000 });
+});
+
 test("a11y: app shell (no session selected) has no serious/critical axe violations", async ({ page }) => {
   // Note: a session exists (seeded in beforeAll), so this scans the shell
   // chrome + aggregate surface rather than a truly empty app.

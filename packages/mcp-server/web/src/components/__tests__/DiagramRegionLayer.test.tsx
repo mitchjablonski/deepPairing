@@ -1,8 +1,25 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { useArtifactStore } from "../../stores/artifact";
+
+/** #185 — deterministic matchMedia: `narrow` drives useIsNarrowViewport
+ *  (max-width:900px) so a test can force the popover vs legacy-block choice;
+ *  prefers-reduced-motion defaults off. happy-dom's own matchMedia returns
+ *  matches:false, but stubbing removes cross-test flakiness. */
+function mockMatchMedia(narrow = false) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("max-width") ? narrow : false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
 
 // Mermaid needs real layout, so mock it: we hand back an SVG string carrying
 // real `g.node` elements so the region layer can enumerate + hit-test them.
@@ -35,6 +52,11 @@ beforeEach(() => {
   renderMock.mockReset();
   renderMock.mockResolvedValue({ svg: TWO_NODE_SVG });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ comment: null }) }));
+  mockMatchMedia(false); // default: wide viewport → popover composer
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
@@ -208,6 +230,140 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
     expect(screen.getAllByText(/node no longer in this diagram/i).length).toBeGreaterThan(0);
     const hl = screen.getByTestId("dp-region-highlight");
     expect(hl).toHaveAttribute("data-region-missing", "true");
+  });
+
+  // --- #185 popover composer + reverse navigation ---------------------------
+  describe("#185 popover composer at the selection", () => {
+    async function mountInteractive() {
+      render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      return screen.getByTestId("dp-region-overlay");
+    }
+    function completeDrag(overlay: HTMLElement) {
+      fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(overlay, { pointerId: 1, clientX: 200, clientY: 150 });
+      fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 200, clientY: 150 });
+    }
+
+    it("a completed drag opens the composer as an anchored POPOVER, not the below-diagram block", async () => {
+      const overlay = await mountInteractive();
+      completeDrag(overlay);
+      const popover = await screen.findByTestId("dp-region-popover");
+      expect(popover).toBeInTheDocument();
+      // Anchored, not the legacy below-diagram block.
+      expect(screen.queryByTestId("dp-region-composer-block")).not.toBeInTheDocument();
+      // Absolutely positioned within the well, carrying its computed placement
+      // (geometry variety — below/above/beside/clamp — is proven in the pure
+      // positionPopover matrix; happy-dom returns all-zero rects, so here it's
+      // the default below placement at the origin).
+      expect(popover.className).toContain("absolute");
+      expect(popover).toHaveAttribute("data-placement");
+      // The same CommentThread composer, so the note flows through unchanged.
+      expect(screen.getByText(/Commenting on/)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+    });
+
+    it("focuses the composer's textarea with preventScroll (no yank when the region is offscreen)", async () => {
+      const focusSpy = vi.spyOn(HTMLTextAreaElement.prototype, "focus");
+      const overlay = await mountInteractive();
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-popover");
+      // The open-composer focus contract now passes { preventScroll: true } — the
+      // exact fix for the field-reported yank (focusing the old below-block
+      // scrolled a large diagram to the bottom, away from the selection).
+      expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+      focusSpy.mockRestore();
+    });
+
+    it("Esc cancels the composer and restores focus to its trigger (contract unregressed)", async () => {
+      const user = userEvent.setup();
+      render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      // Open via the keyboard node path so there's a real trigger to restore to.
+      await user.click(screen.getByText(/comment on a node/i));
+      const authBtn = screen.getByRole("button", { name: "AuthGate" });
+      authBtn.focus();
+      await user.keyboard("{Enter}");
+      await screen.findByTestId("dp-region-popover");
+      expect(screen.getByPlaceholderText(/add a comment/i)).toHaveFocus();
+      // Esc from the focused textarea bubbles to the composer's onKeyDown and
+      // cancels it (and, in a modal host, wouldn't also close the modal —
+      // stopPropagation), restoring focus to the trigger.
+      await user.keyboard("{Escape}");
+      expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+      expect(authBtn).toHaveFocus();
+    });
+
+    it("SMALL-VIEWPORT fallback: a narrow width degrades to the legacy below-diagram block, not a cramped popover", async () => {
+      mockMatchMedia(true); // narrow → useIsNarrowViewport true
+      const overlay = await mountInteractive();
+      completeDrag(overlay);
+      const block = await screen.findByTestId("dp-region-composer-block");
+      expect(block).toBeInTheDocument();
+      // No popover — the block is the legacy in-flow placement.
+      expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+      expect(block.className).toContain("mt-2");
+      // Same composer inside.
+      expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+    });
+  });
+
+  describe("#185 reverse navigation from a posted region thread", () => {
+    function seedRegion() {
+      addRegionComment({
+        id: "rc_nav",
+        content: "tighten this",
+        region: { x: 0.1, y: 0.1, w: 0.3, h: 0.2, elementIds: ["dp-mmd-1-2-flowchart-AuthGate-0"], labels: ["AuthGate"] },
+      });
+    }
+    async function mountWithComment() {
+      seedRegion();
+      render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    }
+
+    it("clicking a thread anchor scrolls its region into view and flash-highlights it, then clears the flash", async () => {
+      await mountWithComment();
+      const highlight = screen.getByTestId("dp-region-highlight");
+      const scrollSpy = vi.fn();
+      // scrollIntoView?.() — the optional chain skips it in happy-dom (no layout
+      // engine), so give the element a real method to observe.
+      (highlight as unknown as { scrollIntoView: () => void }).scrollIntoView = scrollSpy;
+
+      vi.useFakeTimers();
+      const anchor = screen.getByTestId("dp-region-thread-anchor");
+      fireEvent.click(anchor);
+
+      // Scrolled the RIGHT element to center, smooth (reduced-motion off here).
+      expect(scrollSpy).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+      // Flash applied to the region rect.
+      expect(highlight).toHaveAttribute("data-region-flash", "true");
+      expect(highlight.className).toContain("dp-region-flash");
+
+      // The pulse clears after its timeout (nothing lingers).
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(highlight).toHaveAttribute("data-region-flash", "false");
+      expect(highlight.className).not.toContain("dp-region-flash");
+    });
+
+    it("KEYBOARD: activating the anchor by Enter navigates too — passing the COMMENT, never an event (#187)", async () => {
+      await mountWithComment();
+      const highlight = screen.getByTestId("dp-region-highlight");
+      const scrollSpy = vi.fn();
+      (highlight as unknown as { scrollIntoView: () => void }).scrollIntoView = scrollSpy;
+
+      const anchor = screen.getByTestId("dp-region-thread-anchor");
+      anchor.focus();
+      expect(anchor).toHaveFocus();
+      // Enter on the focused button activates onClick — the handler is invoked
+      // with the comment payload (arrow wrapper), never the KeyboardEvent, so
+      // the flash lands on THIS comment's rect (proving the payload identity).
+      await userEvent.keyboard("{Enter}");
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+      expect(highlight).toHaveAttribute("data-region-flash", "true");
+    });
   });
 
   it("DEGRADATION: when the SVG fails to render (source fallback), no drag affordance appears but region comments still show as text", async () => {
