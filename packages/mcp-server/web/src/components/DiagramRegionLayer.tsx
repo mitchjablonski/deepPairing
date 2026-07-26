@@ -21,7 +21,9 @@ import {
 const REGION_FLASH_MS = 1600;
 /** #185 — fixed popover width (px). Clamped to the well when the well is
  *  narrower, so a small-but-not-mobile well never spills a fixed-width popover. */
-const POPOVER_WIDTH = 288;
+// #185 feel round — 288 was cramped for real comments (same lesson as the
+// workbench's roomy composer): 400 default, still clamped to the well width.
+const POPOVER_WIDTH = 400;
 
 /**
  * #140 — region-anchored comments on a rendered Mermaid diagram.
@@ -216,10 +218,62 @@ export function DiagramRegionLayer({
       }
     : null;
   const popoverWidth = Math.min(POPOVER_WIDTH, wellSize.width || POPOVER_WIDTH);
-  const popoverPos =
+  const anchoredPos =
     activePxRect && !narrow
       ? positionPopover(activePxRect, wellSize, { width: popoverWidth, height: popoverSize.height })
       : null;
+
+  // #185 feel round — the popover is user-draggable by its header (the flip
+  // heuristic can't always pick the spot the human wants on a busy diagram).
+  // dragOffset is a delta on top of the anchored position, clamped to the well,
+  // and reset whenever a NEW region is selected (each selection re-anchors).
+  const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const dragStart = useRef<{ px: number; py: number; dx: number; dy: number } | null>(null);
+  const activeKey = active ? `${active.x}|${active.y}|${active.w}|${active.h}` : "";
+  const lastActiveKey = useRef(activeKey);
+  if (lastActiveKey.current !== activeKey) {
+    lastActiveKey.current = activeKey;
+    if (dragOffset.dx !== 0 || dragOffset.dy !== 0) setDragOffset({ dx: 0, dy: 0 });
+  }
+  const onHandlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // Only the header drags; don't let the pointerdown reach anything that
+      // could start a NEW region drag or dismiss the composer.
+      e.stopPropagation();
+      e.preventDefault();
+      dragStart.current = { px: e.clientX, py: e.clientY, dx: dragOffset.dx, dy: dragOffset.dy };
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    },
+    [dragOffset.dx, dragOffset.dy],
+  );
+  const onHandlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const s = dragStart.current;
+    if (!s) return;
+    setDragOffset({ dx: s.dx + (e.clientX - s.px), dy: s.dy + (e.clientY - s.py) });
+  }, []);
+  const onHandlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragStart.current = null;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
+  }, []);
+
+  // Final position: anchored + user delta. Drag bounds are DELIBERATELY looser
+  // than the well (feel round 2): in a short well an in-well clamp collapses
+  // the vertical range to ~zero (only left/right moved), and "pull it below
+  // the diagram, out of the way" is the whole point of dragging. So the box
+  // may be pulled up to DRAG_BELOW px past the well's bottom and slightly past
+  // the sides — as long as enough of the header stays reachable to drag back.
+  const DRAG_BELOW = 320;
+  const DRAG_EDGE = 64; // px of the box that must remain inside horizontally
+  const popoverPos = anchoredPos
+    ? {
+        ...anchoredPos,
+        left: Math.max(
+          -(popoverWidth - DRAG_EDGE),
+          Math.min(anchoredPos.left + dragOffset.dx, Math.max(0, wellSize.width - DRAG_EDGE)),
+        ),
+        top: Math.max(0, Math.min(anchoredPos.top + dragOffset.dy, wellSize.height + DRAG_BELOW)),
+      }
+    : null;
 
   // --- #185 reverse navigation: click a posted region thread → find it --------
   // Clicking a region thread's anchor header scrolls the diagram so the region
@@ -287,8 +341,28 @@ export function DiagramRegionLayer({
       bottom: Math.max(drag.y0, p.y) + (wrap?.top ?? 0),
     };
     setDrag(null);
-    // Zero-area / one-pixel drag = a click, not a region.
-    if (isClickDrag(sel)) return;
+    // Zero-area / one-pixel drag = a click, not a region. Feel round 3: a
+    // CLICK on an existing region highlight re-opens that region's thread —
+    // the highlight itself is the way back in once the composer was closed
+    // (the rects are pointer-events-none, so we hit-test here instead).
+    if (isClickDrag(sel)) {
+      const px = sel.left - (wrap?.left ?? 0) - box.left;
+      const py = sel.top - (wrap?.top ?? 0) - box.top;
+      let best: { region: RegionTarget; area: number } | null = null;
+      for (const c of regionComments) {
+        const r = c.target.region as RegionTarget;
+        const rl = r.x * box.width;
+        const rt = r.y * box.height;
+        const rw = r.w * box.width;
+        const rh = r.h * box.height;
+        if (px >= rl && px <= rl + rw && py >= rt && py <= rt + rh) {
+          const area = rw * rh;
+          if (!best || area < best.area) best = { region: r, area };
+        }
+      }
+      if (best) openRegion(best.region);
+      return;
+    }
     const s = el?.getBoundingClientRect();
     const host: PxRect = s
       ? { left: s.left, top: s.top, right: s.right, bottom: s.bottom }
@@ -322,14 +396,25 @@ export function DiagramRegionLayer({
 
   // #185 — the composer's contents, shared verbatim by the popover and the
   // narrow-viewport fallback block so both placements are byte-identical inside.
-  const composerInner = active ? (
+  const renderComposerInner = (draggable: boolean) => active ? (
     <>
-      <div className="flex items-center gap-2">
+      <div
+        className={`flex items-center gap-2 ${draggable ? "cursor-grab active:cursor-grabbing select-none -m-1 p-1 rounded hover:bg-surface-hover" : ""}`}
+        {...(draggable
+          ? {
+              onPointerDown: onHandlePointerDown,
+              onPointerMove: onHandlePointerMove,
+              onPointerUp: onHandlePointerUp,
+              title: "Drag to move this comment box",
+            }
+          : {})}
+      >
         <span className="text-2xs font-medium text-text-secondary">Commenting on {activeLabel}</span>
         <button
           type="button"
           onClick={closeRegion}
           aria-label="Cancel region comment"
+          onPointerDown={(e) => e.stopPropagation()}
           className="ml-auto text-text-muted hover:text-text-primary text-2xs"
         >
           Cancel
@@ -341,6 +426,7 @@ export function DiagramRegionLayer({
         // #173 — carry optionId when this is a decision focused view, so the
         // posted comment anchors to optionId + visualId + region together.
         target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
+        roomy
       />
     </>
   ) : null;
@@ -449,7 +535,7 @@ export function DiagramRegionLayer({
           className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
           style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth }}
         >
-          {composerInner}
+          {renderComposerInner(true)}
         </div>
       )}
       {active && narrow && (
@@ -459,7 +545,7 @@ export function DiagramRegionLayer({
           onKeyDown={onComposerKeyDown}
           className="relative z-[2] mt-2 p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
         >
-          {composerInner}
+          {renderComposerInner(false)}
         </div>
       )}
 
