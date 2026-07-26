@@ -158,9 +158,24 @@ describe("#173 — decision diagram region comments (focused view)", () => {
     // different optionId) is filtered out, not double-drawn.
     await waitFor(() => expect(screen.getByText(/on region \[App Server\]/)).toBeInTheDocument());
     expect(screen.getAllByTestId("dp-region-highlight")).toHaveLength(1);
+    // o2's cross-option note never enters this view at all (optionId scoping).
+    expect(screen.queryByText(/cross-option note/)).not.toBeInTheDocument();
 
-    // Open the thread on the redrawn region → its body is o1's, never o2's.
-    await user.click(screen.getByRole("button", { name: /on region \[App Server\]/ }));
+    // #185 — the referent row is now REVERSE NAVIGATION: clicking it flashes the
+    // region rect on the diagram (it no longer opens the composer — composing
+    // moved to the drag/node-pick popover at the point of action).
+    await user.click(screen.getByTestId("dp-region-thread-anchor"));
+    await waitFor(() =>
+      expect(screen.getByTestId("dp-region-highlight")).toHaveAttribute("data-region-flash", "true"),
+    );
+
+    // Content scoping through the compose path: open the composer on the SAME
+    // region (keyboard node pick threads onto the existing region by label) →
+    // its thread body is o1's "redis note", never o2's cross-option note.
+    await user.click(screen.getByText(/comment on a node/i));
+    const appBtn = screen.getByRole("button", { name: "App Server" });
+    appBtn.focus();
+    await user.keyboard("{Enter}");
     expect(await screen.findByText(/redis note/)).toBeInTheDocument();
     expect(screen.queryByText(/cross-option note/)).not.toBeInTheDocument();
   });

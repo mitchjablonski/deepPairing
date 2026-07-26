@@ -203,6 +203,34 @@ html {
   }
 }
 
+/* #185 — reverse-nav flash: clicking a posted region thread scrolls the diagram
+   to the region and briefly flash-highlights its rect so the eye lands on it.
+   Same accent-blue arrival-glow family as the new-item locator; the rect already
+   carries a steady blue border/fill, so the flash adds a stronger outer ring +
+   fill that decays. The JS timeout (REGION_FLASH_MS) drops the class as the
+   animation completes. accent-blue #6b93f9 → rgb(107,147,249). */
+@keyframes dp-region-flash {
+  0% {
+    box-shadow: 0 0 0 2px rgba(107, 147, 249, 0.9), 0 0 14px 2px rgba(107, 147, 249, 0.5);
+    background-color: rgba(107, 147, 249, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 0 2px rgba(107, 147, 249, 0);
+    background-color: transparent;
+  }
+}
+.dp-region-flash {
+  animation: dp-region-flash 1.6s ease-out forwards;
+}
+/* prefers-reduced-motion: a STEADY ring (no animation) the same JS timeout
+   removes — the locator cue must not depend on motion. */
+@media (prefers-reduced-motion: reduce) {
+  .dp-region-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px rgba(107, 147, 249, 0.85);
+  }
+}
+
 /* Skeleton shimmer */
 @keyframes shimmer {
   0% { background-position: -200% 0; }

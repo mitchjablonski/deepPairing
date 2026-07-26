@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useChainComments } from "../hooks/useChainComments";
+import { useMediaQuery, useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { CommentThread } from "./CommentThread";
+import { positionPopover } from "../lib/popoverPosition";
 import {
   collectDiagramNodes,
   isClickDrag,
@@ -13,6 +15,13 @@ import {
   type PxRect,
   type RegionTarget,
 } from "../lib/mermaidRegion";
+
+/** #185 — how long the reverse-nav flash lingers on a region rect before the JS
+ *  timeout clears it (matches the CSS `dp-region-flash` duration). */
+const REGION_FLASH_MS = 1600;
+/** #185 — fixed popover width (px). Clamped to the well when the well is
+ *  narrower, so a small-but-not-mobile well never spills a fixed-width popover. */
+const POPOVER_WIDTH = 288;
 
 /**
  * #140 — region-anchored comments on a rendered Mermaid diagram.
@@ -68,6 +77,9 @@ export function DiagramRegionLayer({
     width: 0,
     height: 0,
   });
+  // #185 — the WELL's own size (the positioned wrapper, overlay inset-0), so the
+  // popover math clamps to the well the pins are drawn in. jsdom returns zeros.
+  const [wellSize, setWellSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   // The region being commented on (from a drag or a node pick). Null = idle.
   const [active, setActive] = useState<RegionTarget | null>(null);
   // Live drag rectangle in wrapper-local px, for the marquee outline.
@@ -86,10 +98,13 @@ export function DiagramRegionLayer({
     const el = svgEl();
     setNodes(collectDiagramNodes(el));
     const wrap = overlayRef.current?.parentElement;
-    if (el && wrap) {
-      const s = el.getBoundingClientRect();
+    if (wrap) {
       const w = wrap.getBoundingClientRect();
-      setBox({ left: s.left - w.left, top: s.top - w.top, width: s.width, height: s.height });
+      setWellSize({ width: w.width, height: w.height });
+      if (el) {
+        const s = el.getBoundingClientRect();
+        setBox({ left: s.left - w.left, top: s.top - w.top, width: s.width, height: s.height });
+      }
     }
   }, [svgEl]);
 
@@ -137,11 +152,100 @@ export function DiagramRegionLayer({
     triggerRef.current = null;
     if (t && t.isConnected) t.focus?.();
   }, []);
+  // #185 — Esc cancels the composer and restores focus to its trigger. On the
+  // popover this is the keyboard dismissal a floating surface needs; inside the
+  // decision focused view (a useModal dialog) stopPropagation makes Esc cancel
+  // the composer FIRST without also closing the host modal (the same nested-Esc
+  // rule useModal itself follows). Attached to both placements so the contract
+  // is identical whether the composer is a popover or the narrow-viewport block.
+  const onComposerKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closeRegion();
+      }
+    },
+    [closeRegion],
+  );
   useEffect(() => {
     if (!active) return;
-    // Move focus to the composer's textarea once it mounts.
-    composerRef.current?.querySelector("textarea")?.focus();
+    // Move focus to the composer's textarea once it mounts. #185 — preventScroll:
+    // the composer is now a popover ANCHORED at the selection, so focusing it
+    // must NOT auto-scroll (the exact yank field feedback reported — the old
+    // below-diagram block, focused, scrolled a large diagram to the bottom and
+    // away from the region you just drew). Belt-and-braces even if the popover
+    // is partially offscreen.
+    composerRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
   }, [active]);
+
+  // --- #185 popover placement -------------------------------------------------
+  // The composer opens as a floating popover anchored to the selection rect,
+  // EXCEPT on genuinely narrow (mobile-ish) widths, where there's no room for a
+  // sane popover and we degrade to the legacy below-diagram block. Reduced
+  // motion is honoured for the smooth-scroll of reverse-nav (below).
+  const narrow = useIsNarrowViewport();
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  // Measured popover size (for the flip/clamp math). Estimate until it mounts;
+  // the layout effect corrects it, and the position recomputes on the next pass.
+  const [popoverSize, setPopoverSize] = useState<{ width: number; height: number }>({
+    width: POPOVER_WIDTH,
+    height: 200,
+  });
+  useLayoutEffect(() => {
+    if (!active || narrow) return;
+    const el = composerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Only adopt a real measurement (jsdom returns zeros — keep the estimate so
+    // the pure math still has sane inputs; the geometry is covered in the unit
+    // matrix, not here).
+    if (r.width > 0 && r.height > 0) {
+      setPopoverSize((prev) =>
+        prev.width === r.width && prev.height === r.height ? prev : { width: r.width, height: r.height },
+      );
+    }
+  }, [active, narrow, wellSize.width, wellSize.height, box.left, box.top]);
+
+  // The selection rect in well-local px (same conversion the highlights use).
+  const activePxRect = active
+    ? {
+        left: box.left + active.x * box.width,
+        top: box.top + active.y * box.height,
+        width: active.w * box.width,
+        height: active.h * box.height,
+      }
+    : null;
+  const popoverWidth = Math.min(POPOVER_WIDTH, wellSize.width || POPOVER_WIDTH);
+  const popoverPos =
+    activePxRect && !narrow
+      ? positionPopover(activePxRect, wellSize, { width: popoverWidth, height: popoverSize.height })
+      : null;
+
+  // --- #185 reverse navigation: click a posted region thread → find it --------
+  // Clicking a region thread's anchor header scrolls the diagram so the region
+  // is in view and briefly flash-highlights its rect (arrival-glow family). The
+  // highlight rects are refd by comment id so we can scroll + flash the right one.
+  const highlightRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  const navigateToRegion = useCallback(
+    (comment: Comment) => {
+      const el = highlightRefs.current[comment.id];
+      // scrollIntoView?.() — optional chain for jsdom (no layout engine). Center
+      // the region; honour reduced motion by skipping the smooth animation.
+      el?.scrollIntoView?.({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+      setFlashId(comment.id);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlashId(null), REGION_FLASH_MS);
+    },
+    [reducedMotion],
+  );
 
   // --- drag selection (pointer) ------------------------------------------------
   const localPoint = (e: { clientX: number; clientY: number }) => {
@@ -216,6 +320,31 @@ export function DiagramRegionLayer({
 
   const activeLabel = active ? describeRegion(active) : "";
 
+  // #185 — the composer's contents, shared verbatim by the popover and the
+  // narrow-viewport fallback block so both placements are byte-identical inside.
+  const composerInner = active ? (
+    <>
+      <div className="flex items-center gap-2">
+        <span className="text-2xs font-medium text-text-secondary">Commenting on {activeLabel}</span>
+        <button
+          type="button"
+          onClick={closeRegion}
+          aria-label="Cancel region comment"
+          className="ml-auto text-text-muted hover:text-text-primary text-2xs"
+        >
+          Cancel
+        </button>
+      </div>
+      <CommentThread
+        artifactId={artifactId}
+        comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
+        // #173 — carry optionId when this is a decision focused view, so the
+        // posted comment anchors to optionId + visualId + region together.
+        target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
+      />
+    </>
+  ) : null;
+
   return (
     <>
       {/* Pointer drag-capture surface over the diagram. Presentational — the
@@ -245,17 +374,22 @@ export function DiagramRegionLayer({
         {regionComments.map((c) => {
           const r = c.target.region as RegionTarget;
           const missing = regionNodesMissing(r, nodes);
+          const flashing = flashId === c.id;
           return (
             <div
               key={c.id}
+              ref={(node) => {
+                highlightRefs.current[c.id] = node;
+              }}
               data-testid="dp-region-highlight"
               data-region-missing={missing ? "true" : "false"}
+              data-region-flash={flashing ? "true" : "false"}
               title={`${describeRegion(r)}${missing ? " — node no longer in this diagram" : ""}`}
               className={`absolute rounded-sm pointer-events-none border ${
                 missing
                   ? "border-accent-amber/70 bg-accent-amber/10"
                   : "border-accent-blue/70 bg-accent-blue/10"
-              }`}
+              }${flashing ? " dp-region-flash" : ""}`}
               style={highlightStyle(r)}
             />
           );
@@ -295,35 +429,47 @@ export function DiagramRegionLayer({
         </details>
       )}
 
-      {/* Composer for the active region — reuses the SAME CommentThread /
-          submitComment path as every other comment, so the human's note flows
-          through check_feedback → revise_artifact unchanged. */}
-      {active && (
-        <div ref={composerRef} className="relative z-[2] mt-2 p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-2xs font-medium text-text-secondary">Commenting on {activeLabel}</span>
-            <button
-              type="button"
-              onClick={closeRegion}
-              aria-label="Cancel region comment"
-              className="ml-auto text-text-muted hover:text-text-primary text-2xs"
-            >
-              Cancel
-            </button>
-          </div>
-          <CommentThread
-            artifactId={artifactId}
-            comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
-            // #173 — carry optionId when this is a decision focused view, so the
-            // posted comment anchors to optionId + visualId + region together.
-            target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
-          />
+      {/* #185 — Composer for the active region. It reuses the SAME CommentThread
+          / submitComment path as every other comment (so the human's note flows
+          through check_feedback → revise_artifact unchanged) and the SAME focus
+          contract (focus moves into the textarea on open, Esc/Cancel restores).
+          Only the PLACEMENT changed: a floating popover ANCHORED to the selection
+          rect inside the well (positioned below the rect, flipping above/beside
+          when there's no room, clamped to the well, never occluding the rect),
+          so composing happens at the point of action instead of yanking a large
+          diagram to a below-the-fold block. On genuinely narrow (mobile-ish)
+          widths there's no room for a sane popover, so we degrade to the legacy
+          below-diagram placement. */}
+      {active && !narrow && popoverPos && (
+        <div
+          ref={composerRef}
+          data-testid="dp-region-popover"
+          data-placement={popoverPos.placement}
+          onKeyDown={onComposerKeyDown}
+          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
+          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth }}
+        >
+          {composerInner}
+        </div>
+      )}
+      {active && narrow && (
+        <div
+          ref={composerRef}
+          data-testid="dp-region-composer-block"
+          onKeyDown={onComposerKeyDown}
+          className="relative z-[2] mt-2 p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
+        >
+          {composerInner}
         </div>
       )}
 
       {/* Text mirror of the region comments — always present when there are any,
           so they're legible even before you hover a highlight, and their node
-          referents (and gone-ness) are stated in words. */}
+          referents (and gone-ness) are stated in words. #185 — clicking a row is
+          now REVERSE NAVIGATION: it scrolls the diagram so the region is in view
+          and flash-highlights its rect (the pins already mark posted threads; the
+          composing moment moved to the popover, so the list is a locator). Real
+          <button>s → keyboard-operable (Enter/Space) with a clickable cursor. */}
       {regionComments.length > 0 && (
         <ul className="relative z-[2] mt-1.5 space-y-0.5">
           {regionComments.map((c) => {
@@ -331,11 +477,13 @@ export function DiagramRegionLayer({
             const missing = regionNodesMissing(r, nodes);
             return (
               <li key={`t-${c.id}`} className="text-[10px] text-text-muted flex items-start gap-1">
-                <span aria-hidden="true">▢</span>
+                <span aria-hidden="true">◈</span>
                 <button
                   type="button"
-                  onClick={() => openRegion(r)}
-                  className="text-left hover:text-text-secondary"
+                  data-testid="dp-region-thread-anchor"
+                  onClick={() => navigateToRegion(c)}
+                  title="Show this region on the diagram"
+                  className="text-left cursor-pointer hover:text-accent-blue underline-offset-2 hover:underline"
                 >
                   on region {describeRegion(r)}
                   {missing && <span className="text-accent-amber"> — node no longer in this diagram</span>}
