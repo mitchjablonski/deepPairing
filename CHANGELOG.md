@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.1.20 — 2026-07-25
+
+Big-diagram commenting, tamed. Commenting on a large diagram stops fighting you:
+the composer comes **to your selection** instead of dropping into a block below a
+20-node graph and yanking the page to the bottom the moment its textarea focused;
+you can then **drag it where you want it**; and the posted regions themselves
+become the way back into their threads — click a region's highlight and its
+thread reopens, click a thread and the diagram scrolls to the region and
+flash-highlights it. The whole arc was live-iterated in the running app and
+screenshot-verified with the user on a real 20-node diagram (task #185). No
+schema change — every behavior is in the diagram region layer, and narrow
+viewports keep the legacy below-diagram placement.
+
+### Changed
+- **The region-comment composer is now a popover anchored at your selection.**
+  After you drag-select a region (or pick a node by keyboard), the composer opens
+  as a floating popover **anchored to the selection rect inside the well** —
+  below the rect when there's room, flipping **above** or **beside** when there
+  isn't, clamped to the well and never occluding the rect you just drew. Before,
+  it rendered as a block **below the diagram**, and the focus effect focused a
+  textarea that was offscreen on a large diagram — which auto-scrolled the page
+  to the bottom and **yanked you away from the region you'd just drawn, to
+  compose blind**. `focus({ preventScroll: true })` on the textarea kills the
+  yank. Placement is a pure `positionPopover(rect, well, popover)` helper with a
+  unit matrix — no new dependency. The composer contract is otherwise unchanged
+  (same Comment/Ask intents; Esc/Cancel cancel and restore focus, Esc now wired
+  with `stopPropagation` so it doesn't also close a host modal); posted region
+  **threads** still list below the diagram — only the composing moment moved to
+  the point of action. Genuinely narrow (mobile-ish) widths degrade to the
+  legacy below-diagram placement rather than a cramped popover.
+- **The popover is roomy and draggable.** It widened (288 → 400px) with a roomy
+  composer, and it can be **dragged by its header** (pointer capture; each new
+  region re-anchors, resetting the offset; a `pointercancel` mid-drag can never
+  leave it chasing the cursor). The drag bounds are deliberately looser than the
+  well — you can pull it **below** the diagram, and horizontal overhang stops
+  with the header still reachable — so a popover anchored over the region it
+  annotates can always be moved clear of it. The narrow-viewport fallback header
+  is not a drag handle.
+
+### Added
+- **Click a posted region's highlight to reopen its thread.** Clicking inside a
+  posted region hit-tests the region overlays and opens that region's thread;
+  overlapping regions resolve to the **smallest containing** one; the hit-test
+  is `optionId`-scoped so it can never cross options (#173). Empty space opens
+  nothing.
+- **Reverse navigation from a thread to its region.** A posted region thread's
+  anchor header ("on region …") is now a keyboard-operable button that scrolls
+  the region into view and briefly **flash-highlights** the region rect (reusing
+  the arrival-glow family; `prefers-reduced-motion` → a steady ring, no
+  animation).
+
+### Fixed
+- **A focus-after-send Escape dead zone.** Sending from the popover clears and
+  briefly disables the textarea, so the browser blurs it and `activeElement`
+  falls to `<body>` — a follow-up **Escape then hit nothing** (it neither closed
+  the popover nor, in a modal host, the host modal). A local effect re-focuses
+  the composer's textarea with `preventScroll` when the active region's thread
+  grows. It is double-gated — baselined per active region — so an **agent** reply
+  arriving over WebSocket can never steal focus while the human is typing
+  elsewhere.
+
 ## v0.1.19 — 2026-07-23
 
 The field-day release. Three rough edges the user hit while actually *using* the
