@@ -66,6 +66,42 @@ surface (commenting on findings, voting on options, reviewing diffs)
 doesn't fit in a terminal. The terminal stays the primary chat
 surface; the web UI is read + steer.
 
+## "Why not just use MCP elicitation?"
+
+We do — for the part it fits. When the only question is "approve
+this here or review it in the UI?", deepPairing *can* send a native
+elicitation request (a single boolean; see
+[`elicit.ts`](../packages/mcp-server/src/mcp/elicit.ts)) and take the
+answer inline — an opt-in terminal shortcut
+(`DEEPPAIRING_TERMINAL_APPROVE=1`), off by default precisely because
+the companion UI, not the terminal, is where review belongs.
+Protocol-native where the protocol suffices.
+
+Two things elicitation deliberately *doesn't* do, though:
+
+1. **It's a flat form, by design.** The spec restricts elicitation
+   to "flat objects with primitive properties only … nested
+   structures, arrays of objects … intentionally not supported"
+   ([client/elicitation, Final spec](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)),
+   with an accept / decline / cancel response. That can't hold a
+   multi-file changeset with per-line and cross-file comments, the
+   decision workbench with per-part commenting and version
+   carryover, a region-anchored comment on a Mermaid diagram, or a
+   suggested edit the agent has to answer. deepPairing's companion
+   UI is that surface; elicitation's flat form structurally isn't.
+2. **The non-blocking loop is no longer a differentiator.**
+   Server-initiated MCP requests went non-blocking/stateless in the
+   [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
+   ([SEP-2322 "Multi Round-Trip Requests"](https://modelcontextprotocol.io/seps/2322-MRTR)),
+   and Claude Code backgrounds long-running tool calls. We speak
+   that protocol; we don't claim it as ours. (As of this writing the
+   shipped Claude Code still runs the older blocking elicitation
+   flow; MRTR is spec-final, not yet client-landed.)
+
+The short version: elicitation is the right tool for a yes/no; the
+rich review that makes pairing *feel* like pairing needs a surface
+the flat form can't provide.
+
 ## "How is the Philosophy Ledger different from Claude Code's auto-memory?"
 
 Auto-memory is a **recall** the model is encouraged to consult.
