@@ -18,6 +18,10 @@
 export type CommentAnchorTarget = {
   filePath?: string;
   lineStart?: number;
+  // #186 — a changeset comment on a REMOVED line (side:"old") anchors to a row
+  // keyed by the OLD-side line number, which can equal a new-side line number in
+  // the same file. Qualify the key so old-26 and new-26 don't collide.
+  side?: "old" | "new";
   stepIndex?: number;
   findingIndex?: number;
   evidenceIndex?: number;
@@ -32,8 +36,11 @@ export function commentAnchorKey(target: CommentAnchorTarget | undefined): strin
     // filePath qualifies the anchor when the artifact has multiple files
     // (code_change), so two comments on `L23` of different files don't
     // collide. Empty string for the file segment when undefined keeps the
-    // shape stable.
-    return `line:${target.filePath ?? ""}:${target.lineStart}`;
+    // shape stable. #186 — an old-side (removed-line) anchor gets an extra
+    // `old:` segment so it never collides with the same-numbered new-side line;
+    // a new/absent side keeps the pre-#186 key byte-for-byte.
+    const sideSeg = target.side === "old" ? "old:" : "";
+    return `line:${target.filePath ?? ""}:${sideSeg}${target.lineStart}`;
   }
   if (typeof target.findingIndex === "number") {
     if (typeof target.evidenceIndex === "number") {

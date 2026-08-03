@@ -134,3 +134,60 @@ describe("check_feedback — per-file review state (#171)", () => {
     expect(entry.filesTotal).toBeUndefined();
   });
 });
+
+describe("check_feedback — del-side (removed-line) comment delivery (#186)", () => {
+  async function presentWithDelLine(): Promise<string> {
+    await callTool("present_changeset", {
+      title: "Move TTL refresh into middleware",
+      files: [
+        {
+          path: "auth/middleware.ts", changeType: "modified",
+          hunks: [{ lines: [
+            { kind: "ctx", content: "const sid = readSessionCookie(req);", oldLine: 25, newLine: 25 },
+            { kind: "del", content: "const session = await store.get(sid);", oldLine: 26 },
+            { kind: "add", content: "const session = await store.getAndTouch(sid);", newLine: 26 },
+          ] }],
+        },
+      ],
+    });
+    return store.getArtifacts().find((a) => a.type === "changeset")!.id;
+  }
+
+  it("marks an OLD-side comment as (removed line) and inlines the removed content", async () => {
+    const id = await presentWithDelLine();
+    await store.addComment({
+      id: "cmt_del", artifactId: id, content: "why remove this? the OAuth path needs it", author: "human",
+      target: { filePath: "auth/middleware.ts", lineStart: 26, side: "old" },
+    } as any);
+
+    const res = await callTool("check_feedback");
+    // The agent reads WHICH line, that it's REMOVED, and WHAT the line said.
+    expect(res.text).toContain("auth/middleware.ts:26");
+    expect(res.text).toContain('(removed line: "const session = await store.get(sid);")');
+
+    const sc = res.structuredContent as any;
+    const entry = sc.comments.find((c: any) => c.id === "cmt_del");
+    expect(entry).toBeDefined();
+    expect(entry.side).toBe("old");
+    expect(entry.removedLine).toBe("const session = await store.get(sid);");
+    expect(entry.filePath).toBe("auth/middleware.ts");
+  });
+
+  it("a NEW-side comment on the SAME file+number is delivered byte-unchanged (no removed marking, no side)", async () => {
+    const id = await presentWithDelLine();
+    await store.addComment({
+      id: "cmt_new", artifactId: id, content: "getAndTouch looks right", author: "human",
+      target: { filePath: "auth/middleware.ts", lineStart: 26 },
+    } as any);
+
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain("auth/middleware.ts:26");
+    expect(res.text).not.toContain("removed line");
+
+    const sc = res.structuredContent as any;
+    const entry = sc.comments.find((c: any) => c.id === "cmt_new");
+    expect(entry).toBeDefined();
+    expect(entry.side).toBeUndefined();
+    expect(entry.removedLine).toBeUndefined();
+  });
+});

@@ -324,6 +324,120 @@ describe("ChangesetArtifact — Review all toggle (#175)", () => {
   });
 });
 
+describe("ChangesetArtifact — del-side comments + the collision matrix (#186)", () => {
+  // The seeded middleware hunk literally has a `del` at oldLine 26
+  // ("const s = await store.get(sid);") AND an `add` at newLine 26
+  // ("getAndTouch"). Old-26 and new-26 are DIFFERENT lines in the same file —
+  // the discriminator exists to keep their comments from merging. THIS is the
+  // headline: on `main` (byLine keyed on newLine, commentable = newLine != null)
+  // the del line has no anchor at all and a new-26 comment is the only bucket,
+  // so a del-side comment would land on the new-26 row (crossed) — or be
+  // impossible to post. Here they must render in their OWN rows.
+  it("HEADLINE: an old-26 (removed) comment and a new-26 comment render in their OWN rows, never crossed", () => {
+    const art = changeset();
+    seed(art, [
+      comment({ id: "cmt_old", content: "why delete this getter?", target: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 26, side: "old" } }),
+      comment({ id: "cmt_new", content: "getAndTouch looks right", target: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 26 } }),
+    ]);
+    const { container } = render(<Harness id="art_cs" />);
+
+    const oldRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:old:26"]') as HTMLElement;
+    const newRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:26"]') as HTMLElement;
+    expect(oldRow).toBeTruthy();
+    expect(newRow).toBeTruthy();
+    // Each comment lives in ITS row and NOT the other — the buckets never merged.
+    expect(within(oldRow).getByText("why delete this getter?")).toBeInTheDocument();
+    expect(within(oldRow).queryByText("getAndTouch looks right")).not.toBeInTheDocument();
+    expect(within(newRow).getByText("getAndTouch looks right")).toBeInTheDocument();
+    expect(within(newRow).queryByText("why delete this getter?")).not.toBeInTheDocument();
+  });
+
+  it("back-compat: a legacy comment with NO side on line 26 renders on the NEW side (absent = new), not the removed row", () => {
+    const art = changeset();
+    seed(art, [
+      comment({ id: "cmt_legacy", content: "legacy note on 26", target: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 26 } }),
+    ]);
+    const { container } = render(<Harness id="art_cs" />);
+    const newRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:26"]') as HTMLElement;
+    const oldRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:old:26"]') as HTMLElement;
+    expect(within(newRow).getByText("legacy note on 26")).toBeInTheDocument();
+    // The removed row exists (the del line is commentable) but carries no comment.
+    expect(oldRow).toBeTruthy();
+    expect(within(oldRow).queryByText("legacy note on 26")).not.toBeInTheDocument();
+  });
+
+  it("a del line is commentable: the gutter opens a composer headed 'line 26 (removed)'", async () => {
+    const art = changeset();
+    seed(art);
+    const { container } = render(<Harness id="art_cs" />);
+    const oldRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:old:26"]') as HTMLElement;
+    expect(oldRow).toBeTruthy();
+    // The removed line offers the same + affordance as a new-side line.
+    await userEvent.click(within(oldRow).getByRole("button", { name: /add a comment on this line/i }));
+    const header = await screen.findByTestId("removed-line-header");
+    expect(header).toHaveTextContent("line 26");
+    expect(header).toHaveTextContent("(removed)");
+    // Suggest is NOT offered for a removed line (no new-side text to replace).
+    expect(screen.queryByRole("button", { name: /Suggest edit/i })).not.toBeInTheDocument();
+  });
+
+  it("a FULLY-DELETED file has commentable lines throughout (zero-commentable-file gap closed)", () => {
+    const art = changeset({
+      files: [
+        {
+          path: "auth/legacy.ts",
+          changeType: "deleted",
+          hunks: [{
+            header: "@@ -1,3 +0,0 @@",
+            lines: [
+              { kind: "del", content: "export function old() {", oldLine: 1 },
+              { kind: "del", content: "  return legacy;", oldLine: 2 },
+              { kind: "del", content: "}", oldLine: 3 },
+            ],
+          }],
+        },
+      ],
+      reviewState: {},
+    });
+    seed(art);
+    const { container } = render(<Harness id="art_cs" />);
+    // On `main` this file would have ZERO commentable lines (all del, no newLine).
+    for (const ln of [1, 2, 3]) {
+      const row = container.querySelector(`[data-comment-anchor="line:auth/legacy.ts:old:${ln}"]`) as HTMLElement;
+      expect(row, `del line ${ln} should be commentable`).toBeTruthy();
+      expect(within(row).getByRole("button", { name: /add a comment on this line/i })).toBeInTheDocument();
+    }
+  });
+
+  it("wire shape: posting a del comment sends { filePath, lineStart: 26, lineEnd: 26, side: 'old' } — an exact target, never an event (#187 hazard)", async () => {
+    const art = changeset();
+    seed(art);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ comment: { id: "srv1" } }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(<Harness id="art_cs" />);
+    const oldRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:old:26"]') as HTMLElement;
+    await userEvent.click(within(oldRow).getByRole("button", { name: /add a comment on this line/i }));
+    await userEvent.type(screen.getByPlaceholderText(/add a comment on this line/i), "keep this — the OAuth path relies on it");
+    // Two buttons read "Comment" (the mode tab + the submit) — the submit is last.
+    const commentBtns = screen.getAllByRole("button", { name: /^Comment$/ });
+    await userEvent.click(commentBtns[commentBtns.length - 1]!);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/comments"), expect.anything()));
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("/api/comments"))!;
+    const body = JSON.parse((call[1] as RequestInit).body as string);
+    expect(body.content).toBe("keep this — the OAuth path relies on it");
+    expect(body.target).toEqual({
+      artifactId: "art_cs",
+      filePath: "auth/middleware.ts",
+      lineStart: 26,
+      lineEnd: 26,
+      side: "old",
+    });
+  });
+});
+
 describe("ChangesetArtifact — comments still thread (#171 regression guard)", () => {
   it("renders a per-file line comment thread + a cross-file card", () => {
     const art = changeset();

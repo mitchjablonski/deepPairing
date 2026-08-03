@@ -25703,6 +25703,14 @@ var CommentTargetSchema = external_exports.object({
   lineStart: external_exports.number().int().optional(),
   lineEnd: external_exports.number().int().optional(),
   filePath: external_exports.string().optional(),
+  // #186 — which diff side a changeset line comment anchors to. ABSENT means
+  // "new" (every existing comment keeps its meaning). "old" marks a comment on
+  // a REMOVED line — its anchor is (filePath, lineStart:=oldLine, side:"old"),
+  // so a `del` line (which has only an oldLine) can receive "why did you remove
+  // this?" and a fully-deleted file gets commentable lines throughout. Old (new
+  // 26) and old (old 26) are DIFFERENT lines in the same file, so this
+  // discriminator keeps their comments from colliding. Optional per back-compat.
+  side: external_exports.enum(["old", "new"]).optional().describe("Diff side a changeset line comment anchors to; absent = new (added/context line), 'old' = a removed line"),
   findingIndex: external_exports.number().int().optional(),
   evidenceIndex: external_exports.number().int().optional(),
   stepIndex: external_exports.number().int().optional(),
@@ -29213,6 +29221,19 @@ async function recordRejectedOption(store, broadcast, params) {
 }
 
 // src/mcp/tools/check-feedback.ts
+function removedLineContent(art, filePath, oldLine) {
+  if (!art || art.type !== "changeset") return void 0;
+  const files = art.content?.files;
+  if (!Array.isArray(files)) return void 0;
+  const file2 = files.find((f) => f.path === filePath);
+  if (!file2 || !Array.isArray(file2.hunks)) return void 0;
+  for (const h of file2.hunks) {
+    for (const l of h.lines ?? []) {
+      if (l.kind === "del" && l.oldLine === oldLine) return l.content;
+    }
+  }
+  return void 0;
+}
 function ledgerHealthField() {
   try {
     const health = getGlobalStore().getHealth();
@@ -29531,6 +29552,15 @@ ${s.replacementText}${note ? `
       let loc = c.target.artifactId;
       if (c.target.filePath) loc += ` ${c.target.filePath}`;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+      let removedLine;
+      if (c.target.side === "old" && c.target.filePath && c.target.lineStart != null) {
+        removedLine = removedLineContent(
+          artsForTargets.find((a) => a.id === c.target.artifactId),
+          c.target.filePath,
+          c.target.lineStart
+        );
+        loc += removedLine != null ? ` (removed line: "${removedLine}")` : ` (removed line)`;
+      }
       const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
       if (anchors.length >= 2) {
         loc += ` \u2014 cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" \u2194 ")}`;
@@ -29571,6 +29601,9 @@ ${s.replacementText}${note ? `
           // anchor list for a cross-file thread. Spread only when present so
           // the healthy/no-file payload is byte-for-byte unchanged.
           ...c.target.filePath ? { filePath: c.target.filePath } : {},
+          // #186 — old-side (removed-line) marking + content. Spread ONLY for a
+          // del-side comment so new-side delivery is byte-for-byte unchanged.
+          ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
           ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
           // #140/#173 — a plan/spec region comment carries ONLY the human-
           // meaningful labels (byte-for-byte as before); a DECISION region
@@ -29610,6 +29643,8 @@ ${s.replacementText}${note ? `
         // #171 — see structuredQuestions: file dimension + cross-file anchors,
         // present only when the comment carries them.
         ...c.target.filePath ? { filePath: c.target.filePath } : {},
+        // #186 — old-side (removed-line) marking + content; new-side unchanged.
+        ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
         ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
         // #140/#173 — plan/spec: labels only (byte-for-byte); decision region
         // (optionId set): optionId + visualId + rect + nearNodes. See

@@ -86,6 +86,11 @@ interface LineCommentChipsProps {
   comments: Comment[];
   artifactId: string;
   filePath?: string;
+  /** #186 — the diff side this thread anchors to. Absent/"new" is byte-identical
+   *  to the pre-#186 behavior (code_change). "old" qualifies the anchor key so an
+   *  old-side thread never collides with the same-numbered new-side row, and tags
+   *  the thread as being about a REMOVED line. */
+  side?: "old" | "new";
   /** Click on a chip stack opens the line's composer (so the user can add
    *  another comment / see the expanded view). Optional. */
   onOpenLine?: () => void;
@@ -102,6 +107,7 @@ export function LineCommentChips({
   comments,
   artifactId,
   filePath,
+  side,
   onOpenLine,
 }: LineCommentChipsProps) {
   const submitComment = useArtifactStore((s) => s.submitComment);
@@ -342,7 +348,7 @@ export function LineCommentChips({
     <div
       className={onOpenLine ? "cursor-pointer" : ""}
       onClick={onOpenLine ? () => onOpenLine() : undefined}
-      data-comment-anchor={`line:${filePath ?? ""}:${lineNum}`}
+      data-comment-anchor={`line:${filePath ?? ""}:${side === "old" ? "old:" : ""}${lineNum}`}
     >
       {continuations.map((c) => {
         const cStart = c.target.lineStart;
@@ -389,6 +395,12 @@ interface LineComposerProps {
   /** The new-side source line text, used to pre-fill Suggest mode. Omit to
    *  hide the Suggest tab (e.g. a removed-only diff row has no new line). */
   lineText?: string;
+  /** #186 — which diff side this line anchors to. Absent/"new" is the pre-#186
+   *  behavior (byte-identical for code_change). "old" marks a comment on a
+   *  REMOVED line: the composer labels it "(removed)", the target carries
+   *  side:"old", and Suggest is hidden (you can't replace a line being deleted —
+   *  you ask/comment on WHY it was removed). */
+  side?: "old" | "new";
   /** #172 — the full source lines + their starting line number. When present,
    *  "Suggest edit" pre-fills a CONTIGUOUS RANGE (lineNum..lineEnd), not just the
    *  single line. Diff rows omit these (no contiguous source) and fall back to
@@ -421,6 +433,7 @@ export function LineComposer({
   lineText,
   sourceLines,
   sourceLineStart,
+  side,
   mode,
   setMode,
   existingComments,
@@ -432,7 +445,10 @@ export function LineComposer({
   const [lineEnd, setLineEnd] = useState<number>(lineNum);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSuggest = lineText != null;
+  const isRemoved = side === "old";
+  // #186 — a removed line can't host a "Suggest edit" (there is no new-side line
+  // to replace); it takes Comment / Ask only.
+  const canSuggest = lineText != null && !isRemoved;
   const canSpan = totalLines != null;
   const spanMax = maxLine ?? totalLines ?? lineNum;
 
@@ -486,14 +502,14 @@ export function LineComposer({
         await submitComment(
           artifactId,
           content,
-          { lineStart: lineNum, lineEnd: rangeEnd, filePath, ...targetContext },
+          { lineStart: lineNum, lineEnd: rangeEnd, filePath, ...(isRemoved ? { side: "old" as const } : {}), ...targetContext },
           { intent: "suggestion", suggestion },
         );
       } else {
         await submitComment(
           artifactId,
           commentText.trim(),
-          { lineStart: lineNum, lineEnd: safeEnd, filePath, ...targetContext },
+          { lineStart: lineNum, lineEnd: safeEnd, filePath, ...(isRemoved ? { side: "old" as const } : {}), ...targetContext },
           mode === "ask" ? { intent: "question" } : undefined,
         );
       }
@@ -507,6 +523,13 @@ export function LineComposer({
 
   return (
     <div className="ml-[5.5rem] mr-3 my-1.5">
+      {isRemoved && (
+        <div className="mb-1.5 inline-flex items-center gap-1.5 text-2xs font-semibold text-accent-red" data-testid="removed-line-header">
+          <span aria-hidden>−</span>
+          <span>line {lineNum} <span className="font-normal text-text-muted">(removed)</span></span>
+          <span className="font-normal text-text-secondary">— tell the agent why this line shouldn’t go</span>
+        </div>
+      )}
       {existingComments.length > 0 && (
         <div className="mb-2 space-y-1">
           {existingComments.map((c) => (
