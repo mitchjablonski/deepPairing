@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.1.21 — 2026-08-02
+
+The review surface finishes its sentences. Two field-driven gaps closed, both on
+the changeset surface, both hit by the user in real use: you can now **question
+what was removed**, and you can **keep talking after you've approved**. A
+deleted line in a diff finally has an anchor — "why did you remove this?" was a
+question the surface couldn't hold — and a comment on an artifact you've already
+signed off no longer bounces off a locked review; it becomes a follow-up the
+agent hears as new input, without reopening the verdict. The schema grows one
+optional field (`Comment.target.side`); an absent `side` means "new", so every
+comment written before this release keeps its exact meaning and position, and an
+old daemon degrades gracefully (tasks #186, #187).
+
+### Added
+- **Deleted lines in changeset diffs are commentable.** A `del` line — one that
+  has only an old-side line number — could not previously receive a comment, so
+  "why did you remove this?" had nowhere to land, and a **fully-deleted file**
+  (every line a deletion) exposed **zero** commentable lines. Now del lines carry
+  the same gutter `+`, composer, and threads as add/context lines; the composer
+  is headed **"line N (removed)"** and hides **Suggest** (there's no new-side text
+  to replace); and fully-deleted files are commentable throughout. When you
+  comment a removed line, the agent receives it marked
+  `path:N (removed line: "<content>")` — the removed content pulled from the diff
+  hunks — so it knows the question is about code that's gone, not code that's
+  there. This is the PR-review parity GitHub and GitLab both have, and it was
+  flagged by the #200 adversarial review as well as hit in the field (#186).
+- **Late follow-up comments on an approved artifact.** After you approve a
+  changeset you could no longer comment on its code — commenting was gated on the
+  same `draft` state as the whole review, so approving locked the conversation.
+  Now commenting stays open on an **approved** artifact as a distinct **follow-up
+  feedback lane**: the review itself stays closed (no re-gating, no reopened
+  verdict, the review-closed visual state is untouched), but a new comment reaches
+  the agent prefixed `[follow-up on the APPROVED artifact "<title>"]` with
+  guidance that it's new input, **not** a review reopening. The lane is marked by
+  a store-authoritative `followUp` flag stamped from the artifact's real status at
+  write time — a client can't forge it on a draft or suppress it on an approved
+  one, and a send-back/reject **verdict-feedback** comment is never mis-stamped as
+  a follow-up (only `approved` qualifies). Superseded, revised, rejected,
+  retracted, and obsolete artifacts stay comment-locked; **replay locks
+  everything** (#187).
+
+### Changed
+- **All changeset line-anchor keying is now side-aware.** `old-26` and `new-26`
+  are *different lines in the same file* (a hunk can delete old line 26 and add
+  new line 26), so a del-line anchor is `(filePath, line, side:"old")` and every
+  bucket and lookup keyed on a line number — comment buckets, the
+  `data-comment-anchor` attribute, the active anchor, and scroll-nav keys — now
+  includes the side. New-side keys are **byte-identical** to before, so a legacy
+  comment with no `side` renders exactly where it always did; the change only adds
+  the ability to distinguish the removed line from the added one at the same
+  number.
+
+### Fixed
+- **The pending "— review" chip now meets AA contrast.** The approved-changeset
+  scans opened by the follow-up-comment work exposed a *latent* contrast bug the
+  draft-only scans had never rendered: the pending "— review" disposition chip was
+  `text-muted` on `bg-surface-active` (4.16:1, below the 4.5:1 AA floor). It moved
+  to `bg-surface-elevated` — AA-clean, the same pairing the decision "Not chosen"
+  chip already uses.
+
 ## v0.1.20 — 2026-07-25
 
 Big-diagram commenting, tamed. Commenting on a large diagram stops fighting you:
