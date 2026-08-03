@@ -22946,6 +22946,14 @@ var CommentTargetSchema = external_exports.object({
   lineStart: external_exports.number().int().optional(),
   lineEnd: external_exports.number().int().optional(),
   filePath: external_exports.string().optional(),
+  // #186 — which diff side a changeset line comment anchors to. ABSENT means
+  // "new" (every existing comment keeps its meaning). "old" marks a comment on
+  // a REMOVED line — its anchor is (filePath, lineStart:=oldLine, side:"old"),
+  // so a `del` line (which has only an oldLine) can receive "why did you remove
+  // this?" and a fully-deleted file gets commentable lines throughout. Old (new
+  // 26) and old (old 26) are DIFFERENT lines in the same file, so this
+  // discriminator keeps their comments from colliding. Optional per back-compat.
+  side: external_exports.enum(["old", "new"]).optional().describe("Diff side a changeset line comment anchors to; absent = new (added/context line), 'old' = a removed line"),
   findingIndex: external_exports.number().int().optional(),
   evidenceIndex: external_exports.number().int().optional(),
   stepIndex: external_exports.number().int().optional(),

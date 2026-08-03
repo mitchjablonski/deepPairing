@@ -36,6 +36,13 @@ import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../Li
  * advances AFTER its feedback posts so it never yanks focus out of a textarea.
  */
 
+/** #186 — the side-qualified bucket key for a changeset line comment. old-26 and
+ *  new-26 are different lines in one file, so their comments must never share a
+ *  bucket. Kept in ONE place so bucketing, lookup, and the composer agree. */
+function sideLineKey(side: "old" | "new", line: number): string {
+  return `${side}:${line}`;
+}
+
 const changeMark: Record<ChangesetFile["changeType"], { letter: string; cls: string; label: string }> = {
   modified: { letter: "M", cls: "text-accent-amber", label: "modified" },
   added: { letter: "A", cls: "text-accent-green", label: "added" },
@@ -131,34 +138,40 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     [allComments],
   );
 
-  // Per-file line comments bucketed by path → new-side line (supports both the
-  // single-active pane and the stacked "Review all" mode).
+  // #186 — a changeset line comment anchors to a (side, line) pair, NOT a bare
+  // line number: old-26 (a removed line) and new-26 (its replacement) are
+  // DIFFERENT lines in the same file. Bucket by a side-qualified key so their
+  // comments never merge. A legacy comment with no `side` reads as "new", so it
+  // buckets exactly where it did before this change.
   const commentsByFileLine = useMemo(() => {
-    const out: Record<string, Record<number, Comment[]>> = {};
+    const out: Record<string, Record<string, Comment[]>> = {};
     for (const c of allComments) {
       const t = c.target;
       if (!t.filePath || t.lineStart == null) continue;
+      const side: "old" | "new" = t.side === "old" ? "old" : "new";
       const start = Math.max(0, Math.floor(Number(t.lineStart)));
       const end = t.lineEnd == null ? start : Math.max(start, Math.floor(Number(t.lineEnd)));
       const safeEnd = Math.min(end, start + 200);
       const byLine = (out[t.filePath] ??= {});
       for (let line = start; line <= safeEnd; line++) {
-        (byLine[line] ??= []).push(c);
+        (byLine[sideLineKey(side, line)] ??= []).push(c);
       }
     }
     return out;
   }, [allComments]);
 
-  // Cross-file anchor chips keyed by path → line.
+  // Cross-file anchor chips keyed by path → (side, line). Cross-file anchors
+  // carry no side, so they read as "new" — they never collide with an old-side
+  // (removed-line) comment on the same number.
   const crossFileByFileLine = useMemo(() => {
-    const out: Record<string, Record<number, Comment[]>> = {};
+    const out: Record<string, Record<string, Comment[]>> = {};
     for (const c of crossFileComments) {
       for (const a of c.target.anchors ?? []) {
         if (!a.filePath) continue;
         const line = Math.floor(Number(a.lineStart));
         if (!Number.isFinite(line)) continue;
         const byLine = (out[a.filePath] ??= {});
-        (byLine[line] ??= []).push(c);
+        (byLine[sideLineKey("new", line)] ??= []).push(c);
       }
     }
     return out;
@@ -204,8 +217,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
       ? "approve"
       : "approveAll";
 
-  // One open line-comment composer at a time, keyed by (path, line).
-  const [activeAnchor, setActiveAnchor] = useState<{ path: string; line: number } | null>(null);
+  // One open line-comment composer at a time, keyed by (path, line, side) — the
+  // side is what lets a removed line (old-26) and its replacement (new-26) each
+  // open their OWN composer instead of one stealing the other's row (#186).
+  const [activeAnchor, setActiveAnchor] = useState<{ path: string; line: number; side: "old" | "new" } | null>(null);
   const [mode, setMode] = useState<LineMode>("comment");
 
   // Local needs-changes reason drafts (persisted to content.reviewReasons on blur
@@ -400,21 +415,36 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
             )}
             {hunk.lines.map((line, li) => {
               const newLine = line.newLine ?? null;
-              // FOLLOW-UP (#171): line comments anchor to the NEW-side line only.
-              const commentable = interactive && newLine != null;
-              const lineComments = newLine != null ? byLine[newLine] ?? [] : [];
-              const xfileChips = newLine != null ? xByLine[newLine] ?? [] : [];
-              const isActive = commentable && activeAnchor?.path === file.path && activeAnchor.line === newLine;
+              const oldLine = line.oldLine ?? null;
+              // #186 — a line's comment anchor is its NEW-side number (add / ctx),
+              // or — when there is no new-side line (a `del`) — its OLD-side
+              // number, tagged side:"old". This makes removed lines (and a fully
+              // deleted file, which is ALL del lines) commentable, and keeps
+              // add/ctx lines byte-identical to the pre-#186 new-side behavior.
+              const anchorSide: "old" | "new" = newLine == null ? "old" : "new";
+              const anchorLine = newLine == null ? oldLine : newLine;
+              const commentable = interactive && anchorLine != null;
+              const lineComments = anchorLine != null ? byLine[sideLineKey(anchorSide, anchorLine)] ?? [] : [];
+              // Cross-file chips are new-side only, so an old-side lookup is
+              // always empty — a removed line never shows a stray cross-file chip.
+              const xfileChips = anchorLine != null ? xByLine[sideLineKey(anchorSide, anchorLine)] ?? [] : [];
+              const isActive =
+                commentable &&
+                activeAnchor?.path === file.path &&
+                activeAnchor.line === anchorLine &&
+                activeAnchor.side === anchorSide;
+              const anchorKey =
+                anchorLine != null ? `line:${file.path}:${anchorSide === "old" ? "old:" : ""}${anchorLine}` : undefined;
               return (
-                <div key={`${hi}-${li}`} data-comment-anchor={newLine != null ? `line:${file.path}:${newLine}` : undefined}>
+                <div key={`${hi}-${li}`} data-comment-anchor={anchorKey}>
                   <div className={`flex group ${line.kind === "del" ? "bg-accent-red-dim/30" : line.kind === "add" ? "bg-accent-green-dim/30" : ""}`}>
                     {commentable ? (
                       <LineGutter
-                        lineNum={newLine!}
+                        lineNum={anchorLine!}
                         commentCount={lineComments.length}
                         active={!!isActive}
                         activeMode={mode}
-                        onOpen={(m) => { setActiveAnchor({ path: file.path, line: newLine! }); setMode(m); }}
+                        onOpen={(m) => { setActiveAnchor({ path: file.path, line: anchorLine!, side: anchorSide }); setMode(m); }}
                         onClose={() => setActiveAnchor(null)}
                         className="w-10 shrink-0 pr-0.5"
                       />
@@ -438,20 +468,24 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   {commentable && lineComments.length > 0 && !isActive && (
                     <div className="ml-[5.5rem] mr-3 my-1">
                       <LineCommentChips
-                        lineNum={newLine!}
+                        lineNum={anchorLine!}
                         comments={lineComments}
                         artifactId={artifact.id}
                         filePath={file.path}
-                        onOpenLine={() => { setActiveAnchor({ path: file.path, line: newLine! }); setMode("comment"); }}
+                        side={anchorSide}
+                        onOpenLine={() => { setActiveAnchor({ path: file.path, line: anchorLine!, side: anchorSide }); setMode("comment"); }}
                       />
                     </div>
                   )}
                   {isActive && (
                     <LineComposer
-                      lineNum={newLine!}
+                      lineNum={anchorLine!}
                       artifactId={artifact.id}
                       filePath={file.path}
-                      lineText={line.content}
+                      // A removed line has no new-side text to Suggest against — pass
+                      // it only for new-side lines so Suggest stays available there.
+                      lineText={anchorSide === "new" ? line.content : undefined}
+                      side={anchorSide}
                       mode={mode}
                       setMode={setMode}
                       existingComments={lineComments}

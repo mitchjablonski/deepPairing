@@ -19,6 +19,25 @@ import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
  * path — no tokens added to the healthy payload). Best-effort: any error
  * reading health degrades to `{}` rather than breaking the poll.
  */
+/** #186 — resolve the text of a REMOVED line for delivery. A comment on a `del`
+ *  line anchors to (filePath, oldLine, side:"old"); look the line up in the
+ *  changeset's own hunks (already in the artifact) so the agent reads WHAT was
+ *  removed, not just where — it knows the human is asking about a deletion, not
+ *  the replacement. Returns undefined when the line can't be located. */
+function removedLineContent(art: Artifact | undefined, filePath: string, oldLine: number): string | undefined {
+  if (!art || art.type !== "changeset") return undefined;
+  const files = (art.content as { files?: Array<{ path?: string; hunks?: Array<{ lines?: Array<{ kind?: string; oldLine?: number; content?: string }> }> }> } | null)?.files;
+  if (!Array.isArray(files)) return undefined;
+  const file = files.find((f) => f.path === filePath);
+  if (!file || !Array.isArray(file.hunks)) return undefined;
+  for (const h of file.hunks) {
+    for (const l of h.lines ?? []) {
+      if (l.kind === "del" && l.oldLine === oldLine) return l.content;
+    }
+  }
+  return undefined;
+}
+
 function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: string; backupPath?: string; remedy: string } } {
   try {
     const health = getGlobalStore().getHealth();
@@ -541,6 +560,19 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       // `art_x:12` the agent can't place across a multi-file change.
       if (c.target.filePath) loc += ` ${c.target.filePath}`;
       if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+      // #186 — an OLD-side comment is about a REMOVED line. Mark it so the agent
+      // reads this as "why did you delete this?", not a note on the replacement,
+      // and inline the removed line's content (pulled from the changeset hunks)
+      // so the ask is self-contained: `path:26 (removed line: "const s = …")`.
+      let removedLine: string | undefined;
+      if (c.target.side === "old" && c.target.filePath && c.target.lineStart != null) {
+        removedLine = removedLineContent(
+          artsForTargets.find((a) => a.id === c.target.artifactId),
+          c.target.filePath,
+          c.target.lineStart,
+        );
+        loc += removedLine != null ? ` (removed line: "${removedLine}")` : ` (removed line)`;
+      }
       // #171 — a CROSS-FILE thread (2+ anchors) names every location it binds
       // so the agent sees the invariant spans files (e.g. session.ts:12 ↔
       // middleware.ts:31).
@@ -605,6 +637,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           // anchor list for a cross-file thread. Spread only when present so
           // the healthy/no-file payload is byte-for-byte unchanged.
           ...(c.target.filePath ? { filePath: c.target.filePath } : {}),
+          // #186 — old-side (removed-line) marking + content. Spread ONLY for a
+          // del-side comment so new-side delivery is byte-for-byte unchanged.
+          ...(c.target.side === "old" ? { side: "old" as const, ...(removedLine != null ? { removedLine } : {}) } : {}),
           ...(Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {}),
           // #140/#173 — a plan/spec region comment carries ONLY the human-
           // meaningful labels (byte-for-byte as before); a DECISION region
@@ -649,6 +684,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         // #171 — see structuredQuestions: file dimension + cross-file anchors,
         // present only when the comment carries them.
         ...(c.target.filePath ? { filePath: c.target.filePath } : {}),
+        // #186 — old-side (removed-line) marking + content; new-side unchanged.
+        ...(c.target.side === "old" ? { side: "old" as const, ...(removedLine != null ? { removedLine } : {}) } : {}),
         ...(Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {}),
         // #140/#173 — plan/spec: labels only (byte-for-byte); decision region
         // (optionId set): optionId + visualId + rect + nearNodes. See

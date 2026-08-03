@@ -227,9 +227,14 @@ test.beforeAll(async () => {
             }],
           },
           {
-            path: "auth/session.ts", changeType: "modified", stats: { additions: 1, deletions: 0 },
-            hunks: [{ header: "@@ -10,2 +10,3 @@ export interface Session {", lines: [
+            // #186 — this file carries REMOVED lines too, so the a11y scan
+            // measures the del-side gutter, the "(removed)" composer header, and a
+            // del-side comment thread (both themes).
+            path: "auth/session.ts", changeType: "modified", stats: { additions: 1, deletions: 2 },
+            hunks: [{ header: "@@ -10,3 +10,3 @@ export interface Session {", lines: [
+              { kind: "del", content: "  ttl: number; // fixed 30-minute window", oldLine: 11 },
               { kind: "add", content: "  expiresAt: number; // sliding window", newLine: 12 },
+              { kind: "del", content: "  createdAt: number;", oldLine: 12 },
             ] }],
           },
         ],
@@ -254,6 +259,19 @@ test.beforeAll(async () => {
       ] },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed changeset comment failed: ${r.status}`); });
+  // #186 — a comment on a REMOVED line (side:"old", anchored to oldLine 11 of
+  // session.ts) so the scan mounts a del-side thread. openChangeset opens the
+  // composer on the OTHER del line (old 12) so both the thread and the
+  // "(removed)" composer are measured together.
+  await fetch(`${baseURL}/api/internal/sessions/a11y/comments`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cmt_a11y_del", artifactId: "cs_a11y",
+      content: "Keep ttl — the OAuth callback path reads it and never hits getAndTouch.",
+      author: "human",
+      target: { artifactId: "cs_a11y", filePath: "auth/session.ts", lineStart: 11, side: "old" },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed del-side comment failed: ${r.status}`); });
   // #140 — a SEPARATE single-artifact session whose plan carries a diagram, so
   // it renders directly (like bootstrap's visuals test) and axe can scan the
   // region-comment affordance (drag overlay + keyboard node-list disclosure)
@@ -429,11 +447,21 @@ async function openChangeset(page: import("@playwright/test").Page): Promise<voi
   await page.getByRole("button", { name: /Send back/ }).waitFor({ timeout: 15000 });
   await page.getByText("↻ changes").waitFor({ timeout: 15000 });
   // Activate the flagged file so its needs-changes REASON box mounts for the
-  // scan (the #187 hollow-net lesson — actually render the new state).
+  // scan (the #187 hollow-net lesson — actually render the new state). session.ts
+  // also carries the #186 removed lines + a del-side thread.
   await page.getByTitle("modified auth/session.ts").click();
   await page.getByLabel(/Reason this file needs changes/).waitFor({ timeout: 15000 });
   // The cross-file card in the rail is part of the seeded state.
   await page.getByText("CROSS-FILE COMMENT").waitFor({ timeout: 15000 });
+  // #186 — the seeded del-side thread (on removed oldLine 11) is mounted…
+  await page.getByText(/Keep ttl — the OAuth callback path reads it/).waitFor({ timeout: 15000 });
+  // …and open the composer on the OTHER removed line (oldLine 12) so the
+  // "(removed)" header + del-side Comment/Ask composer are measured too.
+  await page
+    .locator('[data-comment-anchor="line:auth/session.ts:old:12"]')
+    .getByRole("button", { name: /add a comment on this line/i })
+    .click();
+  await page.getByTestId("removed-line-header").waitFor({ timeout: 15000 });
   await page.evaluate(() =>
     Promise.all(
       document
