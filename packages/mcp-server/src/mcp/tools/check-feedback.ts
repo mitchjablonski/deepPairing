@@ -507,6 +507,20 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const suggestionLines: string[] = [];
     const otherLines: string[] = [];
     const artsForTargets = await store.getArtifacts();
+    // #187 — a FOLLOW-UP comment (posted to an already-approved artifact via the
+    // late lane; the store stamps `followUp` authoritatively) is delivered
+    // clearly distinguished: a per-line prose prefix naming the approved artifact
+    // + one guidance paragraph (below), so the agent treats it as NEW INPUT, not
+    // a review reopening. A normal comment has `followUp` absent → prefix is "",
+    // no guidance, structured flag omitted: byte-for-byte-unchanged delivery.
+    let anyFollowUp = false;
+    const followUpPrefix = (c: Comment): string => {
+      if (!c.followUp) return "";
+      anyFollowUp = true;
+      const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+      const title = art?.title ?? c.target.artifactId;
+      return `[follow-up on the APPROVED artifact "${title}"] `;
+    };
     for (const c of artifactCommentsSorted) {
       // #172 — a first-class suggested edit. The agent MUST respond via
       // answer_question. Deliver it prominently with the full original/
@@ -551,6 +565,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
           replacementText: s.replacementText,
           ...(note ? { note } : {}),
           ...(s.counter ? { counter: s.counter } : {}),
+          // #187 — a suggested edit posted to an approved artifact is a follow-up;
+          // spread only when stamped so normal delivery stays byte-unchanged.
+          ...(c.followUp ? { followUp: true as const } : {}),
         });
         continue;
       }
@@ -623,12 +640,15 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
-          `- ❓ QUESTION [${loc}] ${c.content}${commentSecretNote(c)}\n    → Answer via answer_question with commentId="${c.id}"`,
+          `- ❓ QUESTION [${loc}] ${followUpPrefix(c)}${c.content}${commentSecretNote(c)}\n    → Answer via answer_question with commentId="${c.id}"`,
         );
         structuredQuestions.push({
           commentId: c.id,
           artifactId: c.target.artifactId,
           content: c.content,
+          // #187 — spread ONLY when the store stamped it (posted to an approved
+          // artifact via the late lane) so normal delivery is byte-unchanged.
+          ...(c.followUp ? { followUp: true as const } : {}),
           lineStart: c.target.lineStart,
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
@@ -671,12 +691,14 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         });
         continue;
       }
-      otherLines.push(`- [${loc}] ${c.content}${commentSecretNote(c)}`);
+      otherLines.push(`- [${loc}] ${followUpPrefix(c)}${c.content}${commentSecretNote(c)}`);
       structuredComments.push({
         id: c.id,
         artifactId: c.target.artifactId,
         kind: "comment",
         content: c.content,
+        // #187 — see structuredQuestions: present only for a late follow-up.
+        ...(c.followUp ? { followUp: true as const } : {}),
         lineStart: c.target.lineStart,
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
@@ -701,6 +723,14 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     }
     if (otherLines.length > 0) {
       parts.push(`Human comments (${otherLines.length}):\n${otherLines.join("\n")}`);
+    }
+    // #187 — one guidance paragraph, appended ONLY when at least one follow-up
+    // comment/question was delivered above (anyFollowUp set by followUpPrefix).
+    // Absent otherwise → normal delivery is byte-for-byte unchanged.
+    if (anyFollowUp) {
+      parts.push(
+        `ℹ️ The [follow-up ...] item(s) above are FOLLOW-UP FEEDBACK on an already-APPROVED artifact — NOT a review reopening. The review outcome stands; do not treat this as a rejection or a request to re-run the review. Address it as new input: answer it (answer_question / a reply comment), or present a new artifact or revision if it genuinely warrants one.`,
+      );
     }
   }
 

@@ -40,6 +40,22 @@ export const ArtifactStatusSchema = z.enum([
 
 export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>;
 
+/**
+ * #187 — the CLOSED status on which the human may still LEAVE a late follow-up
+ * comment (a new-input lane, NOT a review reopening). Only "approved" qualifies:
+ * the review closed with a positive verdict, so a later comment is genuinely new
+ * input on a standing artifact. The other closed statuses are traps and stay
+ * comment-locked: "revised"/"superseded" are closed-with-successor (their old
+ * threads already aggregate onto the successor version), and
+ * "rejected"/"retracted"/"obsolete" were discarded. "draft" is NOT included here
+ * — it's the OPEN review lane, gated separately. This is the ONE predicate the
+ * UI (which lines to unlock for commenting) and the server (which comments get
+ * `followUp:true`) share, so the two can never drift.
+ */
+export function isLateCommentableStatus(status: ArtifactStatus | string): boolean {
+  return status === "approved";
+}
+
 export const ArtifactStatusHistoryEntrySchema = z.object({
   status: ArtifactStatusSchema,
   at: z.string().datetime(),

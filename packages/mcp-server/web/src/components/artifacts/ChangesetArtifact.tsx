@@ -4,6 +4,7 @@ import {
   coerceChangesetContent,
   composeSendBackFeedback,
   deriveChangesetDisposition,
+  isLateCommentableStatus,
   type ChangesetDisposition,
 } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
@@ -103,7 +104,11 @@ function DispChip({ disposition }: { disposition: ChangesetDisposition }) {
     );
   }
   return (
-    <span className="shrink-0 text-2xs font-bold font-sans rounded-full px-1.5 py-0.5 text-text-muted bg-surface-active" title="Not reviewed yet">
+    // #187 — muted on bg-surface-active is 4.16:1 (below AA); surface-elevated
+    // clears AA for muted text (same combo as the decision "Not chosen" chip).
+    // Surfaced by the approved-changeset a11y scan, where every file reads
+    // "pending" (no persisted reviewState), so the chip is on screen for real.
+    <span className="shrink-0 text-2xs font-bold font-sans rounded-full px-1.5 py-0.5 text-text-muted bg-surface-elevated" title="Not reviewed yet">
       — review
     </span>
   );
@@ -119,7 +124,22 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const replayActive = useReplayStore((s) => s.active);
-  const interactive = artifact.status === "draft" && !replayActive;
+  // #187 — the single `interactive` gate split in two, so late COMMENTING can be
+  // unlocked on a closed changeset WITHOUT reopening its review.
+  //   reviewActive     — the OPEN review: per-file Looks-right/Needs-changes, the
+  //                      derived Approve/Send-back bar, the review keyboard keys,
+  //                      and Suggest-edit. Draft only.
+  //   commentsUnlocked — line gutters / composers / threads (incl. #186's del
+  //                      side). Draft OR approved (isLateCommentableStatus): an
+  //                      approved changeset keeps its review-closed visual state
+  //                      but accepts late follow-up comments as NEW INPUT.
+  // REPLAY locks BOTH (replayActive is an unconditional freeze, unchanged).
+  const reviewActive = artifact.status === "draft" && !replayActive;
+  const commentsUnlocked =
+    !replayActive && (artifact.status === "draft" || isLateCommentableStatus(artifact.status));
+  // True only in the late lane (commenting on, review off) — drives the honesty
+  // marker + the withholding of Suggest-edit in the composer.
+  const followUpLane = commentsUnlocked && !reviewActive;
   const isFocused = selectedArtifactId === artifact.id;
 
   const [activeIdx, setActiveIdx] = useState(0);
@@ -278,13 +298,13 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   useEffect(() => {
     const prev = prevAllLookRightRef.current;
     prevAllLookRightRef.current = allLookRight;
-    if (!interactive) return;
+    if (!reviewActive) return;
     if (allLookRight && !prev && countdown === null && !approveCountdown.held) {
       arm(3);
     }
     // Leaving all-look-right (e.g. a file gets flagged) cancels a pending approve.
     if (!allLookRight && countdown !== null) cancel();
-  }, [allLookRight, interactive, countdown, approveCountdown.held, arm, cancel]);
+  }, [allLookRight, reviewActive, countdown, approveCountdown.held, arm, cancel]);
 
   // --- Disposition + action handlers ---------------------------------------
   const markLookRight = useCallback(
@@ -391,11 +411,13 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     act[intent]();
   };
   useEffect(() => {
-    if (!isFocused || !interactive) return;
+    // Review keys (a/r/j/k/⏎) belong to the OPEN review only — never bound on a
+    // closed changeset in the late follow-up lane.
+    if (!isFocused || !reviewActive) return;
     const listener = (e: KeyboardEvent) => keyHandlerRef.current(e);
     document.addEventListener("keydown", listener, true);
     return () => document.removeEventListener("keydown", listener, true);
-  }, [isFocused, interactive]);
+  }, [isFocused, reviewActive]);
 
   // ------------------------------------------------------------------------
   const renderFileDiff = (file: ChangesetFile) => {
@@ -423,7 +445,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               // add/ctx lines byte-identical to the pre-#186 new-side behavior.
               const anchorSide: "old" | "new" = newLine == null ? "old" : "new";
               const anchorLine = newLine == null ? oldLine : newLine;
-              const commentable = interactive && anchorLine != null;
+              // #187 — gutters/composers/threads follow commentsUnlocked (draft OR
+              // approved), NOT reviewActive: late follow-up commenting on a closed
+              // changeset stays live while its review affordances are gone.
+              const commentable = commentsUnlocked && anchorLine != null;
               const lineComments = anchorLine != null ? byLine[sideLineKey(anchorSide, anchorLine)] ?? [] : [];
               // Cross-file chips are new-side only, so an old-side lookup is
               // always empty — a removed line never shows a stray cross-file chip.
@@ -486,6 +511,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                       // it only for new-side lines so Suggest stays available there.
                       lineText={anchorSide === "new" ? line.content : undefined}
                       side={anchorSide}
+                      // #187 — in the late lane: withhold Suggest (a review action)
+                      // and surface the follow-up honesty marker.
+                      allowSuggest={reviewActive}
+                      followUpLane={followUpLane}
                       mode={mode}
                       setMode={setMode}
                       existingComments={lineComments}
@@ -503,7 +532,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
 
   /** The two per-file disposition buttons + the inline needs-changes reason box. */
   const renderDispositionControls = (file: ChangesetFile) => {
-    if (!interactive) return null;
+    if (!reviewActive) return null;
     const disp = deriveChangesetDisposition(reviewState, file.path);
     return (
       <div className="ml-auto flex items-center gap-1.5" data-testid="disposition-controls">
@@ -540,7 +569,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   };
 
   const renderNeedsBox = (file: ChangesetFile, focusable: boolean) => {
-    if (!interactive || deriveChangesetDisposition(reviewState, file.path) !== "needs_changes") return null;
+    if (!reviewActive || deriveChangesetDisposition(reviewState, file.path) !== "needs_changes") return null;
     return (
       <div
         className="m-3 border border-accent-amber border-l-[3px] rounded-r-lg bg-surface-secondary overflow-hidden"
@@ -704,7 +733,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   {renderDispositionControls(activeFile)}
                 </div>
                 {/* Keyboard hint strip */}
-                {interactive && (
+                {reviewActive && (
                   <div className="flex items-center gap-x-4 gap-y-1 flex-wrap px-3 py-1.5 bg-surface-code border-b border-border-subtle text-[10.5px] text-text-muted">
                     <span><b className="text-text-secondary">a</b> looks right → next</span>
                     <span><b className="text-text-secondary">r</b> needs changes</span>
@@ -723,8 +752,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         </div>
       )}
 
-      {/* Whole-changeset action bar (draft + non-replay only) — DERIVED action */}
-      {interactive && (
+      {/* Whole-changeset action bar (draft + non-replay only) — DERIVED action.
+          Stays gated on reviewActive: the late follow-up lane shows NO review
+          actions (no Approve/Send-back/Reject, no countdown). */}
+      {reviewActive && (
         <div className="space-y-2 pt-2 border-t border-border-default">
           {/* Confirm-countdown (armed when all files look right) */}
           {armed && countdown !== null && countdown > 0 && (

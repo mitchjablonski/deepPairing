@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace } from "@deeppairing/shared";
-import { suggestionSummary } from "@deeppairing/shared";
+import { suggestionSummary, isLateCommentableStatus } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
@@ -790,6 +790,21 @@ export class FileStore implements IStore {
     // and flowed into agent context (check_feedback) with zero warning.
     // Labels/pattern/line only, NEVER the matched value.
     const secretWarnings = scanForSecrets(params.content);
+    // #187 — STORE-AUTHORITATIVE follow-up flag. A HUMAN comment landing on an
+    // already-CLOSED-but-commentable (approved) artifact is a late follow-up on a
+    // standing verdict, not review feedback. The store owns the artifact status,
+    // so it stamps the flag here (mirroring the #162 secret-scan choke-point) —
+    // the client can neither forge it (a tab claiming followUp on a draft) nor
+    // suppress it (a tab hiding it on an approved artifact). Only "approved"
+    // qualifies (isLateCommentableStatus), so a SEND-BACK/REJECT verdict-feedback
+    // comment — posted the instant status flips to revised/rejected — is NEVER
+    // mis-stamped. Agent comments are excluded: the lane is about human input.
+    const targetArtifact =
+      params.artifactId && params.artifactId !== "__session__"
+        ? this.artifacts.find((a) => a.id === params.artifactId)
+        : undefined;
+    const isFollowUp =
+      params.author === "human" && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -809,6 +824,8 @@ export class FileStore implements IStore {
       // #172 — persist the first-class suggested edit. Spread so a plain comment
       // stays byte-identical on disk.
       ...(params.suggestion ? { suggestion: params.suggestion } : {}),
+      // #187 — spread so a normal draft-review comment is byte-identical on disk.
+      ...(isFollowUp ? { followUp: true } : {}),
       answeredByCommentId: null,
       acknowledged: params.author === "agent",
       createdAt: new Date(now).toISOString(),

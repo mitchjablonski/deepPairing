@@ -167,6 +167,17 @@ export const CommentSchema = z.object({
    * optional); old comments without it load unchanged.
    */
   secretWarnings: z.array(SecretWarningSchema).optional(),
+  /**
+   * #187 — set when this comment was posted to an already-CLOSED (approved)
+   * artifact via the late FOLLOW-UP lane: no status change, no review reopening —
+   * the review-closed verdict stands, and the agent is told to treat this as NEW
+   * INPUT (answer it, or present a fresh artifact/revision if warranted), not as
+   * review feedback. STORE-AUTHORITATIVE: set at addComment time from the target
+   * artifact's status (isLateCommentableStatus) — never trusted from the client,
+   * so a tab can't forge or suppress it. Optional per the all-new-fields-optional
+   * rule; ABSENT on every normal draft-review comment (byte-identical on disk).
+   */
+  followUp: z.boolean().optional(),
   acknowledged: z.boolean(),
   createdAt: z.string().datetime(),
 });

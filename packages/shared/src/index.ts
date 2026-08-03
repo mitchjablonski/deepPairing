@@ -70,6 +70,7 @@ export {
   type DecisionContent,
   type CodeChangeContent,
   parseArtifactContent,
+  isLateCommentableStatus,
 } from "./schemas/artifact.js";
 
 export {

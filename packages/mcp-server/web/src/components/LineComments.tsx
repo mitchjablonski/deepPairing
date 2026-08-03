@@ -407,6 +407,16 @@ interface LineComposerProps {
    *  the single `lineText`. */
   sourceLines?: string[];
   sourceLineStart?: number;
+  /** #187 — allow the "Suggest edit" tab. Default true (byte-identical for every
+   *  existing caller). A closed-but-commentable (approved) artifact passes false:
+   *  Suggest is a REVIEW action (it negotiates a new version), so the late
+   *  follow-up lane offers Comment / Ask only — you comment on a standing
+   *  artifact, you don't re-open it with a suggested edit. */
+  allowSuggest?: boolean;
+  /** #187 — this composer is in the late FOLLOW-UP lane on an already-approved
+   *  artifact. Surfaces a subtle hint + reframes the placeholder so the human
+   *  knows the review stays closed and the agent will see it as new input. */
+  followUpLane?: boolean;
   mode: LineMode;
   setMode: (m: LineMode) => void;
   existingComments: Comment[];
@@ -434,6 +444,8 @@ export function LineComposer({
   sourceLines,
   sourceLineStart,
   side,
+  allowSuggest = true,
+  followUpLane = false,
   mode,
   setMode,
   existingComments,
@@ -448,7 +460,8 @@ export function LineComposer({
   const isRemoved = side === "old";
   // #186 — a removed line can't host a "Suggest edit" (there is no new-side line
   // to replace); it takes Comment / Ask only.
-  const canSuggest = lineText != null && !isRemoved;
+  // #187 — the late follow-up lane also withholds Suggest (a review action).
+  const canSuggest = lineText != null && !isRemoved && allowSuggest;
   const canSpan = totalLines != null;
   const spanMax = maxLine ?? totalLines ?? lineNum;
 
@@ -523,6 +536,14 @@ export function LineComposer({
 
   return (
     <div className="ml-[5.5rem] mr-3 my-1.5">
+      {followUpLane && (
+        <div
+          className="mb-1.5 text-2xs text-text-muted italic"
+          data-testid="follow-up-lane-hint"
+        >
+          Follow-up on an approved artifact — the agent will see it as new input (review stays closed).
+        </div>
+      )}
       {isRemoved && (
         <div className="mb-1.5 inline-flex items-center gap-1.5 text-2xs font-semibold text-accent-red" data-testid="removed-line-header">
           <span aria-hidden>−</span>
@@ -707,8 +728,12 @@ export function LineComposer({
             rows={2}
             placeholder={
               mode === "ask"
-                ? "Ask the agent about this line… (⌘⏎ to send)"
-                : "Add a comment on this line… (⌘⏎ to send)"
+                ? followUpLane
+                  ? "Ask a follow-up on this approved artifact… (⌘⏎ to send)"
+                  : "Ask the agent about this line… (⌘⏎ to send)"
+                : followUpLane
+                  ? "Follow-up comment on this approved artifact… (⌘⏎ to send)"
+                  : "Add a comment on this line… (⌘⏎ to send)"
             }
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
