@@ -22849,6 +22849,9 @@ var ArtifactStatusSchema = external_exports.enum([
   // drops out of "waiting for review".
   "obsolete"
 ]);
+function isLateCommentableStatus(status) {
+  return status === "approved";
+}
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
   at: external_exports.string().datetime()
@@ -23055,6 +23058,17 @@ var CommentSchema = external_exports.object({
    * optional); old comments without it load unchanged.
    */
   secretWarnings: external_exports.array(SecretWarningSchema).optional(),
+  /**
+   * #187 — set when this comment was posted to an already-CLOSED (approved)
+   * artifact via the late FOLLOW-UP lane: no status change, no review reopening —
+   * the review-closed verdict stands, and the agent is told to treat this as NEW
+   * INPUT (answer it, or present a fresh artifact/revision if warranted), not as
+   * review feedback. STORE-AUTHORITATIVE: set at addComment time from the target
+   * artifact's status (isLateCommentableStatus) — never trusted from the client,
+   * so a tab can't forge or suppress it. Optional per the all-new-fields-optional
+   * rule; ABSENT on every normal draft-review comment (byte-identical on disk).
+   */
+  followUp: external_exports.boolean().optional(),
   acknowledged: external_exports.boolean(),
   createdAt: external_exports.string().datetime()
 });
@@ -25434,6 +25448,8 @@ var FileStore = class _FileStore {
       return dupe;
     }
     const secretWarnings = scanForSecrets(params.content);
+    const targetArtifact = params.artifactId && params.artifactId !== "__session__" ? this.artifacts.find((a) => a.id === params.artifactId) : void 0;
+    const isFollowUp = params.author === "human" && !params.verdictFeedback && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
     const comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -25451,6 +25467,8 @@ var FileStore = class _FileStore {
       // #172 — persist the first-class suggested edit. Spread so a plain comment
       // stays byte-identical on disk.
       ...params.suggestion ? { suggestion: params.suggestion } : {},
+      // #187 — spread so a normal draft-review comment is byte-identical on disk.
+      ...isFollowUp ? { followUp: true } : {},
       answeredByCommentId: null,
       acknowledged: params.author === "agent",
       createdAt: new Date(now).toISOString()
@@ -27294,7 +27312,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         id: `cmt_${nanoid3(10)}`,
         artifactId,
         content: feedback,
-        author: "human"
+        author: "human",
+        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
+        // flip above. On an "Approve with modifications" (status now `approved`)
+        // it must NOT be dressed as a late follow-up — it's review feedback.
+        verdictFeedback: true
       });
       broadcast({ type: "comment_added", comment }, sid);
     }
@@ -28505,6 +28527,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, AddCommentBody);
     if (!parsed.ok) return parsed.res;
     const params = parsed.data;
+    delete params.verdictFeedback;
     const requestedId = params.id;
     const comment = r.store.addComment(params);
     if (comment.id === requestedId) {

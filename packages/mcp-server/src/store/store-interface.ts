@@ -95,6 +95,16 @@ export interface AddCommentParams {
   /** #172 — a first-class suggested edit posted with the comment (a plain
    *  Record so the store doesn't need to import the shared schema type). */
   suggestion?: CommentSuggestion;
+  /**
+   * #187 — INTERNAL, server-only: this addComment is the status route's own
+   * VERDICT-FEEDBACK comment (an approve/send-back/reject note), posted AFTER the
+   * status already flipped. Suppresses the store's late-follow-up stamp so an
+   * "Approve with modifications" note (status is now `approved`) is NOT dressed
+   * as a late follow-up. Set ONLY by the status handler; the public comment route
+   * never forwards it and the internal daemon route strips it, so a client can't
+   * suppress a genuine follow-up stamp. Never persisted on the comment.
+   */
+  verdictFeedback?: boolean;
 }
 
 /**

@@ -5,6 +5,7 @@ import type { Artifact, Comment } from "@deeppairing/shared";
 import { ChangesetArtifact } from "../ChangesetArtifact";
 import { useArtifactStore } from "../../../stores/artifact";
 import { useOverlayStore } from "../../../stores/overlay";
+import { useReplayStore } from "../../../stores/replay";
 
 /** A 3-file changeset (middleware.ts, session.ts, session.test.ts). */
 function changeset(overrides: Partial<Artifact["content"]> = {}, artifactOverrides: Partial<Artifact> = {}): Artifact {
@@ -92,6 +93,7 @@ afterEach(() => {
   vi.useRealTimers();
   useArtifactStore.getState().reset();
   useOverlayStore.setState({ count: 0 });
+  useReplayStore.setState({ active: false });
 });
 
 describe("ChangesetArtifact — per-file disposition (#175)", () => {
@@ -435,6 +437,81 @@ describe("ChangesetArtifact — del-side comments + the collision matrix (#186)"
       lineEnd: 26,
       side: "old",
     });
+  });
+});
+
+describe("ChangesetArtifact — late follow-up comment lane (#187)", () => {
+  it("APPROVED: line gutters + composer stay live, and the composer carries the follow-up honesty marker (no Suggest)", async () => {
+    const art = changeset({}, { status: "approved" });
+    seed(art);
+    const { container } = render(<Harness id="art_cs" />);
+    // A new-side line (newLine 26) is still commentable on an approved changeset.
+    const newRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:26"]') as HTMLElement;
+    expect(newRow).toBeTruthy();
+    await userEvent.click(within(newRow).getByRole("button", { name: /add a comment on this line/i }));
+    // The honesty marker tells the human the review stays closed.
+    expect(await screen.findByTestId("follow-up-lane-hint")).toHaveTextContent(/review stays closed/i);
+    // Placeholder is reframed for the follow-up lane…
+    expect(screen.getByPlaceholderText(/Follow-up comment on this approved artifact/i)).toBeInTheDocument();
+    // …and Suggest edit (a REVIEW action) is withheld in the late lane.
+    expect(screen.queryByRole("button", { name: /Suggest edit/i })).not.toBeInTheDocument();
+  });
+
+  it("APPROVED: review ACTIONS are gone — no Looks-right, no Approve/Send-back bar, no keyboard review keys", () => {
+    const art = changeset({ reviewState: {} }, { status: "approved" });
+    seed(art);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview });
+    render(<Harness id="art_cs" />);
+    // Per-file disposition controls and the whole-changeset action bar are absent.
+    expect(screen.queryByTestId("looks-right")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("needs-changes")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("approve-all")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("approve-changeset")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("send-back")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("reject-approach")).not.toBeInTheDocument();
+    // The review keyboard keys are DEAD (listener not bound off-draft).
+    act(() => { fireEvent.keyDown(document.body, { key: "a" }); });
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(setReview).not.toHaveBeenCalled();
+  });
+
+  it("del-side (#186) commenting works in the late lane too — an approved del line opens its 'removed' composer", async () => {
+    const art = changeset({}, { status: "approved" });
+    seed(art);
+    const { container } = render(<Harness id="art_cs" />);
+    const oldRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:old:26"]') as HTMLElement;
+    expect(oldRow).toBeTruthy();
+    await userEvent.click(within(oldRow).getByRole("button", { name: /add a comment on this line/i }));
+    const header = await screen.findByTestId("removed-line-header");
+    expect(header).toHaveTextContent("line 26");
+    expect(header).toHaveTextContent("(removed)");
+    // Late lane still carries the follow-up marker on the del composer.
+    expect(screen.getByTestId("follow-up-lane-hint")).toBeInTheDocument();
+  });
+
+  it("SUPERSEDED / REJECTED stay comment-locked (the trap statuses get NO late lane)", () => {
+    for (const status of ["superseded", "rejected"] as const) {
+      const art = changeset({}, { id: "art_cs", status });
+      seed(art);
+      const { unmount } = render(<Harness id="art_cs" />);
+      // The diff still renders, but no line is commentable (no gutter + button).
+      expect(screen.getByText(/getAndTouch/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /add a comment on this line/i })).not.toBeInTheDocument();
+      unmount();
+      useArtifactStore.getState().reset();
+    }
+  });
+
+  it("REPLAY locks EVERYTHING — an approved changeset under replay has no comment gutters and no review actions", () => {
+    useReplayStore.setState({ active: true });
+    const art = changeset({ reviewState: {} }, { status: "approved" });
+    seed(art);
+    render(<Harness id="art_cs" />);
+    expect(screen.getByText(/getAndTouch/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add a comment on this line/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("looks-right")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("approve-all")).not.toBeInTheDocument();
   });
 });
 

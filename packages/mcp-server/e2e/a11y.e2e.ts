@@ -365,6 +365,42 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed carry v2 failed: ${r.status}`); });
+
+  // #187 — an APPROVED changeset in its OWN session so the late FOLLOW-UP lane
+  // is scanned WITHOUT disturbing the draft-review changeset (cs_a11y) above.
+  // The review closed (status approved), but line commenting stays live: the
+  // #187 test SELECTS it, opens a line composer (the follow-up honesty marker +
+  // the Comment/Ask composer, NO Suggest), and scans both themes — the
+  // hollow-net lesson: actually mount the new late-lane state.
+  const regLate = await fetch(`${baseURL}/api/internal/sessions/a11ylate/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regLate.ok) throw new Error(`seed late-comment register failed: ${regLate.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11ylate/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cs_late", type: "changeset", title: "Centralize the TTL refresh",
+      content: {
+        summary: "The already-approved change the human wants to comment on later.",
+        files: [
+          {
+            path: "auth/middleware.ts", changeType: "modified", stats: { additions: 2, deletions: 1 },
+            hunks: [{
+              header: "@@ -24,3 +24,4 @@ export function requireSession(store: SessionStore) {",
+              lines: [
+                { kind: "ctx", content: "    const sid = readSessionCookie(req);", oldLine: 25, newLine: 25 },
+                { kind: "del", content: "    const session = await store.get(sid);", oldLine: 26 },
+                { kind: "add", content: "    const session = await store.getAndTouch(sid); // refreshes TTL", newLine: 26 },
+              ],
+            }],
+          },
+        ],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed late changeset failed: ${r.status}`); });
+  // Close the review with a positive verdict → status approved (the only closed
+  // status that keeps the late comment lane).
+  await fetch(`${baseURL}/api/internal/sessions/a11ylate/artifacts/cs_late/status`, {
+    method: "POST", headers: h, body: JSON.stringify({ status: "approved" }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed late changeset approve failed: ${r.status}`); });
 });
 
 test.afterAll(async () => {
@@ -1224,4 +1260,56 @@ test("#181: a broken diagram degrades to the fallback with NO mermaid error-grap
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await assertNoMermaidErrorLeak(page);
+});
+
+/** #187 — mount the APPROVED changeset's late FOLLOW-UP lane for real before
+ *  scanning (the hollow-net lesson: actually render the new state). The review is
+ *  closed (no disposition buttons, no action bar), but line commenting is live:
+ *  open a new-side line composer and wait for the follow-up honesty marker + the
+ *  Comment/Ask composer (Suggest is withheld in the late lane), then settle
+ *  finite animations. */
+async function openLateFollowUpComposer(page: import("@playwright/test").Page): Promise<void> {
+  await page.waitForSelector('[data-artifact-id="cs_late"]', { timeout: 15000 });
+  // Review is CLOSED — the changeset's own disposition controls + derived action
+  // bar are gone (the shell's generic footer just shows an "Approved" chip).
+  await expect(page.locator('[data-testid="disposition-controls"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="approve-changeset"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="approve-all"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="send-back"]')).toHaveCount(0);
+  // Line commenting stays live: open the composer on the new-side line 26.
+  await page
+    .locator('[data-comment-anchor="line:auth/middleware.ts:26"]')
+    .getByRole("button", { name: /add a comment on this line/i })
+    .click();
+  // The follow-up honesty marker + the reframed composer are mounted.
+  await page.getByTestId("follow-up-lane-hint").waitFor({ timeout: 15000 });
+  await page.getByPlaceholder(/Follow-up comment on this approved artifact/i).waitFor({ timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#187): the approved-changeset late follow-up composer has no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11ylate`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openLateFollowUpComposer(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (late follow-up composer, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#187): the approved-changeset late follow-up composer has no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11ylate`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openLateFollowUpComposer(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (late follow-up composer, light):\n${fmt(serious)}`).toEqual([]);
 });

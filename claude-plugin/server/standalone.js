@@ -25812,6 +25812,17 @@ var CommentSchema = external_exports.object({
    * optional); old comments without it load unchanged.
    */
   secretWarnings: external_exports.array(SecretWarningSchema).optional(),
+  /**
+   * #187 — set when this comment was posted to an already-CLOSED (approved)
+   * artifact via the late FOLLOW-UP lane: no status change, no review reopening —
+   * the review-closed verdict stands, and the agent is told to treat this as NEW
+   * INPUT (answer it, or present a fresh artifact/revision if warranted), not as
+   * review feedback. STORE-AUTHORITATIVE: set at addComment time from the target
+   * artifact's status (isLateCommentableStatus) — never trusted from the client,
+   * so a tab can't forge or suppress it. Optional per the all-new-fields-optional
+   * rule; ABSENT on every normal draft-review comment (byte-identical on disk).
+   */
+  followUp: external_exports.boolean().optional(),
   acknowledged: external_exports.boolean(),
   createdAt: external_exports.string().datetime()
 });
@@ -29502,6 +29513,14 @@ Adjust your approach based on this guidance.`);
     const suggestionLines = [];
     const otherLines = [];
     const artsForTargets = await store.getArtifacts();
+    let anyFollowUp = false;
+    const followUpPrefix = (c) => {
+      if (!c.followUp) return "";
+      anyFollowUp = true;
+      const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+      const title = art?.title ?? c.target.artifactId;
+      return `[follow-up on the APPROVED/RESOLVED artifact "${title}"] `;
+    };
     for (const c of artifactCommentsSorted) {
       if (c.suggestion) {
         const s = c.suggestion;
@@ -29545,7 +29564,10 @@ ${s.replacementText}${note ? `
           originalText: s.originalText,
           replacementText: s.replacementText,
           ...note ? { note } : {},
-          ...s.counter ? { counter: s.counter } : {}
+          ...s.counter ? { counter: s.counter } : {},
+          // #187 — a suggested edit posted to an approved artifact is a follow-up;
+          // spread only when stamped so normal delivery stays byte-unchanged.
+          ...c.followUp ? { followUp: true } : {}
         });
         continue;
       }
@@ -29586,13 +29608,16 @@ ${s.replacementText}${note ? `
       if (regionRef) loc += ` \u2014 on region ${regionRef}`;
       if (c.intent === "question" && !c.answeredByCommentId) {
         questionLines.push(
-          `- \u2753 QUESTION [${loc}] ${c.content}${commentSecretNote(c)}
+          `- \u2753 QUESTION [${loc}] ${followUpPrefix(c)}${c.content}${commentSecretNote(c)}
     \u2192 Answer via answer_question with commentId="${c.id}"`
         );
         structuredQuestions.push({
           commentId: c.id,
           artifactId: c.target.artifactId,
           content: c.content,
+          // #187 — spread ONLY when the store stamped it (posted to an approved
+          // artifact via the late lane) so normal delivery is byte-unchanged.
+          ...c.followUp ? { followUp: true } : {},
           lineStart: c.target.lineStart,
           findingIndex: c.target.findingIndex,
           questionIndex: c.target.questionIndex,
@@ -29630,12 +29655,14 @@ ${s.replacementText}${note ? `
         });
         continue;
       }
-      otherLines.push(`- [${loc}] ${c.content}${commentSecretNote(c)}`);
+      otherLines.push(`- [${loc}] ${followUpPrefix(c)}${c.content}${commentSecretNote(c)}`);
       structuredComments.push({
         id: c.id,
         artifactId: c.target.artifactId,
         kind: "comment",
         content: c.content,
+        // #187 — see structuredQuestions: present only for a late follow-up.
+        ...c.followUp ? { followUp: true } : {},
         lineStart: c.target.lineStart,
         findingIndex: c.target.findingIndex,
         questionIndex: c.target.questionIndex,
@@ -29663,6 +29690,11 @@ ${suggestionLines.join("\n")}`);
     if (otherLines.length > 0) {
       parts.push(`Human comments (${otherLines.length}):
 ${otherLines.join("\n")}`);
+    }
+    if (anyFollowUp) {
+      parts.push(
+        `\u2139\uFE0F The [follow-up ...] item(s) above are FOLLOW-UP FEEDBACK on an already-APPROVED artifact \u2014 NOT a review reopening. The review outcome stands; do not treat this as a rejection or a request to re-run the review. Address it as new input: answer it (answer_question / a reply comment), or present a new artifact or revision if it genuinely warrants one.`
+      );
     }
   }
   if (freshlyRejected.length > 0) {
