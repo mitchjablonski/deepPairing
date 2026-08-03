@@ -29519,7 +29519,7 @@ Adjust your approach based on this guidance.`);
       anyFollowUp = true;
       const art = artsForTargets.find((a) => a.id === c.target.artifactId);
       const title = art?.title ?? c.target.artifactId;
-      return `[follow-up on the APPROVED artifact "${title}"] `;
+      return `[follow-up on the APPROVED/RESOLVED artifact "${title}"] `;
     };
     for (const c of artifactCommentsSorted) {
       if (c.suggestion) {

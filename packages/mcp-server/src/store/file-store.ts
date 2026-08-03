@@ -760,6 +760,7 @@ export class FileStore implements IStore {
     parentCommentId?: string | null;
     codeReferences?: Array<{ filePath: string; lineStart: number; lineEnd: number; snippet?: string }>;
     suggestion?: CommentSuggestion;
+    verdictFeedback?: boolean;
   }): Comment {
     const now = Date.now();
     const parentKey = params.parentCommentId ?? "";
@@ -799,12 +800,20 @@ export class FileStore implements IStore {
     // qualifies (isLateCommentableStatus), so a SEND-BACK/REJECT verdict-feedback
     // comment — posted the instant status flips to revised/rejected — is NEVER
     // mis-stamped. Agent comments are excluded: the lane is about human input.
+    // #187 — `verdictFeedback` excludes the ONE trap the status enum can't catch:
+    // an APPROVE-WITH-FEEDBACK note (status is ALREADY `approved` when the status
+    // handler posts it), which is a review verdict, not a late follow-up. That
+    // flag is server-only (the status handler sets it; the public comment route
+    // never forwards it and the internal daemon route strips it).
     const targetArtifact =
       params.artifactId && params.artifactId !== "__session__"
         ? this.artifacts.find((a) => a.id === params.artifactId)
         : undefined;
     const isFollowUp =
-      params.author === "human" && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
+      params.author === "human" &&
+      !params.verdictFeedback &&
+      !!targetArtifact &&
+      isLateCommentableStatus(targetArtifact.status);
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,

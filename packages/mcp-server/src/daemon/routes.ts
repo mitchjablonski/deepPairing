@@ -565,6 +565,11 @@ export function createDaemonRoutes(
     if (!parsed.ok) return parsed.res;
     const params = parsed.data as Parameters<typeof r.store.addComment>[0];
     // params already has intent/parentCommentId when the MCP wrapper sends them
+    // #187 — `verdictFeedback` is a SERVER-ONLY suppression flag (set only by the
+    // status handler's own verdict note). AddCommentBody is `.passthrough()`, so
+    // strip it here: no client (even a bearer-holding one) may suppress the
+    // store's late-follow-up stamp by smuggling it through this route.
+    delete (params as { verdictFeedback?: boolean }).verdictFeedback;
     const requestedId = params.id;
     const comment = r.store.addComment(params);
     // U0.1 — only broadcast when addComment created a new record. Dedupe

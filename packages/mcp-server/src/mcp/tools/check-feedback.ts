@@ -519,7 +519,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       anyFollowUp = true;
       const art = artsForTargets.find((a) => a.id === c.target.artifactId);
       const title = art?.title ?? c.target.artifactId;
-      return `[follow-up on the APPROVED artifact "${title}"] `;
+      // "APPROVED/RESOLVED" — a decision reaches this lane via `approved` status
+      // but reads as "resolved" to the human; the pair covers both without a
+      // per-type branch.
+      return `[follow-up on the APPROVED/RESOLVED artifact "${title}"] `;
     };
     for (const c of artifactCommentsSorted) {
       // #172 — a first-class suggested edit. The agent MUST respond via

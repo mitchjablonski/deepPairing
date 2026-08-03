@@ -805,6 +805,10 @@ export function createHttpRoutes(
         artifactId,
         content: feedback,
         author: "human",
+        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
+        // flip above. On an "Approve with modifications" (status now `approved`)
+        // it must NOT be dressed as a late follow-up — it's review feedback.
+        verdictFeedback: true,
       });
       broadcast({ type: "comment_added", comment }, sid);
     }

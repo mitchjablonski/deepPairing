@@ -25449,7 +25449,7 @@ var FileStore = class _FileStore {
     }
     const secretWarnings = scanForSecrets(params.content);
     const targetArtifact = params.artifactId && params.artifactId !== "__session__" ? this.artifacts.find((a) => a.id === params.artifactId) : void 0;
-    const isFollowUp = params.author === "human" && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
+    const isFollowUp = params.author === "human" && !params.verdictFeedback && !!targetArtifact && isLateCommentableStatus(targetArtifact.status);
     const comment = {
       id: params.id,
       sessionId: this.sessionId,
@@ -27312,7 +27312,11 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         id: `cmt_${nanoid3(10)}`,
         artifactId,
         content: feedback,
-        author: "human"
+        author: "human",
+        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
+        // flip above. On an "Approve with modifications" (status now `approved`)
+        // it must NOT be dressed as a late follow-up — it's review feedback.
+        verdictFeedback: true
       });
       broadcast({ type: "comment_added", comment }, sid);
     }
@@ -28523,6 +28527,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, AddCommentBody);
     if (!parsed.ok) return parsed.res;
     const params = parsed.data;
+    delete params.verdictFeedback;
     const requestedId = params.id;
     const comment = r.store.addComment(params);
     if (comment.id === requestedId) {

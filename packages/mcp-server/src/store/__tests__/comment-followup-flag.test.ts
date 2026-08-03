@@ -79,6 +79,32 @@ describe("#187 — addComment stamps followUp from the target artifact's status"
     expect("followUp" in c).toBe(false);
   });
 
+  it("APPROVE-WITH-FEEDBACK: verdictFeedback:true suppresses the stamp even though the artifact is approved", () => {
+    // The status handler posts its verdict note AFTER flipping to approved. An
+    // "Approve with modifications" note must read as review feedback, not a late
+    // follow-up — so the server-only verdictFeedback flag suppresses the stamp.
+    seedArtifact("art_awm", "plan", "approved");
+    const c = store.addComment({
+      id: "cmt_awm",
+      artifactId: "art_awm",
+      content: "approved, but rename the helper",
+      author: "human",
+      verdictFeedback: true,
+    });
+    expect("followUp" in c).toBe(false);
+  });
+
+  it("a GENUINELY-LATE comment on the SAME approved artifact (no verdictFeedback) still stamps — the lane still works", () => {
+    seedArtifact("art_late", "plan", "approved");
+    const c = store.addComment({
+      id: "cmt_late",
+      artifactId: "art_late",
+      content: "one more thought, later",
+      author: "human",
+    });
+    expect(c.followUp).toBe(true);
+  });
+
   it("STORE-AUTHORITATIVE: a client sending followUp:false on an APPROVED artifact still gets true", () => {
     seedArtifact("art_a", "changeset", "approved");
     const c = store.addComment({

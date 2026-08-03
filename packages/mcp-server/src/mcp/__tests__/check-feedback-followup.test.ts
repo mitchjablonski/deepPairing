@@ -42,7 +42,7 @@ describe("check_feedback — late follow-up lane (#187)", () => {
 
     const res = await callTool("check_feedback");
     // Prose: the item names the approved artifact + carries the guidance.
-    expect(res.text).toContain('[follow-up on the APPROVED artifact "Move TTL refresh into middleware"]');
+    expect(res.text).toContain('[follow-up on the APPROVED/RESOLVED artifact "Move TTL refresh into middleware"]');
     expect(res.text).toContain("one more thought on the sliding window");
     expect(res.text).toContain("FOLLOW-UP FEEDBACK");
     expect(res.text).toContain("NOT a review reopening");
@@ -66,11 +66,35 @@ describe("check_feedback — late follow-up lane (#187)", () => {
     } as any);
 
     const res = await callTool("check_feedback");
-    expect(res.text).toContain('[follow-up on the APPROVED artifact "Move TTL refresh into middleware"]');
+    expect(res.text).toContain('[follow-up on the APPROVED/RESOLVED artifact "Move TTL refresh into middleware"]');
     const sc = res.structuredContent as any;
     const q = sc.questions.find((q: any) => q.commentId === "cmt_fq");
     expect(q).toBeDefined();
     expect(q.followUp).toBe(true);
+  });
+
+  it("APPROVE-WITH-FEEDBACK verdict note (verdictFeedback) is delivered as NORMAL feedback — no prefix, no guidance", async () => {
+    const id = await presentChangeset();
+    await store.updateArtifactStatus(id, "approved", "ui_approve_button" as any);
+    // The status handler's own verdict note: posted AFTER the flip, marked
+    // verdictFeedback so the store does NOT stamp it despite the approved status.
+    await store.addComment({
+      id: "cmt_verdict",
+      artifactId: id,
+      content: "approved — but rename the helper first",
+      author: "human",
+      verdictFeedback: true,
+    } as any);
+
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain("approved — but rename the helper first");
+    // NOT dressed as a late follow-up: no prefix, no "NOT a review reopening" nudge.
+    expect(res.text).not.toContain("follow-up on the APPROVED/RESOLVED artifact");
+    expect(res.text).not.toContain("FOLLOW-UP FEEDBACK");
+    const sc = res.structuredContent as any;
+    const entry = sc.comments.find((c: any) => c.id === "cmt_verdict");
+    expect(entry).toBeDefined();
+    expect("followUp" in entry).toBe(false);
   });
 
   it("NORMAL delivery is byte-unchanged: a DRAFT-review comment has no prefix, no guidance, no structured flag", async () => {
@@ -84,7 +108,7 @@ describe("check_feedback — late follow-up lane (#187)", () => {
     } as any);
 
     const res = await callTool("check_feedback");
-    expect(res.text).not.toContain("follow-up on the APPROVED artifact");
+    expect(res.text).not.toContain("follow-up on the APPROVED/RESOLVED artifact");
     expect(res.text).not.toContain("FOLLOW-UP FEEDBACK");
 
     const sc = res.structuredContent as any;
