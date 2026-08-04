@@ -81,17 +81,55 @@ function describeDecisionSection(sectionId: string): string {
   return sectionId;
 }
 
+/** #193 E2 — resolve the title (`what`) of a per-ITEM debrief grain so delivery
+ *  reads the human back the specific item, not just the lane. `lane` is the
+ *  hyphenated grain key (`needs-your-eyes` / `decisions` / `deferred`); `i` is
+ *  0-based. Returns undefined when the artifact/item can't be located (delivery
+ *  then falls back to the lane + index alone). */
+function debriefItemTitle(art: Artifact | undefined, lane: string, i: number): string | undefined {
+  if (!art) return undefined;
+  const c = art.content as {
+    needsYourEyes?: Array<{ what?: string }>;
+    decisionsMade?: Array<{ what?: string }>;
+    deferred?: Array<{ what?: string }>;
+  } | null;
+  const arr =
+    lane === "needs-your-eyes" ? c?.needsYourEyes :
+    lane === "decisions" ? c?.decisionsMade :
+    lane === "deferred" ? c?.deferred :
+    undefined;
+  const what = arr?.[i]?.what;
+  return typeof what === "string" && what.trim().length > 0 ? what.trim() : undefined;
+}
+
 /**
  * #190 — a debrief GRAIN comment anchors to a PART of the debrief via a
  * `debrief:<section-key>` sectionId (a distinct namespace from decision grains).
  * Render the section so the agent knows WHICH part the human reacted to. Numeric
  * keys (`debrief:0` / `debrief:section:2`) name the ordered walk sections
  * 1-based; named keys (`debrief:summary`, `debrief:needs-your-eyes`) humanize.
+ *
+ * #193 E2 — a per-ITEM grain within an itemized lane
+ * (`debrief:needs-your-eyes:2`, `debrief:decisions:0`, `debrief:deferred:1`)
+ * reads the index back WITH the item's own title (`what`), so the agent knows
+ * which flagged item — e.g. `needs-your-eyes item #3: The expiry check`. The
+ * lane-level keys (`debrief:needs-your-eyes`) still deliver unchanged — old
+ * comments carry them (backcompat).
  */
-function describeDebriefSection(sectionId: string): string {
+function describeDebriefSection(sectionId: string, art?: Artifact): string {
   const key = sectionId.slice("debrief:".length);
-  const m = /^(?:section:)?(\d+)$/.exec(key);
-  if (m) return `section #${Number(m[1]) + 1}`;
+  // Ordered-walk sections: `0` / `section:2` → 1-based "section #n".
+  const numeric = /^(?:section:)?(\d+)$/.exec(key);
+  if (numeric) return `section #${Number(numeric[1]) + 1}`;
+  // #193 E2 — per-item grain: `<lane>:<index>` (lane is hyphen-lowercase).
+  const item = /^([a-z][a-z-]*):(\d+)$/.exec(key);
+  if (item) {
+    const lane = item[1]!;
+    const i = Number(item[2]);
+    const laneWords = lane.replace(/-/g, " ");
+    const title = debriefItemTitle(art, lane, i);
+    return title ? `${laneWords} item #${i + 1}: ${title}` : `${laneWords} item #${i + 1}`;
+  }
   return key.replace(/-/g, " ");
 }
 
@@ -314,7 +352,8 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // OWN block (distinct namespace: `debrief:*`, never optionId) so it can't
   // collide with the decision grain block above.
   if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
-    loc += ` — ${describeDebriefSection(c.target.sectionId)}`;
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    loc += ` — ${describeDebriefSection(c.target.sectionId, art)}`;
   }
   // #190 A2 — an explainer grain comment names the walk-through part it anchors
   // to. Its OWN block (distinct namespace: `explainer:*`, never optionId) so it

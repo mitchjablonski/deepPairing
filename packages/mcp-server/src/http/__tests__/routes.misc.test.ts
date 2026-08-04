@@ -52,6 +52,40 @@ describe("HTTP Routes", () => {
       const entry = store.getSessionMemory().rejectedApproaches.find((r) => r.description === "T2");
       expect(entry?.concept).toBe("agent fallback concept");
     });
+
+    // #193 E2 — the comprehension surfaces capture NO taste stance on reject:
+    // an explainer teaches existing code, a debrief accounts for finished work;
+    // neither proposes an approach. The store-authoritative guard refuses the
+    // ledger write even if the client sends a concept — the status still flips.
+    it("an EXPLAINER reject writes NO ledger stance (status still flips)", async () => {
+      store.createArtifact({
+        id: "art_ex_rej",
+        type: "explainer",
+        title: "How auth works",
+        content: { title: "How auth works", overview: "walk", sections: [{ heading: "s", body: "b" }] },
+      });
+      const res = await reject("art_ex_rej", { feedback: "redo it", concept: "should-not-persist" });
+      expect(res.status).toBe(200);
+      // Status landed…
+      const art = (await store.getArtifacts()).find((a) => a.id === "art_ex_rej");
+      expect(art?.status).toBe("rejected");
+      // …but nothing was recorded in the project ledger.
+      expect(store.getSessionMemory().rejectedApproaches.find((r) => r.description === "How auth works")).toBeUndefined();
+    });
+
+    it("a DEBRIEF reject writes NO ledger stance (status still flips)", async () => {
+      store.createArtifact({
+        id: "art_db_rej",
+        type: "debrief",
+        title: "Debrief — TTL refactor",
+        content: { summary: "moved TTL refresh" },
+      });
+      const res = await reject("art_db_rej", { feedback: "too terse — redo", concept: "should-not-persist" });
+      expect(res.status).toBe(200);
+      const art = (await store.getArtifacts()).find((a) => a.id === "art_db_rej");
+      expect(art?.status).toBe("rejected");
+      expect(store.getSessionMemory().rejectedApproaches.find((r) => r.description === "Debrief — TTL refactor")).toBeUndefined();
+    });
   });
 
   describe("POST /api/prompts", () => {

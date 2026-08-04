@@ -24986,6 +24986,10 @@ function detectAndRecordGateEscape(args) {
 }
 
 // src/store/file-store.ts
+var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
+  "explainer",
+  "debrief"
+]);
 var FileStore = class _FileStore {
   basePath;
   projectHint;
@@ -25907,6 +25911,10 @@ var FileStore = class _FileStore {
   }
   recordRejectedApproach(params) {
     const { description, reason, sourceArtifactId, concept } = params;
+    if (sourceArtifactId) {
+      const src = this.artifacts.find((a) => a.id === sourceArtifactId);
+      if (src && LEDGER_EXEMPT_REJECT_TYPES.has(src.type)) return;
+    }
     if (sourceArtifactId) {
       try {
         const trace = this.getPreflightTrace(sourceArtifactId);
@@ -27415,7 +27423,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find((a) => a.id === artifactId);
-      if (artifact && artifact.type !== "decision") {
+      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
+      } else if (artifact && artifact.type !== "decision") {
         const artConcept = artifact.content?.concept?.name;
         const changesetFallback = artifact.type === "changeset" ? artifact.title : void 0;
         const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;

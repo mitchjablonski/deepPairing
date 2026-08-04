@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
-import { FileStore } from "../store/file-store.js";
+import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import {
@@ -819,7 +819,16 @@ export function createHttpRoutes(
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
       const artifact = artifacts.find((a) => a.id === artifactId);
-      if (artifact && artifact.type !== "decision") {
+      // #193 E2 — the comprehension surfaces capture NO taste stance on reject
+      // (see LEDGER_EXEMPT_REJECT_TYPES): an explainer teaches existing code, a
+      // debrief accounts for finished work — neither proposes an approach. The
+      // plain `rejected` status already landed above; here we skip BOTH the
+      // ledger write and its `ledger_write` broadcast so nothing misreports a
+      // stance being remembered. recordRejectedApproach guards this
+      // authoritatively too — this is the belt to its suspenders.
+      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
+        // no-op — status flip only, no cross-project stance
+      } else if (artifact && artifact.type !== "decision") {
         // The cross-project ledger key, in priority order:
         //   1. the HUMAN-named concept from the reject prompt (the whole point
         //      — the user phrases the pattern they're rejecting, so a future

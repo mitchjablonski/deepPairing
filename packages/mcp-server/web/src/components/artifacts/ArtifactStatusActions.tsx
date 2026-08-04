@@ -12,6 +12,23 @@ interface ArtifactStatusActionsProps {
    *  would silently approve the plan as-is and discard the human's step
    *  deselections. Reject / Request changes / Respond / Ask stay available. */
   hideApprove?: boolean;
+  /** #193 E2 — the read-only comprehension lifecycle (the EXPLAINER). Replaces
+   *  the verdict triad entirely with an ACKNOWLEDGE footer: one primary "Got it"
+   *  (approves under the hood — reuses the status machinery, relabeled) plus a
+   *  secondary "Ask more" that focuses the artifact's ask-anything composer.
+   *  NO Reject, NO Request-changes — nothing here proposes an approach, so there
+   *  is no taste stance to capture and no redraft to demand. */
+  acknowledgeMode?: boolean;
+  /** #193 E2 — called when the human clicks "Ask more" in acknowledge mode; the
+   *  parent focuses its ask-anything composer. */
+  onAskMore?: () => void;
+  /** #193 E2 — suppress the reject-concept ("name the pattern") ledger capture
+   *  (the DEBRIEF). The debrief keeps Approve / Request-changes / Reject, but a
+   *  rejected debrief is an account of finished work, not a proposed approach —
+   *  so Reject records NO cross-project taste stance. Reject becomes a one-step
+   *  "redo the digest" (the typed reason rides along); the plain rejected status
+   *  still lands. The server guards this authoritatively too. */
+  suppressRejectConcept?: boolean;
 }
 
 const COUNTDOWN_SECONDS = 10;
@@ -133,7 +150,13 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
   }
 }
 
-export function ArtifactStatusActions({ artifact, hideApprove = false }: ArtifactStatusActionsProps) {
+export function ArtifactStatusActions({
+  artifact,
+  hideApprove = false,
+  acknowledgeMode = false,
+  onAskMore,
+  suppressRejectConcept = false,
+}: ArtifactStatusActionsProps) {
   // F12 — replay renders HISTORICAL artifacts through the live components,
   // and F6 owner-routing means a footer click would write a verdict into a
   // long-exited session's store. The whole footer goes read-only.
@@ -347,7 +370,11 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
         className="flex items-center gap-2 pt-2 border-t border-border-default animate-approved rounded p-2 focus:outline-none"
       >
         <span className="text-accent-green text-sm">&#10003;</span>
-        <span className="text-xs text-accent-green font-medium">Approved</span>
+        {/* #193 E2 — in acknowledge mode "approved" reads as "read + understood",
+            not a verdict. The chip says "Read" — the SAME word the header chip
+            uses (statusLabelFor), so the acknowledged state reads coherently in
+            both places (the button that got here is "Got it"). */}
+        <span className="text-xs text-accent-green font-medium">{acknowledgeMode ? "Read" : "Approved"}</span>
       </div>
     );
   }
@@ -425,7 +452,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       }
       // On reject, carry the human-named pattern as the ledger key (empty →
       // server falls back to the agent's concept, then the title).
-      const concept = action === "rejected" ? rejectConcept.trim() || undefined : undefined;
+      // #193 E2 — a debrief reject (suppressRejectConcept) records NO stance, so
+      // never send a concept; the server refuses it too, but don't even offer it.
+      const concept = action === "rejected" && !suppressRejectConcept ? rejectConcept.trim() || undefined : undefined;
       await updateArtifactStatus(artifact.id, action, trimmedComment || undefined, concept);
       dispatch({ type: "actionSucceeded" }); // only on success — a failed action keeps the text to retry
     } catch {
@@ -440,7 +469,13 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
   // Reject is two-step: the first click reveals the "name the pattern" field
   // (pre-filled with the agent's concept); the confirm click does the reject.
-  const beginReject = () => dispatch({ type: "beginReject", concept: agentConcept ?? "" });
+  // #193 E2 — a debrief reject captures no stance, so there's no pattern to
+  // name: skip the second step and reject in one click (the typed reason rides
+  // along as "redo the digest" feedback).
+  const beginReject = () =>
+    suppressRejectConcept
+      ? handleAction("rejected")
+      : dispatch({ type: "beginReject", concept: agentConcept ?? "" });
 
   /**
    * "Respond" — post the comment to the artifact WITHOUT changing status.
@@ -481,6 +516,63 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
     }
   };
 
+  /**
+   * #193 E2 — "Got it": acknowledge the read-only comprehension artifact. Marks
+   * it approved under the hood (reusing the exact status machinery), which drains
+   * it from the "waiting on you" queue — the artifact WAS the human's turn (read
+   * it), and clicking Got it hands the turn back. No comment, no verdict semantics.
+   */
+  const handleAcknowledge = async () => {
+    dispatch({ type: "submitStart" });
+    try {
+      await updateArtifactStatus(artifact.id, "approved");
+      dispatch({ type: "actionSucceeded" });
+    } catch {
+      // store already toasted; keep the panel usable (see handleAction)
+    } finally {
+      dispatch({ type: "submitEnd" });
+    }
+  };
+
+  // #193 E2 — the EXPLAINER's acknowledge footer: a lightened, verdict-free bar.
+  // "Got it" (approves) + "Ask more" (focuses the ask-anything composer). Sits in
+  // the same sticky slot as the verdict footer but carries no textarea, no
+  // reject, no request-changes — the read-only teaching artifact is the human's
+  // to READ, then dismiss, not to adjudicate.
+  if (acknowledgeMode) {
+    return (
+      <>
+        <div ref={sentinelRef} aria-hidden className="h-px" />
+        <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default">
+          <div className="flex items-center gap-2 pb-1">
+            <button
+              onClick={handleAcknowledge}
+              disabled={submitting}
+              className="px-3 py-1.5 text-xs font-medium text-accent-green rounded border border-accent-green/40
+                         hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+              title="Mark this walk-through read — hands the turn back to the agent"
+            >
+              &#10003; Got it
+            </button>
+            {onAskMore && (
+              <button
+                onClick={onAskMore}
+                className="px-2.5 py-1 text-2xs font-medium text-text-secondary rounded border border-border-default
+                           hover:text-text-primary hover:bg-surface-hover transition-all duration-[180ms] ease-out press-scale"
+                title="Ask a follow-up — jumps to the ask-anything box"
+              >
+                Ask more
+              </button>
+            )}
+            <span className="text-2xs text-text-muted ml-auto" aria-hidden>
+              Read-only — nothing to approve or reject
+            </span>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     // B2 — STICKY at the bottom of the scrolling detail pane. On a long
     // artifact (10 findings, a multi-file plan) the review actions — and worse,
@@ -516,7 +608,11 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
                        hover:text-text-primary hover:bg-surface-hover transition-all duration-[180ms] ease-out press-scale"
             title="Respond, request changes, or reject — opens the full review panel"
           >
-            Respond / request changes / reject…
+            {/* #193 E2 (M6) — verb-lexicon coherence: the slim bar now names the
+                SAME cased verbs the expanded panel's buttons carry (Respond /
+                Request changes / Reject), so one control doesn't advertise two
+                different verb sets. */}
+            Respond / Request changes / Reject…
           </button>
           <span className="text-2xs text-text-muted ml-auto" aria-hidden>
             ▼ full review at the end
@@ -618,7 +714,15 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             disabled={submitting || !comment.trim() || rejecting}
             className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
                        hover:bg-accent-red-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-            title={comment.trim() ? "Reject and remember this pattern across sessions" : "Add a reason first"}
+            title={
+              !comment.trim()
+                ? "Add a reason first"
+                : suppressRejectConcept
+                  // #193 E2 — a debrief reject is "redo this write-up", not a
+                  // remembered rule: no cross-project stance is recorded.
+                  ? "Reject — asks for a redo of this digest (records no cross-project rule)"
+                  : "Reject and remember this pattern across sessions"
+            }
           >
             Reject
           </button>
@@ -642,8 +746,10 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
       </div>
 
       {/* Reject confirm: name the pattern (the cross-project ledger key) so a
-          future paraphrase gets caught — not just this artifact's title. */}
-      {rejecting && (
+          future paraphrase gets caught — not just this artifact's title.
+          #193 E2 — never shown when reject captures no stance (debrief):
+          beginReject rejects in one step there, so this panel stays closed. */}
+      {rejecting && !suppressRejectConcept && (
         <div className="space-y-1.5 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
           <label htmlFor="reject-concept" className="block text-2xs font-medium text-text-secondary">
             What pattern are you rejecting?{" "}
@@ -703,7 +809,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
 
       {!comment.trim() && (
         <div className="text-2xs text-text-muted">
-          ⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)
+          {suppressRejectConcept
+            ? "⌘⏎ on empty input approves · Reject / Request changes need a reason (redo the digest)"
+            : "⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)"}
         </div>
       )}
       </>

@@ -72,13 +72,22 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
   // title already exists (a revision that should supersede, not re-post).
   const nudge = await revisionNudge(ctx.store, "explainer", title, id);
   const sectionCount = sections?.length ?? 0;
+  // #193 E2 — pull-first call-to-action nudge (a WARNING, never a rejection).
+  // An explainer with no suggestedQuestions and no chips is the reasoning-card
+  // failure mode: agent-pushed, no call to action, read by ~nobody. We can't see
+  // from here whether the human explicitly asked, so we don't block — we remind:
+  // if you initiated this yourself, seed suggestedQuestions so it has a CTA.
+  const ctaNudge =
+    (suggestedQuestions?.length ?? 0) === 0
+      ? ` ⚠ No suggestedQuestions — if you initiated this explainer yourself (not on an explicit "explain X" ask), add 2–3 so it has a call to action; a no-CTA agent-pushed explainer is the reasoning-card 1%-engagement trap.`
+      : "";
   return {
     content: [{
       type: "text",
       text:
         `Explainer "${artifact.title}" presented for review (${id}) — a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. ` +
         `The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. ` +
-        `Call check_feedback for their questions and comments.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions and comments.${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

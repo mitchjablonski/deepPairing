@@ -547,6 +547,56 @@ const scenarios: Scenario[] = [
       });
     },
   },
+  {
+    // #193 E2 — PER-ITEM debrief grain: `debrief:needs-your-eyes:<i>` and
+    // `debrief:decisions:<i>` resolve the item's own title (`what`) back with the
+    // lane, so the agent hears WHICH flagged item, not just the lane. A
+    // lane-level key (`debrief:deferred`, backcompat) still delivers unchanged.
+    name: "debrief_per_item_grain",
+    seed: (store) => {
+      store.createArtifact({
+        id: "art_dbi",
+        type: "debrief",
+        title: "Debrief — per-item grain",
+        content: {
+          summary: "Moved the TTL refresh into middleware.",
+          decisionsMade: [
+            { what: "fail closed on expiry", why: "safer default" },
+            { what: "clear the cookie on 401", why: "no stale session lingers" },
+          ],
+          needsYourEyes: [
+            { what: "The expiry check in the middleware diff", why: "auth path for every route" },
+            { what: "The new session.test.ts", why: "asserts the sliding window" },
+          ],
+          deferred: [{ what: "Refresh-token rotation", why: "out of scope" }],
+        },
+      });
+      // Per-item grain on needsYourEyes item #2 (0-based index 1).
+      store.addComment({
+        id: "cmt_dbi_eyes",
+        artifactId: "art_dbi",
+        content: "checked — the test covers the boundary",
+        author: "human",
+        target: { artifactId: "art_dbi", sectionId: "debrief:needs-your-eyes:1" },
+      });
+      // Per-item grain on decisionsMade item #1 (0-based index 0).
+      store.addComment({
+        id: "cmt_dbi_dec",
+        artifactId: "art_dbi",
+        content: "agree, fail closed is right",
+        author: "human",
+        target: { artifactId: "art_dbi", sectionId: "debrief:decisions:0" },
+      });
+      // Lane-level key (backcompat) — still delivers with the humanized lane name.
+      store.addComment({
+        id: "cmt_dbi_lane",
+        artifactId: "art_dbi",
+        content: "maybe pull rotation forward",
+        author: "human",
+        target: { artifactId: "art_dbi", sectionId: "debrief:deferred" },
+      });
+    },
+  },
 ];
 
 describe("#188 — check_feedback byte-parity golden pins", () => {
@@ -570,6 +620,8 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
     debrief_grain_and_ask_anything: { prose: "44ff3814640812b73a02392dca742d42f4976784218104110186351495913bc9", struct: "a427507adc25895fc03114459c742c97d7b844062c1e20a80fd67d495f977183" },
     // #190 A2 — NEW golden (14→15): captured against THIS tree's explainer delivery.
     explainer_grain_and_ask_anything: { prose: "15a9549237fdc4658e97567d9f4da821788552a41c4fafa6e9dc5453cef14e39", struct: "5a83e0d5794392fca0e40522b57a6a9cc05214232f13e22af9920806da0dbac5" },
+    // #193 E2 — NEW golden (15→16): per-item debrief grain delivery.
+    debrief_per_item_grain: { prose: "bb0995c0e54d14c13fd6e1d5fdf1b70fa740b86391f55926ae577dc659ba322a", struct: "1d885f1e452348eab95575e0d05544e5d6c39ccff9220aa4f0fe9da9216fa078" },
   };
 
   let idx = 0;

@@ -170,6 +170,49 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
 
   return (
     <div className="space-y-4">
+      {/* #193 E2 (usability M4) — "Needs your eyes" renders ABOVE the fold, before
+          the narrative and the walk. "What do I actually have to look at?" must
+          not require scrolling past everything the agent already handled. Each
+          item carries its OWN per-item grain (`debrief:needs-your-eyes:<i>`) so a
+          comment anchors to the specific flagged item, not the whole lane. */}
+      {needsYourEyes.length > 0 && (
+        <section
+          data-comment-anchor="debrief:needs-your-eyes"
+          className="bg-surface-secondary rounded-lg border border-accent-blue/25 p-3.5 space-y-2"
+        >
+          <h4 className="text-xs font-semibold text-accent-blue uppercase tracking-wide">Needs your eyes</h4>
+          <ol className="space-y-2 list-none">
+            {needsYourEyes.map((item, i) => (
+              <li
+                key={i}
+                data-testid="debrief-needs-eyes"
+                className="rounded-md border-l-2 border-accent-blue bg-accent-blue-dim/15 p-2.5 space-y-1"
+              >
+                <div className="flex items-start gap-2">
+                  <span className="text-2xs font-bold text-accent-blue mt-0.5 shrink-0">{i + 1}</span>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="text-xs font-medium text-text-primary">{item.what}</div>
+                    <div className="text-2xs text-text-secondary">
+                      <span className="text-text-muted">Why: </span>
+                      {item.why}
+                    </div>
+                    {item.artifactRef && (
+                      <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
+                    )}
+                    <BlockGrain
+                      artifactId={artifact.id}
+                      sectionId={`debrief:needs-your-eyes:${i}`}
+                      label={item.what || `needs-your-eyes item ${i + 1}`}
+                      comments={comments}
+                    />
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
       {/* Summary — the narrative headline, always present. */}
       <DebriefBlock
         artifactId={artifact.id}
@@ -239,14 +282,14 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
       )}
 
       {/* Decisions I made on my own — the accountability block, visually
-          distinct (amber, the "look here" tone). */}
+          distinct (amber, the "look here" tone). #193 E2 — per-item grain
+          (`debrief:decisions:<i>`) so pushback anchors to the specific call. */}
       {decisionsMade.length > 0 && (
-        <DebriefBlock
-          artifactId={artifact.id}
-          sectionId="debrief:decisions"
-          title="Calls I made on my own"
-          comments={comments}
+        <section
+          data-comment-anchor="debrief:decisions"
+          className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2"
         >
+          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">Calls I made on my own</h4>
           <p className="text-2xs text-text-muted -mt-1">
             Decisions I took without checking with you first — push back if any of these are wrong.
           </p>
@@ -268,67 +311,49 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                     {d.alternative}
                   </div>
                 )}
+                <BlockGrain
+                  artifactId={artifact.id}
+                  sectionId={`debrief:decisions:${i}`}
+                  label={d.what || `decision ${i + 1}`}
+                  comments={comments}
+                />
               </div>
             ))}
           </div>
-        </DebriefBlock>
+        </section>
       )}
 
-      {/* Needs your eyes — the prioritized review list, each item linking to
-          its underlying artifact. */}
-      {needsYourEyes.length > 0 && (
-        <DebriefBlock
-          artifactId={artifact.id}
-          sectionId="debrief:needs-your-eyes"
-          title="Needs your eyes"
-          comments={comments}
+      {/* Deferred — what I left undone + why. #193 E2 — per-item grain
+          (`debrief:deferred:<i>`) so a "actually, do this now" anchors to the
+          specific item. */}
+      {deferred.length > 0 && (
+        <section
+          data-comment-anchor="debrief:deferred"
+          className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2"
         >
-          <ol className="space-y-2 list-none">
-            {needsYourEyes.map((item, i) => (
-              <li
-                key={i}
-                data-testid="debrief-needs-eyes"
-                className="rounded-md border-l-2 border-accent-blue bg-accent-blue-dim/15 p-2.5 space-y-1"
-              >
+          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">Left for later</h4>
+          <ul className="space-y-2">
+            {deferred.map((d, i) => (
+              <li key={i} data-testid="debrief-deferred" className="text-xs text-text-secondary space-y-1">
                 <div className="flex items-start gap-2">
-                  <span className="text-2xs font-bold text-accent-blue mt-0.5 shrink-0">{i + 1}</span>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="text-xs font-medium text-text-primary">{item.what}</div>
-                    <div className="text-2xs text-text-secondary">
-                      <span className="text-text-muted">Why: </span>
-                      {item.why}
-                    </div>
-                    {item.artifactRef && (
-                      <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
-                    )}
-                  </div>
+                  <span className="text-text-muted mt-0.5 shrink-0" aria-hidden="true">•</span>
+                  <span>
+                    <span className="font-medium text-text-primary">{d.what}</span>
+                    <span className="text-text-muted"> — {d.why}</span>
+                  </span>
+                </div>
+                <div className="pl-4">
+                  <BlockGrain
+                    artifactId={artifact.id}
+                    sectionId={`debrief:deferred:${i}`}
+                    label={d.what || `deferred item ${i + 1}`}
+                    comments={comments}
+                  />
                 </div>
               </li>
             ))}
-          </ol>
-        </DebriefBlock>
-      )}
-
-      {/* Deferred — what I left undone + why. */}
-      {deferred.length > 0 && (
-        <DebriefBlock
-          artifactId={artifact.id}
-          sectionId="debrief:deferred"
-          title="Left for later"
-          comments={comments}
-        >
-          <ul className="space-y-1.5">
-            {deferred.map((d, i) => (
-              <li key={i} data-testid="debrief-deferred" className="text-xs text-text-secondary flex items-start gap-2">
-                <span className="text-text-muted mt-0.5 shrink-0" aria-hidden="true">•</span>
-                <span>
-                  <span className="font-medium text-text-primary">{d.what}</span>
-                  <span className="text-text-muted"> — {d.why}</span>
-                </span>
-              </li>
-            ))}
           </ul>
-        </DebriefBlock>
+        </section>
       )}
 
       {/* Open questions — MY questions for YOU. Reuse the shared
@@ -352,8 +377,12 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
       )}
 
       {/* Ask-anything thread — questions post with intent:"question" (the
-          question-priority lane) via CommentThread's secondary submit. */}
-      <div className="pt-3 border-t border-border-default space-y-2">
+          question-priority lane) via CommentThread's secondary submit.
+          #193 E2 (M2) — this IS the debrief's artifact-level comment surface:
+          ArtifactPanel folds its separate "Comments" thread away for this type,
+          so there's ONE conversational composer. A heavier top border visually
+          separates the conversation from the verdict bar below. */}
+      <div className="pt-3 border-t-2 border-accent-violet/20 space-y-2" data-testid="debrief-ask-anything">
         <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
           Ask me anything
         </h4>
@@ -378,8 +407,13 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
         />
       </div>
 
-      {/* Unified verb triad — Approve / Request changes / Reject. */}
-      <ArtifactStatusActions artifact={artifact} />
+      {/* Verdict bar — Approve / Request changes / Reject. #193 E2 (coverage M2)
+          — a rejected debrief means "redo this digest", NOT "never do it this
+          way again": it's an account of finished work, not a proposed approach.
+          So `suppressRejectConcept` de-fangs Reject — no "name the pattern"
+          cross-project ledger capture (the server guards this authoritatively
+          too). Approve / Request-changes stay fully meaningful. */}
+      <ArtifactStatusActions artifact={artifact} suppressRejectConcept />
     </div>
   );
 }

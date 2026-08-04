@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Artifact, PlanVisual, PlanVisualFile } from "@deeppairing/shared";
-import { coercePlanContent, coerceSpecContent, coerceDecisionContent } from "@deeppairing/shared";
+import { coercePlanContent, coerceSpecContent, coerceDecisionContent, coerceExplainerContent, coerceDebriefContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { VisualBody } from "./ArtifactVisuals";
 
@@ -77,6 +77,52 @@ function bodyOf(a: Artifact): { title: string; items: DiffItem[] } | null {
         detail: `${o.description}|${JSON.stringify(o.pros)}|${JSON.stringify(o.cons)}|${o.recommendation}`,
       })),
     };
+  }
+  // #193 E2 — an EXPLAINER is a section-list; SKILL steers superseding one over
+  // re-posting, so a revision must show its structural delta. Keyed by heading,
+  // detail = the section body (+ overview as its own entry) so a reworded step
+  // reads as "changed", a new/dropped step as +/−.
+  if (a.type === "explainer") {
+    const c = coerceExplainerContent(a.content);
+    const items: DiffItem[] = [
+      { key: "overview", label: "Overview", detail: norm(c.overview) },
+      ...(c.sections ?? []).map((s, i) => ({
+        key: norm(s.heading) || `section-${i}`,
+        label: s.heading || `Section ${i + 1}`,
+        detail: norm(s.body),
+      })),
+    ];
+    return { title: "Sections", items };
+  }
+  // #193 E2 — a DEBRIEF is diffed LANE-BY-LANE: summary, each walk section, each
+  // call/needs-eyes/deferred item, keyed with a lane prefix so a changed
+  // decision reads distinctly from a changed section (the label names the lane).
+  if (a.type === "debrief") {
+    const c = coerceDebriefContent(a.content);
+    const items: DiffItem[] = [
+      { key: "summary", label: "Summary", detail: norm(c.summary) },
+      ...(c.sections ?? []).map((s, i) => ({
+        key: `section:${norm(s.title) || i}`,
+        label: `Section · ${s.title || `#${i + 1}`}`,
+        detail: `${norm(s.body)}|${JSON.stringify((s.concepts ?? []).map((x) => x.name))}`,
+      })),
+      ...(c.decisionsMade ?? []).map((d, i) => ({
+        key: `decision:${norm(d.what) || i}`,
+        label: `Call · ${d.what || `#${i + 1}`}`,
+        detail: `${norm(d.why)}|${norm(d.alternative)}`,
+      })),
+      ...(c.needsYourEyes ?? []).map((d, i) => ({
+        key: `eyes:${norm(d.what) || i}`,
+        label: `Needs eyes · ${d.what || `#${i + 1}`}`,
+        detail: norm(d.why),
+      })),
+      ...(c.deferred ?? []).map((d, i) => ({
+        key: `deferred:${norm(d.what) || i}`,
+        label: `Deferred · ${d.what || `#${i + 1}`}`,
+        detail: norm(d.why),
+      })),
+    ];
+    return { title: "Debrief", items };
   }
   return null;
 }

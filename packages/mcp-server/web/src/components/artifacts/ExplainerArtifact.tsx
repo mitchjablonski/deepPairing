@@ -162,6 +162,10 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
   // nonce on each click so CommentThread's prefill effect fires per click.
   const [prefill, setPrefill] = useState<{ text: string; nonce: number }>({ text: "", nonce: 0 });
 
+  // #193 E2 — "Ask more" (the acknowledge footer's secondary) jumps the reader
+  // to the ask-anything composer. Bump this to focus it without touching the draft.
+  const [askFocus, setAskFocus] = useState(0);
+
   return (
     <div className="space-y-4">
       {/* Overview — "what you're about to read", always present. */}
@@ -240,8 +244,11 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
 
       {/* Ask-anything thread — questions post with intent:"question" (the
           question-priority lane) via CommentThread's secondary submit. The
-          suggestedQuestions render as one-click chips that prefill the composer. */}
-      <div className="pt-3 border-t border-border-default space-y-2">
+          suggestedQuestions render as one-click chips that prefill the composer.
+          #193 E2 — this IS the artifact-level comment surface for the explainer:
+          ArtifactPanel folds its separate "Comments" thread away for this type,
+          so the reader has ONE conversational composer, not two. */}
+      <div className="pt-3 border-t-2 border-accent-blue/20 space-y-2" data-testid="explainer-ask-anything">
         <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
           Ask me anything
         </h4>
@@ -284,12 +291,21 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
           secondarySubmitLabel="Ask"
           secondarySubmitTitle="Ask the agent a question about this explainer"
           prefill={prefill.nonce > 0 ? prefill : undefined}
+          focusSignal={askFocus > 0 ? askFocus : undefined}
           roomy
         />
       </div>
 
-      {/* Unified verb triad — Approve / Request changes / Reject. */}
-      <ArtifactStatusActions artifact={artifact} />
+      {/* #193 E2 — the explainer is a read-only TEACHING artifact: no approach is
+          being proposed, so there's nothing to approve/reject/request-changes.
+          The footer is an ACKNOWLEDGE bar — "Got it" (marks it read; hands the
+          turn back) + "Ask more" (jumps to the composer above). It STAYS a
+          "waiting on you" item until acknowledged — reading it IS your turn. */}
+      <ArtifactStatusActions
+        artifact={artifact}
+        acknowledgeMode
+        onAskMore={() => setAskFocus((n) => n + 1)}
+      />
     </div>
   );
 }

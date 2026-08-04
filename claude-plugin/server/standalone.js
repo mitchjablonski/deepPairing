@@ -29433,10 +29433,25 @@ function describeDecisionSection(sectionId) {
   if (sectionId === "summary") return "summary";
   return sectionId;
 }
-function describeDebriefSection(sectionId) {
+function debriefItemTitle(art, lane, i) {
+  if (!art) return void 0;
+  const c = art.content;
+  const arr2 = lane === "needs-your-eyes" ? c?.needsYourEyes : lane === "decisions" ? c?.decisionsMade : lane === "deferred" ? c?.deferred : void 0;
+  const what = arr2?.[i]?.what;
+  return typeof what === "string" && what.trim().length > 0 ? what.trim() : void 0;
+}
+function describeDebriefSection(sectionId, art) {
   const key = sectionId.slice("debrief:".length);
-  const m = /^(?:section:)?(\d+)$/.exec(key);
-  if (m) return `section #${Number(m[1]) + 1}`;
+  const numeric = /^(?:section:)?(\d+)$/.exec(key);
+  if (numeric) return `section #${Number(numeric[1]) + 1}`;
+  const item = /^([a-z][a-z-]*):(\d+)$/.exec(key);
+  if (item) {
+    const lane = item[1];
+    const i = Number(item[2]);
+    const laneWords = lane.replace(/-/g, " ");
+    const title = debriefItemTitle(art, lane, i);
+    return title ? `${laneWords} item #${i + 1}: ${title}` : `${laneWords} item #${i + 1}`;
+  }
   return key.replace(/-/g, " ");
 }
 function describeExplainerSection(sectionId) {
@@ -29568,7 +29583,8 @@ ${s.replacementText}${note ? `
     loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
   }
   if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
-    loc += ` \u2014 ${describeDebriefSection(c.target.sectionId)}`;
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    loc += ` \u2014 ${describeDebriefSection(c.target.sectionId, art)}`;
   }
   if (c.target.sectionId && c.target.sectionId.startsWith("explainer:")) {
     loc += ` \u2014 ${describeExplainerSection(c.target.sectionId)}`;
@@ -30958,10 +30974,11 @@ async function handlePresentExplainer(ctx, args) {
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "explainer", title, id);
   const sectionCount = sections?.length ?? 0;
+  const ctaNudge = (suggestedQuestions?.length ?? 0) === 0 ? ` \u26A0 No suggestedQuestions \u2014 if you initiated this explainer yourself (not on an explicit "explain X" ask), add 2\u20133 so it has a call to action; a no-CTA agent-pushed explainer is the reasoning-card 1%-engagement trap.` : "";
   return {
     content: [{
       type: "text",
-      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions and comments.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions and comments.${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }

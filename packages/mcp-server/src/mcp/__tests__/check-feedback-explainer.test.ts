@@ -51,6 +51,32 @@ describe("present_explainer — non-blocking record", () => {
   });
 });
 
+describe("present_explainer — pull-first call-to-action nudge (#193 E2)", () => {
+  it("warns (not rejects) when an explainer has zero suggestedQuestions", async () => {
+    const res = await callTool("present_explainer", {
+      title: "How X works",
+      overview: "the walk-through of X",
+      sections: [{ heading: "1. start", body: "here's where it begins" }],
+      // no suggestedQuestions
+    });
+    // A WARNING, never a rejection: the artifact still records.
+    expect(res.isError).toBeFalsy();
+    expect(res.text).toContain("No suggestedQuestions");
+    expect(store.getArtifacts().find((a) => a.type === "explainer")!.status).toBe("draft");
+  });
+
+  it("suppresses the nudge when suggestedQuestions seed the ask-anything chips", async () => {
+    const res = await callTool("present_explainer", {
+      title: "How Y works",
+      overview: "the walk-through of Y",
+      sections: [{ heading: "1. start", body: "begins here" }],
+      suggestedQuestions: ["Where does it start?"],
+    });
+    expect(res.isError).toBeFalsy();
+    expect(res.text).not.toContain("No suggestedQuestions");
+  });
+});
+
 describe("check_feedback — rejected explainer (#190 A2)", () => {
   it("a rejected explainer gets the 'Do NOT apply' posture, not 'You may proceed'", async () => {
     const id = await presentExplainer();
