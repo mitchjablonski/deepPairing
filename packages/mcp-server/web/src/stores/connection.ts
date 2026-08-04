@@ -4,6 +4,7 @@ import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
 import { pushDaemonRestartToast } from "../lib/daemon-restart";
+import { noAgentLive } from "../lib/liveness";
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -362,7 +363,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             // agent has exited (the composer right below already says so). Branch
             // the copy on the SAME liveness predicate ResumeQuestionsBanner uses:
             // no live session ⇒ the message waits for a resume, not a poll.
-            const agentLive = get().activeSessions.some((s) => s.live !== false);
+            const agentLive = !noAgentLive(get().activeSessions);
             import("./toast").then(({ useToastStore }) => {
               useToastStore.getState().push({
                 kind: "info",

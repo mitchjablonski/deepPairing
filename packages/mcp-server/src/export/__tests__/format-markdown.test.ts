@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatSessionMarkdown } from "../format-markdown.js";
+import { formatSessionMarkdown, neutralizeVoice } from "../format-markdown.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function makeState(overrides: {
@@ -456,6 +456,113 @@ describe("formatSessionMarkdown", () => {
     it("full export KEEPS the pair voice (faithful session record)", () => {
       const md = formatSessionMarkdown(makeState({ artifacts: [voiceDebrief] }), "full");
       expect(md).toContain("You rejected the global ConfigStore, so I pivoted to a lazy loader.");
+    });
+  });
+
+  // F2 (#196 M1, hardened in review #232) — neutralizeVoice must not mangle
+  // ordinary pair prose. The pre-fix rules glued "'re"/"'ll" onto noun phrases,
+  // rewrote code identifiers, and split "I/O". These pin the fixes.
+  describe("#196 F2 — neutralizeVoice hostile repro", () => {
+    // A glued contraction ("the pair're", "the reviewer'll") is a rule gap.
+    // NB: possessives ("the reviewer's", "the pair's") are LEGITIMATE, so the
+    // guard targets contraction remnants (re|ll|ve|d) only — not a bare "'".
+    const GLUED = /\bthe (?:reviewer|pair|agent)['’](?:re|ll|ve|d)\b/;
+
+    it("expands you/we/I contractions instead of gluing them onto a noun phrase", () => {
+      const out = neutralizeVoice("We're refactoring so you'll get testable config; you've seen we'll batch it, and we'd cache your results. I've moved it and I'd defer the rest.");
+      expect(out).not.toMatch(GLUED);
+      expect(out).toContain("The pair is refactoring");
+      expect(out).toContain("the reviewer will get testable config");
+      expect(out).toContain("the reviewer has seen");
+      expect(out).toContain("the pair will batch it");
+      expect(out).toContain("the pair would cache the reviewer's results");
+      expect(out).toContain("The agent has moved it");
+      expect(out).toContain("the agent would defer the rest");
+    });
+
+    it("leaves code identifiers untouched — inline spans AND fenced blocks", () => {
+      const inline = neutralizeVoice("Call `you.method()` to read your config.");
+      expect(inline).toContain("`you.method()`");
+      expect(inline).toContain("the reviewer's config");
+      const fenced = neutralizeVoice("```ts\nconst you = 1; // we keep this and your setting\n```\nAfter, you review it.");
+      expect(fenced).toContain("const you = 1; // we keep this and your setting");
+      expect(fenced).toContain("the reviewer review it"); // prose after the block IS transformed
+      expect(fenced).not.toMatch(GLUED);
+    });
+
+    it("does not split 'I/O' (slash-adjacent capital I is not a pronoun)", () => {
+      const out = neutralizeVoice("I/O bound work: you've profiled it.");
+      expect(out).toContain("I/O bound work");
+      expect(out).not.toContain("the agent/O");
+    });
+
+    it("the reviewer's exact ADR repro produces sane English + no rewritten identifiers", () => {
+      const adrProse = "We're moving config to a loader. You'll call `you.method()`; the `we` var is gone. I/O is unchanged, and you've approved it.";
+      const state = makeState({
+        artifacts: [makeArtifact("research", "Config audit", {
+          summary: adrProse,
+          findings: [{ category: "Architecture", detail: adrProse, significance: "high" }],
+        })],
+      });
+      const md = formatSessionMarkdown(state, "adr");
+      expect(md).not.toMatch(GLUED);
+      expect(md).toContain("`you.method()`"); // identifier preserved
+      expect(md).toContain("the `we` var is gone"); // inline-code `we` preserved
+      expect(md).toContain("I/O is unchanged");
+      expect(md).toContain("The pair is moving config");
+      expect(md).toContain("the reviewer has approved it");
+      expect(md).not.toMatch(/\bYou\b/);
+    });
+
+    it("re-capitalizes sentence starts but not after an inline code span mid-sentence", () => {
+      const out = neutralizeVoice("You did X. call `foo()` and you continue.");
+      expect(out).toContain("The reviewer did X.");
+      // The word after the inline span stays lowercase (mid-sentence).
+      expect(out).toContain("and the reviewer continue");
+    });
+  });
+
+  // F2 (#196 Fix 3, review #232) — decisions whose owning artifact was
+  // rejected/retracted must not read as shipped in external formats.
+  describe("#196 F2 — rejected decisions are gated (via decision.artifactId link)", () => {
+    const mkDecision = (over: any = {}) => ({
+      decisionId: "d_rej",
+      artifactId: "art_dec_rej",
+      context: "Where do rate-limit counters live?",
+      options: [{ id: "a", title: "Redis", description: "shared" }, { id: "b", title: "In-process", description: "per-node" }],
+      response: { optionId: "a", reasoning: "shared store" },
+      createdAt: "2026-01-01T00:00:00Z",
+      ...over,
+    });
+
+    it("pr-description + adr EXCLUDE a decision whose artifact is rejected", () => {
+      const state = makeState({
+        artifacts: [makeArtifact("decision", "Counter store", {}, "rejected")],
+        decisions: [mkDecision()],
+      });
+      state.artifacts[0]!.id = "art_dec_rej";
+      const pr = formatSessionMarkdown(state, "pr-description");
+      expect(pr).not.toContain("Where do rate-limit counters live?");
+      const adr = formatSessionMarkdown(state, "adr");
+      expect(adr).not.toContain("Where do rate-limit counters live?");
+    });
+
+    it("full KEEPS the rejected decision but marks it 'Rejected (not built)'", () => {
+      const state = makeState({
+        artifacts: [makeArtifact("decision", "Counter store", {}, "rejected")],
+        decisions: [mkDecision()],
+      });
+      state.artifacts[0]!.id = "art_dec_rej";
+      const full = formatSessionMarkdown(state, "full");
+      expect(full).toContain("Where do rate-limit counters live?");
+      expect(full).toContain("Rejected (not built)");
+    });
+
+    it("a decision with NO resolvable artifact stays ungated (documented gap)", () => {
+      // artifactId points at nothing in state → we can't prove rejection.
+      const state = makeState({ decisions: [mkDecision({ artifactId: "art_missing" })] });
+      const pr = formatSessionMarkdown(state, "pr-description");
+      expect(pr).toContain("Where do rate-limit counters live?");
     });
   });
 });

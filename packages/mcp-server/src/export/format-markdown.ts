@@ -88,6 +88,25 @@ function rejectionNote(a: Artifact): string | null {
   return `> ⚠️ **Rejected (not built)** — this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.\n`;
 }
 
+// F2 (Fix 3, review #232) — the "## Decision(s)" blocks render from
+// state.decisions, which the H1 artifact filters don't touch, so a decision
+// whose OWNING artifact was later rejected/retracted still read as shipped.
+// Gate it via the EXACT decision.artifactId → artifact.id link — no heuristic.
+// KNOWN GAP (documented, deferred): a decision record whose artifactId has no
+// matching artifact in state (decisions can be logged without a resolvable
+// artifact) is NOT gated — we can't prove its status, and inventing a linkage
+// is worse than the residual. In practice present_options records both, so the
+// common path is covered.
+function decisionOwningArtifact(state: SessionState, d: { artifactId?: string }): Artifact | undefined {
+  if (!d.artifactId) return undefined;
+  return state.artifacts.find((a) => a.id === d.artifactId);
+}
+
+function decisionIsRejected(state: SessionState, d: { artifactId?: string }): boolean {
+  const a = decisionOwningArtifact(state, d);
+  return !!a && (a.status === "rejected" || a.status === "retracted");
+}
+
 // M1: neutralize pair-voice for the EXTERNAL formats. The debrief/decision
 // narrative is written in second-person pair-voice ("You rejected X, so I
 // pivoted…") which is right for the human you paired with but wrong for a
@@ -98,28 +117,74 @@ function rejectionNote(a: Artifact): string | null {
 // passive prose, but it removes every second-person address, which is the
 // defect. Full/replay/learnings KEEP the pair voice (the faithful record;
 // feedback_artifact_voice applies to those pair-facing surfaces).
+//
+// Hardening (review #232): contractions are EXPANDED, not glued onto a noun
+// phrase ("you'll" → "the reviewer will", never "the reviewer'll"); CODE
+// segments (inline `spans` and ```fenced``` blocks) are left byte-for-byte
+// intact so an identifier like `you.method()` is never rewritten; and the
+// standalone-I rule excludes slash-adjacency so "I/O" survives.
 const VOICE_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  // --- you (contractions first, then possessive, then bare) ---
+  [/\byou['’]re\b/gi, "the reviewer is"],
+  [/\byou['’]ll\b/gi, "the reviewer will"],
+  [/\byou['’]ve\b/gi, "the reviewer has"],
+  [/\byou['’]d\b/gi, "the reviewer would"],
+  [/\byour\b/gi, "the reviewer's"],
+  [/\byou\b/gi, "the reviewer"],
+  // --- we ---
+  [/\bwe['’]re\b/gi, "the pair is"],
+  [/\bwe['’]ll\b/gi, "the pair will"],
+  [/\bwe['’]ve\b/gi, "the pair has"],
+  [/\bwe['’]d\b/gi, "the pair would"],
+  [/\bour\b/gi, "the pair's"],
+  [/\bwe\b/gi, "the pair"],
+  // --- I (capital only; the standalone rule excludes \w AND / so "I/O",
+  //     "I18n" etc. never match) ---
   [/\bI['’]ve\b/g, "the agent has"],
   [/\bI['’]m\b/g, "the agent is"],
   [/\bI['’]ll\b/g, "the agent will"],
   [/\bI['’]d\b/g, "the agent would"],
-  [/\bI\b/g, "the agent"],
+  [/(?<![\w/])I(?![\w/])/g, "the agent"],
   [/\bmy\b/gi, "the agent's"],
-  [/\byour\b/gi, "the reviewer's"],
-  [/\byou\b/gi, "the reviewer"],
-  [/\bwe['’]ve\b/gi, "the pair has"],
-  [/\bwe\b/gi, "the pair"],
-  [/\bour\b/gi, "the pair's"],
 ];
 
-function neutralizeVoice(text: string | undefined | null): string {
-  if (!text) return text ?? "";
-  let out = text;
+/** Fenced ```blocks``` (matched first, non-greedy) and inline `code spans`. */
+const CODE_SEGMENT = /```[\s\S]*?```|`[^`]*`/g;
+
+function transformProse(seg: string, atTextStart: boolean): string {
+  let out = seg;
   for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
-  // The lowercase replacements ("the agent") can land at a sentence start;
-  // re-capitalize the first letter of the string and after . ! ? or a newline.
-  out = out.replace(/(^|[.!?]\s+|\n\s*)([a-z])/g, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
-  return out;
+  // Re-capitalize sentence starts the lowercase replacements can break. The
+  // string-start (`^`) branch applies ONLY to the first prose segment — a
+  // segment that begins right after an inline code span is mid-sentence, so
+  // forcing a capital on the word after the code would be wrong.
+  const boundary = atTextStart
+    ? /(^|[.!?]\s+|\n\s*)([a-z])/g
+    : /([.!?]\s+|\n\s*)([a-z])/g;
+  return out.replace(boundary, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
+}
+
+// Exported for the hostile-repro unit tests (review #232) — the transform is
+// small but its edge cases are exactly what need pinning.
+export function neutralizeVoice(text: string | undefined | null): string {
+  if (!text) return text ?? "";
+  let result = "";
+  let lastIndex = 0;
+  let atTextStart = true;
+  for (const m of text.matchAll(CODE_SEGMENT)) {
+    const idx = m.index ?? 0;
+    const prose = text.slice(lastIndex, idx);
+    if (prose) {
+      result += transformProse(prose, atTextStart);
+      atTextStart = false;
+    }
+    result += m[0]; // code verbatim — never transformed
+    atTextStart = false;
+    lastIndex = idx + m[0].length;
+  }
+  const tail = text.slice(lastIndex);
+  if (tail) result += transformProse(tail, atTextStart);
+  return result;
 }
 
 // --- PR Description ---
@@ -148,8 +213,8 @@ function formatPrDescription(state: SessionState): string {
     }
   }
 
-  // Decisions made
-  const resolved = state.decisions.filter((d) => d.response);
+  // Decisions made (Fix 3 — drop any whose owning artifact was rejected/retracted).
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
   if (resolved.length > 0) {
     sections.push("### Decisions\n");
     for (const d of resolved) {
@@ -226,8 +291,8 @@ function formatAdr(state: SessionState): string {
     }
   }
 
-  // Decision — from resolved decisions
-  const resolved = state.decisions.filter((d) => d.response);
+  // Decision — from resolved decisions (Fix 3 — exclude rejected/retracted).
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
   if (resolved.length > 0) {
     sections.push("## Decision\n");
     for (const d of resolved) {
@@ -519,6 +584,9 @@ function formatFull(state: SessionState): string {
     for (const d of resolved) {
       const chosen = d.options.find((o: any) => o.id === d.response?.optionId);
       sections.push(`### ${d.context}\n`);
+      // Fix 3 — the full record keeps a rejected/retracted decision but marks it.
+      const dNote = decisionIsRejected(state, d) ? rejectionNote(decisionOwningArtifact(state, d)!) : null;
+      if (dNote) sections.push(dNote);
       sections.push(`**Selected**: ${chosen?.title ?? d.response?.optionId}`);
       if (d.response?.reasoning) sections.push(`**Reasoning**: ${d.response.reasoning}`);
       sections.push("\nOptions considered:");
@@ -578,9 +646,13 @@ function formatFull(state: SessionState): string {
 }
 
 function getSessionTitle(state: SessionState): string {
-  const firstDecision = state.decisions[0];
+  // Fix 3 (review #232) — never title a session (esp. the ADR heading) after a
+  // decision/research that was rejected: that leaks discarded work as the
+  // headline of "what shipped". Prefer the first NON-rejected source; fall
+  // through to a neutral session id rather than to a rejected one.
+  const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
   if (firstDecision) return firstDecision.context;
-  const firstResearch = state.artifacts.find((a) => a.type === "research");
+  const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
   if (firstResearch) return firstResearch.title;
   return "Session " + state.sessionId;
 }

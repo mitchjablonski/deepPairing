@@ -28958,25 +28958,64 @@ function rejectionNote(a) {
   return `> \u26A0\uFE0F **Rejected (not built)** \u2014 this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.
 `;
 }
+function decisionOwningArtifact(state, d) {
+  if (!d.artifactId) return void 0;
+  return state.artifacts.find((a) => a.id === d.artifactId);
+}
+function decisionIsRejected(state, d) {
+  const a = decisionOwningArtifact(state, d);
+  return !!a && (a.status === "rejected" || a.status === "retracted");
+}
 var VOICE_RULES = [
+  // --- you (contractions first, then possessive, then bare) ---
+  [/\byou['’]re\b/gi, "the reviewer is"],
+  [/\byou['’]ll\b/gi, "the reviewer will"],
+  [/\byou['’]ve\b/gi, "the reviewer has"],
+  [/\byou['’]d\b/gi, "the reviewer would"],
+  [/\byour\b/gi, "the reviewer's"],
+  [/\byou\b/gi, "the reviewer"],
+  // --- we ---
+  [/\bwe['’]re\b/gi, "the pair is"],
+  [/\bwe['’]ll\b/gi, "the pair will"],
+  [/\bwe['’]ve\b/gi, "the pair has"],
+  [/\bwe['’]d\b/gi, "the pair would"],
+  [/\bour\b/gi, "the pair's"],
+  [/\bwe\b/gi, "the pair"],
+  // --- I (capital only; the standalone rule excludes \w AND / so "I/O",
+  //     "I18n" etc. never match) ---
   [/\bI['’]ve\b/g, "the agent has"],
   [/\bI['’]m\b/g, "the agent is"],
   [/\bI['’]ll\b/g, "the agent will"],
   [/\bI['’]d\b/g, "the agent would"],
-  [/\bI\b/g, "the agent"],
-  [/\bmy\b/gi, "the agent's"],
-  [/\byour\b/gi, "the reviewer's"],
-  [/\byou\b/gi, "the reviewer"],
-  [/\bwe['’]ve\b/gi, "the pair has"],
-  [/\bwe\b/gi, "the pair"],
-  [/\bour\b/gi, "the pair's"]
+  [/(?<![\w/])I(?![\w/])/g, "the agent"],
+  [/\bmy\b/gi, "the agent's"]
 ];
+var CODE_SEGMENT = /```[\s\S]*?```|`[^`]*`/g;
+function transformProse(seg, atTextStart) {
+  let out = seg;
+  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
+  const boundary = atTextStart ? /(^|[.!?]\s+|\n\s*)([a-z])/g : /([.!?]\s+|\n\s*)([a-z])/g;
+  return out.replace(boundary, (_m, pre, ch) => pre + ch.toUpperCase());
+}
 function neutralizeVoice(text) {
   if (!text) return text ?? "";
-  let out = text;
-  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
-  out = out.replace(/(^|[.!?]\s+|\n\s*)([a-z])/g, (_m, pre, ch) => pre + ch.toUpperCase());
-  return out;
+  let result = "";
+  let lastIndex = 0;
+  let atTextStart = true;
+  for (const m of text.matchAll(CODE_SEGMENT)) {
+    const idx = m.index ?? 0;
+    const prose = text.slice(lastIndex, idx);
+    if (prose) {
+      result += transformProse(prose, atTextStart);
+      atTextStart = false;
+    }
+    result += m[0];
+    atTextStart = false;
+    lastIndex = idx + m[0].length;
+  }
+  const tail = text.slice(lastIndex);
+  if (tail) result += transformProse(tail, atTextStart);
+  return result;
 }
 function formatPrDescription(state) {
   const sections = [];
@@ -28992,7 +29031,7 @@ function formatPrDescription(state) {
       sections.push("");
     }
   }
-  const resolved = state.decisions.filter((d) => d.response);
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
   if (resolved.length > 0) {
     sections.push("### Decisions\n");
     for (const d of resolved) {
@@ -29056,7 +29095,7 @@ function formatAdr(state) {
       }
     }
   }
-  const resolved = state.decisions.filter((d) => d.response);
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
   if (resolved.length > 0) {
     sections.push("## Decision\n");
     for (const d of resolved) {
@@ -29308,6 +29347,8 @@ function formatFull(state) {
       const chosen = d.options.find((o) => o.id === d.response?.optionId);
       sections.push(`### ${d.context}
 `);
+      const dNote = decisionIsRejected(state, d) ? rejectionNote(decisionOwningArtifact(state, d)) : null;
+      if (dNote) sections.push(dNote);
       sections.push(`**Selected**: ${chosen?.title ?? d.response?.optionId}`);
       if (d.response?.reasoning) sections.push(`**Reasoning**: ${d.response.reasoning}`);
       sections.push("\nOptions considered:");
@@ -29354,9 +29395,9 @@ function formatFull(state) {
   return sections.join("\n");
 }
 function getSessionTitle(state) {
-  const firstDecision = state.decisions[0];
+  const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
   if (firstDecision) return firstDecision.context;
-  const firstResearch = state.artifacts.find((a) => a.type === "research");
+  const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
   if (firstResearch) return firstResearch.title;
   return "Session " + state.sessionId;
 }

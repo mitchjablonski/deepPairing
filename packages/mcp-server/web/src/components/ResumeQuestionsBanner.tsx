@@ -3,6 +3,12 @@ import type { Comment } from "@deeppairing/shared";
 import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
+import { noAgentLive } from "../lib/liveness";
+
+// Re-exported so existing importers (App.tsx) keep their import site; the
+// definition now lives in lib/liveness so the store can share it without a
+// store→component cycle.
+export { noAgentLive };
 
 /**
  * #192 (serving H1) — the "questions waiting for Claude" affordance.
@@ -27,12 +33,6 @@ import { useConnectionStore } from "../stores/connection";
 export function countResumeQuestions(comments: Record<string, Comment[]>): number {
   const all = Object.values(comments).flat() as Comment[];
   return collectUnansweredQuestions(all).length;
-}
-
-/** True when no registered session reports live !== false (an exited agent is
- *  marked live:false; zero sessions is also "no agent"). */
-export function noAgentLive(activeSessions: Array<{ live?: boolean }>): boolean {
-  return !activeSessions.some((s) => s.live !== false);
 }
 
 export function ResumeQuestionsBanner() {
