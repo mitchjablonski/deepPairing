@@ -340,7 +340,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       // #190 — `debrief` joins for the same reason: a rejected debrief (the human
       // says "this doesn't reflect what we built") must get the "Do NOT apply /
       // address the rejection" posture, not "You may proceed".
-      ["code_change", "spec", "research", "decision", "changeset", "debrief"].includes(a.type) &&
+      // #190 A2 — `explainer` joins too: a rejected explainer ("this walk-through
+      // is wrong / misleading") must get "Do NOT apply", not "You may proceed".
+      ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer"].includes(a.type) &&
       !ctx.state.reportedRejectedVerdicts.has(a.id),
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
@@ -377,6 +379,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // it and may ask questions. Answer any questions (answer_question) and keep
     // polling until they close it out.
     suggestedAction = "The debrief is presented — the human is reading it. Answer any questions they raise, then continue polling.";
+  } else if (pendingArts.some((a) => a.type === "explainer")) {
+    // #190 A2 — an explainer is a read-only walk-through; the human reads it and
+    // may ask questions. Answer any questions (answer_question) and keep polling.
+    suggestedAction = "The explainer is presented — the human is reading the walk-through. Answer any questions they raise, then continue polling.";
   }
 
   // GH#152 — when the human COMMENTED while an artifact is still awaiting its

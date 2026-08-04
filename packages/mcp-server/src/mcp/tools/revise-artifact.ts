@@ -11,6 +11,7 @@ import {
   validatePresentCodeChangeInput,
   validatePresentChangesetInput,
   validatePresentDebriefInput,
+  validatePresentExplainerInput,
   validateLogReasoningInput,
 } from "../validate-tool-input.js";
 
@@ -33,6 +34,9 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   // #190 — a revised debrief must pass the same strict validator as
   // present_debrief (summary required, echo guard, optional-tolerant rest).
   debrief: validatePresentDebriefInput,
+  // #190 A2 — a revised explainer must pass the same strict validator as
+  // present_explainer (title + overview + non-empty sections, echo guard).
+  explainer: validatePresentExplainerInput,
   reasoning: validateLogReasoningInput,
 };
 

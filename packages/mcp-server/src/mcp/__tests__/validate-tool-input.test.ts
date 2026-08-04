@@ -648,6 +648,67 @@ describe("#183 — example-echo guard", () => {
     expect(text).toContain("summary");
     expect(store.getArtifacts()).toHaveLength(0);
   });
+
+  // #190 A2 — present_explainer keys the echo guard on title AND overview (both
+  // must match). Neither alone suffices — the sections[] item-set only narrows.
+  const EXPLAINER_EXAMPLE = {
+    title: "How session authentication works here",
+    overview:
+      "You're about to walk the request path for an authenticated route: how the cookie is read, where the session is looked up and its TTL refreshed, and what happens when it has expired. Read top to bottom — each step points at the exact code.",
+    sections: [{ heading: "1. edge", body: "the cookie is read" }],
+  };
+
+  it("REJECTS the present_explainer example (title + overview fingerprint) end-to-end", async () => {
+    const { text, isError } = await call("present_explainer", EXPLAINER_EXAMPLE);
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real explainer reusing the example TITLE but a different overview (title alone is NOT a fingerprint)", async () => {
+    const { isError } = await call("present_explainer", {
+      title: "How session authentication works here", // deliberately the example title
+      overview: "A short tour of how the login handler mints a session and sets the cookie, end to end.",
+      sections: [{ heading: "1. mint", body: "the handler creates a session row" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real explainer reusing the example OVERVIEW but a different title (overview alone is NOT a fingerprint)", async () => {
+    const { isError } = await call("present_explainer", {
+      title: "A totally different walk-through title",
+      overview: EXPLAINER_EXAMPLE.overview, // deliberately the example overview
+      sections: [{ heading: "1. edge", body: "the cookie is read" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real, distinctive explainer and records it as type 'explainer'", async () => {
+    const { isError } = await call("present_explainer", {
+      title: "How the daemon picks its port",
+      overview: "Walks the deterministic per-project port derivation from the project path hash.",
+      sections: [
+        { heading: "1. hash the path", body: "the project root is hashed into the 3847-3974 window" },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+    expect(store.getArtifacts()[0]!.type).toBe("explainer");
+  });
+
+  it("REJECTS an explainer with an EMPTY overview (.min(1)) and creates NO artifact", async () => {
+    const { text, isError } = await call("present_explainer", {
+      title: "How auth works",
+      overview: "",
+      sections: [{ heading: "h", body: "b" }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toContain("overview");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -715,6 +776,48 @@ describe("#184 — truncated tool-call detection", () => {
     const { text, isError } = await call("present_findings", {
       summary: "x",
       findings: "26/26 selfies passed face detection", // present, wrong type — the classic field bug
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).not.toContain("TOOL_CALL_TRUNCATED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  // #190 A2 — the explainer's title is a CONTENT field, so unlike debrief/spec
+  // (title extracted first) the truncation lane IS meaningful: a long `overview`
+  // streams before the required `sections[]` array, so overview-present /
+  // sections-absent is exactly the cutoff signature.
+  const LONG_OVERVIEW =
+    "You're about to walk the entire request path for an authenticated route, " +
+    "step by step, from the cookie read through the session lookup and TTL refresh " +
+    "and finally the expiry check that fails closed.".repeat(3);
+
+  it("REJECTS present_explainer with overview present but sections TRUNCATED away — TOOL_CALL_TRUNCATED, NO embedded example", async () => {
+    const { text, isError } = await call("present_explainer", {
+      title: "How auth works here",
+      overview: LONG_OVERVIEW,
+      // sections truncated away mid-stream
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("TOOL_CALL_TRUNCATED");
+    expect(text).toMatch(/truncated in transit/i);
+    expect(text).toMatch(/`sections` is missing while `overview` is present/);
+    // CRUCIAL: the echo-able example must NOT be in this path.
+    expect(text).not.toContain("readSessionCookie");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("present_explainer truncation attaches _meta.code = TOOL_CALL_TRUNCATED (retryable)", async () => {
+    const res = await client.callTool({ name: "present_explainer", arguments: { title: "t", overview: LONG_OVERVIEW } });
+    const meta = (res as { _meta?: { code?: string; retryable?: boolean } })._meta;
+    expect(meta?.code).toBe("TOOL_CALL_TRUNCATED");
+    expect(meta?.retryable).toBe(true);
+  });
+
+  it("KEEPS the generic example-bearing error for present_explainer when overview is ALSO missing (just malformed)", async () => {
+    const { text, isError } = await call("present_explainer", {
+      title: "How auth works here",
+      // neither overview nor sections — not a truncation signature
     });
     expect(isError).toBe(true);
     expect(text).toContain("INPUT_VALIDATION_FAILED");

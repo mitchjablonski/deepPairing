@@ -8,6 +8,7 @@ import {
   coerceReasoningContent,
   coerceChangesetContent,
   coerceDebriefContent,
+  coerceExplainerContent,
   coerceArtifactContent,
 } from "../coerce-content.js";
 
@@ -303,12 +304,48 @@ describe("coerceDebriefContent (#190)", () => {
   });
 });
 
+describe("coerceExplainerContent (#190 A2)", () => {
+  it("empty → title/overview '' + sections [] and no throw; optional blocks omitted", () => {
+    const out = coerceExplainerContent({});
+    expect(out).toEqual({ title: "", overview: "", sections: [] });
+  });
+  it("non-array section/list fields → omitted or empty (not crashed)", () => {
+    const out = coerceExplainerContent({ title: "t", overview: "o", sections: "nope", relatedArtifactIds: 3, suggestedQuestions: {} });
+    expect(out).toEqual({ title: "t", overview: "o", sections: [] });
+  });
+  it("coerces sections field-by-field, keeping string+object evidence and dropping junk", () => {
+    const out = coerceExplainerContent({
+      title: "How auth works",
+      overview: "the request path",
+      sections: [
+        {
+          heading: "1. edge",
+          body: "the cookie is read",
+          evidence: ["legacy ref", { filePath: "a.ts", lineStart: 1, lineEnd: 2, snippet: "x", explanation: "why" }, 42],
+        },
+        { heading: "2. lookup" }, // body missing → defaults to ""
+      ],
+      relatedArtifactIds: ["art_1", 9],
+      suggestedQuestions: ["Q1?", 5],
+    });
+    expect(out.sections).toHaveLength(2);
+    expect(out.sections[0]!.heading).toBe("1. edge");
+    // string ref AND structured evidence survive; the number is dropped
+    expect(out.sections[0]!.evidence).toHaveLength(2);
+    expect(out.sections[0]!.evidence![0]).toBe("legacy ref");
+    expect(out.sections[1]!.body).toBe(""); // lenient default
+    expect(out.relatedArtifactIds).toEqual(["art_1"]); // non-string dropped
+    expect(out.suggestedQuestions).toEqual(["Q1?"]); // non-string dropped
+  });
+});
+
 describe("coerceArtifactContent dispatcher", () => {
   it("routes by type and returns null for an unknown/contentless type", () => {
     expect(coerceArtifactContent({ type: "plan", content: {} })).toEqual({ steps: [], estimatedChanges: 0 });
     expect(coerceArtifactContent({ type: "reasoning" as any, content: { action: "a", reasoning: "r" } })).toMatchObject({ action: "a" });
     expect(coerceArtifactContent({ type: "changeset", content: {} })).toEqual({ files: [] });
     expect(coerceArtifactContent({ type: "debrief", content: { summary: "s" } })).toEqual({ summary: "s" });
+    expect(coerceArtifactContent({ type: "explainer", content: { title: "t", overview: "o" } })).toEqual({ title: "t", overview: "o", sections: [] });
     expect(coerceArtifactContent({ type: "unknown" as any, content: {} })).toBeNull();
   });
 });

@@ -442,6 +442,38 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed debrief failed: ${r.status}`); });
+
+  // #190 A2 — the read-only EXPLAINER in its OWN session so BOTH theme scans mount
+  // the full walk-through (overview + numbered sections with token-rich evidence,
+  // the suggested-question chips, the related drill-in link, and the always-visible
+  // ask-anything thread). Same #187 hollow-net discipline as the debrief seed.
+  const regExplainer = await fetch(`${baseURL}/api/internal/sessions/a11yexplainer/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regExplainer.ok) throw new Error(`seed explainer register failed: ${regExplainer.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11yexplainer/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "explainer_a11y", type: "explainer", title: "How session authentication works here",
+      content: {
+        title: "How session authentication works here",
+        overview: "You're about to walk the request path for an authenticated route: how the cookie is read, where the session is looked up and its TTL refreshed, and what happens when it has expired. Read top to bottom — each step points at the exact code.",
+        sections: [
+          {
+            heading: "1. The session is looked up and its TTL refreshed",
+            body: "`requireSession` calls `store.getAndTouch(sid)`, which refreshes the expiry as a side effect of the lookup — no route has to remember to do it.",
+            // Token-rich TS (string, comment, keyword, number, punctuation) so the
+            // scan measures the syntax palette on this surface too.
+            evidence: [{ filePath: "auth/middleware.ts", lineStart: 26, lineEnd: 30, snippet: 'const session = await store.getAndTouch(sid); // refreshes TTL\nif (!session || session.expiresAt < Date.now()) {\n  clearSessionCookie(res);\n  return res.status(401).end();\n}', explanation: "The single choke point every authenticated route flows through." }],
+          },
+          {
+            heading: "2. An expired session fails closed",
+            body: "If the session is missing or past its expiry, the cookie is cleared and the request is rejected — the code never transparently re-issues a session.",
+          },
+        ],
+        relatedArtifactIds: ["cs_explainer_ref"],
+        suggestedQuestions: ["Where does the session get created in the first place?"],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed explainer failed: ${r.status}`); });
 });
 
 test.afterAll(async () => {
@@ -1066,6 +1098,52 @@ test("a11y (#190): the DEBRIEF surface (ask-anything thread open) has no serious
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations (debrief, light):\n${fmt(serious)}`).toEqual([]);
+});
+
+/** #190 A2 — mount the EXPLAINER walk-through for real before scanning. Selects
+ *  it, waits for the sections + the always-visible ask-anything composer, opens the
+ *  overview grain composer so its scoped thread is scanned too, waits for the shiki
+ *  syntax palette on the evidence, then settles finite animations. */
+async function openExplainer(page: import("@playwright/test").Page): Promise<void> {
+  await page.click('[data-artifact-item="explainer_a11y"]');
+  await page.waitForSelector('[data-artifact-id="explainer_a11y"]', { timeout: 15000 });
+  // The ordered sections prove the full renderer mounted.
+  await page.getByTestId("explainer-section").first().waitFor({ timeout: 15000 });
+  // The ask-anything thread composer is always visible — scan it OPEN.
+  await page.getByLabel("Comment on this explainer").waitFor({ timeout: 15000 });
+  // Open the overview block's grain composer so its scoped thread is scanned too.
+  await page.getByRole("button", { name: "Comment on What you're about to read" }).click();
+  await page.getByLabel("Comment on What you're about to read").waitFor({ timeout: 15000 });
+  // Token-rich evidence highlights async (shiki) — wait for a colored span.
+  await page.waitForSelector(
+    '[data-artifact-id="explainer_a11y"] .bg-surface-code span[style*="color:"]',
+    { timeout: 15000 },
+  );
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#190 A2): the EXPLAINER surface (ask-anything thread open) has no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11yexplainer`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openExplainer(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (explainer, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#190 A2): the EXPLAINER surface (ask-anything thread open) has no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11yexplainer`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openExplainer(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (explainer, light):\n${fmt(serious)}`).toEqual([]);
 });
 
 test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {

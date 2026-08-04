@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { buildThreads } from "../lib/threading";
 import { formatClockTime as formatTime } from "../lib/time";
 import { useDraft } from "../hooks/useDraft";
@@ -50,6 +50,13 @@ interface CommentThreadProps {
   // thread — including the workbench's own rail, which shows its marker at the
   // anchor level — is byte-for-byte unchanged.
   carryoverFor?: (comment: Comment) => CarryoverState;
+  // #190 A2 — an external prefill signal. A caller (the explainer's
+  // suggestedQuestions chips) bumps `nonce` with the chip's `text` to drop that
+  // text into the composer and focus it, so a one-click chip seeds the
+  // ask-anything box. Optional + nonce-gated so it fires only on a fresh click,
+  // never clobbering an in-progress draft on every render. Omitted everywhere
+  // else, so existing threads are byte-for-byte unchanged.
+  prefill?: { text: string; nonce: number };
 }
 
 function Avatar({ author }: { author: string }) {
@@ -180,6 +187,7 @@ export function CommentThread({
   secondarySubmitTitle,
   roomy,
   carryoverFor,
+  prefill,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -191,6 +199,16 @@ export function CommentThread({
   const [input, setInput] = useDraft(`comment:${rootId}:${JSON.stringify(target ?? {})}`);
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  // #190 A2 — fire on a fresh prefill click (nonce change), not on every render.
+  const lastPrefillNonce = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!prefill || prefill.nonce === lastPrefillNonce.current) return;
+    lastPrefillNonce.current = prefill.nonce;
+    setInput(prefill.text);
+    composerRef.current?.focus?.();
+  }, [prefill, setInput]);
   
 
   // #164 round 2 — intent is set only by the explicit Ask button; the primary
@@ -264,6 +282,7 @@ export function CommentThread({
 
       <div className={roomy ? "flex flex-col gap-2" : "flex gap-1.5 items-end"}>
         <textarea
+          ref={composerRef}
           rows={roomy ? 4 : 2}
           placeholder={placeholder ?? "Add a comment… (⌘⏎ to send, Enter for newline)"}
           aria-label={textareaLabel}

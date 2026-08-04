@@ -112,6 +112,19 @@ describe("present_* tool descriptions carry single-review-surface guidance (U0.3
     expect(d).toMatch(/needsYourEyes/);
   });
 
+  it("#190 A2 — present_explainer is described as a read-only walk-through of how code WORKS, distinct from findings/debrief", async () => {
+    const d = await descFor("present_explainer");
+    expect(d).toMatch(/SINGLE REVIEW SURFACE/i);
+    expect(d).toMatch(/walk-through/i);
+    // Names WHEN to reach for it vs the two surfaces it's easy to confuse.
+    expect(d).toMatch(/code archaeology|onboarding/i);
+    expect(d).toMatch(/present_findings/);
+    expect(d).toMatch(/present_debrief/);
+    // It carries the required-core content fields.
+    expect(d).toMatch(/overview/);
+    expect(d).toMatch(/sections/);
+  });
+
   // X8 — descriptions must use the Summary / Schema note / Workflow
   // structure so the LLM can scan rather than read linearly. Round-2 MCP
   // review flagged that wall-of-text descriptions risk being tuned out.

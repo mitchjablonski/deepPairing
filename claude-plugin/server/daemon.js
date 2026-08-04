@@ -22872,6 +22872,34 @@ var DebriefContentSchema = external_exports.object({
    *  the same questionIndex comment lane. */
   openQuestions: external_exports.array(external_exports.string()).optional()
 });
+var ExplainerSectionSchema = external_exports.object({
+  // `.min(1)` — an untitled section in an ordered reading-list is degenerate
+  // (the numbered progression needs something to name). Same "empty is worse
+  // than absent" discipline the rest of the schemas use; the coercer stays
+  // lenient and defaults to "" so a partial render never crashes.
+  heading: external_exports.string().min(1).describe("Names this part of the walk-through"),
+  body: external_exports.string().describe("Markdown narration for this section, in plain English"),
+  /** Code evidence for this section (file:line + snippet + explanation). */
+  evidence: external_exports.array(EvidenceInputSchema).optional()
+});
+var ExplainerContentSchema = external_exports.object({
+  /** The walk-through's title (e.g. "How authentication works here"). `.min(1)` —
+   *  part of the required core; also half the echo fingerprint (title + overview). */
+  title: external_exports.string().min(1),
+  /** The one-paragraph "what you're about to read" — orients the reader before
+   *  the walk. `.min(1)` (required core; the other half of the echo fingerprint). */
+  overview: external_exports.string().min(1),
+  /** The ordered sections, read top-to-bottom as a numbered progression. Required
+   *  and non-empty — the walk IS the artifact; an explainer with no sections is
+   *  degenerate (and its absence is what the #184 truncation lane keys on). */
+  sections: external_exports.array(ExplainerSectionSchema).min(1),
+  /** Related artifacts the reader can drill into (rendered via ArtifactRefLink).
+   *  Optional per the backcompat convention. */
+  relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
+  /** Seed questions for the ask-anything thread — rendered as one-click chips
+   *  that prefill the composer. Optional per the backcompat convention. */
+  suggestedQuestions: external_exports.array(external_exports.string()).optional()
+});
 
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
@@ -22887,7 +22915,11 @@ var ArtifactTypeSchema = external_exports.enum([
   // #190 — the end-of-feature comprehension surface: ONE batched artifact that
   // summarizes what changed and why, the decisions the agent made alone, what
   // needs the human's eyes, and an ask-anything thread. The thesis's 80% case.
-  "debrief"
+  "debrief",
+  // #190 A2 — the read-only comprehension surface: a narrated, ordered
+  // walk-through of how something WORKS (code archaeology / onboarding / spike
+  // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
+  "explainer"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",

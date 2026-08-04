@@ -30,6 +30,7 @@ import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handlePresentChangeset } from "./tools/present-changeset.js";
 import { handlePresentDebrief } from "./tools/present-debrief.js";
+import { handlePresentExplainer } from "./tools/present-explainer.js";
 import { handleRecall } from "./tools/recall.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult } from "./tools/types.js";
@@ -321,6 +322,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief),
+      },
+      {
+        name: "present_explainer",
+        annotations: { title: "Present explainer", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description:
+          "Present a read-only EXPLAINER: a narrated, ordered walk-through of how something WORKS. Reach for it when the human wants to UNDERSTAND existing code — code archaeology (\"how does auth work here?\"), onboarding a new area, or a spike readout — NOT when you have problems to report (that's present_findings) and NOT to digest a change you just made (that's present_debrief). It carries a `title`, a one-paragraph `overview` (\"what you're about to read\"), an ordered `sections[]` walk (each with a `heading`, markdown `body`, and optional `evidence[]` anchored to real code — filePath/lineStart/lineEnd/snippet/explanation, rendered with per-line commenting), optional `relatedArtifactIds[]` to drill into, and optional `suggestedQuestions[]` that become one-click chips. Deliberately NO problem-framing — no severity, significance, or recommendations; it explains, it doesn't flag." +
+          "\n\nSchema note: required: `title`, `overview`, and a non-empty `sections[]` (each section needs a `heading`). Put the FULL explanation IN the content — \"details in chat\" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: SINGLE REVIEW SURFACE — the walk-through lives in the companion UI, don't re-narrate it in chat. Non-blocking: it records + returns immediately. The human reads it and can ask ANYTHING in the thread; call check_feedback for their questions and comments.",
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_explainer),
       },
       {
         name: "recall",
@@ -893,6 +905,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     "present_code_change",
     "present_changeset",
     "present_debrief",
+    "present_explainer",
     "log_reasoning",
     "revise_artifact",
     "post_pr_review",
@@ -1009,6 +1022,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       case "present_debrief":
         // #190 — end-of-feature comprehension surface (tools/present-debrief.ts).
         return handlePresentDebrief(ctx, args);
+
+      case "present_explainer":
+        // #190 A2 — read-only narrated walk-through (tools/present-explainer.ts).
+        return handlePresentExplainer(ctx, args);
 
       case "check_feedback":
         // B3 — extracted to mcp/tools/check-feedback.ts (the last big inline
