@@ -13,6 +13,7 @@ import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
 let tmpDir: string;
 
@@ -125,7 +126,9 @@ describe("check_feedback surfaces render failures (#176)", () => {
     store.addComment({ id: "cmt_1", artifactId: "__session__", content: "ok", author: "human" });
 
     const res = await handleCheckFeedback(makeCtx(store), {});
-    expect("renderFailures" in (res.structuredContent as Record<string, unknown>)).toBe(false);
+    // #188 — the shared healthy contract subsumes "no renderFailures key"; the
+    // lane delta is that "render" appears nowhere in the payload.
+    expectHealthyCheckFeedbackPayload(res.structuredContent as Record<string, unknown>);
     expect(JSON.stringify(res.structuredContent)).not.toContain("render");
   });
 });
