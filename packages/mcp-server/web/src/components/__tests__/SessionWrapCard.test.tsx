@@ -63,6 +63,22 @@ describe("D9 (H3) — SessionWrapCard", () => {
   });
 });
 
+describe("L1 (#196) — an approved explainer is 'read', not 'approved'", () => {
+  it("counts an approved explainer under 'read', not inflating the approved tally", () => {
+    useArtifactStore.setState({
+      artifacts: [
+        art({ id: "a1", type: "research", status: "approved" }),
+        art({ id: "a2", type: "explainer", status: "approved" }),
+      ],
+    });
+    render(<SessionWrapCard sessionId="s1" />);
+    expect(screen.getByText(/1 approved/)).toBeInTheDocument();
+    expect(screen.getByText(/1 read/)).toBeInTheDocument();
+    // The old "2 approved" over-count must be gone.
+    expect(screen.queryByText(/2 approved/)).toBeNull();
+  });
+});
+
 describe("F8 (M2) — the wrap card recaps ITS session, not the merged store", () => {
   it("a live neighbor's draft neither suppresses the card nor inflates its stats", () => {
     useArtifactStore.setState({

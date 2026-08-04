@@ -8,7 +8,7 @@ import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
-import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
+import { ResumeQuestionsBanner, countResumeQuestions, noAgentLive } from "./components/ResumeQuestionsBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { DiagnosticsMenu } from "./components/DiagnosticsMenu";
@@ -37,6 +37,7 @@ function App() {
   const connected = useConnectionStore((s) => s.connected);
   const connect = useConnectionStore((s) => s.connect);
   const sessionId = useConnectionStore((s) => s.sessionId);
+  const projectRoot = useConnectionStore((s) => s.projectRoot);
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const switchSession = useConnectionStore((s) => s.switchSession);
   const refreshSessions = useConnectionStore((s) => s.refreshSessions);
@@ -75,6 +76,14 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  // M4 — whether each below-header banner is visible, so the header pills can
+  // suppress the verbatim duplicate (computed with the banners' OWN predicates
+  // so they can't drift). Both banners self-hide when their count is 0.
+  const artifactsList = useArtifactStore((s) => s.artifacts);
+  const commentsMap = useArtifactStore((s) => s.comments);
+  const pendingBannerVisible = computePending(artifactsList).total > 0;
+  const questionsBannerVisible =
+    connected && noAgentLive(activeSessions) && countResumeQuestions(commentsMap) > 0;
 
   // U7 — at-rest signal on the Conversation button: how many human questions
   // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
@@ -384,7 +393,10 @@ function App() {
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-sm font-bold shrink-0">deepPairing</h1>
           <ProjectSwitcher />
-          <TurnIndicator />
+          <TurnIndicator
+            pendingBannerVisible={pendingBannerVisible}
+            questionsBannerVisible={questionsBannerVisible}
+          />
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {/* #189 — the ONE primary Ledger surface: the functional drawer. The
@@ -562,12 +574,26 @@ function App() {
           renders when a demo session is active AND has at least one
           artifact — i.e., the demo has actually fired. */}
       {connected && sessionId?.startsWith("demo_") && hasArtifacts && (
-        <div className="px-3 py-2 bg-accent-blue-dim/30 border-b border-accent-blue/20 text-2xs flex items-center gap-2 shrink-0">
+        // L2 (#196) — the CTA now leads with the README's RECOMMENDED marketplace
+        // install (no build step, ships the hooks) and offers the local-plugin
+        // command with the daemon's REAL projectRoot (client-side) instead of a
+        // /path/to/deeppairing placeholder the user had to hand-edit.
+        <div className="px-3 py-2 bg-accent-blue-dim/30 border-b border-accent-blue/20 text-2xs flex flex-wrap items-center gap-x-2 gap-y-1 shrink-0">
           <span className="text-accent-blue font-medium">✓ Demo fired.</span>
-          <span className="text-text-secondary">Next: connect Claude Code in your real project →</span>
+          <span className="text-text-secondary">Next: install in Claude Code —</span>
           <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
-            claude --plugin-dir /path/to/deeppairing/claude-plugin
+            /plugin marketplace add https://github.com/mitchjablonski/deepPairing
           </code>
+          <span className="text-text-muted">then</span>
+          <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
+            /plugin install deeppairing@deeppairing
+          </code>
+          <span className="text-text-muted">
+            or from a clone:{" "}
+            <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-secondary font-mono">
+              claude --plugin-dir {(projectRoot ?? "/path/to/deeppairing")}/claude-plugin
+            </code>
+          </span>
         </div>
       )}
 

@@ -324,9 +324,12 @@ describe("formatSessionMarkdown", () => {
       expect(md).not.toContain("Nothing crystallized yet");
     });
 
-    it("formatPrDescription leads with the debrief summary + what-needs-review", () => {
+    it("formatPrDescription leads with the debrief summary + what-needs-review (neutralized, #196 M1)", () => {
       const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "pr-description");
-      expect(md).toContain("You moved session validation into a shared guard.");
+      // F2 (M1) — the pair-voice "You moved…" is neutralized for the teammate
+      // reading the PR; no second-person address survives.
+      expect(md).not.toContain("You moved session validation");
+      expect(md).toContain("The reviewer moved session validation into a shared guard.");
       expect(md).toContain("**What needs review:**");
       expect(md).toContain("The 401 redirect target");
     });
@@ -349,6 +352,110 @@ describe("formatSessionMarkdown", () => {
       expect(md).not.toContain("## Explainer");
       expect(md).not.toContain("## Spec");
       expect(md).not.toContain("## Changeset");
+    });
+
+    // F2 (#196 M2) — debrief markdown defects.
+    it("formatFull renames the walk-lane group header to Walkthrough (no 'What changed' collision)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "full");
+      expect(md).toContain("### Walkthrough");
+      expect(md).not.toContain("### What changed");
+    });
+
+    it("formatFull does not double-prefix a debrief whose title already carries the word", () => {
+      const prefixed = makeArtifact("debrief", "Debrief — auth refactor", {
+        summary: "A summary.",
+        sections: [{ title: "The guard", body: "b" }],
+      });
+      const md = formatSessionMarkdown(makeState({ artifacts: [prefixed] }), "full");
+      expect(md).toContain("## Debrief — auth refactor");
+      expect(md).not.toContain("Debrief — Debrief");
+    });
+  });
+
+  // F2 (#196 H1) — rejected/retracted work must not read as SHIPPED. External
+  // formats (pr-description, adr) drop it entirely; the full record keeps it but
+  // marks it "Rejected (not built)". Shaped after the demo's rejected
+  // ConfigStore-singleton finding (demo-script.ts) — the executed repro.
+  describe("#196 F2 — rejected work is not shipped-as-built", () => {
+    const rejectedResearch = makeArtifact(
+      "research",
+      "Config loader refactor — proposed approach",
+      {
+        summary: "Add a global mutable state singleton for config access across services.",
+        findings: [{
+          category: "Architecture",
+          title: "Introduce ConfigStore global singleton",
+          detail: "A shared mutable ConfigStore would cache config across services.",
+          significance: "high",
+          severity: "medium",
+          recommendation: "Add a ConfigStore class exported as a singleton.",
+        }],
+      },
+      "rejected",
+    );
+
+    it("pr-description EXCLUDES a rejected finding entirely (demo repro)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [rejectedResearch] }), "pr-description");
+      expect(md).not.toContain("Introduce ConfigStore global singleton");
+      expect(md).not.toContain("### Key Findings");
+    });
+
+    it("adr EXCLUDES rejected research from Context", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [rejectedResearch] }), "adr");
+      expect(md).not.toContain("Introduce ConfigStore global singleton");
+      expect(md).not.toContain("global mutable state singleton");
+    });
+
+    it("full INCLUDES the rejected finding but marks it 'Rejected (not built)'", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [rejectedResearch] }), "full");
+      expect(md).toContain("Introduce ConfigStore global singleton");
+      expect(md).toContain("Rejected (not built)");
+      // The marker precedes the finding it applies to.
+      expect(md.indexOf("Rejected (not built)")).toBeLessThan(md.indexOf("Introduce ConfigStore global singleton"));
+    });
+
+    it("a retracted plan is dropped from pr-description but marked in full", () => {
+      const retractedPlan = makeArtifact("plan", "Risky migration", {
+        steps: [{ description: "Drop the users table", reasoning: "start clean" }],
+      }, "retracted");
+      const pr = formatSessionMarkdown(makeState({ artifacts: [retractedPlan] }), "pr-description");
+      expect(pr).not.toContain("Drop the users table");
+      const full = formatSessionMarkdown(makeState({ artifacts: [retractedPlan] }), "full");
+      expect(full).toContain("Drop the users table");
+      expect(full).toContain("Rejected (not built)");
+    });
+
+    it("approved work still ships clean (no marker leaks onto a normal run)", () => {
+      const approved = makeArtifact("research", "Audit", {
+        summary: "Clean.",
+        findings: [{ category: "Sec", title: "Real issue", detail: "d", significance: "high" }],
+      });
+      const full = formatSessionMarkdown(makeState({ artifacts: [approved] }), "full");
+      expect(full).toContain("Real issue");
+      expect(full).not.toContain("Rejected (not built)");
+      const pr = formatSessionMarkdown(makeState({ artifacts: [approved] }), "pr-description");
+      expect(pr).toContain("Real issue");
+    });
+  });
+
+  // F2 (#196 M1) — neutral voice for external formats only.
+  describe("#196 F2 — neutral voice for external formats", () => {
+    const voiceDebrief = makeArtifact("debrief", "Config loader debrief", {
+      summary: "You rejected the global ConfigStore, so I pivoted to a lazy loader.",
+      needsYourEyes: [{ what: "The retry cap", why: "product-specific" }],
+    });
+
+    it("pr-description strips second-person pair voice", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [voiceDebrief] }), "pr-description");
+      expect(md).not.toMatch(/\bYou\b/);
+      expect(md).not.toMatch(/\bI\b/);
+      expect(md).toContain("The reviewer rejected the global ConfigStore");
+      expect(md).toContain("the agent pivoted to a lazy loader");
+    });
+
+    it("full export KEEPS the pair voice (faithful session record)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [voiceDebrief] }), "full");
+      expect(md).toContain("You rejected the global ConfigStore, so I pivoted to a lazy loader.");
     });
   });
 });

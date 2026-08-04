@@ -28949,17 +28949,46 @@ function formatSessionMarkdown(state, format = "full") {
       return formatFull(state);
   }
 }
+function isShippedArtifact(a) {
+  return a.status !== "superseded" && a.status !== "rejected" && a.status !== "retracted";
+}
+function rejectionNote(a) {
+  if (a.status !== "rejected" && a.status !== "retracted") return null;
+  const verb = a.status === "rejected" ? "rejected" : "retracted";
+  return `> \u26A0\uFE0F **Rejected (not built)** \u2014 this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.
+`;
+}
+var VOICE_RULES = [
+  [/\bI['’]ve\b/g, "the agent has"],
+  [/\bI['’]m\b/g, "the agent is"],
+  [/\bI['’]ll\b/g, "the agent will"],
+  [/\bI['’]d\b/g, "the agent would"],
+  [/\bI\b/g, "the agent"],
+  [/\bmy\b/gi, "the agent's"],
+  [/\byour\b/gi, "the reviewer's"],
+  [/\byou\b/gi, "the reviewer"],
+  [/\bwe['’]ve\b/gi, "the pair has"],
+  [/\bwe\b/gi, "the pair"],
+  [/\bour\b/gi, "the pair's"]
+];
+function neutralizeVoice(text) {
+  if (!text) return text ?? "";
+  let out = text;
+  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
+  out = out.replace(/(^|[.!?]\s+|\n\s*)([a-z])/g, (_m, pre, ch) => pre + ch.toUpperCase());
+  return out;
+}
 function formatPrDescription(state) {
   const sections = [];
   sections.push("## Summary\n");
-  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && isShippedArtifact(a));
   for (const d of debriefs) {
     const content = coerceDebriefContent(d.content);
-    if (content.summary) sections.push(`${content.summary}
+    if (content.summary) sections.push(`${neutralizeVoice(content.summary)}
 `);
     if (content.needsYourEyes?.length) {
       sections.push("**What needs review:**");
-      for (const n of content.needsYourEyes) sections.push(`- ${n.what} \u2014 ${n.why}`);
+      for (const n of content.needsYourEyes) sections.push(`- ${neutralizeVoice(n.what)} \u2014 ${neutralizeVoice(n.why)}`);
       sections.push("");
     }
   }
@@ -28975,7 +29004,7 @@ function formatPrDescription(state) {
     }
     sections.push("");
   }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
   for (const plan of plans) {
     const steps = coercePlanContent(plan.content).steps;
     if (steps.length > 0) {
@@ -28988,7 +29017,7 @@ function formatPrDescription(state) {
       sections.push("");
     }
   }
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
   if (research.length > 0) {
     const findings = research.flatMap((r) => coerceResearchContent(r.content).findings);
     const highFindings = findings.filter((f) => f.significance === "high");
@@ -29011,18 +29040,18 @@ function formatAdr(state) {
   sections.push(`**Date**: ${date5}`);
   sections.push(`**Status**: Accepted
 `);
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
   if (research.length > 0) {
     sections.push("## Context\n");
     for (const r of research) {
       const content = coerceResearchContent(r.content);
-      if (content.summary) sections.push(content.summary + "\n");
+      if (content.summary) sections.push(neutralizeVoice(content.summary) + "\n");
       for (const f of content.findings ?? []) {
         sections.push(`### ${f.title ?? f.category}
 `);
-        sections.push(f.detail);
+        sections.push(neutralizeVoice(f.detail));
         if (f.impact) sections.push(`
-**Impact**: ${f.impact}`);
+**Impact**: ${neutralizeVoice(f.impact)}`);
         sections.push("");
       }
     }
@@ -29038,7 +29067,7 @@ function formatAdr(state) {
       sections.push(`Chosen: **${chosen?.title}** \u2014 ${chosen?.description ?? ""}`);
       if (d.response?.reasoning) {
         sections.push(`
-Reasoning: ${d.response.reasoning}`);
+Reasoning: ${neutralizeVoice(d.response.reasoning)}`);
       }
       if (rejected.length > 0) {
         sections.push("\nRejected alternatives:");
@@ -29049,7 +29078,7 @@ Reasoning: ${d.response.reasoning}`);
       sections.push("");
     }
   }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
   if (plans.length > 0) {
     sections.push("## Consequences\n");
     for (const plan of plans) {
@@ -29086,12 +29115,16 @@ function formatDebriefSections(state) {
   const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
   for (const d of debriefs) {
     const content = coerceDebriefContent(d.content);
-    sections.push(`## Debrief \u2014 ${d.title}
+    const t = (d.title ?? "").trim();
+    const heading = /^debrief\b/i.test(t) ? t : `Debrief \u2014 ${t || "Session"}`;
+    sections.push(`## ${heading}
 `);
+    const note = rejectionNote(d);
+    if (note) sections.push(note);
     if (content.summary) sections.push(`${content.summary}
 `);
     if (content.sections?.length) {
-      sections.push("### What changed\n");
+      sections.push("### Walkthrough\n");
       for (const s of content.sections) {
         sections.push(`#### ${s.title}
 `);
@@ -29142,6 +29175,8 @@ function formatExplainerSections(state) {
     const content = coerceExplainerContent(ex.content);
     sections.push(`## Explainer \u2014 ${content.title || ex.title}
 `);
+    const note = rejectionNote(ex);
+    if (note) sections.push(note);
     if (content.overview) sections.push(`${content.overview}
 `);
     content.sections?.forEach((s, i) => {
@@ -29161,6 +29196,8 @@ function formatSpecSections(state) {
     const content = coerceSpecContent(sp.content);
     sections.push(`## Spec \u2014 ${sp.title}
 `);
+    const note = rejectionNote(sp);
+    if (note) sections.push(note);
     if (content.objective) sections.push(`**Objective**: ${content.objective}
 `);
     if (content.context) sections.push(`${content.context}
@@ -29184,6 +29221,8 @@ function formatChangesetSections(state) {
     const content = coerceChangesetContent(cs.content);
     sections.push(`## Changeset \u2014 ${cs.title}
 `);
+    const note = rejectionNote(cs);
+    if (note) sections.push(note);
     if (content.summary) sections.push(`${content.summary}
 `);
     for (const file2 of content.files ?? []) {
@@ -29218,6 +29257,8 @@ function formatFull(state) {
     sections.push("## Findings\n");
     for (const r of research) {
       const content = coerceResearchContent(r.content);
+      const note = rejectionNote(r);
+      if (note) sections.push(note);
       if (content.summary) sections.push(`${content.summary}
 `);
       for (const f of content.findings ?? []) {
@@ -29283,6 +29324,8 @@ function formatFull(state) {
     for (const plan of plans) {
       sections.push(`### ${plan.title}
 `);
+      const rejNote = rejectionNote(plan);
+      if (rejNote) sections.push(rejNote);
       const review = state.planReviews.find((p) => p.artifactId === plan.id);
       if (review?.verdict) sections.push(`**Status**: ${review.verdict}
 `);

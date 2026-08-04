@@ -20,6 +20,21 @@ import { useConnectionStore } from "../stores/connection";
  * open, and no agent session is live; otherwise the TurnIndicator's "waiting on
  * the agent" badge already covers the agent's-turn case.
  */
+/** The count of questions the ResumeQuestionsBanner would surface — exported so
+ *  the TurnIndicator dedup (F2 #196 M4) can suppress the header questions badge
+ *  when this banner is visible WITHOUT re-deriving the predicate (drift = a
+ *  hidden badge with no banner to replace it). */
+export function countResumeQuestions(comments: Record<string, Comment[]>): number {
+  const all = Object.values(comments).flat() as Comment[];
+  return collectUnansweredQuestions(all).length;
+}
+
+/** True when no registered session reports live !== false (an exited agent is
+ *  marked live:false; zero sessions is also "no agent"). */
+export function noAgentLive(activeSessions: Array<{ live?: boolean }>): boolean {
+  return !activeSessions.some((s) => s.live !== false);
+}
+
 export function ResumeQuestionsBanner() {
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
@@ -36,11 +51,7 @@ export function ResumeQuestionsBanner() {
     return collectUnansweredQuestions(all);
   }, [comments]);
 
-  // No agent is live when no registered session reports live !== false (an
-  // exited agent is marked live:false; zero sessions is also "no agent").
-  const anyAgentLive = activeSessions.some((s) => s.live !== false);
-
-  if (!connected || anyAgentLive || unanswered.length === 0) return null;
+  if (!connected || !noAgentLive(activeSessions) || unanswered.length === 0) return null;
 
   const n = unanswered.length;
   const resumePrompt =

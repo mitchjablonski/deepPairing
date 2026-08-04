@@ -17,7 +17,18 @@ import { buildThreads } from "../lib/threading";
  *     peer think" mechanic: instead of a static spinner, the human sees
  *     what the agent is currently working on.
  */
-export function TurnIndicator() {
+/**
+ * F2 (#196 M4) — banner-soup dedup. When the sibling PendingBanner /
+ * ResumeQuestionsBanner is visible (App passes these flags), the matching
+ * header pill collapses to a count-only badge so the same fact doesn't render
+ * verbatim twice (pills summarize, banners act). Both default false, so the
+ * component renders the full pills in isolation (tests) and whenever a banner
+ * is dismissed/absent.
+ */
+export function TurnIndicator({
+  pendingBannerVisible = false,
+  questionsBannerVisible = false,
+}: { pendingBannerVisible?: boolean; questionsBannerVisible?: boolean } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
@@ -100,6 +111,11 @@ export function TurnIndicator() {
     }
     for (const list of Object.values(comments)) {
       for (const c of list as Comment[]) {
+        // M3 — only AGENT-authored comments count as agent liveness. A human
+        // posting a comment while the agent is gone used to bump this, pulsing
+        // "Agent working" for 45s over an exited agent (the composer below said
+        // otherwise). Human input is never proof the agent is alive.
+        if (c.author !== "agent") continue;
         const t = new Date(c.createdAt).getTime();
         if (Number.isFinite(t) && t > max) max = t;
       }
@@ -145,6 +161,13 @@ export function TurnIndicator() {
   // returns (D10's exact rules-of-hooks lesson — the local e2e caught the
   // repeat before push).
   const activeSessions = useConnectionStore((st) => st.activeSessions);
+  // M3 — the exited signal for the agent's-turn pill: a session explicitly
+  // reported gone (live:false) and none is live. A merely-absent session list
+  // (fresh connect, no registration yet) is NOT "exited" — that stays the
+  // neverActive "Connected — waiting" beat. Mirrors ResumeQuestionsBanner.
+  const hasDeadSession = activeSessions.some((s) => s.live === false);
+  const anyAgentLive = activeSessions.some((s) => s.live !== false);
+  const agentExited = hasDeadSession && !anyAgentLive;
 
   if (!connected) return null;
 
@@ -161,6 +184,11 @@ export function TurnIndicator() {
   const anyAnswerable = unanswered.some(
     (q) => activeSessions.find((x) => x.sessionId === q.comment.sessionId)?.live !== false,
   );
+  // M4 — when ResumeQuestionsBanner is showing (agent exited + open questions),
+  // its "N questions waiting for Claude" is the actionable surface; this header
+  // badge collapses to a count-only chip so the label isn't rendered twice. The
+  // "(agent exited)" wording also moves OUT of this badge — the agent's-turn
+  // pill now states "Agent exited" once, canonically (M3).
   const questionsBadge = unanswered.length > 0 ? (
     <button
       type="button"
@@ -171,10 +199,17 @@ export function TurnIndicator() {
       title={anyAnswerable
         ? `${unanswered.length} question${unanswered.length > 1 ? "s" : ""} waiting on the agent — click to jump`
         : `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — the agent exited; they'll be seen if the session resumes`}
+      // Only override the accessible name in COMPACT mode (visible text is a
+      // bare count then); in full mode the visible label is the name.
+      aria-label={questionsBannerVisible
+        ? `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — click to jump`
+        : undefined}
       className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-violet-dim text-accent-violet shrink-0 hover:bg-accent-violet-dim/80 transition-colors"
     >
       <span className="font-bold">❓</span>
-      {unanswered.length} question{unanswered.length > 1 ? "s" : ""} {anyAnswerable ? "waiting" : "unanswered (agent exited)"}
+      {questionsBannerVisible
+        ? unanswered.length
+        : <>{unanswered.length} question{unanswered.length > 1 ? "s" : ""} {anyAnswerable ? "waiting" : "unanswered"}</>}
     </button>
   ) : null;
 
@@ -201,6 +236,7 @@ export function TurnIndicator() {
           type="button"
           onClick={jumpToPending}
           title={`Your turn — ${parts.join(", ")}${pending.length > 1 ? " · click to jump to the next item" : " · click to jump"}`}
+          aria-label={`Your turn — ${parts.join(", ")} · click to jump`}
           // #189 — TRUNCATES instead of shrink-0. At the VS Code webview width
           // (~900px) the full "Your turn — 1 finding, 1 decision, 1 change, 1
           // plan" string forced the pill past the nav and garbled the labels.
@@ -208,7 +244,13 @@ export function TurnIndicator() {
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber min-w-0 hover:brightness-110 transition-[filter] cursor-pointer"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
-          <span className="truncate">Your turn — {parts.join(", ")}</span>
+          {/* M4 — PendingBanner (right below the header) lists these items with
+              jump + dismiss chips, so when it's visible the header pill drops
+              its verbatim "1 finding, 1 decision" breakdown to a count summary;
+              the full text stays in the title + aria-label. */}
+          <span className="truncate">
+            {pendingBannerVisible ? `${totalPending} for you` : `Your turn — ${parts.join(", ")}`}
+          </span>
         </button>
         {questionsBadge}
       </div>
@@ -221,7 +263,17 @@ export function TurnIndicator() {
   // that's finished or gone.
   return (
     <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
-      {neverActive ? (
+      {agentExited ? (
+        // M3 — the bound session's wrapper exited. The old branch only knew
+        // "Agent working"/"Up to date" (both wrong: the agent is gone, not
+        // idle), so a comment posted now pulsed "Agent working" for 45s. No
+        // pulse — nothing is happening — and a resume voice matching the
+        // composer + ResumeQuestionsBanner below.
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0" title="The agent's session ended. Resume it in Claude Code to continue.">
+          <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50" />
+          Agent exited — resume to continue
+        </div>
+      ) : neverActive ? (
         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-surface-elevated text-text-muted shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-accent-blue/60" />
           Connected — waiting for the agent's first move
@@ -240,7 +292,7 @@ export function TurnIndicator() {
         </div>
       )}
       {questionsBadge}
-      {!idle && latestReasoningAction && (
+      {!idle && !agentExited && latestReasoningAction && (
         <span
           className="text-2xs text-text-muted truncate italic min-w-0 max-w-md"
           title={latestReasoningAction}

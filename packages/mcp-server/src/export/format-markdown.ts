@@ -59,6 +59,69 @@ export function formatSessionMarkdown(
   }
 }
 
+// --- F2 (#196) — export honesty helpers ---
+//
+// H1: rejected/retracted artifacts must not read as shipped. The EXTERNAL
+// formats (pr-description, adr) describe what SHIPPED, so they drop such
+// artifacts entirely (a teammate reading the PR would otherwise see the exact
+// opposite of what happened — the demo's REJECTED ConfigStore singleton
+// appearing under "Key Findings"). The FULL export is the faithful record, so
+// it KEEPS them but prepends an explicit "Rejected (not built)" marker.
+//
+// `superseded` was already filtered everywhere (an older version replaced by a
+// newer one); we fold rejected + retracted into the same "not shipped" bucket
+// for the external formats.
+
+/** True when the artifact represents work that actually shipped (for the
+ *  external pr-description / adr formats). Excludes superseded (old version),
+ *  rejected, and retracted. */
+function isShippedArtifact(a: Artifact): boolean {
+  return a.status !== "superseded" && a.status !== "rejected" && a.status !== "retracted";
+}
+
+/** The blockquote marker the FULL export prepends to a rejected/retracted
+ *  artifact so the complete record keeps it without ever reading as shipped.
+ *  Returns null for everything else (byte-identical output for a clean run). */
+function rejectionNote(a: Artifact): string | null {
+  if (a.status !== "rejected" && a.status !== "retracted") return null;
+  const verb = a.status === "rejected" ? "rejected" : "retracted";
+  return `> ⚠️ **Rejected (not built)** — this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.\n`;
+}
+
+// M1: neutralize pair-voice for the EXTERNAL formats. The debrief/decision
+// narrative is written in second-person pair-voice ("You rejected X, so I
+// pivoted…") which is right for the human you paired with but wrong for a
+// teammate reading a PR or an ADR. This is a light, MECHANICAL transform:
+// whole-word pronoun swaps (I → the agent, you → the reviewer, we → the pair)
+// plus a sentence-start re-capitalization pass. It is deliberately NOT a
+// full rewrite — it can't turn "You rejected X, so I pivoted" into perfect
+// passive prose, but it removes every second-person address, which is the
+// defect. Full/replay/learnings KEEP the pair voice (the faithful record;
+// feedback_artifact_voice applies to those pair-facing surfaces).
+const VOICE_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bI['’]ve\b/g, "the agent has"],
+  [/\bI['’]m\b/g, "the agent is"],
+  [/\bI['’]ll\b/g, "the agent will"],
+  [/\bI['’]d\b/g, "the agent would"],
+  [/\bI\b/g, "the agent"],
+  [/\bmy\b/gi, "the agent's"],
+  [/\byour\b/gi, "the reviewer's"],
+  [/\byou\b/gi, "the reviewer"],
+  [/\bwe['’]ve\b/gi, "the pair has"],
+  [/\bwe\b/gi, "the pair"],
+  [/\bour\b/gi, "the pair's"],
+];
+
+function neutralizeVoice(text: string | undefined | null): string {
+  if (!text) return text ?? "";
+  let out = text;
+  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
+  // The lowercase replacements ("the agent") can land at a sentence start;
+  // re-capitalize the first letter of the string and after . ! ? or a newline.
+  out = out.replace(/(^|[.!?]\s+|\n\s*)([a-z])/g, (_m, pre: string, ch: string) => pre + ch.toUpperCase());
+  return out;
+}
+
 // --- PR Description ---
 
 function formatPrDescription(state: SessionState): string {
@@ -71,13 +134,16 @@ function formatPrDescription(state: SessionState): string {
   // reviewer's eyes) when a debrief exists; ADR deliberately omits this (see
   // the format-markdown test) because an ADR is a decision record, not a change
   // narrative, and the decision/context blocks already carry its substance.
-  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  // F2 (H1) — a rejected/retracted debrief must not lead a PR description; F2
+  // (M1) — the surviving narrative is neutralized out of pair-voice for the
+  // teammate reading it.
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && isShippedArtifact(a));
   for (const d of debriefs) {
     const content = coerceDebriefContent(d.content);
-    if (content.summary) sections.push(`${content.summary}\n`);
+    if (content.summary) sections.push(`${neutralizeVoice(content.summary)}\n`);
     if (content.needsYourEyes?.length) {
       sections.push("**What needs review:**");
-      for (const n of content.needsYourEyes) sections.push(`- ${n.what} — ${n.why}`);
+      for (const n of content.needsYourEyes) sections.push(`- ${neutralizeVoice(n.what)} — ${neutralizeVoice(n.why)}`);
       sections.push("");
     }
   }
@@ -97,7 +163,7 @@ function formatPrDescription(state: SessionState): string {
   }
 
   // Plan steps
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
   for (const plan of plans) {
     const steps = coercePlanContent(plan.content).steps;
     if (steps.length > 0) {
@@ -113,7 +179,7 @@ function formatPrDescription(state: SessionState): string {
   }
 
   // Key findings
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
   if (research.length > 0) {
     const findings = research.flatMap((r) => coerceResearchContent(r.content).findings);
     const highFindings = findings.filter((f: any) => f.significance === "high");
@@ -142,16 +208,19 @@ function formatAdr(state: SessionState): string {
   sections.push(`**Status**: Accepted\n`);
 
   // Context — from findings
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  // F2 (H1) — an ADR records what was DECIDED and shipped; rejected/retracted
+  // research is not context, it's a discarded proposal. F2 (M1) — the surviving
+  // narrative is neutralized out of pair-voice for an external reader.
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
   if (research.length > 0) {
     sections.push("## Context\n");
     for (const r of research) {
       const content = coerceResearchContent(r.content);
-      if (content.summary) sections.push(content.summary + "\n");
+      if (content.summary) sections.push(neutralizeVoice(content.summary) + "\n");
       for (const f of content.findings ?? []) {
         sections.push(`### ${f.title ?? f.category}\n`);
-        sections.push(f.detail);
-        if (f.impact) sections.push(`\n**Impact**: ${f.impact}`);
+        sections.push(neutralizeVoice(f.detail));
+        if (f.impact) sections.push(`\n**Impact**: ${neutralizeVoice(f.impact)}`);
         sections.push("");
       }
     }
@@ -168,7 +237,7 @@ function formatAdr(state: SessionState): string {
       sections.push(`**${d.context}**\n`);
       sections.push(`Chosen: **${chosen?.title}** — ${chosen?.description ?? ""}`);
       if (d.response?.reasoning) {
-        sections.push(`\nReasoning: ${d.response.reasoning}`);
+        sections.push(`\nReasoning: ${neutralizeVoice(d.response.reasoning)}`);
       }
       if (rejected.length > 0) {
         sections.push("\nRejected alternatives:");
@@ -181,7 +250,7 @@ function formatAdr(state: SessionState): string {
   }
 
   // Consequences — from plan
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
   if (plans.length > 0) {
     sections.push("## Consequences\n");
     for (const plan of plans) {
@@ -237,11 +306,20 @@ function formatDebriefSections(state: SessionState): string[] {
   const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
   for (const d of debriefs) {
     const content = coerceDebriefContent(d.content);
-    sections.push(`## Debrief — ${d.title}\n`);
+    // F2 (M2) — don't double-prefix "Debrief — Debrief — <title>" when the
+    // artifact title already carries the word.
+    const t = (d.title ?? "").trim();
+    const heading = /^debrief\b/i.test(t) ? t : `Debrief — ${t || "Session"}`;
+    sections.push(`## ${heading}\n`);
+    const note = rejectionNote(d);
+    if (note) sections.push(note);
     if (content.summary) sections.push(`${content.summary}\n`);
 
     if (content.sections?.length) {
-      sections.push("### What changed\n");
+      // F2 (M2) — the group header for the walk lane was "### What changed",
+      // which collided with a same-named debrief section. The UI calls this
+      // lane THE WALK; "Walkthrough" removes the collision.
+      sections.push("### Walkthrough\n");
       for (const s of content.sections) {
         sections.push(`#### ${s.title}\n`);
         if (s.body) sections.push(`${s.body}\n`);
@@ -296,6 +374,8 @@ function formatExplainerSections(state: SessionState): string[] {
   for (const ex of explainers) {
     const content = coerceExplainerContent(ex.content);
     sections.push(`## Explainer — ${content.title || ex.title}\n`);
+    const note = rejectionNote(ex);
+    if (note) sections.push(note);
     if (content.overview) sections.push(`${content.overview}\n`);
     content.sections?.forEach((s, i) => {
       sections.push(`### ${i + 1}. ${s.heading}\n`);
@@ -315,6 +395,8 @@ function formatSpecSections(state: SessionState): string[] {
   for (const sp of specs) {
     const content = coerceSpecContent(sp.content);
     sections.push(`## Spec — ${sp.title}\n`);
+    const note = rejectionNote(sp);
+    if (note) sections.push(note);
     if (content.objective) sections.push(`**Objective**: ${content.objective}\n`);
     if (content.context) sections.push(`${content.context}\n`);
     if (content.requirements?.length) {
@@ -339,6 +421,8 @@ function formatChangesetSections(state: SessionState): string[] {
   for (const cs of changesets) {
     const content = coerceChangesetContent(cs.content);
     sections.push(`## Changeset — ${cs.title}\n`);
+    const note = rejectionNote(cs);
+    if (note) sections.push(note);
     if (content.summary) sections.push(`${content.summary}\n`);
     for (const file of content.files ?? []) {
       sections.push(`### \`${file.path}\` (${file.changeType})\n`);
@@ -375,6 +459,11 @@ function formatFull(state: SessionState): string {
     sections.push("## Findings\n");
     for (const r of research) {
       const content = coerceResearchContent(r.content);
+      // F2 (H1) — the full record KEEPS rejected/retracted research (the whole
+      // record is the point here) but marks it so a reader never mistakes a
+      // proposed-then-rejected approach for what shipped.
+      const note = rejectionNote(r);
+      if (note) sections.push(note);
       if (content.summary) sections.push(`${content.summary}\n`);
 
       for (const f of content.findings ?? []) {
@@ -447,6 +536,8 @@ function formatFull(state: SessionState): string {
     sections.push("## Implementation Plan\n");
     for (const plan of plans) {
       sections.push(`### ${plan.title}\n`);
+      const rejNote = rejectionNote(plan);
+      if (rejNote) sections.push(rejNote);
       const review = state.planReviews.find((p) => p.artifactId === plan.id);
       if (review?.verdict) sections.push(`**Status**: ${review.verdict}\n`);
 

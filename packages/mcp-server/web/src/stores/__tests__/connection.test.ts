@@ -485,6 +485,35 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0]!.title).toMatch(/claude will see this/i);
     });
 
+    it("L3 (#196) — a LIVE agent gets the 'next check' toast", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: true } as any] });
+      activeAdapter.emit({ type: "feedback_received", commentId: "cmt_1" });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts[0]!.title).toMatch(/next check/i);
+      expect(toasts[0]!.title).not.toMatch(/resumes/i);
+    });
+
+    it("L3 (#196) — an EXITED agent gets the 'when the session resumes' toast, not the 30s promise", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+
+      useConnectionStore.getState().connect();
+      useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false } as any] });
+      activeAdapter.emit({ type: "feedback_received", commentId: "cmt_1" });
+      await flush();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts[0]!.title).toMatch(/when the session resumes/i);
+      expect(toasts[0]!.title).not.toMatch(/next check/i);
+      expect(toasts[0]!.body).not.toMatch(/every 30 seconds/i);
+    });
+
     it("debounces `feedback_received` bursts — 2 emits in quick succession = 1 toast", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

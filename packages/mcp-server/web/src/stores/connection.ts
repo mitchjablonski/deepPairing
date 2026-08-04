@@ -358,11 +358,20 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             const now = Date.now();
             if (now - lastFeedbackToastAt < FEEDBACK_TOAST_DEBOUNCE_MS) break;
             lastFeedbackToastAt = now;
+            // L3 (#196) — the "next check… every 30s" promise is a lie once the
+            // agent has exited (the composer right below already says so). Branch
+            // the copy on the SAME liveness predicate ResumeQuestionsBanner uses:
+            // no live session ⇒ the message waits for a resume, not a poll.
+            const agentLive = get().activeSessions.some((s) => s.live !== false);
             import("./toast").then(({ useToastStore }) => {
               useToastStore.getState().push({
                 kind: "info",
-                title: "✓ Sent — Claude will see this on its next check",
-                body: "Claude checks in about every 30 seconds while working.",
+                title: agentLive
+                  ? "✓ Sent — Claude will see this on its next check"
+                  : "✓ Saved — Claude will see this when the session resumes",
+                body: agentLive
+                  ? "Claude checks in about every 30 seconds while working."
+                  : "The agent has exited; your message is saved and delivered when you resume the session.",
                 ttl: 4000,
               });
             });

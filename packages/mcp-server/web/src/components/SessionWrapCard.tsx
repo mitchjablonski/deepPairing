@@ -27,7 +27,12 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
 
   const stats = useMemo(() => {
     const total = artifacts.length;
-    const approved = artifacts.filter((a) => a.status === "approved").length;
+    // L1 (#196) — an approved explainer means "Read + understood" (E2 vocab,
+    // ArtifactPanel's statusLabel), NOT an approval of built work. Counting it
+    // as "approved" inflated the wrap tally. Split it into its own "read" count
+    // so "2 approved · 1 read" tells the truth.
+    const approved = artifacts.filter((a) => a.status === "approved" && a.type !== "explainer").length;
+    const read = artifacts.filter((a) => a.type === "explainer" && a.status === "approved").length;
     const decisions = artifacts.filter((a) => a.type === "decision").length;
     // First-seen casing per normalized key — SessionMetrics' idiom.
     const conceptNames = new Map<string, string>();
@@ -51,7 +56,7 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
         }
       }
     }
-    return { total, approved, decisions, concepts: [...conceptNames.values()].slice(0, 6) };
+    return { total, approved, read, decisions, concepts: [...conceptNames.values()].slice(0, 6) };
   }, [artifacts]);
 
   // Nothing waiting on the human is a PRECONDITION of the wrap state; if a
@@ -70,6 +75,7 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
         <span className="font-medium text-text-primary">Session wrapped.</span>{" "}
         {stats.total} artifact{stats.total === 1 ? "" : "s"}
         {stats.approved > 0 && <> · {stats.approved} approved</>}
+        {stats.read > 0 && <> · {stats.read} read</>}
         {stats.decisions > 0 && <> · {stats.decisions} decision{stats.decisions === 1 ? "" : "s"}</>}
         {stats.concepts.length > 0 && (
           <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
