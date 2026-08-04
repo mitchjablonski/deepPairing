@@ -83,19 +83,33 @@ describe("present_* tool descriptions carry single-review-surface guidance (U0.3
     expect(d).toMatch(/SINGLE REVIEW SURFACE/i);
   });
 
-  // V1 — checkpoint cadence guidance, distinct from "single review surface".
-  it("present_code_change is described as a per-edit checkpoint, not a one-shot for big diffs", async () => {
+  // #190 — the default-mode flip. Batched present_changeset is the default code
+  // surface; present_code_change is the single-file EXCEPTION, and log_reasoning
+  // is demoted to sparingly (concept-naming lives in the debrief). These pins
+  // encode the NEW cadence (they replaced the old per-edit-checkpoint pins).
+  it("present_code_change is described as the single-file EXCEPTION (batched changeset is the default)", async () => {
     const d = await descFor("present_code_change");
-    expect(d).toMatch(/REQUIRED BEFORE EACH WRITE/i);
-    expect(d).toMatch(/per-edit checkpoint/i);
-    expect(d).toMatch(/Batched implementation .*protocol violation/i);
+    expect(d).toMatch(/SINGLE-file/i);
+    expect(d).toMatch(/exception/i);
+    expect(d).toMatch(/present_changeset/);
+    // The old per-edit-every-write mandate is gone.
+    expect(d).not.toMatch(/REQUIRED BEFORE EACH/i);
   });
 
-  it("log_reasoning is described as the WHY half of the per-edit checkpoint pair", async () => {
+  it("log_reasoning is demoted to sparingly (standalone reasoning), not the per-edit default", async () => {
     const d = await descFor("log_reasoning");
-    expect(d).toMatch(/REQUIRED BEFORE EACH SIGNIFICANT EDIT/i);
-    expect(d).toMatch(/per-edit checkpoint/i);
-    expect(d).toMatch(/present_code_change/);
+    expect(d).toMatch(/sparingly/i);
+    expect(d).toMatch(/standalone/i);
+    expect(d).toMatch(/present_debrief/);
+    expect(d).not.toMatch(/REQUIRED BEFORE EACH/i);
+  });
+
+  it("#190 — present_debrief is described as the primary comprehension surface, ended once per feature", async () => {
+    const d = await descFor("present_debrief");
+    expect(d).toMatch(/primary comprehension surface/i);
+    expect(d).toMatch(/END EVERY feature/i);
+    expect(d).toMatch(/decisionsMade/);
+    expect(d).toMatch(/needsYourEyes/);
   });
 
   // X8 — descriptions must use the Summary / Schema note / Workflow

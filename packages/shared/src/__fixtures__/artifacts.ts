@@ -280,6 +280,102 @@ export const changesetCrossFileComment: Comment = {
   createdAt: "2026-04-02T10:21:00.000Z",
 };
 
+// #190 — the end-of-feature DEBRIEF for the session-TTL refactor: what changed
+// and why, the calls the agent made alone, what needs the human's eyes, what was
+// deferred, and open questions. Written in second person TO the pair.
+export const debriefArtifact: Artifact = {
+  id: "art_debrief_001",
+  sessionId: "sess_1",
+  type: "debrief",
+  version: 1,
+  parentId: null,
+  title: "Debrief — sliding-window session TTL",
+  status: "draft",
+  content: {
+    summary:
+      "We moved the sliding-window session-TTL refresh out of every route and into one place in the auth middleware, so every authenticated route now inherits it for free. Below is the walk of what changed, the calls I made without you, and what I'd like your eyes on.",
+    sections: [
+      {
+        title: "Centralized the TTL refresh in middleware",
+        body: "The refresh used to be scheduled by hand in each route. `requireSession` now calls `store.getAndTouch(sid)`, which refreshes the expiry as a side effect of the lookup, so no route has to remember to do it.",
+        concepts: [
+          {
+            name: "sliding-window expiration",
+            oneLineExplanation: "each authenticated request pushes the session's expiry forward, so active users are never logged out mid-session",
+          },
+        ],
+        evidence: [
+          {
+            filePath: "auth/middleware.ts",
+            lineStart: 26,
+            lineEnd: 30,
+            snippet: "    const session = await store.getAndTouch(sid); // refreshes TTL\n    if (!session || session.expiresAt < Date.now()) {\n      clearSessionCookie(res);\n      return res.status(401).end();\n    }",
+            language: "typescript",
+            explanation: "The single choke point every authenticated route flows through — refresh + expiry check live here now.",
+          },
+        ],
+        changesetRef: "art_changeset_001",
+      },
+      {
+        title: "Widened the Session type + added a test",
+        body: "`Session` gained an `expiresAt` field, and there's a new unit test asserting `getAndTouch` moves the window forward.",
+        artifactRefs: ["art_changeset_001"],
+      },
+    ],
+    decisionsMade: [
+      {
+        what: "Return 401 and clear the cookie on an expired session, rather than transparently re-issuing one.",
+        why: "A silent re-issue would mask a genuinely stale session and weaken the security posture; failing closed is the safer default.",
+        alternative: "Auto-renew any session seen within a grace window — rejected as too permissive for an auth path.",
+      },
+    ],
+    needsYourEyes: [
+      {
+        what: "The expiry check in the middleware diff",
+        why: "It changes the auth failure path for every route at once — worth a careful read before we ship.",
+        artifactRef: "art_changeset_001",
+      },
+    ],
+    deferred: [
+      {
+        what: "Refresh-token rotation",
+        why: "Out of scope for this change; the sliding window covers the active-session case. Flag it if you want it next.",
+      },
+    ],
+    openQuestions: [
+      "Should the sliding window survive a server restart, or is an in-memory store acceptable here?",
+    ],
+  },
+  agentReasoning: "End-of-feature comprehension surface for the TTL refactor.",
+  createdAt: "2026-04-02T10:30:00.000Z",
+  updatedAt: "2026-04-02T10:30:00.000Z",
+};
+
+// A grain comment on a debrief section (sectionId = `debrief:<key>`).
+export const debriefSectionComment: Comment = {
+  id: "cmt_debrief_sec_001",
+  sessionId: "sess_1",
+  target: { artifactId: "art_debrief_001", sectionId: "debrief:0" },
+  parentCommentId: null,
+  author: "human",
+  content: "Nice — the single choke point is exactly what I wanted.",
+  acknowledged: false,
+  createdAt: "2026-04-02T10:31:00.000Z",
+};
+
+// An ask-anything question on the debrief (the question-priority lane).
+export const debriefQuestionComment: Comment = {
+  id: "cmt_debrief_q_001",
+  sessionId: "sess_1",
+  target: { artifactId: "art_debrief_001" },
+  parentCommentId: null,
+  author: "human",
+  intent: "question",
+  content: "Does getAndTouch add a write on every request? Any perf concern under load?",
+  acknowledged: false,
+  createdAt: "2026-04-02T10:32:00.000Z",
+};
+
 export const sampleComment: Comment = {
   id: "cmt_001",
   sessionId: "sess_1",

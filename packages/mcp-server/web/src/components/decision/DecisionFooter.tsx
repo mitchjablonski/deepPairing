@@ -31,6 +31,13 @@ export interface DecisionFooterProps {
   onSelect: (optionId: string) => void;
   predictOptIn: boolean;
   setPredictOptIn: Dispatch<SetStateAction<boolean>>;
+  /** #190 (the 0/20 calibration demotion) — gate the two calibration footer
+   *  actions ("+ Add reasoning" and "+ Capture prediction") so they render ONLY
+   *  in the Discuss workbench, never on the compact inline decision card.
+   *  Defaults false: the compact card omits them; DecisionWorkbench passes true.
+   *  The underlying state (showReasoning / predictOptIn / reasoning) is untouched
+   *  — this demotes only the SURFACE where the triggers appear. */
+  showCalibrationActions?: boolean;
 }
 
 export function DecisionFooter({
@@ -59,6 +66,7 @@ export function DecisionFooter({
   onSelect,
   predictOptIn,
   setPredictOptIn,
+  showCalibrationActions = false,
 }: DecisionFooterProps) {
   return (
     /* X11 — escape hatches grouped under one footer instead of two
@@ -223,7 +231,10 @@ export function DecisionFooter({
         </div>
       ) : (
         <div className="flex items-center gap-3 flex-wrap text-2xs text-text-muted">
-          {!showReasoning && (
+          {/* #190 — the calibration actions were 0/20 on the compact card;
+              they now render ONLY in the Discuss workbench (showCalibrationActions).
+              The state machine is unchanged — this gates the trigger surface. */}
+          {showCalibrationActions && !showReasoning && (
             <button
               onClick={() => { setShowReasoning(true); setShowSendBack(false); }}
               className="hover:text-accent-blue transition-colors"
@@ -236,8 +247,9 @@ export function DecisionFooter({
               decisions. When ON, clicking an option enters the
               predicting phase (confidence + outcome inputs) before
               submitting; when OFF (default), the pick submits
-              immediately. Surfaces only when stakes='high'. */}
-          {stakes === "high" && (
+              immediately. Surfaces only when stakes='high' AND (#190)
+              only in the Discuss workbench. */}
+          {showCalibrationActions && stakes === "high" && (
             <button
               onClick={() => setPredictOptIn((v) => !v)}
               className={`transition-colors ${predictOptIn ? "text-accent-violet" : "hover:text-accent-violet"}`}

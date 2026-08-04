@@ -82,6 +82,20 @@ function describeDecisionSection(sectionId: string): string {
 }
 
 /**
+ * #190 — a debrief GRAIN comment anchors to a PART of the debrief via a
+ * `debrief:<section-key>` sectionId (a distinct namespace from decision grains).
+ * Render the section so the agent knows WHICH part the human reacted to. Numeric
+ * keys (`debrief:0` / `debrief:section:2`) name the ordered walk sections
+ * 1-based; named keys (`debrief:summary`, `debrief:needs-your-eyes`) humanize.
+ */
+function describeDebriefSection(sectionId: string): string {
+  const key = sectionId.slice("debrief:".length);
+  const m = /^(?:section:)?(\d+)$/.exec(key);
+  if (m) return `section #${Number(m[1]) + 1}`;
+  return key.replace(/-/g, " ");
+}
+
+/**
  * #173 — the structured delivery of a region comment, split by artifact kind.
  *
  * A DECISION region comment (target.optionId set — the focused-view region
@@ -281,6 +295,12 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // horizon-check sectionIds, which carry neither and stay untouched.
   if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
     loc += ` — ${describeDecisionSection(c.target.sectionId)}`;
+  }
+  // #190 — a debrief grain comment names the debrief part it anchors to. Its
+  // OWN block (distinct namespace: `debrief:*`, never optionId) so it can't
+  // collide with the decision grain block above.
+  if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
+    loc += ` — ${describeDebriefSection(c.target.sectionId)}`;
   }
   // #140 — a region comment names the diagram nodes it covers TEXTUALLY so
   // the agent can find them in the Mermaid source it authored (no image).

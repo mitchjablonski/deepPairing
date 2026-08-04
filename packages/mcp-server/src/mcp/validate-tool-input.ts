@@ -30,6 +30,7 @@ import {
   CodeChangeContentSchema,
   ReasoningContentSchema,
   ChangesetContentSchema,
+  DebriefContentSchema,
   PlanVisualSchema,
   DecisionOptionBaseSchema,
 } from "@deeppairing/shared";
@@ -306,6 +307,40 @@ const EXAMPLE_CHANGESET = `{
   ]
 }`;
 
+const EXAMPLE_DEBRIEF = `{
+  "title": "Debrief — rate limiting on the auth endpoints",
+  "summary": "We added IP-based rate limiting to /login and /reset so credential-stuffing is throttled without hurting real users. Here is the walk of what changed, the calls I made alone, and what I'd like your eyes on.",
+  "sections": [
+    {
+      "title": "Added a sliding-window limiter middleware",
+      "body": "Requests to the auth routes now pass through a limiter keyed on client IP.",
+      "concepts": [
+        { "name": "sliding-window rate limiting",
+          "oneLineExplanation": "counts requests in a moving time window instead of fixed buckets, so bursts at a boundary can't slip through" }
+      ],
+      "evidence": [
+        { "filePath": "api/middleware/limit.ts", "lineStart": 12, "lineEnd": 14,
+          "snippet": "if (window.count(ip) > MAX) return res.status(429).end();",
+          "explanation": "The choke point every auth route inherits." }
+      ],
+      "changesetRef": "art_xxxxxxxxxx"
+    }
+  ],
+  "decisionsMade": [
+    { "what": "Return 429 with a Retry-After rather than a silent drop.",
+      "why": "A silent drop makes the limit undebuggable for legitimate clients.",
+      "alternative": "Fail open on limiter errors — rejected as too permissive for auth." }
+  ],
+  "needsYourEyes": [
+    { "what": "The MAX threshold", "why": "Too low locks out real users; worth your call.",
+      "artifactRef": "art_xxxxxxxxxx" }
+  ],
+  "deferred": [
+    { "what": "Distributed limiter state", "why": "In-memory is fine single-instance; revisit when we scale out." }
+  ],
+  "openQuestions": ["Should the limit apply per-account as well as per-IP?"]
+}`;
+
 // ---------------------------------------------------------------------------
 // #183 — EXAMPLE-ECHO GUARD.
 //
@@ -359,6 +394,7 @@ const EX_PLAN: unknown = JSON.parse(EXAMPLE_PLAN);
 const EX_CODE_CHANGE: unknown = JSON.parse(EXAMPLE_CODE_CHANGE);
 const EX_REASONING: unknown = JSON.parse(EXAMPLE_REASONING);
 const EX_CHANGESET: unknown = JSON.parse(EXAMPLE_CHANGESET);
+const EX_DEBRIEF: unknown = JSON.parse(EXAMPLE_DEBRIEF);
 
 // NOTE: no `optionTitles` — present_options matches on the context scalar
 // alone (the option-title set was a false-positive-prone arm, removed in the
@@ -409,6 +445,10 @@ const stepDescriptions = (o: unknown): string[] => pluckSet(o, "steps", "descrip
  *  - changeset: title ONLY — the example title is a full, highly specific
  *               sentence. A real changeset reusing the example SUMMARY with a
  *               different title is admitted (summary is not an arm).
+ *  - debrief:   summary ONLY — the example summary is a full, highly specific
+ *               narrative sentence (the debrief's distinctive scalar). A real
+ *               debrief reusing the example TITLE with a different summary is
+ *               admitted; only a verbatim summary replay is caught.
  */
 const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
   present_options: (d) =>
@@ -430,6 +470,7 @@ const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
     normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) ||
     normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
   present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
+  present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary")),
 };
 
 /** The pointed, second-person-to-the-agent rejection. Fail-loud, in the grain
@@ -652,6 +693,30 @@ export function validatePresentChangesetInput(args: any): ValidationResult<z.inf
   return admit("present_changeset", { title: titleParse.data.title, ...contentParse.data });
 }
 
+export function validatePresentDebriefInput(args: any): ValidationResult<z.infer<typeof DebriefContentSchema> & { title: string }> {
+  // #190 — a debrief needs a title (artifact-level) plus the content fields.
+  // Like spec/changeset, title is validated first, so the #184 truncation lane
+  // (earlier-scalar-present / required-array-absent) does NOT apply here — a
+  // mid-stream cutoff surfaces as the title-missing path, and the echo guard
+  // still nets any example replay.
+  const titleParse = z.object({ title: z.string().min(1) }).safeParse(args);
+  if (!titleParse.success) {
+    return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF) };
+  }
+  const contentParse = DebriefContentSchema.safeParse({
+    summary: args?.summary,
+    sections: args?.sections,
+    decisionsMade: args?.decisionsMade,
+    needsYourEyes: args?.needsYourEyes,
+    deferred: args?.deferred,
+    openQuestions: args?.openQuestions,
+  });
+  if (!contentParse.success) {
+    return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF) };
+  }
+  return admit("present_debrief", { title: titleParse.data.title, ...contentParse.data });
+}
+
 export function validateLogReasoningInput(args: any): ValidationResult<z.infer<typeof ReasoningContentSchema>> {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -718,6 +783,9 @@ export const TOOL_INPUT_SCHEMAS = {
   // HUMAN-driven (set via the review route), so they're omitted from the
   // advertised input — the agent never sends them.
   present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
+  // #190 — the end-of-feature debrief. `summary` is the only required content
+  // field (all others optional-tolerant); title is artifact-level.
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE }),
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's

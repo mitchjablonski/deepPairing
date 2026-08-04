@@ -7,6 +7,7 @@ import {
   SpecContentSchema,
   ReasoningContentSchema,
   ChangesetContentSchema,
+  DebriefContentSchema,
 } from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
@@ -19,6 +20,10 @@ export const ArtifactTypeSchema = z.enum([
   // #171 — a change spanning 2+ files, reviewed as one unit (unified diffs +
   // per-file review state). Single-file changes stay `code_change`.
   "changeset",
+  // #190 — the end-of-feature comprehension surface: ONE batched artifact that
+  // summarizes what changed and why, the decisions the agent made alone, what
+  // needs the human's eyes, and an ask-anything thread. The thesis's 80% case.
+  "debrief",
 ]);
 
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>;
@@ -211,7 +216,8 @@ export function parseArtifactContent(
   | ParseResult<import("./content-types.js").PlanContent>
   | ParseResult<import("./content-types.js").SpecContent>
   | ParseResult<import("./content-types.js").ReasoningContent>
-  | ParseResult<import("./content-types.js").ChangesetContent> {
+  | ParseResult<import("./content-types.js").ChangesetContent>
+  | ParseResult<import("./content-types.js").DebriefContent> {
   const schema = (() => {
     switch (artifact.type) {
       case "decision":     return DecisionContentSchema;
@@ -221,6 +227,7 @@ export function parseArtifactContent(
       case "spec":         return SpecContentSchema;
       case "reasoning":    return ReasoningContentSchema;
       case "changeset":    return ChangesetContentSchema;
+      case "debrief":      return DebriefContentSchema;
     }
   })();
   const result = schema.safeParse(artifact.content);

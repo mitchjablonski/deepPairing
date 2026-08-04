@@ -340,7 +340,13 @@ function FindingLegend({ colorBy, findings }: { colorBy: ColorBy; findings: Rich
   );
 }
 
-function EvidenceItem({
+// Exported so other narrative artifacts (the #190 DEBRIEF sections) reuse the
+// exact Evidence + CommentableCode wiring instead of duplicating the
+// commentsByLine bucketing + FileViewer plumbing. The debrief passes its
+// section index as `findingIndex` (a debrief has no findings, so the namespace
+// is its own) so line comments anchor via the same generic findingIndex/
+// evidenceIndex target the server already delivers.
+export function EvidenceItem({
   evidence,
   artifactId,
   findingIndex,
@@ -492,7 +498,9 @@ function EvidenceItem({
   );
 }
 
-function renderEvidence(
+// Exported alongside EvidenceItem so the debrief's section evidence renders
+// through the identical string|Evidence[] handling (reuse, not rebuild).
+export function renderEvidence(
   evidence: unknown,
   artifactId: string,
   findingIndex: number,

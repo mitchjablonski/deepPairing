@@ -26,10 +26,11 @@ import {
   planArtifact,
   changesetArtifact,
   changesetCrossFileComment,
+  debriefArtifact,
   sampleComment,
   lineComment,
 } from "../../__fixtures__/artifacts.js";
-import { ChangesetContentSchema, DecisionOptionBaseSchema } from "../content-types.js";
+import { ChangesetContentSchema, DebriefContentSchema, DecisionOptionBaseSchema } from "../content-types.js";
 
 describe("AgentEventSchema", () => {
   it("parses text events", () => {
@@ -251,6 +252,23 @@ describe("ArtifactSchema", () => {
     expect(content.files[1]?.stats).toEqual({ additions: 24, deletions: 11 });
     expect(content.risks).toContain("touches auth");
     expect(content.reviewState?.["auth/session.ts"]).toBe("reviewed");
+  });
+
+  // #190 — debrief is a first-class artifact type.
+  it("parses a debrief artifact and round-trips its content", () => {
+    const result = ArtifactSchema.parse(debriefArtifact);
+    expect(result.type).toBe("debrief");
+    const content = DebriefContentSchema.parse(result.content);
+    expect(content.summary.length).toBeGreaterThan(0);
+    expect(content.sections).toHaveLength(2);
+    expect(content.sections?.[0]?.concepts?.[0]?.name).toBe("sliding-window expiration");
+    expect(content.decisionsMade?.[0]?.alternative).toBeDefined();
+    expect(content.needsYourEyes?.[0]?.artifactRef).toBe("art_changeset_001");
+    expect(content.openQuestions).toHaveLength(1);
+  });
+
+  it("rejects a debrief with no summary (the one required field)", () => {
+    expect(() => DebriefContentSchema.parse({ sections: [] })).toThrow();
   });
 
   it("rejects a changeset file with an unknown changeType", () => {

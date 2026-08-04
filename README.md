@@ -234,11 +234,12 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), the
   `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
-15 MCP tools: `present_findings`, `present_options`, `present_spec`,
-`present_plan`, `present_code_change`, `present_changeset`, `update_plan_progress`,
-`log_reasoning`, `recall`, `revise_artifact`, `answer_question`, `post_pr_review`,
-`export_session`, `check_feedback`, `get_companion_url` — plus two MCP prompts
-(`recall` and `seed`) for slash-style queries.
+16 MCP tools: `present_findings`, `present_options`, `present_spec`,
+`present_plan`, `present_code_change`, `present_changeset`, `present_debrief`,
+`update_plan_progress`, `log_reasoning`, `recall`, `revise_artifact`,
+`answer_question`, `post_pr_review`, `export_session`, `check_feedback`,
+`get_companion_url` — plus two MCP prompts (`recall` and `seed`) for
+slash-style queries.
 
 ### CLI
 

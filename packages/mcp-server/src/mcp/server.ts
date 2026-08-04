@@ -29,6 +29,7 @@ import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
 import { handlePresentCodeChange } from "./tools/present-code-change.js";
 import { handlePresentChangeset } from "./tools/present-changeset.js";
+import { handlePresentDebrief } from "./tools/present-debrief.js";
 import { handleRecall } from "./tools/recall.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult } from "./tools/types.js";
@@ -147,9 +148,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "log_reasoning",
         annotations: { title: "Log reasoning", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          "Log the reasoning for an action before taking it. Pairs with present_code_change for the per-edit checkpoint cadence (WHY + WHAT — together they give the human a chance to redirect BEFORE the diff is on disk)." +
+          "Log a STANDALONE piece of reasoning worth interrupting for (a surprising tradeoff, a non-obvious constraint) before you act. Use SPARINGLY — do NOT stream a card per step; for a feature, concept-naming now lives in present_debrief's sections[].concepts." +
           "\n\nSchema note: required: `action`, `reasoning`. Name the underlying concept in `concept` whenever one applies — that's the human's learning lever. INPUT_VALIDATION_FAILED on mismatch." +
-          "\n\nWorkflow: REQUIRED BEFORE EACH SIGNIFICANT EDIT. Don't just chat-explain.",
+          "\n\nWorkflow: sparingly, for genuinely standalone reasoning — NOT a per-edit default. Kept functional for back-compat; end features with present_debrief instead. Don't just chat-explain.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.log_reasoning),
@@ -292,9 +293,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "present_code_change",
         annotations: { title: "Present code change", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          "Present a code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) — name the pattern (e.g. 'work factor tuning') so cross-project preflight matches it." +
+          "Present a SINGLE-file code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) — name the pattern so cross-project preflight matches it." +
           "\n\nSchema note: required: `filePath`, `changeType`, `after`, `reasoning`. `concept` strongly preferred. INPUT_VALIDATION_FAILED on mismatch." +
-          "\n\nWorkflow: REQUIRED BEFORE EACH Write/Edit/MultiEdit on a file not yet approved this session — per-edit checkpoint, not one-shot. Batched implementation skipping checkpoints is a protocol violation. SINGLE REVIEW SURFACE — companion UI only, don't paste in chat. Call check_feedback for the verdict.",
+          "\n\nWorkflow: the EXCEPTION, not the default. Use it only for a genuinely single-file, surgical change, or when the human asks to see an edit first. For a change spanning 2+ FILES, batch into present_changeset instead (then end with present_debrief). SINGLE REVIEW SURFACE — companion UI only, don't paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change),
@@ -309,6 +310,17 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset),
+      },
+      {
+        name: "present_debrief",
+        annotations: { title: "Present debrief", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description:
+          "At the end of a feature or autonomous run, present ONE debrief summarizing what changed and why — this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), `decisionsMade[]` (the calls you made WITHOUT the human — the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread." +
+          "\n\nSchema note: only `summary` is required; everything else is optional-tolerant. Put the FULL deliberation IN the content — writing \"details in chat\" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes). SINGLE REVIEW SURFACE — don't re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.",
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief),
       },
       {
         name: "recall",
@@ -880,6 +892,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     "present_plan",
     "present_code_change",
     "present_changeset",
+    "present_debrief",
     "log_reasoning",
     "revise_artifact",
     "post_pr_review",
@@ -992,6 +1005,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       case "present_changeset":
         // #171 — multi-file changeset review (extracted to tools/present-changeset.ts).
         return handlePresentChangeset(ctx, args);
+
+      case "present_debrief":
+        // #190 — end-of-feature comprehension surface (tools/present-debrief.ts).
+        return handlePresentDebrief(ctx, args);
 
       case "check_feedback":
         // B3 — extracted to mcp/tools/check-feedback.ts (the last big inline

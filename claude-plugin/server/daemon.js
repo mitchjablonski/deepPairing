@@ -22822,6 +22822,52 @@ var ChangesetContentSchema = external_exports.object({
    *  changeset-review route), keyed by file path. */
   reviewReasons: ChangesetReviewReasonsSchema.optional()
 });
+var DebriefSectionSchema = external_exports.object({
+  title: external_exports.string(),
+  body: external_exports.string().describe("The narrative for this part of the change, in plain English"),
+  /** Named concepts applied here — same shape as reasoning/decision concepts so
+   *  the UI reuses ConceptCallout. THE learning lever: name the pattern, not just
+   *  the fix. */
+  concepts: external_exports.array(ReasoningConceptSchema).optional(),
+  /** Code evidence for this section (file:line + snippet + explanation), rendered
+   *  through the shared Evidence/CommentableCode stack. Accepts a legacy string
+   *  reference or a rich Evidence object (EvidenceInputSchema). */
+  evidence: external_exports.array(EvidenceInputSchema).optional(),
+  /** The changeset artifact id this section walks through (drill-in link). */
+  changesetRef: external_exports.string().optional().describe("Artifact id of the changeset this section explains"),
+  /** Other underlying artifact ids this section references (drill-in links). */
+  artifactRefs: external_exports.array(external_exports.string()).optional()
+});
+var DebriefDecisionSchema = external_exports.object({
+  what: external_exports.string().describe("What you decided on your own"),
+  why: external_exports.string().describe("Why you made that call"),
+  alternative: external_exports.string().optional().describe("The alternative you considered but did not take")
+});
+var DebriefReviewItemSchema = external_exports.object({
+  what: external_exports.string().describe("What the human should review"),
+  why: external_exports.string().describe("Why it warrants their eyes"),
+  artifactRef: external_exports.string().optional().describe("Artifact id to open for this item")
+});
+var DebriefDeferredSchema = external_exports.object({
+  what: external_exports.string().describe("What was left undone"),
+  why: external_exports.string().describe("Why it was deferred")
+});
+var DebriefContentSchema = external_exports.object({
+  /** The narrative — what we built and why. The anchor field. */
+  summary: external_exports.string(),
+  /** Ordered walk of what changed. */
+  sections: external_exports.array(DebriefSectionSchema).optional(),
+  /** Decisions the agent made without the human — the accountability block. */
+  decisionsMade: external_exports.array(DebriefDecisionSchema).optional(),
+  /** The prioritized review list — "look at these first". */
+  needsYourEyes: external_exports.array(DebriefReviewItemSchema).optional(),
+  /** What was left undone and why. */
+  deferred: external_exports.array(DebriefDeferredSchema).optional(),
+  /** Reuses the existing open-question machinery (spec/plan host these the same
+   *  way) — questions the agent wants the human to weigh in on, threaded through
+   *  the same questionIndex comment lane. */
+  openQuestions: external_exports.array(external_exports.string()).optional()
+});
 
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
@@ -22833,7 +22879,11 @@ var ArtifactTypeSchema = external_exports.enum([
   "spec",
   // #171 — a change spanning 2+ files, reviewed as one unit (unified diffs +
   // per-file review state). Single-file changes stay `code_change`.
-  "changeset"
+  "changeset",
+  // #190 — the end-of-feature comprehension surface: ONE batched artifact that
+  // summarizes what changed and why, the decisions the agent made alone, what
+  // needs the human's eyes, and an ask-anything thread. The thesis's 80% case.
+  "debrief"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
