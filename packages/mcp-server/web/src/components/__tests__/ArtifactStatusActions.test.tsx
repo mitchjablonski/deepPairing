@@ -54,16 +54,16 @@ describe("B6 — compact-while-floating review footer", () => {
     });
   });
 
-  it("'Respond / revise / reject…' expands the full panel and focuses the textarea", async () => {
+  it("'Respond / request changes / reject…' expands the full panel and focuses the textarea", async () => {
     stubIO(false);
     const user = userEvent.setup();
     render(<ArtifactStatusActions artifact={artifact} />);
-    await user.click(screen.getByRole("button", { name: /respond \/ revise \/ reject/i }));
+    await user.click(screen.getByRole("button", { name: /respond \/ request changes \/ reject/i }));
     const textarea = await screen.findByPlaceholderText(/respond to the agent/i);
     expect(textarea).toBeInTheDocument();
     await waitFor(() => expect(document.activeElement).toBe(textarea));
     // The full action row is present now.
-    expect(screen.getByRole("button", { name: /request revision/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /request changes/i })).toBeInTheDocument();
   });
 
   it("shows the FULL panel when the user is at the artifact's end", () => {
@@ -111,7 +111,7 @@ describe("B7 — the expanded footer can be minimized (and mandatory states over
 
     await user.click(screen.getByRole("button", { name: /minimize/i }));
     expect(screen.queryByPlaceholderText(/respond to the agent/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /respond \/ revise \/ reject/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /respond \/ request changes \/ reject/i })).toBeInTheDocument();
   });
 
   it("the slim bar's expander re-opens after a Minimize", async () => {
@@ -119,7 +119,7 @@ describe("B7 — the expanded footer can be minimized (and mandatory states over
     const user = userEvent.setup();
     render(<ArtifactStatusActions artifact={artifact} />);
     await user.click(screen.getByRole("button", { name: /minimize/i }));
-    await user.click(screen.getByRole("button", { name: /respond \/ revise \/ reject/i }));
+    await user.click(screen.getByRole("button", { name: /respond \/ request changes \/ reject/i }));
     const textarea = await screen.findByPlaceholderText(/respond to the agent/i);
     await waitFor(() => expect(document.activeElement).toBe(textarea));
   });

@@ -80,13 +80,13 @@ describe("ArtifactStatusActions — draft interactions", () => {
   it("shows all three action buttons", () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     expect(screen.getByRole("button", { name: /^Approve$/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Request Revision/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Request changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Reject$/ })).toBeInTheDocument();
   });
 
   it("Reject + Request Revision are disabled without a comment", () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
-    expect(screen.getByRole("button", { name: /Request Revision/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Request changes/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Reject$/ })).toBeDisabled();
   });
 
@@ -94,7 +94,7 @@ describe("ArtifactStatusActions — draft interactions", () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     const textarea = screen.getByRole("textbox");
     await userEvent.type(textarea, "needs a rethink");
-    expect(screen.getByRole("button", { name: /Request Revision/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /Request changes/i })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /^Reject$/ })).not.toBeDisabled();
   });
 
@@ -133,7 +133,7 @@ describe("ArtifactStatusActions — draft interactions", () => {
     const textarea = screen.getByRole("textbox");
     await userEvent.type(textarea, "please re-do");
 
-    await userEvent.click(screen.getByRole("button", { name: /Request Revision/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Request changes/i }));
 
     // Two fetches: comment POST + status POST
     await waitFor(() => {

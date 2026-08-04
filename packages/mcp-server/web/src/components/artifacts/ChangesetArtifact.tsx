@@ -4,7 +4,6 @@ import {
   coerceChangesetContent,
   composeSendBackFeedback,
   deriveChangesetDisposition,
-  isLateCommentableStatus,
   type ChangesetDisposition,
 } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
@@ -14,6 +13,7 @@ import { useChainComments } from "../../hooks/useChainComments";
 import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
 import { computePending } from "../../lib/pending";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
+import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../LineComments";
 
@@ -134,12 +134,18 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   //                      approved changeset keeps its review-closed visual state
   //                      but accepts late follow-up comments as NEW INPUT.
   // REPLAY locks BOTH (replayActive is an unconditional freeze, unchanged).
-  const reviewActive = artifact.status === "draft" && !replayActive;
-  const commentsUnlocked =
-    !replayActive && (artifact.status === "draft" || isLateCommentableStatus(artifact.status));
+  // #189 — the tuple is derived from ONE shared write-axis helper now
+  // (reviewLifecycle). Behavior is byte-identical to the inline booleans:
+  //   review    → reviewActive + commentsUnlocked        (draft, live)
+  //   follow_up → commentsUnlocked only                  (late-commentable, live)
+  //   frozen    → neither                                (replay)
+  //   closed    → neither                                (terminal, live)
+  const lifecycle = reviewLifecycle(artifact.status, replayActive);
+  const reviewActive = lifecycle === "review";
+  const commentsUnlocked = lifecycle === "review" || lifecycle === "follow_up";
   // True only in the late lane (commenting on, review off) — drives the honesty
   // marker + the withholding of Suggest-edit in the composer.
-  const followUpLane = commentsUnlocked && !reviewActive;
+  const followUpLane = lifecycle === "follow_up";
   const isFocused = selectedArtifactId === artifact.id;
 
   const [activeIdx, setActiveIdx] = useState(0);
@@ -791,8 +797,9 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               disabled={submitting}
               className="px-2.5 py-1 text-2xs font-semibold text-accent-red rounded border border-accent-red/30 hover:bg-accent-red-dim disabled:opacity-50 transition-colors"
               data-testid="reject-approach"
+              title="Reject this approach — you don't want any version of this changeset. Remembered across sessions."
             >
-              ✕ Reject approach
+              ✕ Reject
             </button>
 
             {derived === "sendBack" ? (

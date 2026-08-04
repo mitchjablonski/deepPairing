@@ -371,6 +371,8 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
     // clip (trigger button + popover) rather than the whole dimmed page.
     await page.goto(`${base}/?session=${planSid}`);
     await page.waitForSelector("[data-artifact-id]", { timeout: 15_000 });
+    // #189 — autonomy moved into the Diagnostics (⋯) overflow; open it first.
+    await page.getByRole("button", { name: /open diagnostics menu/i }).click();
     await page.getByRole("button", { name: /Autonomy:/ }).click();
     await page.getByRole("radiogroup", { name: "Detail density" }).waitFor({ state: "visible", timeout: 8_000 });
     await page.waitForTimeout(400);

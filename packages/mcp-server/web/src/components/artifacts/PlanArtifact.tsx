@@ -254,22 +254,29 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-start gap-2 flex-1 min-w-0">
-                    {/* Checkbox for partial acceptance (only when draft) */}
+                    {/* #189 — partial-acceptance toggle (draft only). Renders as a
+                        NEUTRAL numbered circle, NOT a pre-filled checkmark: a
+                        draft plan is proposed work, none of it done, so a row of
+                        blue check-marks read as "already completed". Included =
+                        the plain numbered marker (same shape update_plan_progress
+                        fills with a ✓ once a step is genuinely DONE); excluded =
+                        struck + muted. The include/exclude semantics are
+                        unchanged — only the glyph. */}
                     {artifact.status === "draft" ? (
                       <button
                         onClick={() => toggleStep(i)}
-                        className={`shrink-0 w-5 h-5 rounded border flex items-center justify-center mt-0.5 transition-colors ${
+                        aria-pressed={checkedSteps[i]}
+                        aria-label={checkedSteps[i]
+                          ? `Step ${i + 1} — included; click to skip`
+                          : `Step ${i + 1} — skipped; click to include`}
+                        className={`shrink-0 w-5 h-5 rounded-full border flex items-center justify-center mt-0.5 text-xs font-bold transition-colors ${
                           checkedSteps[i]
-                            ? "bg-accent-blue-strong border-accent-blue text-white"
-                            : "border-border-default bg-surface-elevated text-transparent hover:border-text-muted"
+                            ? "bg-accent-blue-dim text-accent-blue border-transparent hover:brightness-110"
+                            : "bg-surface-elevated text-text-muted border-border-default line-through hover:border-text-muted"
                         }`}
-                        title={checkedSteps[i] ? "Uncheck to skip this step" : "Check to include this step"}
+                        title={checkedSteps[i] ? "Included — click to skip this step" : "Skipped — click to include this step"}
                       >
-                        {checkedSteps[i] && (
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M2 5l2.5 2.5L8 3" />
-                          </svg>
-                        )}
+                        {i + 1}
                       </button>
                     ) : (
                       <StepStatusMarker index={i} status={step.status} />

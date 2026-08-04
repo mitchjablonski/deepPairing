@@ -145,8 +145,8 @@ describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a f
     // fresh draft: standard approve is available
     expect(screen.getByTitle(/approve as-is/i)).toBeInTheDocument();
 
-    // uncheck the first step → the additive mods button appears...
-    fireEvent.click(screen.getAllByTitle(/uncheck to skip this step/i)[0]!);
+    // exclude the first step → the additive mods button appears...
+    fireEvent.click(screen.getAllByTitle(/click to skip this step/i)[0]!);
     expect(screen.getByRole("button", { name: /approve with modifications/i })).toBeInTheDocument();
 
     // ...the rest of the standard footer is STILL there (regression: it used to
@@ -156,6 +156,26 @@ describe("PlanArtifact — U3: 'Approve with modifications' is additive, not a f
     // ...but the plain "Approve" is suppressed, so it can't silently approve the
     // plan as-is and discard the human's deselection (review QUESTION).
     expect(screen.queryByTitle(/approve as-is/i)).not.toBeInTheDocument();
+  });
+
+  it("#189 — draft plan steps render UNCHECKED: neutral numbered markers, never a pre-filled 'done' checkmark", () => {
+    const plan = mk("plan", {
+      estimatedChanges: 1,
+      steps: [
+        { description: "first", reasoning: "r" },
+        { description: "second", reasoning: "r" },
+      ],
+    });
+    render(<PlanArtifact artifact={plan} />);
+    // The partial-acceptance toggles default to INCLUDED, but as plain numbered
+    // markers (step 1, step 2) — NOT blue check-marks that read "already done".
+    const toggles = screen.getAllByTitle("Included — click to skip this step");
+    expect(toggles).toHaveLength(2);
+    expect(toggles[0]!).toHaveTextContent("1");
+    expect(toggles[1]!).toHaveTextContent("2");
+    // No completion checkmark glyph on a draft step (that ✓ is reserved for
+    // steps genuinely marked done via update_plan_progress).
+    expect(toggles[0]!.querySelector("svg")).toBeNull();
   });
 
   it("cancels an armed approve-countdown when approval gets suppressed mid-countdown (2nd-pass review)", () => {

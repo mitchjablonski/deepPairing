@@ -53,3 +53,30 @@ describe("ArtifactSidebar — collapse older artifacts", () => {
     expect(screen.getByText("▾ Show 2 older")).toBeInTheDocument();
   });
 });
+
+/**
+ * #189 — in the default Flow grouping a singleton group's ALL-CAPS header is
+ * just the lone artifact's own title, one line above the row that already shows
+ * it. Render the group header ONLY when the flow holds ≥2 items.
+ */
+describe("ArtifactSidebar — #189 flow-singleton header collapse", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  it("renders NO group header when a flow holds a single artifact", () => {
+    // Default grouping is Flow (fresh tab). One unrelated artifact = one
+    // singleton flow → the repeated-title header is suppressed.
+    useArtifactStore.getState().addArtifact(mk(1));
+    render(<ArtifactPanel />);
+    expect(screen.queryByTestId("sidebar-group-header")).not.toBeInTheDocument();
+  });
+
+  it("renders exactly one group header once a flow holds ≥2 artifacts", () => {
+    // b joins a's causal chain via relatedArtifactIds → ONE flow of 2 items,
+    // which DOES get a header (the shared root's title now names a real group).
+    useArtifactStore.getState().addArtifact(mk(1));
+    useArtifactStore.getState().addArtifact({ ...mk(2), relatedArtifactIds: ["art_1"] } as any);
+    render(<ArtifactPanel />);
+    const headers = screen.getAllByTestId("sidebar-group-header");
+    expect(headers.length).toBe(1);
+  });
+});

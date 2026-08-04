@@ -242,8 +242,8 @@ function FindingTriage({
           setReason("");
         }}
         disabled={submitting}
-        aria-label={`Request revision on finding ${findingIndex + 1}`}
-        title="Request revision — needs a reason"
+        aria-label={`Request changes on finding ${findingIndex + 1}`}
+        title="Request changes — needs a reason"
         className={chipClass(latestVerdict === "revised", "amber")}
       >
         ↻
@@ -298,7 +298,7 @@ function FindingTriage({
                 promptVerdict === "revised" ? "bg-accent-amber hover:bg-accent-amber/80" : "bg-accent-red hover:bg-accent-red/80"
               }`}
             >
-              {promptVerdict === "revised" ? "Request revision" : "Reject"}
+              {promptVerdict === "revised" ? "Request changes" : "Reject"}
             </button>
           </div>
         </div>

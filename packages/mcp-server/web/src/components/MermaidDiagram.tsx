@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useModal } from "../hooks/useModal";
 import { DiagramRegionLayer, RegionCommentsFallback } from "./DiagramRegionLayer";
 import { useArtifactStore } from "../stores/artifact";
+import { usePreferencesStore } from "../stores/preferences";
 
 /**
  * Renders agent-authored Mermaid source to an SVG. Lazy-loads the (sizable)
@@ -15,24 +16,43 @@ import { useArtifactStore } from "../stores/artifact";
  * code block instead of blanking the plan. securityLevel "strict" makes mermaid
  * sanitize the SVG (DOMPurify) so agent text in node labels can't inject script.
  */
+// #189 — the non-theme mermaid config, applied once on load AND merged on every
+// per-theme re-init below. `theme` is deliberately NOT here — it's chosen per
+// render from the CURRENT app theme so light-theme cards don't get dark-filled
+// nodes on a white surface.
+const MERMAID_BASE_CONFIG = {
+  startOnLoad: false,
+  securityLevel: "strict" as const,
+  fontFamily: "inherit",
+  // On a bad diagram mermaid otherwise injects its OWN "Syntax error" bomb
+  // graphic into document.body, which leaks to the bottom of the page —
+  // pure noise, since we already show a clean fallback AND report the
+  // failure to the agent (#176). With this set mermaid THROWS instead of
+  // drawing it, and the existing catch below handles the throw (fallback +
+  // report) unchanged. It also makes mermaid self-clean its temp layout
+  // node before throwing (belt: we also remove ours in the catch).
+  suppressErrorRendering: true,
+};
+
+/** #189 — map the app's resolved theme to a mermaid built-in theme. mermaid's
+ *  "default" theme paints light node fills + dark text (legible on white cards);
+ *  "dark" paints dark fills + light text (legible on the dark surface). */
+export function mermaidThemeFor(appTheme: "light" | "dark"): "default" | "dark" {
+  return appTheme === "light" ? "default" : "dark";
+}
+
+/** The resolved (never "system") app theme, read from the <html data-theme>
+ *  attribute the preferences store stamps. Falls back to dark. */
+function resolvedAppTheme(): "light" | "dark" {
+  if (typeof document === "undefined") return "dark";
+  return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+}
+
 let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
 function loadMermaid() {
   if (!mermaidReady) {
     mermaidReady = import("mermaid").then((m) => {
-      m.default.initialize({
-        startOnLoad: false,
-        theme: "dark",
-        securityLevel: "strict",
-        fontFamily: "inherit",
-        // On a bad diagram mermaid otherwise injects its OWN "Syntax error" bomb
-        // graphic into document.body, which leaks to the bottom of the page —
-        // pure noise, since we already show a clean fallback AND report the
-        // failure to the agent (#176). With this set mermaid THROWS instead of
-        // drawing it, and the existing catch below handles the throw (fallback +
-        // report) unchanged. It also makes mermaid self-clean its temp layout
-        // node before throwing (belt: we also remove ours in the catch).
-        suppressErrorRendering: true,
-      });
+      m.default.initialize({ ...MERMAID_BASE_CONFIG, theme: mermaidThemeFor(resolvedAppTheme()) });
       return m.default;
     });
   }
@@ -109,6 +129,13 @@ export function MermaidDiagram({
   const [svg, setSvg] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // #189 — re-render the diagram when the app theme flips so mermaid re-themes
+  // (dark fills on the dark surface, light fills on white cards). "system"
+  // resolves through the <html data-theme> attr; subscribing to the store's
+  // theme selector is what re-runs the render effect on a manual toggle. (A live
+  // OS-level scheme change while theme==="system" re-themes on the next mount,
+  // not instantly — an accepted edge, no cheap reactive signal for it.)
+  const appTheme = usePreferencesStore((s) => s.theme);
   const [showSource, setShowSource] = useState(false);
   // True when the raw source failed but repairMermaidSource made it render.
   const [repaired, setRepaired] = useState(false);
@@ -133,13 +160,26 @@ export function MermaidDiagram({
   // re-render). Values are stable; only the object identity churns.
   const reportRef = useRef(report);
   reportRef.current = report;
+  // #189 (Fix 2) — the source this component last STARTED rendering. A
+  // theme-only re-render (same source, new appTheme) must keep the previous SVG
+  // on screen while mermaid re-themes, so it never flashes the "Rendering…"
+  // blank — which would unmount DiagramRegionLayer and drop an OPEN region
+  // composer (unsent text + focus). Only a genuine SOURCE change clears state.
+  const lastSourceRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setSvg(null);
-    setError(null);
-    setRepaired(false);
-    setReported(false);
+    const sourceChanged = lastSourceRef.current !== source;
+    lastSourceRef.current = source;
+    // Clear render state only when the SOURCE changed. For a theme-only
+    // re-render we leave svg/error/repaired/reported intact and swap the new
+    // svg in when it arrives (below), so the diagram never blanks between themes.
+    if (sourceChanged) {
+      setSvg(null);
+      setError(null);
+      setRepaired(false);
+      setReported(false);
+    }
     // #176 — report a genuine render failure exactly once for this source. The
     // repair path is deliberately NOT reported (a successful auto-format isn't a
     // failure the agent must act on) — only the terminal error branches call it.
@@ -147,7 +187,11 @@ export function MermaidDiagram({
       const r = reportRef.current;
       if (!r || cancelled) return;
       const key = `${r.artifactId}|${r.visualId}|${source}`;
-      if (reportedKeyRef.current === key) return;
+      // #189 (Fix 3) — a theme toggle re-runs the effect and re-fires the report
+      // for an unchanged broken source. The dedupe still suppresses the re-POST,
+      // but it must NOT drop the "Reported to the agent" note: it WAS reported,
+      // so re-assert the flag the sourceChanged reset (skipped here) left alone.
+      if (reportedKeyRef.current === key) { setReported(true); return; }
       reportedKeyRef.current = key;
       setReported(true);
       void useArtifactStore.getState().reportRenderFailure(r.artifactId, r.visualId, msg, r.title);
@@ -160,10 +204,17 @@ export function MermaidDiagram({
     }
     (async () => {
       const mermaid = await loadMermaid();
+      // #189 — re-apply the CURRENT theme before rendering. mermaid's config is
+      // global + singleton; initialize merges, so this flips only the theme
+      // (base config stays). Every diagram shares the app theme, so the last
+      // writer before a render wins — which is exactly this render's theme.
+      mermaid.initialize({ ...MERMAID_BASE_CONFIG, theme: mermaidThemeFor(resolvedAppTheme()) });
       const rawId = `${idPrefix.current}-${++renderSeq}`;
       try {
         const { svg } = await mermaid.render(rawId, src);
-        if (!cancelled) setSvg(svg);
+        // setError(null) covers the theme-only path where we skipped the top
+        // reset: a now-successful render must not stay masked by a stale error.
+        if (!cancelled) { setSvg(svg); setError(null); setRepaired(false); }
         return;
       } catch (firstErr: any) {
         // suppressErrorRendering makes mermaid THROW here (no bomb graphic) and
@@ -179,6 +230,7 @@ export function MermaidDiagram({
             if (!cancelled) {
               setSvg(svg);
               setRepaired(true);
+              setError(null);
             }
             return;
           } catch {
@@ -200,7 +252,8 @@ export function MermaidDiagram({
     return () => {
       cancelled = true;
     };
-  }, [source]);
+    // appTheme drives a re-render+re-theme on a manual theme toggle (#189).
+  }, [source, appTheme]);
 
   if (error) {
     return (
