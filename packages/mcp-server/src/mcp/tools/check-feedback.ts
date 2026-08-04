@@ -3,6 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 import type { Artifact } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
+import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -481,6 +482,66 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     }
   }
 
+  // #192 (serving H1) — CARRYOVER: unanswered human questions from EARLIER in
+  // this project's session that the normal drain above won't re-report because a
+  // PRIOR run already acknowledged them (acknowledge ≠ answered). The session
+  // store is per-project and reloads across runs, so a question asked after a
+  // run ended — e.g. on a debrief/explainer ask-anything thread just as the
+  // agent stopped polling — lives on and must be answerable on the NEXT run
+  // without the human re-raising it. Read-only: uses the SAME tail-walk
+  // predicate (collectUnansweredQuestions) every UI surface uses, does NOT
+  // re-acknowledge anything, and is spread into structuredContent ONLY when
+  // non-empty so the healthy hot-path payload stays byte-for-byte unchanged.
+  // Scope = same-session-chain (the project's one deterministic session id) —
+  // documented; cross-*project* questions are out of scope.
+  const structuredCarryover: Array<Record<string, unknown>> = [];
+  try {
+    const full = await store.getFullState();
+    const carryover = collectUnansweredQuestions(full.comments ?? []);
+    // Don't double-report a comment already delivered in THIS poll — questions
+    // (structuredQuestions) AND directives/comments (structuredComments, which
+    // includes the __session__ directive drain). Belt-and-suspenders alongside
+    // the __session__ exclusion below.
+    const deliveredIds = new Set<string>();
+    for (const q of structuredQuestions) {
+      const id = (q.commentId ?? q.id) as string | undefined;
+      if (id) deliveredIds.add(id);
+    }
+    for (const q of structuredComments) {
+      const id = (q.id ?? q.commentId) as string | undefined;
+      if (id) deliveredIds.add(id);
+    }
+    const older = carryover.filter(
+      (q) =>
+        // FIX 1 — target/dedupe the ACTUAL open-question comment (the tail-walk
+        // landing, which for a reply-question is NOT the thread root).
+        !deliveredIds.has(q.question.id) &&
+        // HUNCH — a __session__ question is drained as a DIRECTIVE above (and
+        // acknowledged); collecting it here too would double-surface it in the
+        // same poll. Session directives never carry over as questions.
+        q.artifactId !== "__session__",
+    );
+    if (older.length > 0) {
+      for (const q of older) {
+        structuredCarryover.push({
+          commentId: q.question.id,
+          artifactId: q.artifactId,
+          content: String(q.question.content ?? "").slice(0, 200),
+        });
+      }
+      // FIX 4 — carry the secret-warning note the normal drain appends, so a
+      // carried-over question that may contain a pasted credential is flagged.
+      const lines = older.map(
+        (q) => `  • ${q.artifactId || "(session)"} — comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`,
+      );
+      parts.push(
+        `↩️ ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier — the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:\n${lines.join("\n")}`,
+      );
+    }
+  } catch {
+    // Non-fatal — carryover is best-effort; the normal drain already ran.
+  }
+
   // FN2 — explicit rejection verdict for non-plan/non-decision artifacts
   // (those don't have a dedicated verdict path). The reason is in the
   // human-comments block above; this makes the verdict unmissable so the
@@ -765,6 +826,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     ...(structuredSuggestions.length > 0 ? { suggestions: structuredSuggestions } : {}),
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
+    // #192 — spread `unansweredCarryover` ONLY when older unanswered questions
+    // exist, so the healthy poll payload's top-level key set stays byte-for-byte
+    // (contract lock in check-feedback-ledger-health.test.ts / the golden SHA).
+    ...(structuredCarryover.length > 0 ? { unansweredCarryover: structuredCarryover } : {}),
     // #176 — spread `renderFailures` ONLY when a diagram broke, so the healthy
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.

@@ -190,6 +190,37 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
   });
 });
 
+// #192 (serving H1) — the daemon exposes an unanswered-question count (the
+// INVERSE of pendingCount: a question the human asked that the agent still owes
+// an answer). Uses the SAME shared tail-walk predicate the UI + first-call hint
+// + check_feedback carryover use, so a question outliving its run stays visible.
+describe("#192 — /api/daemon-info exposes unansweredQuestionCount", () => {
+  it("counts an open human question and drops to 0 once answered", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const store = daemon.createSession("s_q");
+    store.createArtifact({ id: "art_q", type: "changeset", title: "cs", content: { files: [] } });
+    await store.addComment({
+      id: "q1", artifactId: "art_q", content: "why cookies not JWT?",
+      author: "human", intent: "question",
+    });
+
+    const res1 = await daemon.app.request("/api/daemon-info", { headers: { "X-Project-Hash": projectHashOf(tmpDir) } });
+    expect((await res1.json()).unansweredQuestionCount).toBe(1);
+
+    // Agent answers it (links answeredByCommentId via the reply).
+    await store.addComment({
+      id: "a1", artifactId: "art_q", content: "cookies — no client change.",
+      author: "agent", parentCommentId: "q1",
+    });
+    // The store links the answer; if not, mark it resolved to mirror answer_question.
+    await store.acknowledgeComments(["q1"]);
+
+    const res2 = await daemon.app.request("/api/daemon-info", { headers: { "X-Project-Hash": projectHashOf(tmpDir) } });
+    // The agent reply is the last substantive word in the thread → not waiting.
+    expect((await res2.json()).unansweredQuestionCount).toBe(0);
+  });
+});
+
 describe("applyTopLevelGuards — the 64KB cap actually covers ROOT-level routes", () => {
   it("rejects a >64KB body on /api/evict with 413 before the handler runs", async () => {
     const { tmpDir, daemon } = makeDaemon();

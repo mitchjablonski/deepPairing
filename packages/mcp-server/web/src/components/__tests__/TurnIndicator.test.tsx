@@ -141,6 +141,24 @@ describe("TurnIndicator — UX1: a draft code_change is 'your turn' (matches Pen
   });
 });
 
+describe("#192 (usability H1) — 'Your turn' never dangles for changeset/debrief/explainer", () => {
+  // Screenshot-proven defect: with ONLY a draft changeset/debrief/explainer
+  // pending, the summary rendered "Your turn —" with nothing after the dash
+  // while the tab badge said 3. Fails on revert (the summary text would be a
+  // bare "Your turn —").
+  it("shows the three nouns, not a dangling dash, when only the new types are pending", () => {
+    seedConnected();
+    seedArtifact({ id: "cs", type: "changeset", status: "draft" });
+    seedArtifact({ id: "db", type: "debrief", status: "draft" });
+    seedArtifact({ id: "ex", type: "explainer", status: "draft" });
+    render(<TurnIndicator />);
+    const pill = screen.getByRole("button", { name: /your turn/i });
+    expect(pill).toHaveTextContent("Your turn — 1 changeset, 1 debrief, 1 explainer");
+    // Guard against the exact regression: the visible summary must not end at the dash.
+    expect(pill.textContent ?? "").not.toMatch(/Your turn\s*—\s*$/);
+  });
+});
+
 describe("TurnIndicator — U2 agent liveness", () => {
   it("shows 'Up to date' (not a forever 'Agent working' pulse) once activity is stale", () => {
     seedConnected();

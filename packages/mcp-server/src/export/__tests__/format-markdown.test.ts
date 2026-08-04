@@ -257,4 +257,103 @@ describe("formatSessionMarkdown", () => {
     expect(md).toContain("Session Report");
     // Should not throw on empty state
   });
+
+  // #192 (coverage H1) — the comprehension artifacts (debrief, explainer) plus
+  // the older-omitted spec + changeset now reach the exports that should carry
+  // them. The debrief IS the session digest; export `full` IS the session report.
+  describe("#192 — comprehension artifacts in exports", () => {
+    const debrief = makeArtifact("debrief", "Auth refactor debrief", {
+      summary: "You moved session validation into a shared guard.",
+      sections: [{
+        title: "The guard",
+        body: "Extracted requireSession into middleware.",
+        concepts: [{ name: "middleware chaining", oneLineExplanation: "compose per-request checks" }],
+        evidence: [{ filePath: "/src/guard.ts", lineStart: 1, lineEnd: 3, snippet: "export const requireSession", language: "typescript", explanation: "the new guard" }],
+      }],
+      decisionsMade: [{ what: "Kept cookie sessions", why: "no client change needed", alternative: "JWT" }],
+      needsYourEyes: [{ what: "The 401 redirect target", why: "product-specific" }],
+      deferred: [{ what: "Rate limiting", why: "out of scope this pass" }],
+      openQuestions: ["Should logout clear all sessions or just this one?"],
+    });
+    const explainer = makeArtifact("explainer", "How auth works", {
+      title: "How authentication works here",
+      overview: "A walk-through of the request auth path.",
+      sections: [{ heading: "Entry", body: "Requests hit the guard first.", evidence: [{ filePath: "/src/guard.ts", lineStart: 5, lineEnd: 9, snippet: "if (!session) throw", explanation: "the gate" }] }],
+    });
+
+    it("formatFull renders debrief (five lanes) + explainer sections", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [debrief, explainer] }), "full");
+      expect(md).toContain("## Debrief — Auth refactor debrief");
+      expect(md).toContain("You moved session validation into a shared guard.");
+      expect(md).toContain("### Decisions I made without you");
+      expect(md).toContain("Kept cookie sessions");
+      expect(md).toContain("### Needs your eyes");
+      expect(md).toContain("### Deferred");
+      expect(md).toContain("### Open questions");
+      expect(md).toContain("middleware chaining");
+      expect(md).toContain("```typescript");
+      // Explainer
+      expect(md).toContain("## Explainer — How authentication works here");
+      expect(md).toContain("A walk-through of the request auth path.");
+      expect(md).toContain("### 1. Entry");
+    });
+
+    it("formatFull renders spec + changeset sections", () => {
+      const spec = makeArtifact("spec", "Session guard spec", {
+        objective: "Centralize session checks",
+        requirements: [{ id: "REQ-1", statement: "All routes require a session", rationale: "security", acceptanceCriteria: ["401 without a cookie"], priority: "must" }],
+      });
+      const changeset = makeArtifact("changeset", "Guard changeset", {
+        summary: "Two files touched",
+        files: [{ path: "/src/guard.ts", changeType: "added", hunks: [{ header: "@@ -0,0 +1,3 @@", lines: [{ kind: "add", content: "export const requireSession = () => {}" }] }] }],
+      });
+      const md = formatSessionMarkdown(makeState({ artifacts: [spec, changeset] }), "full");
+      expect(md).toContain("## Spec — Session guard spec");
+      expect(md).toContain("**REQ-1**");
+      expect(md).toContain("All routes require a session");
+      expect(md).toContain("## Changeset — Guard changeset");
+      expect(md).toContain("```diff");
+      expect(md).toContain("+export const requireSession");
+    });
+
+    it("formatLearnings folds in the debrief's decisions-made / deferred / open questions", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "learnings");
+      expect(md).toContain("## From the debrief");
+      expect(md).toContain("### Calls the agent made on its own");
+      expect(md).toContain("Kept cookie sessions");
+      expect(md).toContain("### Deferred");
+      expect(md).toContain("Rate limiting");
+      expect(md).toContain("### Still open");
+      expect(md).toContain("Should logout clear all sessions");
+      // A debrief alone means the session is NOT "nothing crystallized yet".
+      expect(md).not.toContain("Nothing crystallized yet");
+    });
+
+    it("formatPrDescription leads with the debrief summary + what-needs-review", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "pr-description");
+      expect(md).toContain("You moved session validation into a shared guard.");
+      expect(md).toContain("**What needs review:**");
+      expect(md).toContain("The 401 redirect target");
+    });
+
+    // DESIGN CHOICE (documented): the ADR deliberately OMITS the debrief. An ADR
+    // is a decision record — its Context/Decision/Consequences already come from
+    // findings + resolved decisions + plan; a change-narrative digest doesn't fit
+    // that format's purpose and would dilute it. PR description + full report DO
+    // carry it (a PR benefits from the summary). This pins the omission.
+    it("formatAdr does NOT inject the debrief narrative (decision record, not a change digest)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "adr");
+      expect(md).not.toContain("## Debrief");
+      expect(md).not.toContain("You moved session validation into a shared guard.");
+    });
+
+    it("a session WITHOUT the new types produces no new headers (existing exports unchanged)", () => {
+      const research = makeArtifact("research", "Audit", { summary: "s", findings: [{ category: "Sec", detail: "d", significance: "high" }] });
+      const md = formatSessionMarkdown(makeState({ artifacts: [research] }), "full");
+      expect(md).not.toContain("## Debrief");
+      expect(md).not.toContain("## Explainer");
+      expect(md).not.toContain("## Spec");
+      expect(md).not.toContain("## Changeset");
+    });
+  });
 });

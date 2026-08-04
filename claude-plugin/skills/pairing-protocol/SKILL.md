@@ -207,7 +207,10 @@ Two rhythms, and they're different:
   question.
 - **`check_feedback`** — poll for human responses in a loop. Each call
   waits up to 30s. If it returns WAITING, call again immediately. Human
-  responds in the companion UI, NOT the terminal.
+  responds in the companion UI, NOT the terminal. On session start, if the
+  first-call hint or a `check_feedback` response surfaces questions carried
+  over from an earlier run (the human asked them after the last run stopped
+  polling), drain those with `answer_question` BEFORE starting new work.
 
 ## Pairing on a PR (a common workflow)
 

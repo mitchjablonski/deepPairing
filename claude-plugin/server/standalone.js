@@ -26254,6 +26254,47 @@ function coerceVisual(v, fallbackId) {
   }
   return out;
 }
+function coerceRequirement(v) {
+  const r = obj(v);
+  const out = {
+    id: str(r.id),
+    statement: str(r.statement),
+    rationale: str(r.rationale),
+    acceptanceCriteria: strArr(r.acceptanceCriteria)
+  };
+  const priority = optOneOf(r.priority, ["must", "should", "could"]);
+  if (priority)
+    out.priority = priority;
+  return out;
+}
+function coerceTask(v) {
+  const t = obj(v);
+  const out = { description: str(t.description) };
+  if (Array.isArray(t.linkedRequirementIds))
+    out.linkedRequirementIds = strArr(t.linkedRequirementIds);
+  const estimate = optOneOf(t.estimate, ["xs", "s", "m", "l", "xl"]);
+  if (estimate)
+    out.estimate = estimate;
+  return out;
+}
+function coerceSpecContent(raw) {
+  const c = obj(raw);
+  const out = {
+    objective: str(c.objective),
+    requirements: arr(c.requirements).map(coerceRequirement)
+  };
+  if (typeof c.context === "string")
+    out.context = c.context;
+  if (typeof c.design === "string")
+    out.design = c.design;
+  if (Array.isArray(c.tasks))
+    out.tasks = c.tasks.map(coerceTask);
+  if (Array.isArray(c.openQuestions))
+    out.openQuestions = strArr(c.openQuestions);
+  if (Array.isArray(c.visuals))
+    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  return out;
+}
 function coerceReasoningContent(raw) {
   const c = obj(raw);
   const out = {
@@ -26282,6 +26323,165 @@ function coerceReasoningContent(raw) {
       out.relatesTo = { artifactId: c.relatesTo.artifactId, kind };
     }
   }
+  return out;
+}
+function coerceHunkLine(v) {
+  const l = obj(v);
+  const out = {
+    kind: oneOf(l.kind, ["ctx", "add", "del"], "ctx"),
+    content: str(l.content)
+  };
+  if (typeof l.oldLine === "number" && Number.isFinite(l.oldLine))
+    out.oldLine = l.oldLine;
+  if (typeof l.newLine === "number" && Number.isFinite(l.newLine))
+    out.newLine = l.newLine;
+  return out;
+}
+function coerceHunk(v) {
+  const h = obj(v);
+  const out = { lines: arr(h.lines).map(coerceHunkLine) };
+  if (typeof h.header === "string")
+    out.header = h.header;
+  return out;
+}
+function coerceChangesetFile(v) {
+  const f = obj(v);
+  const out = {
+    path: str(f.path),
+    changeType: oneOf(f.changeType, ["modified", "added", "deleted"], "modified"),
+    hunks: arr(f.hunks).map(coerceHunk)
+  };
+  if (isObj(f.stats)) {
+    out.stats = {
+      additions: num(f.stats.additions),
+      deletions: num(f.stats.deletions)
+    };
+  }
+  return out;
+}
+function coerceReviewState(v) {
+  if (!isObj(v))
+    return void 0;
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (val === "reviewed" || val === "needs_changes" || val === "skipped")
+      out[k] = val;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
+function coerceReviewReasons(v) {
+  if (!isObj(v))
+    return void 0;
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === "string" && val.length > 0)
+      out[k] = val;
+  }
+  return Object.keys(out).length > 0 ? out : void 0;
+}
+function coerceChangesetContent(raw) {
+  const c = obj(raw);
+  const out = {
+    files: arr(c.files).map(coerceChangesetFile)
+  };
+  if (typeof c.summary === "string")
+    out.summary = c.summary;
+  if (Array.isArray(c.risks))
+    out.risks = strArr(c.risks);
+  const reviewState = coerceReviewState(c.reviewState);
+  if (reviewState)
+    out.reviewState = reviewState;
+  const reviewReasons = coerceReviewReasons(c.reviewReasons);
+  if (reviewReasons)
+    out.reviewReasons = reviewReasons;
+  return out;
+}
+function coerceConcepts(v) {
+  if (!Array.isArray(v))
+    return void 0;
+  const out = v.map(coerceConcept).filter((c) => !!c);
+  return out;
+}
+function coerceEvidenceInputs(v) {
+  if (!Array.isArray(v))
+    return void 0;
+  return v.filter((x) => typeof x === "string" || isObj(x));
+}
+function coerceDebriefSection(v) {
+  const s = obj(v);
+  const out = {
+    title: str(s.title),
+    body: str(s.body)
+  };
+  const concepts = coerceConcepts(s.concepts);
+  if (concepts && concepts.length > 0)
+    out.concepts = concepts;
+  const evidence = coerceEvidenceInputs(s.evidence);
+  if (evidence && evidence.length > 0)
+    out.evidence = evidence;
+  if (typeof s.changesetRef === "string")
+    out.changesetRef = s.changesetRef;
+  if (Array.isArray(s.artifactRefs))
+    out.artifactRefs = strArr(s.artifactRefs);
+  return out;
+}
+function coerceDebriefDecision(v) {
+  const d = obj(v);
+  const out = { what: str(d.what), why: str(d.why) };
+  if (typeof d.alternative === "string")
+    out.alternative = d.alternative;
+  return out;
+}
+function coerceDebriefReviewItem(v) {
+  const r = obj(v);
+  const out = { what: str(r.what), why: str(r.why) };
+  if (typeof r.artifactRef === "string")
+    out.artifactRef = r.artifactRef;
+  return out;
+}
+function coerceDebriefDeferred(v) {
+  const d = obj(v);
+  return { what: str(d.what), why: str(d.why) };
+}
+function coerceDebriefContent(raw) {
+  const c = obj(raw);
+  const out = { summary: str(c.summary) };
+  if (Array.isArray(c.sections))
+    out.sections = c.sections.map(coerceDebriefSection);
+  if (Array.isArray(c.decisionsMade))
+    out.decisionsMade = c.decisionsMade.map(coerceDebriefDecision);
+  if (Array.isArray(c.needsYourEyes))
+    out.needsYourEyes = c.needsYourEyes.map(coerceDebriefReviewItem);
+  if (Array.isArray(c.deferred))
+    out.deferred = c.deferred.map(coerceDebriefDeferred);
+  if (Array.isArray(c.openQuestions))
+    out.openQuestions = strArr(c.openQuestions);
+  return out;
+}
+function coerceExplainerSection(v) {
+  const s = obj(v);
+  const out = {
+    heading: str(s.heading),
+    body: str(s.body)
+  };
+  const evidence = coerceEvidenceInputs(s.evidence);
+  if (evidence && evidence.length > 0)
+    out.evidence = evidence;
+  return out;
+}
+function coerceExplainerContent(raw) {
+  const c = obj(raw);
+  const out = {
+    // Defaults to "" (lenient) even though the strict schema requires .min(1) —
+    // a partial/legacy explainer must still render, never crash.
+    title: str(c.title),
+    overview: str(c.overview),
+    sections: arr(c.sections).map(coerceExplainerSection)
+  };
+  if (Array.isArray(c.relatedArtifactIds))
+    out.relatedArtifactIds = strArr(c.relatedArtifactIds);
+  if (Array.isArray(c.suggestedQuestions))
+    out.suggestedQuestions = strArr(c.suggestedQuestions);
   return out;
 }
 
@@ -26516,6 +26716,75 @@ var PreflightTraceSchema = external_exports.object({
 // ../shared/dist/normalize.js
 function normalizeConceptKey(name) {
   return String(name).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// ../shared/dist/unanswered.js
+function threadRootId(comment, byId) {
+  let current = comment;
+  const seen = /* @__PURE__ */ new Set([current.id]);
+  while (current.parentCommentId && byId.has(current.parentCommentId)) {
+    const parent = byId.get(current.parentCommentId);
+    if (seen.has(parent.id)) {
+      const cycle = [];
+      let node = parent;
+      do {
+        cycle.push(node);
+        node = byId.get(node.parentCommentId ?? "");
+      } while (node && node.id !== parent.id && cycle.length <= byId.size);
+      cycle.sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+      return cycle[0]?.id ?? current.id;
+    }
+    seen.add(parent.id);
+    current = parent;
+  }
+  return current.id;
+}
+var byTime = (a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+function buildThreads(comments) {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  const descendants = /* @__PURE__ */ new Map();
+  const roots = [];
+  for (const c of comments) {
+    const rootId = threadRootId(c, byId);
+    if (rootId === c.id) {
+      roots.push(c);
+    } else {
+      const arr2 = descendants.get(rootId) ?? [];
+      arr2.push(c);
+      descendants.set(rootId, arr2);
+    }
+  }
+  return roots.sort(byTime).map((root) => ({
+    root,
+    replies: (descendants.get(root.id) ?? []).sort(byTime)
+  }));
+}
+function findOpenQuestion(comment, replies) {
+  const isOpenHumanQuestion = (m) => {
+    const x = m;
+    return m.author === "human" && x.intent === "question" && !x.answeredByCommentId && !x.humanResolvedAt;
+  };
+  const chain = [comment, ...replies];
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const m = chain[i];
+    if (m.author !== "human")
+      return null;
+    if (m.intent === "question")
+      return isOpenHumanQuestion(m) ? m : null;
+  }
+  return null;
+}
+function collectUnansweredQuestions(comments) {
+  const out = [];
+  for (const t of buildThreads(comments)) {
+    const question = findOpenQuestion(t.root, t.replies);
+    if (question) {
+      const artifactId = question.target?.artifactId ?? t.root.target?.artifactId ?? "";
+      out.push({ artifactId, question, root: t.root, replies: t.replies });
+    }
+  }
+  out.sort((a, b) => (a.question.createdAt ?? "").localeCompare(b.question.createdAt ?? ""));
+  return out;
 }
 
 // src/store/global-store.ts
@@ -27216,7 +27485,7 @@ ${philosophyParts.join("\n")}`
     const fullState = await store.getFullState();
     const allComments = fullState.comments ?? [];
     const unanswered = allComments.filter(
-      (c) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId
+      (c) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && !c.humanResolvedAt
     );
     const revisionRequested = unanswered.filter(
       (c) => typeof c.target?.sectionId === "string" && c.target.sectionId.startsWith("decision_revision_requested")
@@ -27238,7 +27507,7 @@ Required response per request: call \`revise_artifact\` mode="supersede" on the 
     if (plainUnanswered.length > 0) {
       blockingParts.push(
         `
-\u2753 ${plainUnanswered.length} unanswered question${plainUnanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`
+\u2753 ${plainUnanswered.length} unanswered human question${plainUnanswered.length === 1 ? "" : "s"} await${plainUnanswered.length === 1 ? "s" : ""} \u2014 some may be from earlier runs. Call check_feedback to see and answer them, then reply with answer_question (not a plain comment) so the UI links the answer to the question. Drain these before new work.`
       );
     }
     const agentCommentIds = new Set(
@@ -28704,6 +28973,17 @@ function formatSessionMarkdown(state, format = "full") {
 function formatPrDescription(state) {
   const sections = [];
   sections.push("## Summary\n");
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  for (const d of debriefs) {
+    const content = coerceDebriefContent(d.content);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    if (content.needsYourEyes?.length) {
+      sections.push("**What needs review:**");
+      for (const n of content.needsYourEyes) sections.push(`- ${n.what} \u2014 ${n.why}`);
+      sections.push("");
+    }
+  }
   const resolved = state.decisions.filter((d) => d.response);
   if (resolved.length > 0) {
     sections.push("### Decisions\n");
@@ -28802,6 +29082,150 @@ Reasoning: ${d.response.reasoning}`);
   }
   return sections.join("\n");
 }
+function pushEvidenceLines(sections, evidence) {
+  if (!Array.isArray(evidence)) return;
+  for (const ev of evidence) {
+    if (typeof ev === "string") {
+      sections.push(`> ${ev}`);
+      sections.push("");
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const e = ev;
+    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
+    if (e.snippet) {
+      sections.push("```" + (e.language ?? ""));
+      sections.push(e.snippet);
+      sections.push("```");
+    }
+    if (e.explanation) sections.push(`> ${e.explanation}`);
+    sections.push("");
+  }
+}
+function formatDebriefSections(state) {
+  const sections = [];
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  for (const d of debriefs) {
+    const content = coerceDebriefContent(d.content);
+    sections.push(`## Debrief \u2014 ${d.title}
+`);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    if (content.sections?.length) {
+      sections.push("### What changed\n");
+      for (const s of content.sections) {
+        sections.push(`#### ${s.title}
+`);
+        if (s.body) sections.push(`${s.body}
+`);
+        if (s.concepts?.length) {
+          for (const c of s.concepts) {
+            sections.push(`- *Concept*: **${c.name}**${c.oneLineExplanation ? ` \u2014 ${c.oneLineExplanation}` : ""}`);
+          }
+          sections.push("");
+        }
+        pushEvidenceLines(sections, s.evidence);
+      }
+    }
+    if (content.decisionsMade?.length) {
+      sections.push("### Decisions I made without you\n");
+      for (const dm of content.decisionsMade) {
+        sections.push(`- **${dm.what}** \u2014 ${dm.why}${dm.alternative ? ` *(considered but not taken: ${dm.alternative})*` : ""}`);
+      }
+      sections.push("");
+    }
+    if (content.needsYourEyes?.length) {
+      sections.push("### Needs your eyes\n");
+      for (const n of content.needsYourEyes) {
+        sections.push(`- **${n.what}** \u2014 ${n.why}`);
+      }
+      sections.push("");
+    }
+    if (content.deferred?.length) {
+      sections.push("### Deferred\n");
+      for (const df of content.deferred) {
+        sections.push(`- **${df.what}** \u2014 ${df.why}`);
+      }
+      sections.push("");
+    }
+    if (content.openQuestions?.length) {
+      sections.push("### Open questions\n");
+      for (const q of content.openQuestions) sections.push(`- ${q}`);
+      sections.push("");
+    }
+  }
+  return sections;
+}
+function formatExplainerSections(state) {
+  const sections = [];
+  const explainers = state.artifacts.filter((a) => a.type === "explainer" && a.status !== "superseded");
+  for (const ex of explainers) {
+    const content = coerceExplainerContent(ex.content);
+    sections.push(`## Explainer \u2014 ${content.title || ex.title}
+`);
+    if (content.overview) sections.push(`${content.overview}
+`);
+    content.sections?.forEach((s, i) => {
+      sections.push(`### ${i + 1}. ${s.heading}
+`);
+      if (s.body) sections.push(`${s.body}
+`);
+      pushEvidenceLines(sections, s.evidence);
+    });
+  }
+  return sections;
+}
+function formatSpecSections(state) {
+  const sections = [];
+  const specs = state.artifacts.filter((a) => a.type === "spec" && a.status !== "superseded");
+  for (const sp of specs) {
+    const content = coerceSpecContent(sp.content);
+    sections.push(`## Spec \u2014 ${sp.title}
+`);
+    if (content.objective) sections.push(`**Objective**: ${content.objective}
+`);
+    if (content.context) sections.push(`${content.context}
+`);
+    if (content.requirements?.length) {
+      sections.push("### Requirements\n");
+      for (const r of content.requirements) {
+        sections.push(`- **${r.id}**${r.priority ? ` _(${r.priority})_` : ""}: ${r.statement}`);
+        if (r.rationale) sections.push(`  - *Why*: ${r.rationale}`);
+        for (const ac of r.acceptanceCriteria ?? []) sections.push(`  - \u2713 ${ac}`);
+      }
+      sections.push("");
+    }
+  }
+  return sections;
+}
+function formatChangesetSections(state) {
+  const sections = [];
+  const changesets = state.artifacts.filter((a) => a.type === "changeset" && a.status !== "superseded");
+  for (const cs of changesets) {
+    const content = coerceChangesetContent(cs.content);
+    sections.push(`## Changeset \u2014 ${cs.title}
+`);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    for (const file2 of content.files ?? []) {
+      sections.push(`### \`${file2.path}\` (${file2.changeType})
+`);
+      if (file2.hunks?.length) {
+        sections.push("```diff");
+        for (const hunk of file2.hunks) {
+          if (hunk.header) sections.push(hunk.header);
+          for (const line of hunk.lines ?? []) {
+            const prefix = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+            sections.push(`${prefix}${line.content}`);
+          }
+        }
+        sections.push("```");
+      }
+      sections.push("");
+    }
+  }
+  return sections;
+}
 function formatFull(state) {
   const sections = [];
   sections.push(`# deepPairing Session Report
@@ -28856,6 +29280,7 @@ function formatFull(state) {
       }
     }
   }
+  sections.push(...formatSpecSections(state));
   const resolved = state.decisions.filter((d) => d.response);
   if (resolved.length > 0) {
     sections.push("## Decisions\n");
@@ -28891,6 +29316,9 @@ function formatFull(state) {
       sections.push("");
     }
   }
+  sections.push(...formatChangesetSections(state));
+  sections.push(...formatDebriefSections(state));
+  sections.push(...formatExplainerSections(state));
   const reasoning = state.artifacts.filter((a) => a.type === "reasoning");
   if (reasoning.length > 0) {
     sections.push("<details><summary>Reasoning Log</summary>\n");
@@ -29243,7 +29671,36 @@ function formatLearnings(state) {
     rows.forEach((r) => sections.push(r));
     sections.push("");
   }
-  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0) {
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  const debriefDecisions = debriefs.flatMap((d) => coerceDebriefContent(d.content).decisionsMade ?? []);
+  const debriefDeferred = debriefs.flatMap((d) => coerceDebriefContent(d.content).deferred ?? []);
+  const debriefOpen = debriefs.flatMap((d) => coerceDebriefContent(d.content).openQuestions ?? []);
+  const hasDebriefLearnings = debriefDecisions.length > 0 || debriefDeferred.length > 0 || debriefOpen.length > 0;
+  if (hasDebriefLearnings) {
+    sections.push("## From the debrief");
+    sections.push("");
+    if (debriefDecisions.length > 0) {
+      sections.push("### Calls the agent made on its own");
+      sections.push("");
+      for (const dm of debriefDecisions) {
+        sections.push(`- **${dm.what}** \u2014 ${dm.why}${dm.alternative ? ` _(considered: ${dm.alternative})_` : ""}`);
+      }
+      sections.push("");
+    }
+    if (debriefDeferred.length > 0) {
+      sections.push("### Deferred");
+      sections.push("");
+      for (const df of debriefDeferred) sections.push(`- **${df.what}** \u2014 ${df.why}`);
+      sections.push("");
+    }
+    if (debriefOpen.length > 0) {
+      sections.push("### Still open");
+      sections.push("");
+      for (const q of debriefOpen) sections.push(`- ${q}`);
+      sections.push("");
+    }
+  }
+  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0 && !hasDebriefLearnings) {
     sections.push("_Nothing crystallized yet. Keep pairing \u2014 the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
     sections.push("");
   }
@@ -29920,6 +30377,47 @@ ${otherLines.join("\n")}`);
       );
     }
   }
+  const structuredCarryover = [];
+  try {
+    const full = await store.getFullState();
+    const carryover = collectUnansweredQuestions(full.comments ?? []);
+    const deliveredIds = /* @__PURE__ */ new Set();
+    for (const q of structuredQuestions) {
+      const id = q.commentId ?? q.id;
+      if (id) deliveredIds.add(id);
+    }
+    for (const q of structuredComments) {
+      const id = q.id ?? q.commentId;
+      if (id) deliveredIds.add(id);
+    }
+    const older = carryover.filter(
+      (q) => (
+        // FIX 1 — target/dedupe the ACTUAL open-question comment (the tail-walk
+        // landing, which for a reply-question is NOT the thread root).
+        !deliveredIds.has(q.question.id) && // HUNCH — a __session__ question is drained as a DIRECTIVE above (and
+        // acknowledged); collecting it here too would double-surface it in the
+        // same poll. Session directives never carry over as questions.
+        q.artifactId !== "__session__"
+      )
+    );
+    if (older.length > 0) {
+      for (const q of older) {
+        structuredCarryover.push({
+          commentId: q.question.id,
+          artifactId: q.artifactId,
+          content: String(q.question.content ?? "").slice(0, 200)
+        });
+      }
+      const lines = older.map(
+        (q) => `  \u2022 ${q.artifactId || "(session)"} \u2014 comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`
+      );
+      parts.push(
+        `\u21A9\uFE0F ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier \u2014 the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:
+${lines.join("\n")}`
+      );
+    }
+  } catch {
+  }
   if (freshlyRejected.length > 0) {
     const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
     parts.push(
@@ -30107,6 +30605,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     ...structuredSuggestions.length > 0 ? { suggestions: structuredSuggestions } : {},
     rejected: freshlyRejected.map((a) => ({ id: a.id, type: a.type, title: a.title })),
     statusChanges: structuredStatusChanges,
+    // #192 — spread `unansweredCarryover` ONLY when older unanswered questions
+    // exist, so the healthy poll payload's top-level key set stays byte-for-byte
+    // (contract lock in check-feedback-ledger-health.test.ts / the golden SHA).
+    ...structuredCarryover.length > 0 ? { unansweredCarryover: structuredCarryover } : {},
     // #176 — spread `renderFailures` ONLY when a diagram broke, so the healthy
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
