@@ -28258,7 +28258,7 @@ var ECHO_MATCHERS = {
   log_reasoning: (d) => normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) || normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
   present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
   present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary")),
-  present_explainer: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_EXPLAINER, "title")) && normEcho(prop(d, "overview")) === normEcho(prop(EX_EXPLAINER, "overview"))
+  present_explainer: (d) => normEcho(prop(d, "overview")) === normEcho(prop(EX_EXPLAINER, "overview"))
 };
 function formatExampleEchoError(toolName) {
   const code = TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED;

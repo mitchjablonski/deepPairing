@@ -473,12 +473,14 @@ const stepDescriptions = (o: unknown): string[] => pluckSet(o, "steps", "descrip
  *               narrative sentence (the debrief's distinctive scalar). A real
  *               debrief reusing the example TITLE with a different summary is
  *               admitted; only a verbatim summary replay is caught.
- *  - explainer: title AND overview — the title alone ("How X works here") is a
- *               common shape a real explainer could reuse, so it can't suffice
- *               alone; the overview paragraph is the distinctive scalar. Both
- *               must match to be an echo (the sections[] item-set is NOT an arm —
- *               it only ever narrows, never establishes a match). A real explainer
- *               reusing just the title, or just the overview, is admitted.
+ *  - explainer: overview ONLY — the example overview is a full, highly specific
+ *               paragraph (the explainer's distinctive scalar, exactly like the
+ *               debrief's summary and the changeset's title). The title ("How X
+ *               works here") is a common shape and is deliberately NOT an arm, so
+ *               a real explainer reusing the example TITLE with a different overview
+ *               is admitted; only a verbatim overview replay is caught. A title+
+ *               overview AND-match was strictly WEAKER — changing either field
+ *               defeated it — so it's replaced by the single distinctive scalar.
  */
 const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
   present_options: (d) =>
@@ -501,9 +503,7 @@ const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
     normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
   present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
   present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary")),
-  present_explainer: (d) =>
-    normEcho(prop(d, "title")) === normEcho(prop(EX_EXPLAINER, "title")) &&
-    normEcho(prop(d, "overview")) === normEcho(prop(EX_EXPLAINER, "overview")),
+  present_explainer: (d) => normEcho(prop(d, "overview")) === normEcho(prop(EX_EXPLAINER, "overview")),
 };
 
 /** The pointed, second-person-to-the-agent rejection. Fail-loud, in the grain

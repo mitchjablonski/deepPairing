@@ -29377,7 +29377,7 @@ function createDaemon(deps) {
     }
   );
   app.route("/", publicRoutes);
-  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
+  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"]);
   function computeDaemonPendingCount() {
     let n = 0;
     for (const store of sessions.values()) {

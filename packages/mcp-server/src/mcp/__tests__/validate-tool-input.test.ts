@@ -649,8 +649,9 @@ describe("#183 — example-echo guard", () => {
     expect(store.getArtifacts()).toHaveLength(0);
   });
 
-  // #190 A2 — present_explainer keys the echo guard on title AND overview (both
-  // must match). Neither alone suffices — the sections[] item-set only narrows.
+  // #190 A2 — present_explainer keys the echo guard on the OVERVIEW scalar ONLY
+  // (a full distinctive paragraph), matching debrief's summary-only and
+  // changeset's title-only rule. The sections[] item-set is NOT an arm.
   const EXPLAINER_EXAMPLE = {
     title: "How session authentication works here",
     overview:
@@ -658,28 +659,31 @@ describe("#183 — example-echo guard", () => {
     sections: [{ heading: "1. edge", body: "the cookie is read" }],
   };
 
-  it("REJECTS the present_explainer example (title + overview fingerprint) end-to-end", async () => {
+  it("REJECTS the present_explainer example (overview fingerprint) end-to-end", async () => {
     const { text, isError } = await call("present_explainer", EXPLAINER_EXAMPLE);
     expect(isError).toBe(true);
     expect(text).toContain("EXAMPLE_ECHO_REJECTED");
     expect(store.getArtifacts()).toHaveLength(0);
   });
 
-  it("ADMITS a real explainer reusing the example TITLE but a different overview (title alone is NOT a fingerprint)", async () => {
+  it("REJECTS a verbatim example OVERVIEW even under a DIFFERENT title (overview is the fingerprint)", async () => {
+    // Post-fix: re-keying to overview-ONLY closes the hole the old title+overview
+    // AND-match left — changing the title no longer defeats the guard.
+    const { text, isError } = await call("present_explainer", {
+      title: "A totally different walk-through title",
+      overview: EXPLAINER_EXAMPLE.overview, // deliberately the example overview
+      sections: [{ heading: "1. edge", body: "the cookie is read" }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real explainer reusing the example TITLE but a different overview (title is NOT a fingerprint)", async () => {
     const { isError } = await call("present_explainer", {
       title: "How session authentication works here", // deliberately the example title
       overview: "A short tour of how the login handler mints a session and sets the cookie, end to end.",
       sections: [{ heading: "1. mint", body: "the handler creates a session row" }],
-    });
-    expect(isError).toBeFalsy();
-    expect(store.getArtifacts()).toHaveLength(1);
-  });
-
-  it("ADMITS a real explainer reusing the example OVERVIEW but a different title (overview alone is NOT a fingerprint)", async () => {
-    const { isError } = await call("present_explainer", {
-      title: "A totally different walk-through title",
-      overview: EXPLAINER_EXAMPLE.overview, // deliberately the example overview
-      sections: [{ heading: "1. edge", body: "the cookie is read" }],
     });
     expect(isError).toBeFalsy();
     expect(store.getArtifacts()).toHaveLength(1);

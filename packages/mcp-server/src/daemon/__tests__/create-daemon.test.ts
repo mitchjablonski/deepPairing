@@ -27,6 +27,10 @@ import { projectHashOf } from "../../project-root.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
 import { __resetMetricsCacheForTests } from "../../store/metrics-store.js";
 import { ERROR_CODES } from "../../error-codes.js";
+import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
+// The web "waiting on you" set — imported here (a server-project test, so no web
+// tsconfig rootDir boundary) to pin it EQUAL to the server's PENDING_DRAFT_TYPES.
+import { REVIEWABLE_TYPES } from "../../../web/src/lib/pending.js";
 
 const OPTS: DecisionOption[] = [
   { id: "o1", title: "Redis", description: "d", pros: ["fast"], cons: ["ops"], effort: "low", risk: "low", recommendation: true },
@@ -132,6 +136,56 @@ describe("#175 — daemon pendingCount counts a draft changeset (parity with lib
       headers: { "X-Project-Hash": projectHashOf(tmpDir) },
     });
     expect(res.status).toBe(200);
+    expect((await res.json()).pendingCount).toBe(1);
+  });
+});
+
+// #190 — the two "waiting on you" sets (the daemon's PENDING_REVIEWABLE and the
+// web PendingBanner's REVIEWABLE_TYPES) must stay EQUAL to the MCP server's
+// PENDING_DRAFT_TYPES, or a new artifact type silently misses a nudge surface —
+// exactly the #175 changeset omission, now reproduced for debrief/explainer.
+// This is the class-ending guard: the parity assertion + the behavioral badge
+// pin over EVERY PENDING_DRAFT_TYPE, so the NEXT type added to PENDING_DRAFT_TYPES
+// fails here until it's added to both sets too.
+describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PENDING_DRAFT_TYPES)", () => {
+  it("the web REVIEWABLE_TYPES set equals the server PENDING_DRAFT_TYPES set exactly", () => {
+    // `reasoning` is the only draft type deliberately NOT reviewable; it's absent
+    // from PENDING_DRAFT_TYPES, so the two sets are a straight equality.
+    expect(REVIEWABLE_TYPES.has("reasoning")).toBe(false);
+    expect(new Set(PENDING_DRAFT_TYPES as readonly string[])).toEqual(new Set(REVIEWABLE_TYPES));
+  });
+
+  it("the daemon pendingCount counts a draft of EVERY PENDING_DRAFT_TYPE, and never a reasoning draft", () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const store = daemon.createSession("s_parity");
+    let i = 0;
+    for (const type of PENDING_DRAFT_TYPES) {
+      store.createArtifact({ id: `art_${i++}`, type, title: `${type} draft`, content: {} });
+    }
+    // A reasoning draft (agent narration) must NOT lift the badge.
+    store.createArtifact({ id: "art_reasoning", type: "reasoning", title: "narration", content: {} });
+    return daemon.app
+      .request("/api/daemon-info", { headers: { "X-Project-Hash": projectHashOf(tmpDir) } })
+      .then(async (res) => {
+        expect(res.status).toBe(200);
+        // Pre-fix (PENDING_REVIEWABLE missing debrief+explainer) this returned
+        // PENDING_DRAFT_TYPES.length - 2.
+        expect((await res.json()).pendingCount).toBe(PENDING_DRAFT_TYPES.length);
+      });
+  });
+
+  it("a draft EXPLAINER is reflected in /api/daemon-info pendingCount (targeted #190 A2 badge)", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const store = daemon.createSession("s_ex");
+    store.createArtifact({
+      id: "ex1", type: "explainer", title: "How auth works here",
+      content: { title: "How auth works here", overview: "the walk", sections: [{ heading: "1. edge", body: "the cookie is read" }] },
+    });
+    const res = await daemon.app.request("/api/daemon-info", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect(res.status).toBe(200);
+    // Pre-fix (PENDING_REVIEWABLE omitted "explainer") this returned 0.
     expect((await res.json()).pendingCount).toBe(1);
   });
 });
