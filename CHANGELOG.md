@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.1.23 — 2026-08-04
+
+The close-the-loop release. v0.1.22 shipped the comprehension half — the debrief
+and the explainer — but a gaps review found them shipped *quietly*: the app never
+named the new artifacts when it was your turn, and the questions they raised had
+nowhere to go when a run ended, so an open question just evaporated. This release
+closes those loops. The app now **names every reviewable artifact** when it hands
+the turn back to you, **carries unanswered questions into the next run** instead of
+dropping them, and **right-sizes the read-only lifecycle** so a teaching artifact
+asks "got it?" instead of "approve / reject". And it **cuts the calibration loop**
+the data said nobody used — 0 predictions across 36 high-stakes decisions in all
+real usage. Every new field is optional and the removed calibration files are still
+read gracefully, so an old daemon degrades without a stumble (PRs #228, #229, #230).
+
+### Added
+- **Unanswered questions carry into the next run.** A question raised on a debrief,
+  an explainer, or any artifact no longer evaporates when a run ends. A shared
+  `collectUnansweredQuestions` surfaces the *actual* open question — including the
+  follow-ups buried in a reply thread, not just the top-level ask — and the daemon
+  tracks an in-memory `unansweredQuestionCount` (no disk reads on the poll path).
+  `check_feedback` returns an `unansweredCarryover` (spread-only — the golden
+  payload SHA is unchanged), a **ResumeQuestionsBanner** surfaces the queue with an
+  honest clipboard copy, and the first-call preamble tells the agent to drain it.
+- **The app names what's waiting.** The **TurnIndicator** now names all eight
+  reviewable artifact types (parity-pinned, with an "N items" fallback) — no more a
+  dangling "Your turn —" that never says *for what*. The **PendingBanner** gains a
+  "+N more" so a backlog reads at a glance.
+
+### Changed
+- **The read-only lifecycle is right-sized.** The explainer trades the steering
+  verbs (accept / send back / reject) for comprehension ones — **"Got it" / "Ask
+  more"** — and its status reads **"New — for you to read" → "Read"** instead of
+  borrowing the approval vocabulary. The debrief's **NEEDS YOUR EYES** lane moves
+  above the fold with per-item comment grain (`debrief:<lane>:<i>`), and the
+  comprehension artifacts consolidate on a single **ask-anything composer** in the
+  footer. Explainer guidance is now **pull-first** with a `ctaNudge`. RevisionDiff
+  learned to render superseded debriefs and explainers.
+- **A reject on a comprehension artifact can no longer write a cross-project Ledger
+  stance.** Rejecting a debrief or explainer is a "not yet understood", not a
+  standing rule — a store-authoritative guard blocks it from leaking into the
+  cross-project ledger.
+- **Export reaches the new surfaces.** Full / learnings / PR-description exports now
+  include debrief, explainer, spec, and changeset content.
+- **The theme defaults to system**, an **unknown-artifact-type fallback notice**
+  keeps a forward-version artifact readable on an older UI, and the 900px header
+  rail gains tooltips. The **gate copy is softened to honest framing**, and the
+  Ledger's double-entry display is disambiguated. The demo gains debrief and
+  explainer beats, and the README's comprehension narrative and screenshots (two
+  new) were recaptured.
+
+### Removed
+- **The calibration loop is cut.** Prediction-vs-outcome calibration recorded **0
+  predictions across 36 high-stakes decisions** in all real usage — the data was
+  decisive that nobody used it. The write path, UI, routes, and guidance are
+  removed; legacy calibration files still on disk are read gracefully, so no one's
+  history breaks.
+
 ## v0.1.22 — 2026-08-04
 
 The comprehension release. deepPairing's thesis has always had two halves — steer
