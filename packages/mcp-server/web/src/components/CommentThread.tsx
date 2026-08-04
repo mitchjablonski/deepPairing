@@ -219,7 +219,11 @@ export function CommentThread({
 
   // #193 E2 — bare focus signal (no draft mutation): focus + scroll the composer
   // when the caller bumps `focusSignal`. Nonce-gated so it fires per bump only.
-  const lastFocusSignal = useRef<number | undefined>(undefined);
+  // Seed the ref with the FIRST value (not undefined): otherwise an initial
+  // signal of 0 slips past both the `== null` and the `=== lastFocusSignal.current`
+  // guards on mount and steals focus into this composer — the class-ending fix
+  // for any consumer that starts its counter at 0 (call sites still gate too).
+  const lastFocusSignal = useRef<number | undefined>(focusSignal);
   useEffect(() => {
     if (focusSignal == null || focusSignal === lastFocusSignal.current) return;
     lastFocusSignal.current = focusSignal;

@@ -258,9 +258,9 @@ describe("#193 E2 — acknowledge mode (the explainer lifecycle)", () => {
     expect(onAskMore).toHaveBeenCalledTimes(1);
   });
 
-  it("the approved chip reads 'Got it' in acknowledge mode", () => {
+  it("the approved chip reads 'Read' (not the verdict word) in acknowledge mode", () => {
     render(<ArtifactStatusActions artifact={artifact({ status: "approved" })} acknowledgeMode />);
-    expect(screen.getByText("Got it")).toBeInTheDocument();
+    expect(screen.getByText("Read")).toBeInTheDocument();
     expect(screen.queryByText("Approved")).not.toBeInTheDocument();
   });
 });

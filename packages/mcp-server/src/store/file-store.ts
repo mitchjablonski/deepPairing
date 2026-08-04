@@ -1303,6 +1303,15 @@ export class FileStore implements IStore {
     if (sourceArtifactId) {
       const src = this.artifacts.find((a) => a.id === sourceArtifactId);
       if (src && LEDGER_EXEMPT_REJECT_TYPES.has(src.type)) return;
+      // INTENTIONAL fail-open: an unresolvable sourceArtifactId (not in the
+      // in-memory set) does NOT block the write — it records, matching the
+      // gate's fail-open convention. Today the only caller is the HTTP /status
+      // route, which resolves-and-short-circuits the exempt types BEFORE
+      // calling us, so an exempt artifact never reaches here with an
+      // unresolvable id. Do NOT "harden" this into fail-closed: a future
+      // pre-load reject path (one that records before the artifact is in
+      // `this.artifacts`) would then silently drop every stance. If such a path
+      // is ever added, thread the type explicitly rather than flipping this.
     }
     // Phase-1 (D) — before recording, check whether this rejection is a "gate
     // escape": the human is re-flagging an artifact the gate ADMITTED, with

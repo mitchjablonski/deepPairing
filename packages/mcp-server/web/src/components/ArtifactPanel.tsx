@@ -104,8 +104,13 @@ const statusLabels: Record<string, string> = {
  *  framing ("Draft, awaiting review") mis-casts it. Say "New — for you to read"
  *  so the chip matches its acknowledge (Got it) footer. Every other type/status
  *  is unchanged. */
-function statusLabelFor(artifact: Artifact): string {
+export function statusLabelFor(artifact: Artifact): string {
   if (artifact.type === "explainer" && artifact.status === "draft") return "New — for you to read";
+  // #193 E2 — after "Got it" the explainer is approved under the hood, but the
+  // verdict word "Approved" is exactly the framing this surface drops. Say
+  // "Read" — the SAME word the footer's acknowledge chip uses — so the state
+  // reads coherently in the header and the footer.
+  if (artifact.type === "explainer" && artifact.status === "approved") return "Read";
   return statusLabels[artifact.status] ?? artifact.status;
 }
 

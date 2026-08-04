@@ -291,7 +291,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
           secondarySubmitLabel="Ask"
           secondarySubmitTitle="Ask the agent a question about this explainer"
           prefill={prefill.nonce > 0 ? prefill : undefined}
-          focusSignal={askFocus}
+          focusSignal={askFocus > 0 ? askFocus : undefined}
           roomy
         />
       </div>

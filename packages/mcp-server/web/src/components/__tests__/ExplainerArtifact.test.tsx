@@ -85,11 +85,16 @@ describe("ExplainerArtifact — renders the walk-through", () => {
     });
   });
 
-  it("#193 E2 — Ask more focuses the ask-anything composer", async () => {
+  it("#193 E2 — the composer does NOT steal focus on mount, but Ask more focuses it", async () => {
     const user = userEvent.setup();
     render(<ExplainerArtifact artifact={explainerArtifact} />);
-    await user.click(screen.getByRole("button", { name: /ask more/i }));
     const composer = screen.getByLabelText("Comment on this explainer");
+    // Fail-on-revert: an unguarded focusSignal=0 fired the focus effect ON MOUNT
+    // (0 == null is false, 0 === undefined is false) and stole focus into the
+    // bottom composer — contradicting read-top-to-bottom. It must stay unfocused.
+    expect(document.activeElement).not.toBe(composer);
+    // …until the human explicitly asks for it.
+    await user.click(screen.getByRole("button", { name: /ask more/i }));
     await waitFor(() => expect(document.activeElement).toBe(composer));
   });
 });

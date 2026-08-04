@@ -371,8 +371,10 @@ export function ArtifactStatusActions({
       >
         <span className="text-accent-green text-sm">&#10003;</span>
         {/* #193 E2 — in acknowledge mode "approved" reads as "read + understood",
-            not a verdict, so the chip says "Got it". */}
-        <span className="text-xs text-accent-green font-medium">{acknowledgeMode ? "Got it" : "Approved"}</span>
+            not a verdict. The chip says "Read" — the SAME word the header chip
+            uses (statusLabelFor), so the acknowledged state reads coherently in
+            both places (the button that got here is "Got it"). */}
+        <span className="text-xs text-accent-green font-medium">{acknowledgeMode ? "Read" : "Approved"}</span>
       </div>
     );
   }
