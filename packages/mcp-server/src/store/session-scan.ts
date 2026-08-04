@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, Retrospective, RetrospectiveVerdict } from "@deeppairing/shared";
-import { nanoid } from "nanoid";
+import type { Artifact } from "@deeppairing/shared";
 import { salvageArray } from "./salvage.js";
-import { writeJsonAtomic } from "./atomic-write.js";
 import type { DecisionRecord } from "./store-interface.js";
 
 /**
@@ -12,8 +10,8 @@ import type { DecisionRecord } from "./store-interface.js";
  * instance. (#151: listAllDecisions additionally accepts plain-data
  * SNAPSHOTS of live sessions from the daemon — still no store coupling.)
  * Extracted from file-store.ts; the FileStore statics
- * (listSessions/searchAll/findPastPredictions/addRetrospective) delegate
- * here so existing call sites stay byte-compatible.
+ * (listSessions/searchAll) delegate here so existing call sites stay
+ * byte-compatible.
  */
 
 export function listSessions(projectRoot: string): Array<{
@@ -208,121 +206,6 @@ export function searchAll(
   // Sort by score desc, then recency (session.lastActivity is already in
   // listSessions order; we preserve insertion order via stable sort).
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
-}
-
-/**
- * N3.3: find the user's past predictions on similar past decisions.
- * Source: resolved decisions with a non-empty `response.predictedOutcome`
- * (captured by the companion UI on high-stakes decisions).
- *
- * Match is concept-token overlap between `query` and each past decision's
- * artifact title + context + chosen option text. We don't use exact match
- * because the phrasing of a decision evolves; we do cap at tokens ≥4 chars
- * to keep the signal-to-noise reasonable.
- */
-export function findPastPredictions(
-  projectRoot: string,
-  query: string,
-  opts: { excludeArtifactId?: string; limit?: number } = {},
-): Array<{
-  sessionId: string;
-  sessionTitle?: string;
-  artifactId: string;
-  artifactTitle: string;
-  context: string;
-  decisionId: string;
-  chosenOptionTitle: string;
-  predictedOutcome: string;
-  confidence?: "low" | "medium" | "high";
-  resolvedAt: string;
-  daysAgo: number;
-  retrospective?: Retrospective;
-}> {
-  const q = query.toLowerCase().trim();
-  if (!q) return [];
-  const tokens = q.split(/\s+/).filter((t) => t.length >= 4);
-  if (tokens.length === 0) return [];
-
-  const limit = opts.limit ?? 3;
-  const now = Date.now();
-
-  const out: ReturnType<typeof findPastPredictions> = [];
-  const sessions = listSessions(projectRoot);
-  for (const session of sessions) {
-    const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
-    const artFile = path.join(sessionDir, "artifacts.json");
-    const decFile = path.join(sessionDir, "decisions.json");
-    if (!fs.existsSync(artFile) || !fs.existsSync(decFile)) continue;
-
-    let artifacts: Artifact[];
-    let decisions: DecisionRecord[];
-    try {
-      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
-      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
-    } catch {
-      continue;
-    }
-
-    for (const dec of decisions) {
-      if (!dec.response?.predictedOutcome) continue;
-      if (opts.excludeArtifactId && dec.artifactId === opts.excludeArtifactId) continue;
-      const artifact = artifacts.find((a) => a.id === dec.artifactId);
-      if (!artifact) continue;
-
-      const haystack = (
-        artifact.title + " " +
-        (dec.context ?? "") + " " +
-        ((dec.options ?? []).find((o: any) => o.id === dec.response!.optionId)?.title ?? "") + " " +
-        ((dec.options ?? []).find((o: any) => o.id === dec.response!.optionId)?.description ?? "")
-      ).toLowerCase();
-
-      const hits = tokens.filter((t) => haystack.includes(t));
-      // N3.3 — match on concept-token OVERLAP, not a majority of the (broad)
-      // title+context query. The old `ceil(tokens.length / 2)` rule scaled
-      // with query length, so a paraphrased decision that shared the real
-      // concept but differed in wording almost never cleared the bar — the
-      // calibration loop basically never fired. Require a fixed floor of
-      // shared ≥4-char tokens instead (2, or the single token when that's all
-      // the query has). Decisions that recorded a prediction are rare, so this
-      // surfaces the relevant ones without flooding.
-      const required = Math.min(2, tokens.length);
-      if (hits.length < required) continue;
-
-      const chosen = (dec.options ?? []).find((o: any) => o.id === dec.response!.optionId);
-      const resolvedAt = dec.resolvedAt ?? dec.createdAt;
-      const daysAgo = Math.max(0, Math.floor((now - new Date(resolvedAt).getTime()) / (24 * 60 * 60 * 1000)));
-
-      // Hydrate any existing retrospective for this decision so the
-      // breadcrumb can render the verdict alongside the prediction.
-      const retrosPath = path.join(sessionDir, "retrospectives.json");
-      let retrospective: Retrospective | undefined;
-      try {
-        if (fs.existsSync(retrosPath)) {
-          const retros: Retrospective[] = salvageArray<Retrospective>(
-            "retrospectives.json", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
-          retrospective = retros.find((r) => r.decisionId === dec.decisionId);
-        }
-      } catch {}
-
-      out.push({
-        sessionId: session.id,
-        sessionTitle: session.summary,
-        artifactId: dec.artifactId,
-        artifactTitle: artifact.title,
-        context: dec.context ?? "",
-        decisionId: dec.decisionId,
-        chosenOptionTitle: chosen?.title ?? dec.response!.optionId,
-        predictedOutcome: dec.response!.predictedOutcome,
-        confidence: (dec.response as any).confidence,
-        resolvedAt,
-        daysAgo,
-        retrospective,
-      });
-    }
-  }
-
-  // Newest first — the user likely remembers recent predictions better.
-  return out.sort((a, b) => b.resolvedAt.localeCompare(a.resolvedAt)).slice(0, limit);
 }
 
 /**
@@ -619,54 +502,4 @@ export function listAllDecisions(
   decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return { decisions, failedSessions };
-}
-
-/**
- * P2 — write a retrospective for a decision that was made in some past
- * session. Walks sessions to find the one owning the decisionId; replaces
- * any existing retrospective for that decision (users can change their
- * minds as more evidence comes in).
- *
- * Returns the hydrated retrospective on success, or null if no session
- * owns the decisionId (caller should 404).
- */
-export function addRetrospective(
-  projectRoot: string,
-  params: { decisionId: string; verdict: RetrospectiveVerdict; note?: string },
-): { retrospective: Retrospective; sessionId: string } | null {
-  const sessions = listSessions(projectRoot);
-  for (const session of sessions) {
-    const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", session.id);
-    const decFile = path.join(sessionDir, "decisions.json");
-    if (!fs.existsSync(decFile)) continue;
-    let decisions: DecisionRecord[];
-    try {
-      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs.readFileSync(decFile, "utf-8")), "decisionId");
-    } catch {
-      continue;
-    }
-    if (!decisions.some((d) => d.decisionId === params.decisionId)) continue;
-
-    const retrospective: Retrospective = {
-      id: `retro_${nanoid(10)}`,
-      decisionId: params.decisionId,
-      verdict: params.verdict,
-      note: params.note?.trim() || undefined,
-      createdAt: new Date().toISOString(),
-    };
-
-    const retrosPath = path.join(sessionDir, "retrospectives.json");
-    let existing: Retrospective[] = [];
-    try {
-      if (fs.existsSync(retrosPath)) {
-        existing = salvageArray("retrospectives.json (write path)", JSON.parse(fs.readFileSync(retrosPath, "utf-8")), "decisionId");
-      }
-    } catch {}
-    const filtered = existing.filter((r) => r.decisionId !== params.decisionId);
-    filtered.push(retrospective);
-    writeJsonAtomic(retrosPath, filtered);
-
-    return { retrospective, sessionId: session.id };
-  }
-  return null;
 }

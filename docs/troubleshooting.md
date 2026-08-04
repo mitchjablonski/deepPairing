@@ -100,6 +100,22 @@ loaded deepPairing's MCP server.
    the daemon logs to `.deeppairing/daemon.log`. Doctor's `--fix` mode
    handles common spawn failures.
 
+## An artifact says "isn't supported by this page version — reload to update"
+
+You opened an artifact — often a **debrief** or **explainer**, the
+comprehension surfaces — and instead of the rendered card you see a quiet
+"reload to update" notice with the artifact's raw text.
+
+**What it means:** the browser tab is running an **older build of the
+companion UI than the daemon**. A newer daemon pushed an artifact type this
+cached page version doesn't know how to render yet, so it shows the safe
+fallback (with whatever text it can) instead of a blank card.
+
+**Fix:** hard-reload the tab (Cmd/Ctrl-Shift-R). The page re-fetches the
+current UI bundle from the daemon and renders the artifact normally. If it
+persists, the daemon's bundled `dist/web` is stale — rebuild with
+`pnpm build:clean`.
+
 ## Build / install fails on a fresh clone
 
 * **`pnpm install` fails with peer dependency warnings:** harmless on

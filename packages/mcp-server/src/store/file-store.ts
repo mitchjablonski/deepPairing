@@ -10,7 +10,7 @@ import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.j
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
 import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
-import { listSessions, searchAll, findPastPredictions, addRetrospective, listAllDecisions } from "./session-scan.js";
+import { listSessions, searchAll, listAllDecisions } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
@@ -1747,11 +1747,10 @@ export class FileStore implements IStore {
   }
 
   // --- Static methods for multi-session access ---
-  // G10 — the cross-session read helpers (listSessions / searchAll /
-  // findPastPredictions / addRetrospective) and the AA5 ledger digest with
-  // its BB2 cache now live in session-scan.ts and ledger-digest.ts. The
-  // statics below are byte-compatible delegates so every FileStore.* call
-  // site — HTTP routes, CLI, tests — keeps working unchanged.
+  // G10 — the cross-session read helpers (listSessions / searchAll) and the
+  // AA5 ledger digest with its BB2 cache now live in session-scan.ts and
+  // ledger-digest.ts. The statics below are byte-compatible delegates so every
+  // FileStore.* call site — HTTP routes, CLI, tests — keeps working unchanged.
 
   static listSessions = listSessions;
 
@@ -1761,12 +1760,6 @@ export class FileStore implements IStore {
   }
 
   static searchAll = searchAll;
-
-  /** N3.3 — see findPastPredictions in session-scan.ts. */
-  static findPastPredictions = findPastPredictions;
-
-  /** P2 — see addRetrospective in session-scan.ts. */
-  static addRetrospective = addRetrospective;
 
   /** #138 — project-wide decisions (every session's decisions.json, flattened
    *  newest-first, with a partial-data report). See session-scan.ts. */

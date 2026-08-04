@@ -607,22 +607,6 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
             sourceArtifactId: d.artifactId,
           });
         }
-        // O7: high-stakes decisions also fire a "decision_resolved_hero"
-        // event so the UI can toast the captured prediction — otherwise
-        // the prediction disappears into the decision record.
-        // stakes is typed on DecisionRecord; the nested `.request.stakes` read
-        // is a legacy stored shape from pre-FF9 sessions — one narrow cast.
-        const stakes = d.stakes ?? (d as { request?: { stakes?: string } }).request?.stakes;
-        if (stakes === "high" && d.response?.predictedOutcome) {
-          broadcast({
-            type: "decision_resolved_hero",
-            artifactId: d.artifactId,
-            context: d.context,
-            chosenTitle: option.title,
-            predictedOutcome: d.response.predictedOutcome,
-            confidence: d.response.confidence,
-          });
-        }
       }
       formattedDecisions.push(`- Decision "${d.context}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
       structuredDecisions.push({

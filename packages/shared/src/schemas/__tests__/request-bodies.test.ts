@@ -11,7 +11,6 @@ import {
   StatusUpdateBodySchema,
   RenameBodySchema,
   PreferenceBodySchema,
-  RetrospectiveBodySchema,
   PromptBodySchema,
   formatZodIssues,
 } from "../request-bodies.js";
@@ -87,19 +86,6 @@ describe("PreferenceBodySchema", () => {
     expect(PreferenceBodySchema.safeParse({}).success).toBe(true);
     expect(PreferenceBodySchema.safeParse({ autonomyLevel: "balanced" }).success).toBe(true);
     expect(PreferenceBodySchema.safeParse({ autonomyLevel: "yolo" }).success).toBe(false);
-  });
-});
-
-describe("RetrospectiveBodySchema", () => {
-  it("requires decisionId AND verdict in the closed enum", () => {
-    expect(RetrospectiveBodySchema.safeParse({ decisionId: "", verdict: "right" }).success).toBe(false);
-    expect(RetrospectiveBodySchema.safeParse({ decisionId: "d", verdict: "ok" }).success).toBe(false);
-    expect(RetrospectiveBodySchema.safeParse({ decisionId: "d", verdict: "right" }).success).toBe(true);
-  });
-
-  it("caps note length at 2000 chars", () => {
-    expect(RetrospectiveBodySchema.safeParse({ decisionId: "d", verdict: "right", note: "x".repeat(2001) }).success).toBe(false);
-    expect(RetrospectiveBodySchema.safeParse({ decisionId: "d", verdict: "right", note: "x".repeat(2000) }).success).toBe(true);
   });
 });
 

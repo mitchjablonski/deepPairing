@@ -29,14 +29,12 @@ export interface DecisionFooterProps {
   setReasoning: (v: string) => void;
   /** Selecting from the reasoning input's Enter key — commits the focused option. */
   onSelect: (optionId: string) => void;
-  predictOptIn: boolean;
-  setPredictOptIn: Dispatch<SetStateAction<boolean>>;
-  /** #190 (the 0/20 calibration demotion) — gate the two calibration footer
-   *  actions ("+ Add reasoning" and "+ Capture prediction") so they render ONLY
-   *  in the Discuss workbench, never on the compact inline decision card.
-   *  Defaults false: the compact card omits them; DecisionWorkbench passes true.
-   *  The underlying state (showReasoning / predictOptIn / reasoning) is untouched
-   *  — this demotes only the SURFACE where the triggers appear. */
+  /** #190 (the 0/20 calibration demotion) — gate the "+ Add reasoning" footer
+   *  action so it renders ONLY in the Discuss workbench, never on the compact
+   *  inline decision card. Defaults false: the compact card omits it;
+   *  DecisionWorkbench passes true. The underlying state (showReasoning /
+   *  reasoning) is untouched — this demotes only the SURFACE where the trigger
+   *  appears. (#194 E3 cut the sibling "+ Capture prediction" action.) */
   showCalibrationActions?: boolean;
 }
 
@@ -44,7 +42,6 @@ export function DecisionFooter({
   options,
   focusedIndex,
   artifactId,
-  stakes,
   showSendBack,
   setShowSendBack,
   sendBackText,
@@ -64,8 +61,6 @@ export function DecisionFooter({
   reasoning,
   setReasoning,
   onSelect,
-  predictOptIn,
-  setPredictOptIn,
   showCalibrationActions = false,
 }: DecisionFooterProps) {
   return (
@@ -231,8 +226,8 @@ export function DecisionFooter({
         </div>
       ) : (
         <div className="flex items-center gap-3 flex-wrap text-2xs text-text-muted">
-          {/* #190 — the calibration actions were 0/20 on the compact card;
-              they now render ONLY in the Discuss workbench (showCalibrationActions).
+          {/* #190 — the "+ Add reasoning" action was 0/20 on the compact card;
+              it now renders ONLY in the Discuss workbench (showCalibrationActions).
               The state machine is unchanged — this gates the trigger surface. */}
           {showCalibrationActions && !showReasoning && (
             <button
@@ -241,22 +236,6 @@ export function DecisionFooter({
               title="The reason you pick gets recorded as the why for every rejected option"
             >
               + Add reasoning <span className="opacity-60">(remembered across sessions)</span>
-            </button>
-          )}
-          {/* FF9 — opt-in prediction capture toggle on high-stakes
-              decisions. When ON, clicking an option enters the
-              predicting phase (confidence + outcome inputs) before
-              submitting; when OFF (default), the pick submits
-              immediately. Surfaces only when stakes='high' AND (#190)
-              only in the Discuss workbench. */}
-          {showCalibrationActions && stakes === "high" && (
-            <button
-              onClick={() => setPredictOptIn((v) => !v)}
-              className={`transition-colors ${predictOptIn ? "text-accent-violet" : "hover:text-accent-violet"}`}
-              title="Capture confidence + predicted outcome on this pick — for calibration over time"
-              aria-pressed={predictOptIn}
-            >
-              {predictOptIn ? "✓ Predicting outcome" : "+ Capture prediction with my pick"}
             </button>
           )}
           {artifactId && !showSendBack && (

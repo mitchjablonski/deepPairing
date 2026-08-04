@@ -6,7 +6,7 @@ import { m } from "motion/react";
 import type { DecisionRequestEvent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
-import { badgeColors, type InitialResolved } from "./types";
+import { badgeColors } from "./types";
 import { useConnectionStore } from "../../stores/connection";
 
 interface ResolvedDecisionViewProps {
@@ -17,7 +17,6 @@ interface ResolvedDecisionViewProps {
   reasoning: string;
   /** C2 — true once the agent's check_feedback drained this resolution. */
   agentPickedUp: boolean;
-  initialResolved?: InitialResolved;
   /** For the Re-pair button: which session this decision was recorded in. */
   sessionId?: string;
   /** Artifact id — gates the Q3 horizon-check trigger block. */
@@ -36,7 +35,6 @@ export function ResolvedDecisionView({
   selectedId,
   reasoning,
   agentPickedUp,
-  initialResolved,
   sessionId,
   artifactId,
   stakes,
@@ -90,25 +88,6 @@ export function ResolvedDecisionView({
           </span>
         )}
       </p>
-      {(initialResolved?.predictedOutcome || initialResolved?.confidence) && (
-        <div className="mt-2 pt-2 border-t border-accent-green/15">
-          <div className="flex items-start gap-2">
-            <span className="text-2xs font-semibold text-accent-amber shrink-0 mt-0.5">
-              Predicted:
-            </span>
-            <div className="flex-1 min-w-0">
-              {initialResolved.predictedOutcome && (
-                <p className="text-xs text-text-secondary">{initialResolved.predictedOutcome}</p>
-              )}
-              {initialResolved.confidence && (
-                <span className="inline-block mt-1 text-2xs text-text-muted italic">
-                  ({initialResolved.confidence} confidence)
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
       {rejected.length > 0 && (
         <div className="mt-2 pt-2 border-t border-accent-green/15">
           <span className="text-xs text-text-muted">

@@ -555,36 +555,39 @@ describe("FileStore", () => {
     });
   });
 
-  describe("findPastPredictions — concept-token matching (N3.3)", () => {
-    function seedPrediction(sessionId: string, title: string, context: string, predicted: string) {
-      const store = createStore(sessionId);
-      store.createArtifact({ id: `dart_${sessionId}`, type: "decision", title, content: {} });
+  describe("legacy calibration data reads gracefully (#194 — cut leaves the read path safe)", () => {
+    it("loads a session whose decisions.json carries a legacy predictedOutcome AND a stray retrospectives.json without crashing", () => {
+      // Seed a resolved high-stakes decision the old way — resolveDecision still
+      // accepts + persists the (now-vestigial) prediction payload for backward
+      // compat, so a project written before the cut still round-trips.
+      const store = createStore("legacy_cal");
+      store.createArtifact({ id: "dart_legacy", type: "decision", title: "Pick a hash", content: {} });
       store.recordDecisionRequest({
-        decisionId: `dec_${sessionId}`,
-        artifactId: `dart_${sessionId}`,
-        context,
-        options: [{ id: "o1", title: "Redis", description: "in-memory" }],
+        decisionId: "dec_legacy",
+        artifactId: "dart_legacy",
+        context: "Password hashing",
+        options: [{ id: "o1", title: "argon2id", description: "memory-hard" }],
         stakes: "high",
       });
-      store.resolveDecision(`dec_${sessionId}`, "o1", "go", { predictedOutcome: predicted, confidence: "high" });
+      store.resolveDecision("dec_legacy", "o1", "OWASP", { predictedOutcome: "zero-downtime", confidence: "high" });
       store.forceFlush();
-    }
 
-    it("surfaces a past prediction sharing ≥2 concept tokens, even with a differently-worded query", () => {
-      seedPrediction("past", "Choose a cache layer for hot reads", "API latency", "Redis will hold up");
-      // Shares exactly two distinctive tokens (cache, layer). The OLD majority
-      // rule needed ceil(5/2)=3 of the query's tokens, so this missed; the
-      // token-floor rule surfaces it.
-      const hits = FileStore.findPastPredictions(tmpDir, "which cache layer should we pick");
-      expect(hits).toHaveLength(1);
-      expect(hits[0].predictedOutcome).toBe("Redis will hold up");
-    });
+      // Drop a stray retrospectives.json (a file the daemon no longer writes)
+      // into the session dir — the store must ignore it, never choke on it.
+      const sessDir = path.join(tmpDir, ".deeppairing", "sessions", "legacy_cal");
+      fs.writeFileSync(
+        path.join(sessDir, "retrospectives.json"),
+        JSON.stringify([{ id: "r1", decisionId: "dec_legacy", verdict: "right", createdAt: new Date().toISOString() }]),
+      );
 
-    it("does NOT surface on a single incidental token overlap (floor is 2)", () => {
-      seedPrediction("past2", "Choose a cache layer for hot reads", "API latency", "Redis");
-      // Only "choose" overlaps — one shared token isn't a concept match.
-      const hits = FileStore.findPastPredictions(tmpDir, "which database should we choose");
-      expect(hits).toHaveLength(0);
+      // A fresh store reads purely from disk — assert no throw + the decision
+      // (and its recorded reasoning) survive the round-trip.
+      const reloaded = createStore("legacy_cal");
+      const state = reloaded.getFullState();
+      const dec = state.decisions.find((d) => d.decisionId === "dec_legacy");
+      expect(dec).toBeDefined();
+      expect(dec!.response?.optionId).toBe("o1");
+      expect(dec!.response?.reasoning).toBe("OWASP");
     });
   });
 

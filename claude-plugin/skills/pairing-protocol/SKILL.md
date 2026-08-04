@@ -21,9 +21,10 @@ On your first tool call, the response includes:
   exactly. **`http://localhost:5173` is NOT the answer** — that's Vite's dev
   default and a hallucination; if you're tempted to say any port you didn't
   read from a tool response, stop and read `deeppairing://onboarding`.
-- **Session memory** — rejected approaches from this project (`present_*`
-  tools will REFUSE any proposal that matches one), approved patterns, and
-  project guardrails (migrations, CI workflows, infra paths).
+- **Session memory** — approaches the user has REJECTED in this project (once
+  such a rejection exists, `present_*` stops you re-attempting a proposal that
+  matches it), approved patterns, and project guardrails (migrations, CI
+  workflows, infra paths).
 - **Cross-project philosophy ledger** — the user's stances across every
   deepPairing project they've used. 'Avoid' stances with multi-project
   support are especially strong signal. These are advisory — a match nudges
@@ -70,8 +71,8 @@ Two rhythms, and they're different:
   dump findings as plain text.
 - **`present_options`** — at any decision point with 2-4 valid approaches.
   Set `stakes: "high"` on architecturally-significant / hard-to-reverse
-  choices (schema, auth, infra, billing) — the UI captures the user's
-  prediction + confidence, raw material for calibration. **One choice = one
+  choices (schema, auth, infra, billing) — the UI weights those cards
+  visually so the human sees which calls are load-bearing. **One choice = one
   `present_options` card, each with a `concept`.** Do NOT bury a decision inside
   a plan step as an implied default ("approve = take my picks"), and do NOT
   interleave several decisions inside a plan — both are easy for the human to
@@ -251,25 +252,20 @@ reviews in the companion UI.
 
 ## Rejected approaches (CRITICAL)
 
-Session memory includes "rejected approaches" with reasons and concepts.
-The `present_*` tools will refuse (`REJECTED_APPROACH_BLOCKED`) if your
-proposal matches by surface name OR by underlying concept. Do not retry —
-revise your proposal to exclude the rejected approach, or present_findings
-first to make the case for reconsidering.
+Session memory includes any "rejected approaches" the user has recorded, with
+their reasons and concepts. Once one exists, `present_*` stops you from
+RE-ATTEMPTING it (`REJECTED_APPROACH_BLOCKED`) — a proposal matching a past
+rejection by surface name OR underlying concept is blocked in THIS project
+(same-project enforcement); a match against the cross-project ledger is
+advisory (it flags, it doesn't block). Don't retry a blocked call — revise your
+proposal to exclude the rejected approach, or present_findings first to make
+the case for reconsidering.
 
 ## Guardrails
 
 Project guardrails (migrations, `.github/workflows/`, `Dockerfile`, `.env`)
 are detected by filesystem. Even when autonomy is "autonomous", escalate
 to supervised for changes touching these paths.
-
-## Craft-development surfaces (sparingly)
-
-- On architecturally-significant decisions, set `stakes: "high"` on
-  `present_options`. The UI captures the user's prediction (what will this
-  look like in 3mo / 1y / 2y) — calibration material for future sessions.
-  Reserve it for genuinely significant, hard-to-reverse calls; it's not a
-  checkbox.
 
 ## Don't
 

@@ -8,8 +8,6 @@ export interface InitialResolved {
   optionId: string;
   reasoning?: string;
   resolvedAt?: string;
-  confidence?: "low" | "medium" | "high";
-  predictedOutcome?: string;
 }
 
 export const badgeColors = {

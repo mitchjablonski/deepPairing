@@ -14,15 +14,11 @@ export async function handleExportSession(ctx: ToolContext, args: any): Promise<
   if (format === "replay" && typeof (ctx.store as any).getAnnotations === "function") {
     state.annotations = await (ctx.store as any).getAnnotations();
   }
-  // R3: the learnings format cross-references retrospectives. Attach the
-  // session memory (rejected approaches) and retrospectives when the
-  // store exposes them.
+  // R3: the learnings format surfaces the session's rejected approaches.
+  // Attach the session memory when the store exposes it.
   if (format === "learnings") {
     if (typeof (ctx.store as any).getSessionMemory === "function") {
       state.sessionMemory = await (ctx.store as any).getSessionMemory();
-    }
-    if (typeof (ctx.store as any).getRetrospectives === "function") {
-      state.retrospectives = await (ctx.store as any).getRetrospectives();
     }
   }
   const markdown = formatSessionMarkdown(state, format);

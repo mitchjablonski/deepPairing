@@ -8,8 +8,9 @@ import { useArtifactStore } from "../../stores/artifact";
 // runs in happy-dom (the same seam #173/#174 tests use).
 vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), render: vi.fn() } }));
 
-// A HIGH-STAKES decision so BOTH calibration actions ("+ Add reasoning" and
-// "+ Capture prediction with my pick") are eligible to render.
+// A HIGH-STAKES decision so the "+ Add reasoning" action is eligible to render.
+// (#194 E3 cut the sibling "+ Capture prediction" action along with the
+// calibration loop; only "+ Add reasoning" survives, and only in the workbench.)
 const event = {
   type: "decision_request" as const,
   decisionId: "dec_cal",
@@ -26,27 +27,29 @@ beforeEach(() => {
 });
 
 describe("#190 calibration demotion — compact DecisionCard", () => {
-  it("does NOT show '+ Add reasoning' or '+ Capture prediction' on the compact card", () => {
+  it("does NOT show '+ Add reasoning' on the compact card, and never a '+ Capture prediction'", () => {
     render(<DecisionCard event={event} decisionId="dec_cal" artifactId="art_cal" stakes="high" />);
-    // Pre-fix (DecisionFooter rendered these unconditionally) BOTH buttons were
-    // present on the compact card — the 0/20 surface this demotion removes.
+    // Pre-fix (DecisionFooter rendered these unconditionally) the reasoning
+    // action was present on the compact card — the 0/20 surface this demotes.
     expect(screen.queryByRole("button", { name: /Add reasoning/i })).not.toBeInTheDocument();
+    // #194 — the prediction-capture action is gone everywhere.
     expect(screen.queryByRole("button", { name: /Capture prediction/i })).not.toBeInTheDocument();
   });
 });
 
 describe("#190 calibration demotion — Discuss workbench", () => {
-  it("SHOWS both calibration actions in the workbench footer", async () => {
+  it("SHOWS the '+ Add reasoning' action in the workbench footer (but never '+ Capture prediction')", async () => {
     const user = userEvent.setup();
     render(<DecisionCard event={event} decisionId="dec_cal" artifactId="art_cal" stakes="high" />);
 
     // Sanity: confirmed absent on the compact card BEFORE opening the workbench
-    // (guards against a false pass where the actions never render at all).
+    // (guards against a false pass where the action never renders at all).
     expect(screen.queryByRole("button", { name: /Add reasoning/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Expand to discuss/i }));
-    // The workbench passes showCalibrationActions → both actions surface here.
+    // The workbench passes showCalibrationActions → "+ Add reasoning" surfaces.
     expect(await screen.findByRole("button", { name: /Add reasoning/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Capture prediction/i })).toBeInTheDocument();
+    // #194 — no prediction-capture action, even in the workbench.
+    expect(screen.queryByRole("button", { name: /Capture prediction/i })).not.toBeInTheDocument();
   });
 });

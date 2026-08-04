@@ -31,7 +31,6 @@ import {
   RenameBodySchema,
   ChangesetReviewBodySchema,
   PreferenceBodySchema,
-  RetrospectiveBodySchema,
   RenderFailureBodySchema,
   formatZodIssues,
   normalizeConceptKey,
@@ -1352,24 +1351,6 @@ export function createHttpRoutes(
     });
   });
 
-  // N3.3: past-predictions lookup. Powers the breadcrumb above high-stakes
-  // decisions that asks "you predicted X on a similar decision N months ago".
-  // Project-scoped (walks .deeppairing/sessions/*); returns empty if the
-  // daemon wasn't started with a projectRoot.
-  app.get("/api/predictions", (c) => {
-    const concept = (c.req.query("concept") ?? "").trim();
-    const excludeArtifactId = c.req.query("excludeArtifactId") ?? undefined;
-    const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 3), 1), 10);
-    if (!concept || !projectRoot) {
-      return c.json({ predictions: [] });
-    }
-    const predictions = FileStore.findPastPredictions(projectRoot, concept, {
-      excludeArtifactId,
-      limit,
-    });
-    return c.json({ predictions });
-  });
-
   // AA5 — ledger digest. The cross-project moat surface that Z1's
   // durable preflight traces unlocked. Aggregates every trace across
   // every session in this project + the global Philosophy Ledger so
@@ -1529,32 +1510,6 @@ export function createHttpRoutes(
     // ambiguous — treat as "not yet configured" (the UI treats both empty
     // and missing the same way: nudge toward `team init`).
     return c.json({ preferences, exists: preferences.length > 0 });
-  });
-
-  // P2: capture a retrospective on a past decision's prediction — the
-  // calibration loop closure. Walks sessions to find the owning session
-  // and writes into its retrospectives.json, replacing any prior entry
-  // for the same decisionId (verdict can change as evidence accumulates).
-  app.post("/api/retrospectives", async (c) => {
-    if (!projectRoot) return c.json({ error: "projectRoot not configured" }, 400);
-    // H2-2 (#145) — see /api/comments: honest generic 400 on a malformed body
-    // (not the misleading "received null"), Zod field-level errors preserved.
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = RetrospectiveBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { decisionId, verdict, note } = parsed.data;
-    const result = FileStore.addRetrospective(projectRoot, { decisionId, verdict, note });
-    if (!result) {
-      return c.json({ error: `no decision found with id "${decisionId}"` }, 404);
-    }
-    broadcast({
-      type: "retrospective_recorded",
-      decisionId,
-      verdict,
-      retrospectiveId: result.retrospective.id,
-    }, result.sessionId);
-    return c.json({ retrospective: result.retrospective, sessionId: result.sessionId });
   });
 
   // Export session as markdown

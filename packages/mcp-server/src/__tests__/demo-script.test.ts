@@ -39,6 +39,14 @@ async function runUntil(ms: number) {
   for (const s of due) await s.fn();
 }
 
+/** Deterministic BUT distinct ids — the demo now creates 3 artifacts
+ *  (findings, explainer, debrief), so a single fixed id would collide on
+ *  createArtifact once the later beats fire. */
+function idSeq(): () => string {
+  let n = 0;
+  return () => `art_demo_${n++}`;
+}
+
 describe("runDemoScript", () => {
   it("HONESTY GUARD — the demo's scripted block is one the REAL matcher would make", () => {
     // The demo hardcodes its own preflight_blocked broadcast. This pins that
@@ -49,18 +57,48 @@ describe("runDemoScript", () => {
     expect(conceptMatchesProposal(DEFAULT_REJECTION_CONCEPT, DEFAULT_REPROPOSAL)).toBe(true);
   });
 
-  it("registers three scheduled steps on the canonical timeline", () => {
+  it("registers five scheduled steps on the canonical timeline (#194 — + explainer + debrief)", () => {
     runDemoScript({
       sessionId: "demo_x",
       store,
       broadcast: (sid, evt) => broadcasts.push({ sessionId: sid, event: evt }),
       schedule: (ms, fn) => scheduled.push({ ms, fn }),
-      makeArtifactId: () => "art_demo_fixed",
+      makeArtifactId: idSeq(),
     });
     const timings = scheduled.map((s) => s.ms).sort((a, b) => a - b);
-    expect(timings).toEqual([500, 2500, 5000]);
+    expect(timings).toEqual([500, 2500, 5000, 6500, 8000]);
     // Nothing fires until we advance time.
     expect(broadcasts).toEqual([]);
+  });
+
+  it("#194 — the comprehension beats create an explainer (t=6500) then a debrief (t=8000)", async () => {
+    runDemoScript({
+      sessionId: "demo_x",
+      store,
+      broadcast: (sid, evt) => broadcasts.push({ sessionId: sid, event: evt }),
+      schedule: (ms, fn) => scheduled.push({ ms, fn }),
+      makeArtifactId: idSeq(),
+    });
+    await runUntil(8000);
+
+    const explainer = store.getArtifacts().find((a) => a.type === "explainer");
+    expect(explainer).toBeDefined();
+    expect((explainer!.content as any).sections?.length).toBeGreaterThanOrEqual(1);
+
+    const debrief = store.getArtifacts().find((a) => a.type === "debrief");
+    expect(debrief).toBeDefined();
+    const dc = debrief!.content as any;
+    // The debrief tells the five lanes against the demo's own story.
+    expect(dc.summary).toMatch(/rejected/i);
+    expect(dc.decisionsMade?.length).toBeGreaterThanOrEqual(1);
+    expect(dc.needsYourEyes?.length).toBeGreaterThanOrEqual(1);
+    expect(dc.deferred?.length).toBeGreaterThanOrEqual(1);
+    expect(dc.openQuestions?.length).toBeGreaterThanOrEqual(1);
+
+    // Both were announced to the UI.
+    const created = broadcasts.filter((b) => b.event.type === "artifact_created").map((b) => b.event.artifact.type);
+    expect(created).toContain("explainer");
+    expect(created).toContain("debrief");
   });
 
   it("step 1 (t=500ms) creates a findings artifact and broadcasts artifact_created", async () => {

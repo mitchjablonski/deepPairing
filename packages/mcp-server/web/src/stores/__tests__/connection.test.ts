@@ -281,7 +281,7 @@ describe("connection store — handleMessage dispatch", () => {
         // even before the agent has drained (acknowledged) it.
         decisions: [
           { decisionId: "dec_r", artifactId: "art_dec", acknowledged: false,
-            response: { optionId: "o2", reasoning: "cheapest", confidence: "high", predictedOutcome: "no p99 regressions" },
+            response: { optionId: "o2", reasoning: "cheapest" },
             resolvedAt: "2026-04-16T10:05:00.000Z" },
         ],
       },
@@ -293,8 +293,6 @@ describe("connection store — handleMessage dispatch", () => {
       optionId: "o2",
       reasoning: "cheapest",
       resolvedAt: "2026-04-16T10:05:00.000Z",
-      confidence: "high",
-      predictedOutcome: "no p99 regressions",
     });
   });
 
@@ -466,28 +464,6 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0]!.body).toContain("/Users/alice/other-project");
       expect(toasts[0]!.ttl).toBe(0); // sticky — user must dismiss
       expect(useConnectionStore.getState().connected).toBe(false);
-    });
-
-    it("pushes a success toast on `decision_resolved_hero` with the captured prediction", async () => {
-      const { useToastStore } = await import("../toast");
-      useToastStore.getState().dismissAll();
-
-      useConnectionStore.getState().connect();
-      activeAdapter.emit({
-        type: "decision_resolved_hero",
-        artifactId: "art_d1",
-        context: "Password hashing",
-        chosenTitle: "argon2id",
-        predictedOutcome: "zero-downtime migration",
-        confidence: "medium",
-      });
-      await flush();
-
-      const toasts = useToastStore.getState().toasts;
-      expect(toasts).toHaveLength(1);
-      expect(toasts[0]!.title).toContain("argon2id");
-      expect(toasts[0]!.body).toContain("zero-downtime migration");
-      expect(toasts[0]!.body).toContain("medium confidence");
     });
 
     it("pushes an info toast on `feedback_received` (Q5 pair-tempo signal)", async () => {

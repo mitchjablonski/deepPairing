@@ -3,15 +3,16 @@ import { useLedgerStore } from "../stores/ledger";
 import { useAbortableFetch } from "../hooks/useAbortableFetch";
 
 /**
- * Compact "look how much you've taught it" stat for the header — the felt proof
- * that the moat is compounding. The full breakdown lives in SessionMetrics
- * (inside the settings sheet); this surfaces the two headline cumulative counts
- * — pre-flight blocks and ledger writes — always-visible, one click from the
- * full Your-taste view.
+ * Compact "look how much you've taught it" stat — the felt proof that the moat
+ * is compounding. #189 moved it OFF the header into the Diagnostics overflow;
+ * the header keeps the ONE primary "Ledger" button. This is the STATS view of
+ * that same Ledger (headline cumulative counts — pre-flight blocks + ledger
+ * writes), and clicking it opens the exact same drawer the header opens (L9,
+ * #194 — the label + tooltip now say so, so the two entries don't read as
+ * unrelated).
  *
- * Self-hides until there's real signal (a blank "0 · 0" sells nothing). Refetches
- * whenever the ledger store invalidates (a block fired / a stance changed), so
- * the count ticks up in the moment the taste compounds rather than on reload.
+ * Refetches whenever the ledger store invalidates (a block fired / a stance
+ * changed), so the count ticks up in the moment the taste compounds.
  */
 export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
 
@@ -44,18 +45,18 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
     <button
       onClick={onOpen}
       title={isZero
-        ? "Your taste will compound here: pre-flight blocks and ledger writes accumulate across this project. Click to see how it works."
-        : `Your taste is compounding: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project. Click for the full breakdown.`}
-      aria-label="Cumulative taste stats — open the Ledger"
+        ? "Ledger stats — pre-flight blocks and ledger writes accumulate across this project. Opens the same Ledger as the header button."
+        : `Ledger stats: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project. Opens the same Ledger as the header button.`}
+      aria-label="Ledger stats — opens the same Ledger as the header button"
       className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs text-text-muted
                  hover:text-text-secondary hover:bg-surface-hover transition-colors font-mono"
     >
       {isZero ? (
         // F1 — no opacity stacking: muted IS the floor of the AA ladder.
-        // Naming split (deliberate): "Ledger" is the surface/store you open;
-        // "your taste" is the felt judgment it holds (see the title copy and
-        // the "Blocked by your taste" toast). This label names the surface.
-        <span>🛡 Ledger</span>
+        // L9 (#194) — "Ledger stats" (not a bare "Ledger") so this overflow
+        // entry doesn't read as a second, unrelated copy of the header's
+        // primary "Ledger" button; both open the same drawer.
+        <span>🛡 Ledger stats</span>
       ) : (
         <>
           <span>🛡 {stat.blocks}</span>

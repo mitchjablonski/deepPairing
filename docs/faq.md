@@ -195,6 +195,17 @@ If you try it, the most useful feedback is "the rejection-block
 fired on something it shouldn't have" — that's the signal that
 shapes the next milestone.
 
+## "How do I understand what the agent actually changed?"
+
+Every feature or autonomous run ends with a **debrief** artifact: the
+narrative of what changed and why, the calls the agent made without you
+(each with the alternative it weighed), what still needs your eyes, what
+it deferred, and an ask-anything thread. It's the comprehension surface —
+the point is to *understand* the change, not just approve a diff. For the
+other direction — understanding code that already exists ("how does auth
+work here?") — the agent narrates a read-only **explainer**: an ordered
+walk-through with each section anchored to the real code.
+
 ## "Where's the roadmap?"
 
 Open in [Discussions](https://github.com/mitchjablonski/deepPairing/discussions)

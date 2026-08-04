@@ -238,8 +238,6 @@ export interface ResolvedDecisionInfo {
   optionId: string;
   reasoning?: string;
   resolvedAt?: string;
-  confidence?: "low" | "medium" | "high";
-  predictedOutcome?: string;
 }
 
 export interface ArtifactState {
@@ -323,7 +321,6 @@ export interface ArtifactState {
     decisionId: string,
     optionId: string,
     reasoning?: string,
-    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ) => Promise<void>;
 
   renameArtifact: (artifactId: string, title: string) => Promise<void>;
@@ -817,7 +814,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     );
   },
 
-  resolveDecision: async (decisionId, optionId, reasoning, prediction) => {
+  resolveDecision: async (decisionId, optionId, reasoning) => {
     assertNotReplay("Resolving a decision");
     // Bug A — guard BEFORE recording the local resolution / optimistic flip;
     // await only on the suspected-foreign path (keeps the flip synchronous).
@@ -835,8 +832,6 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       optionId,
       reasoning: reasoning?.trim() || undefined,
       resolvedAt: new Date().toISOString(),
-      confidence: prediction?.confidence,
-      predictedOutcome: prediction?.predictedOutcome,
     });
     // Optimistic: flip the decision artifact to "approved" locally so it leaves
     // the "waiting for you" set the instant you choose — don't wait on the
@@ -859,8 +854,6 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           body: JSON.stringify({
             optionId,
             reasoning,
-            confidence: prediction?.confidence,
-            predictedOutcome: prediction?.predictedOutcome,
           }),
         }),
       "Resolve decision",

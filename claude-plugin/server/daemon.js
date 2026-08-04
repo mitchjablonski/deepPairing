@@ -23184,9 +23184,9 @@ var DecisionRequestSchema = external_exports.object({
   options: external_exports.array(DecisionOptionSchema).min(2).max(4),
   /**
    * How consequential is this decision? Agent sets this on architecturally
-   * significant / hard-to-reverse choices. When "high", the UI asks the
-   * human for a prediction + confidence alongside their pick — the raw
-   * material for calibration tracking later.
+   * significant / hard-to-reverse choices. Drives the UI's visual weight on
+   * the decision card (the "high/medium stakes" badge) so the human sees at a
+   * glance which calls are load-bearing.
    */
   stakes: DecisionStakesSchema.optional()
 });
@@ -23195,11 +23195,12 @@ var DecisionResponseSchema = external_exports.object({
   optionId: external_exports.string(),
   reasoning: external_exports.string().optional(),
   /**
-   * Optional craft-development fields — captured primarily on high-stakes
-   * decisions. The UI prompts for these; the human can skip.
+   * Legacy craft-development fields, retained OPTIONAL for backward compat so
+   * decisions.json written before the calibration-loop cut (E3, #194) still
+   * parse. No live surface captures these anymore — the prediction-capture
+   * ritual was cut after 0/36 real high-stakes decisions ever recorded one.
    */
   confidence: DecisionConfidenceSchema.optional(),
-  /** What the human expects to happen as a result of this choice. */
   predictedOutcome: external_exports.string().optional()
 });
 
@@ -23785,11 +23786,6 @@ var PreferenceBodySchema = external_exports.object({
   autonomyLevel: AutonomyLevelSchema.optional(),
   detailDensity: DetailDensitySchema.optional()
 });
-var RetrospectiveBodySchema = external_exports.object({
-  decisionId: external_exports.string().min(1),
-  verdict: external_exports.enum(["right", "wrong", "mixed"]),
-  note: external_exports.string().max(2e3).optional()
-});
 var RenderFailureBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
   /** The stable PlanVisual.id of the diagram that failed. */
@@ -23865,23 +23861,6 @@ var TaskHandleSchema = external_exports.object({
   response: external_exports.unknown().optional(),
   createdAt: external_exports.string().datetime(),
   lastUpdatedAt: external_exports.string().datetime()
-});
-
-// ../shared/dist/schemas/retrospective.js
-var RetrospectiveVerdictSchema = external_exports.enum(["right", "wrong", "mixed"]);
-var RetrospectiveSchema = external_exports.object({
-  id: external_exports.string().min(1),
-  /** The decisionId this retrospective targets. */
-  decisionId: external_exports.string().min(1),
-  verdict: RetrospectiveVerdictSchema,
-  /** Optional note: what actually happened. Learning material. */
-  note: external_exports.string().optional(),
-  createdAt: external_exports.string().datetime()
-});
-var CreateRetrospectiveRequestSchema = external_exports.object({
-  decisionId: external_exports.string().min(1),
-  verdict: RetrospectiveVerdictSchema,
-  note: external_exports.string().max(2e3).optional()
 });
 
 // ../shared/dist/schemas/team-preferences.js
@@ -24846,71 +24825,6 @@ function searchAll(projectRoot2, query, limit = 50) {
   }
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
 }
-function findPastPredictions(projectRoot2, query, opts = {}) {
-  const q = query.toLowerCase().trim();
-  if (!q) return [];
-  const tokens = q.split(/\s+/).filter((t) => t.length >= 4);
-  if (tokens.length === 0) return [];
-  const limit = opts.limit ?? 3;
-  const now = Date.now();
-  const out = [];
-  const sessions = listSessions(projectRoot2);
-  for (const session of sessions) {
-    const sessionDir = path5.join(projectRoot2, ".deeppairing", "sessions", session.id);
-    const artFile = path5.join(sessionDir, "artifacts.json");
-    const decFile = path5.join(sessionDir, "decisions.json");
-    if (!fs6.existsSync(artFile) || !fs6.existsSync(decFile)) continue;
-    let artifacts;
-    let decisions;
-    try {
-      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs6.readFileSync(artFile, "utf-8")), "id");
-      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs6.readFileSync(decFile, "utf-8")), "decisionId");
-    } catch {
-      continue;
-    }
-    for (const dec of decisions) {
-      if (!dec.response?.predictedOutcome) continue;
-      if (opts.excludeArtifactId && dec.artifactId === opts.excludeArtifactId) continue;
-      const artifact = artifacts.find((a) => a.id === dec.artifactId);
-      if (!artifact) continue;
-      const haystack = (artifact.title + " " + (dec.context ?? "") + " " + ((dec.options ?? []).find((o) => o.id === dec.response.optionId)?.title ?? "") + " " + ((dec.options ?? []).find((o) => o.id === dec.response.optionId)?.description ?? "")).toLowerCase();
-      const hits = tokens.filter((t) => haystack.includes(t));
-      const required2 = Math.min(2, tokens.length);
-      if (hits.length < required2) continue;
-      const chosen = (dec.options ?? []).find((o) => o.id === dec.response.optionId);
-      const resolvedAt = dec.resolvedAt ?? dec.createdAt;
-      const daysAgo = Math.max(0, Math.floor((now - new Date(resolvedAt).getTime()) / (24 * 60 * 60 * 1e3)));
-      const retrosPath = path5.join(sessionDir, "retrospectives.json");
-      let retrospective;
-      try {
-        if (fs6.existsSync(retrosPath)) {
-          const retros = salvageArray(
-            "retrospectives.json",
-            JSON.parse(fs6.readFileSync(retrosPath, "utf-8")),
-            "decisionId"
-          );
-          retrospective = retros.find((r) => r.decisionId === dec.decisionId);
-        }
-      } catch {
-      }
-      out.push({
-        sessionId: session.id,
-        sessionTitle: session.summary,
-        artifactId: dec.artifactId,
-        artifactTitle: artifact.title,
-        context: dec.context ?? "",
-        decisionId: dec.decisionId,
-        chosenOptionTitle: chosen?.title ?? dec.response.optionId,
-        predictedOutcome: dec.response.predictedOutcome,
-        confidence: dec.response.confidence,
-        resolvedAt,
-        daysAgo,
-        retrospective
-      });
-    }
-  }
-  return out.sort((a, b) => b.resolvedAt.localeCompare(a.resolvedAt)).slice(0, limit);
-}
 function resolveLiveArtifact(artifacts, id) {
   let current = artifacts.find((a) => a.id === id);
   const seen = /* @__PURE__ */ new Set();
@@ -25045,41 +24959,6 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return { decisions, failedSessions };
-}
-function addRetrospective(projectRoot2, params) {
-  const sessions = listSessions(projectRoot2);
-  for (const session of sessions) {
-    const sessionDir = path5.join(projectRoot2, ".deeppairing", "sessions", session.id);
-    const decFile = path5.join(sessionDir, "decisions.json");
-    if (!fs6.existsSync(decFile)) continue;
-    let decisions;
-    try {
-      decisions = salvageArray(`${session.id}/decisions.json`, JSON.parse(fs6.readFileSync(decFile, "utf-8")), "decisionId");
-    } catch {
-      continue;
-    }
-    if (!decisions.some((d) => d.decisionId === params.decisionId)) continue;
-    const retrospective = {
-      id: `retro_${nanoid3(10)}`,
-      decisionId: params.decisionId,
-      verdict: params.verdict,
-      note: params.note?.trim() || void 0,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    const retrosPath = path5.join(sessionDir, "retrospectives.json");
-    let existing = [];
-    try {
-      if (fs6.existsSync(retrosPath)) {
-        existing = salvageArray("retrospectives.json (write path)", JSON.parse(fs6.readFileSync(retrosPath, "utf-8")), "decisionId");
-      }
-    } catch {
-    }
-    const filtered = existing.filter((r) => r.decisionId !== params.decisionId);
-    filtered.push(retrospective);
-    writeJsonAtomic(retrosPath, filtered);
-    return { retrospective, sessionId: session.id };
-  }
-  return null;
 }
 
 // src/store/ledger-digest.ts
@@ -26527,21 +26406,16 @@ var FileStore = class _FileStore {
     };
   }
   // --- Static methods for multi-session access ---
-  // G10 — the cross-session read helpers (listSessions / searchAll /
-  // findPastPredictions / addRetrospective) and the AA5 ledger digest with
-  // its BB2 cache now live in session-scan.ts and ledger-digest.ts. The
-  // statics below are byte-compatible delegates so every FileStore.* call
-  // site — HTTP routes, CLI, tests — keeps working unchanged.
+  // G10 — the cross-session read helpers (listSessions / searchAll) and the
+  // AA5 ledger digest with its BB2 cache now live in session-scan.ts and
+  // ledger-digest.ts. The statics below are byte-compatible delegates so every
+  // FileStore.* call site — HTTP routes, CLI, tests — keeps working unchanged.
   static listSessions = listSessions;
   static loadSession(projectRoot2, sessionId) {
     const store = new _FileStore(projectRoot2, sessionId);
     return store.getFullState();
   }
   static searchAll = searchAll;
-  /** N3.3 — see findPastPredictions in session-scan.ts. */
-  static findPastPredictions = findPastPredictions;
-  /** P2 — see addRetrospective in session-scan.ts. */
-  static addRetrospective = addRetrospective;
   /** #138 — project-wide decisions (every session's decisions.json, flattened
    *  newest-first, with a partial-data report). See session-scan.ts. */
   static listAllDecisions = listAllDecisions;
@@ -27192,7 +27066,7 @@ function formatLearnings(state) {
   sections.push(`# Learnings \u2014 ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named, predictions made, and approaches you won't re-propose.*"
+    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
   );
   sections.push("");
   const reasoningArtifacts = state.artifacts.filter(
@@ -27232,27 +27106,6 @@ function formatLearnings(state) {
       if (c.actions.length > 0) {
         const shown = c.actions.slice(0, 3);
         for (const act of shown) sections.push(`  - applied to: ${act}`);
-      }
-    }
-    sections.push("");
-  }
-  const decisionsWithPredictions = state.decisions.filter(
-    (d) => d.response?.predictedOutcome
-  );
-  if (decisionsWithPredictions.length > 0) {
-    sections.push("## Predictions captured");
-    sections.push("");
-    for (const d of decisionsWithPredictions) {
-      const chosen = d.options.find((o) => o.id === d.response?.optionId);
-      const confidence = d.response?.confidence;
-      sections.push(
-        `- **${d.context}**: chose _${chosen?.title ?? d.response?.optionId}_${confidence ? ` (${confidence} confidence)` : ""}`
-      );
-      sections.push(`  - Predicted: "${d.response.predictedOutcome}"`);
-      const retro = findRetrospective(state, d.decisionId);
-      if (retro) {
-        const mark = retro.verdict === "right" ? "\u2713" : retro.verdict === "wrong" ? "\u2717" : "\u25D0";
-        sections.push(`  - Looking back: ${mark} ${retro.verdict}${retro.note ? ` \u2014 "${retro.note}"` : ""}`);
       }
     }
     sections.push("");
@@ -27314,16 +27167,12 @@ function formatLearnings(state) {
       sections.push("");
     }
   }
-  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0 && !hasDebriefLearnings) {
+  if (conceptCounts.size === 0 && rows.length === 0 && !hasDebriefLearnings) {
     sections.push("_Nothing crystallized yet. Keep pairing \u2014 the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
     sections.push("");
   }
   sections.push(`*Generated from session ${state.sessionId} \u2014 [deepPairing](https://github.com/deeppairing).*`);
   return sections.join("\n");
-}
-function findRetrospective(state, decisionId) {
-  const retros = state.retrospectives;
-  return retros?.find((r) => r.decisionId === decisionId);
 }
 
 // src/store/rejected-option-recorder.ts
@@ -28257,19 +28106,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       strengthenedThisPeriod
     });
   });
-  app.get("/api/predictions", (c) => {
-    const concept = (c.req.query("concept") ?? "").trim();
-    const excludeArtifactId = c.req.query("excludeArtifactId") ?? void 0;
-    const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 3), 1), 10);
-    if (!concept || !projectRoot2) {
-      return c.json({ predictions: [] });
-    }
-    const predictions = FileStore.findPastPredictions(projectRoot2, concept, {
-      excludeArtifactId,
-      limit
-    });
-    return c.json({ predictions });
-  });
   app.get("/api/ledger/digest", (c) => {
     if (!projectRoot2) {
       return c.json({
@@ -28370,25 +28206,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!store) return c.json({ preferences: [], exists: false });
     const preferences = await store.getTeamPreferences?.() ?? [];
     return c.json({ preferences, exists: preferences.length > 0 });
-  });
-  app.post("/api/retrospectives", async (c) => {
-    if (!projectRoot2) return c.json({ error: "projectRoot not configured" }, 400);
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = RetrospectiveBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { decisionId, verdict, note } = parsed.data;
-    const result = FileStore.addRetrospective(projectRoot2, { decisionId, verdict, note });
-    if (!result) {
-      return c.json({ error: `no decision found with id "${decisionId}"` }, 404);
-    }
-    broadcast({
-      type: "retrospective_recorded",
-      decisionId,
-      verdict,
-      retrospectiveId: result.retrospective.id
-    }, result.sessionId);
-    return c.json({ retrospective: result.retrospective, sessionId: result.sessionId });
   });
   app.get("/api/export", async (c) => {
     const store = getStore(getSessionId(c));
@@ -29501,6 +29318,79 @@ function runDemoScript({
         via: "concept"
       }
     });
+  });
+  const explainerArtifactId = makeArtifactId();
+  schedule(6500, async () => {
+    const artifact = await store.createArtifact({
+      id: explainerArtifactId,
+      type: "explainer",
+      title: "How config loading works after the pivot",
+      content: {
+        title: "How config loading works after the pivot",
+        overview: "You rejected a global mutable ConfigStore singleton. Here's the read-only walk-through of the dependency-injected loader that replaced it \u2014 no shared mutable state, testable per module.",
+        sections: [
+          {
+            heading: "Config is injected, not reached for",
+            body: "Each service receives its config through its constructor instead of importing a shared singleton, so a test can hand in a fixture without touching global state.",
+            evidence: [
+              {
+                filePath: "src/config/loader.ts",
+                lineStart: 1,
+                lineEnd: 8,
+                snippet: "export function loadConfig(env: Env): AppConfig {\n  return parse(env);\n}\n\nexport class OrderService {\n  constructor(private config: AppConfig) {}\n}",
+                explanation: "loadConfig is a pure function; OrderService takes the resolved config \u2014 the pattern your rejection steered us to."
+              }
+            ]
+          },
+          {
+            heading: "Why this survives testing",
+            body: "Because nothing mutates a shared instance, two tests can run with different configs in the same process \u2014 the exact failure ('broke testability in 3 places') that made you reject the singleton."
+          }
+        ],
+        suggestedQuestions: ["Where does env parsing happen?", "How do we handle a missing key?"]
+      }
+    });
+    broadcast(sessionId, { type: "artifact_created", artifact });
+  });
+  const debriefArtifactId = makeArtifactId();
+  schedule(8e3, async () => {
+    const artifact = await store.createArtifact({
+      id: debriefArtifactId,
+      type: "debrief",
+      title: "Debrief \u2014 config loader pivot",
+      content: {
+        summary: "You rejected the global mutable ConfigStore, so I pivoted to a dependency-injected loader. When I drifted back toward a global singleton, the rejection gate stopped me before the edit landed.",
+        sections: [
+          {
+            title: "What changed",
+            body: "Config now flows through constructors instead of a shared mutable singleton.",
+            concepts: [{ name: "dependency injection", oneLineExplanation: "Pass collaborators in rather than reaching for a global." }]
+          }
+        ],
+        decisionsMade: [
+          {
+            what: "Made config immutable + injected",
+            why: "Your rejection reason was that global mutable config broke testability in 3 places.",
+            alternative: "A read-through cache on the singleton (still shared mutable state)."
+          }
+        ],
+        needsYourEyes: [
+          {
+            what: "The loader's env-parsing edge cases",
+            why: "It's the one spot that can still throw at startup.",
+            artifactRef: explainerArtifactId
+          }
+        ],
+        deferred: [
+          {
+            what: "Migrating the two legacy call sites still importing the old singleton",
+            why: "Out of scope for this pass; flagged so it isn't forgotten."
+          }
+        ],
+        openQuestions: ["Should a missing key fail fast at boot, or fall back to a default?"]
+      }
+    });
+    broadcast(sessionId, { type: "artifact_created", artifact });
   });
   return { artifactId: findingsArtifactId };
 }

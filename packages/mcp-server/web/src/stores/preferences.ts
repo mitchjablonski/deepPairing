@@ -51,8 +51,12 @@ interface PreferencesState {
 }
 
 function getStoredTheme(): Theme {
+  // M5 (#194) — default to "system" (honor the OS's prefers-color-scheme) when
+  // the user hasn't made an explicit choice. An existing stored value ("dark"
+  // /"light"/"system") is always respected. The non-browser branch keeps a
+  // concrete fallback since matchMedia isn't available to resolve "system".
   if (typeof window === "undefined") return "dark";
-  return (localStorage.getItem("dp-theme") as Theme) ?? "dark";
+  return (localStorage.getItem("dp-theme") as Theme) ?? "system";
 }
 
 function getStoredEditor(): string {

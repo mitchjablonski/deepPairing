@@ -102,6 +102,93 @@ export function runDemoScript({
     });
   });
 
+  // #194 E3 — the demo also shows the v0.1.22 COMPREHENSION headline, not just
+  // the rejection gate. Two closing beats: a read-only EXPLAINER (how the safer
+  // approach works) then the end-of-run DEBRIEF (the five lanes), both told
+  // against THIS demo's own story so a fresh install feels the whole loop.
+  const explainerArtifactId = makeArtifactId();
+  // t=6500ms — comprehension surface #1: the narrated walk-through of the
+  // dependency-injected loader the agent pivoted to after the rejection.
+  schedule(6500, async () => {
+    const artifact = await store.createArtifact({
+      id: explainerArtifactId,
+      type: "explainer",
+      title: "How config loading works after the pivot",
+      content: {
+        title: "How config loading works after the pivot",
+        overview:
+          "You rejected a global mutable ConfigStore singleton. Here's the read-only walk-through of the dependency-injected loader that replaced it — no shared mutable state, testable per module.",
+        sections: [
+          {
+            heading: "Config is injected, not reached for",
+            body: "Each service receives its config through its constructor instead of importing a shared singleton, so a test can hand in a fixture without touching global state.",
+            evidence: [
+              {
+                filePath: "src/config/loader.ts",
+                lineStart: 1,
+                lineEnd: 8,
+                snippet:
+                  "export function loadConfig(env: Env): AppConfig {\n  return parse(env);\n}\n\nexport class OrderService {\n  constructor(private config: AppConfig) {}\n}",
+                explanation: "loadConfig is a pure function; OrderService takes the resolved config — the pattern your rejection steered us to.",
+              },
+            ],
+          },
+          {
+            heading: "Why this survives testing",
+            body: "Because nothing mutates a shared instance, two tests can run with different configs in the same process — the exact failure ('broke testability in 3 places') that made you reject the singleton.",
+          },
+        ],
+        suggestedQuestions: ["Where does env parsing happen?", "How do we handle a missing key?"],
+      },
+    });
+    broadcast(sessionId, { type: "artifact_created", artifact });
+  });
+
+  const debriefArtifactId = makeArtifactId();
+  // t=8000ms — comprehension surface #2: the DEBRIEF closes the loop with the
+  // five lanes (narrative, decisions made alone, needs-your-eyes, deferred,
+  // open questions), told against this demo's own story.
+  schedule(8000, async () => {
+    const artifact = await store.createArtifact({
+      id: debriefArtifactId,
+      type: "debrief",
+      title: "Debrief — config loader pivot",
+      content: {
+        summary:
+          "You rejected the global mutable ConfigStore, so I pivoted to a dependency-injected loader. When I drifted back toward a global singleton, the rejection gate stopped me before the edit landed.",
+        sections: [
+          {
+            title: "What changed",
+            body: "Config now flows through constructors instead of a shared mutable singleton.",
+            concepts: [{ name: "dependency injection", oneLineExplanation: "Pass collaborators in rather than reaching for a global." }],
+          },
+        ],
+        decisionsMade: [
+          {
+            what: "Made config immutable + injected",
+            why: "Your rejection reason was that global mutable config broke testability in 3 places.",
+            alternative: "A read-through cache on the singleton (still shared mutable state).",
+          },
+        ],
+        needsYourEyes: [
+          {
+            what: "The loader's env-parsing edge cases",
+            why: "It's the one spot that can still throw at startup.",
+            artifactRef: explainerArtifactId,
+          },
+        ],
+        deferred: [
+          {
+            what: "Migrating the two legacy call sites still importing the old singleton",
+            why: "Out of scope for this pass; flagged so it isn't forgotten.",
+          },
+        ],
+        openQuestions: ["Should a missing key fail fast at boot, or fall back to a default?"],
+      },
+    });
+    broadcast(sessionId, { type: "artifact_created", artifact });
+  });
+
   return { artifactId: findingsArtifactId };
 }
 

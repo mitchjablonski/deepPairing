@@ -44,25 +44,12 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
 });
 
-// #190 — the calibration actions ("+ Add reasoning" / "+ Capture prediction")
-// were demoted OFF the compact card and now render ONLY in the Discuss
-// workbench. The underlying state (showReasoning / predictOptIn) is DecisionCard
-// state shared with the workbench footer, so performing the action in the
-// workbench and collapsing back leaves it set on the card. These helpers drive
-// that path; the card must be rendered WITH an artifactId for the Discuss
-// affordance to exist.
+// #190 — the "+ Add reasoning" action lives in the Discuss workbench, not the
+// compact card (the card must be rendered WITH an artifactId for the Discuss
+// affordance to exist). This helper opens it.
 async function openWorkbench() {
   await userEvent.click(screen.getByRole("button", { name: /Expand to discuss/i }));
   await screen.findByTestId("decision-workbench");
-}
-async function collapseWorkbench() {
-  await userEvent.click(screen.getByRole("button", { name: /Collapse to the decision card/i }));
-  await waitFor(() => expect(screen.queryByTestId("decision-workbench")).not.toBeInTheDocument());
-}
-async function optInPredictionViaWorkbench() {
-  await openWorkbench();
-  await userEvent.click(await screen.findByRole("button", { name: /capture prediction with my pick/i }));
-  await collapseWorkbench();
 }
 
 describe("DecisionCard — resolved options disclosure", () => {
@@ -371,27 +358,6 @@ describe("DecisionCard — keyboard navigation", () => {
     );
   });
 
-  it("FF9 — high-stakes Enter-select honors the prediction opt-in (no stale keydown closure)", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchSpy);
-    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" artifactId="art_x" />);
-
-    // Opt in to prediction capture (this is what the stale closure missed).
-    // #190 — the toggle now lives in the Discuss workbench; opt in there, then
-    // collapse (predictOptIn persists on the card).
-    await optInPredictionViaWorkbench();
-
-    // Select via the container's NATIVE Enter handler (not a card click).
-    const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
-    (container as HTMLElement).focus();
-    fireEvent.keyDown(container, { key: "Enter" });
-
-    // Must enter the prediction-capture phase, NOT resolve immediately.
-    expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
-    const resolveCalls = fetchSpy.mock.calls.filter(([u]) => String(u).includes("/api/decisions"));
-    expect(resolveCalls).toHaveLength(0);
-  });
-
   it("ArrowDown/ArrowUp mirror j/k", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" />);
     const container = screen.getByText("Let's think this through").closest("div")!.parentElement!;
@@ -664,71 +630,24 @@ describe("DecisionCard — Send back for revision (Fix B)", () => {
     expect(await findByRole("heading", { name: /Decision Made|Redis/i }).catch(() => null) ?? await screen.findByText(/Decision Made/i)).toBeInTheDocument();
   });
 
-  it("X5 — Cancel during prediction returns to idle (no stale selectedId)", async () => {
-    // High-stakes path with FF9 opt-in: enable prediction capture
-    // explicitly, then option click moves to predicting. Cancel must
-    // return all the way to idle (not leave selectedId set).
-    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" artifactId="art_x5" />);
-    // FF9 — opt in to prediction capture before clicking the option. #190 — the
-    // toggle now lives in the Discuss workbench.
-    await optInPredictionViaWorkbench();
-    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
-    // Predicting form is showing.
-    expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
-    // Cancel.
-    const cancelBtns = screen.getAllByRole("button", { name: /^Cancel$/ });
-    await userEvent.click(cancelBtns[cancelBtns.length - 1]!);
-    // Back to idle: prediction form gone, options re-clickable.
-    expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
-    const redisBtn = screen.getByRole("button", { name: "Select Redis" });
-    expect(redisBtn).toBeEnabled();
-  });
-
-  it("FF9 — high-stakes pick WITHOUT opting in submits directly (no prediction modal)", async () => {
+  it("#194 — high-stakes pick submits directly with no prediction payload (calibration loop cut)", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" />);
-    // No opt-in click. Pick directly.
+    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" artifactId="art_hs" />);
     await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
-    // Pre-FF9 this would have entered the predicting modal. Now it
-    // submits straight through.
+    // No predicting phase exists anymore — the pick resolves straight through.
     expect(screen.queryByText(/quick prediction/i)).not.toBeInTheDocument();
+    // No "Capture prediction" affordance anywhere (compact card OR workbench).
+    expect(screen.queryByRole("button", { name: /capture prediction/i })).toBeNull();
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const calls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes("/api/decisions"));
     expect(calls.length).toBeGreaterThanOrEqual(1);
-    // Body has no prediction payload.
     const body = JSON.parse(calls[0]![1]!.body as string);
     expect(body.predictedOutcome).toBeUndefined();
     expect(body.confidence).toBeUndefined();
-  });
-
-  it("FF9 — high-stakes pick WITH opting in enters predicting + submits prediction payload", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    render(<DecisionCard event={event} decisionId="dec_abc" stakes="high" artifactId="art_ff9" />);
-    // #190 — opt in via the Discuss workbench (the toggle's new home).
-    await optInPredictionViaWorkbench();
-    await userEvent.click(screen.getByRole("button", { name: "Select Redis" }));
-    expect(screen.getByText(/quick prediction/i)).toBeInTheDocument();
-    // Fill prediction and confirm.
-    await userEvent.type(screen.getByPlaceholderText(/cache hit rate/i), "smooth rollout");
-    const confirmBtn = await screen.findByRole("button", { name: /commit with prediction/i });
-    await userEvent.click(confirmBtn);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const calls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes("/api/decisions"));
-    const body = JSON.parse(calls[calls.length - 1]![1]!.body as string);
-    expect(body.predictedOutcome).toBe("smooth rollout");
-  });
-
-  it("FF9 — toggle button is HIDDEN on non-high-stakes decisions", async () => {
-    render(<DecisionCard event={event} decisionId="dec_abc" stakes="medium" />);
-    expect(screen.queryByRole("button", { name: /capture prediction/i })).toBeNull();
   });
 
   it("X5 — sendBack rapid double-submit fires only ONE comment POST", async () => {
@@ -937,18 +856,6 @@ describe("D3 review — keyboard nav from a focused Select button", () => {
 });
 
 describe("F3 decomp — pins for the extracted seams (review NITs)", () => {
-  it("resolved view renders the Predicted block when initialResolved carries a prediction", () => {
-    render(
-      <DecisionCard
-        event={event}
-        decisionId="dec_abc"
-        initialResolved={{ optionId: "o1", predictedOutcome: "cuts p95 in half", confidence: "high" }}
-      />,
-    );
-    expect(screen.getByText(/predicted/i)).toBeInTheDocument();
-    expect(screen.getByText(/cuts p95 in half/)).toBeInTheDocument();
-  });
-
   it("reasoning-Enter commits the focused option with the trimmed reasoning (the onSelect substitution seam)", async () => {
     render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art_reason" />);
     // #190 — "+ Add reasoning" now lives in the Discuss workbench; the onSelect

@@ -816,10 +816,8 @@ function formatPrComments(state: SessionState): string {
 // --- Learnings format (R3) ---
 //
 // A teaching artifact: what the pair *learned* during this session, not what
-// they built. Three sections:
+// they built. Two sections:
 //   - Concepts named via log_reasoning (with count per concept)
-//   - Predictions captured on high-stakes decisions, cross-referenced with
-//     any retrospectives (verdict + note) so the calibration loop is visible
 //   - Rejected approaches with reasons — the "you won't re-propose this"
 //     moat, made legible for sharing
 //
@@ -832,7 +830,7 @@ function formatLearnings(state: SessionState): string {
   sections.push(`# Learnings — ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named, predictions made, and approaches you won't re-propose.*",
+    "*Teaching artifact: concepts named and approaches you won't re-propose.*",
   );
   sections.push("");
 
@@ -876,31 +874,6 @@ function formatLearnings(state: SessionState): string {
       if (c.actions.length > 0) {
         const shown = c.actions.slice(0, 3);
         for (const act of shown) sections.push(`  - applied to: ${act}`);
-      }
-    }
-    sections.push("");
-  }
-
-  // --- Predictions + retrospectives ---
-  const decisionsWithPredictions = state.decisions.filter(
-    (d) => (d.response as any)?.predictedOutcome,
-  );
-  if (decisionsWithPredictions.length > 0) {
-    sections.push("## Predictions captured");
-    sections.push("");
-    for (const d of decisionsWithPredictions) {
-      const chosen = d.options.find((o: any) => o.id === d.response?.optionId);
-      const confidence = (d.response as any)?.confidence;
-      sections.push(
-        `- **${d.context}**: chose _${chosen?.title ?? d.response?.optionId}_${
-          confidence ? ` (${confidence} confidence)` : ""
-        }`,
-      );
-      sections.push(`  - Predicted: "${(d.response as any).predictedOutcome}"`);
-      const retro = findRetrospective(state, d.decisionId);
-      if (retro) {
-        const mark = retro.verdict === "right" ? "✓" : retro.verdict === "wrong" ? "✗" : "◐";
-        sections.push(`  - Looking back: ${mark} ${retro.verdict}${retro.note ? ` — "${retro.note}"` : ""}`);
       }
     }
     sections.push("");
@@ -977,20 +950,11 @@ function formatLearnings(state: SessionState): string {
     }
   }
 
-  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0 && !hasDebriefLearnings) {
+  if (conceptCounts.size === 0 && rows.length === 0 && !hasDebriefLearnings) {
     sections.push("_Nothing crystallized yet. Keep pairing — the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
     sections.push("");
   }
 
   sections.push(`*Generated from session ${state.sessionId} — [deepPairing](https://github.com/deeppairing).*`);
   return sections.join("\n");
-}
-
-function findRetrospective(state: SessionState, decisionId: string):
-  | { verdict: "right" | "wrong" | "mixed"; note?: string }
-  | undefined {
-  const retros = (state as any).retrospectives as
-    | Array<{ decisionId: string; verdict: "right" | "wrong" | "mixed"; note?: string }>
-    | undefined;
-  return retros?.find((r) => r.decisionId === decisionId);
 }

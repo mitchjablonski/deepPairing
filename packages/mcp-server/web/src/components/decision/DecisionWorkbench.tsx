@@ -337,8 +337,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                   commentCount={optionCommentCount(option.id)}
                   onChoose={() => {
                     // Reuse the card's exact selection handler, then collapse —
-                    // the card behind resolves (or shows the high-stakes
-                    // prediction capture) with the workbench out of the way.
+                    // the card behind resolves with the workbench out of the way.
                     footerProps.onSelect(option.id);
                     onClose();
                   }}
@@ -413,8 +412,8 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
         </div>
 
         {/* Decision-level actions — reuse DecisionFooter verbatim, plus the
-            #190 calibration actions ("+ Add reasoning" / "+ Capture prediction")
-            which live ONLY here now, not on the compact inline card. */}
+            "+ Add reasoning" action which lives ONLY here now, not on the
+            compact inline card. */}
         <div className="border-t border-border-default bg-surface-secondary px-4 py-1">
           <DecisionFooter {...footerProps} showCalibrationActions />
         </div>

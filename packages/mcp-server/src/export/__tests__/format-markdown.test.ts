@@ -204,7 +204,7 @@ describe("formatSessionMarkdown", () => {
       expect(md.indexOf("dependency inversion")).toBeLessThan(md.indexOf("exponential backoff"));
     });
 
-    it("cross-references predictions with retrospectives when present", () => {
+    it("does NOT emit a predictions section even when a legacy decision carries a predictedOutcome (#194 cut)", () => {
       const state = {
         ...makeState({
           decisions: [{
@@ -215,15 +215,10 @@ describe("formatSessionMarkdown", () => {
             response: { optionId: "a", reasoning: "future-proof", predictedOutcome: "zero-downtime migration", confidence: "medium" },
           }],
         }),
-        retrospectives: [{ id: "r1", decisionId: "d1", verdict: "right" as const, note: "rolled out clean" }],
       };
       const md = formatSessionMarkdown(state, "learnings");
-      expect(md).toContain("## Predictions captured");
-      expect(md).toContain("argon2id");
-      expect(md).toContain("zero-downtime migration");
-      expect(md).toContain("medium confidence");
-      expect(md).toContain("✓ right");
-      expect(md).toContain("rolled out clean");
+      expect(md).not.toContain("## Predictions captured");
+      expect(md).not.toContain("zero-downtime migration");
     });
 
     it("surfaces rejected approaches from session memory with reasons", () => {
