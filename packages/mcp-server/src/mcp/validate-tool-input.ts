@@ -31,6 +31,7 @@ import {
   ReasoningContentSchema,
   ChangesetContentSchema,
   DebriefContentSchema,
+  ExplainerContentSchema,
   PlanVisualSchema,
   DecisionOptionBaseSchema,
 } from "@deeppairing/shared";
@@ -341,6 +342,28 @@ const EXAMPLE_DEBRIEF = `{
   "openQuestions": ["Should the limit apply per-account as well as per-IP?"]
 }`;
 
+const EXAMPLE_EXPLAINER = `{
+  "title": "How session authentication works here",
+  "overview": "You're about to walk the request path for an authenticated route: how the cookie is read, where the session is looked up and its TTL refreshed, and what happens when it has expired. Read top to bottom — each step points at the exact code.",
+  "sections": [
+    {
+      "heading": "1. The cookie is read at the middleware edge",
+      "body": "Every authenticated route flows through requireSession, which first pulls the session id out of the signed cookie — no id, straight to 401.",
+      "evidence": [
+        { "filePath": "auth/middleware.ts", "lineStart": 22, "lineEnd": 24,
+          "snippet": "const sid = readSessionCookie(req);\\nif (!sid) return res.status(401).end();",
+          "explanation": "The gate before any lookup." }
+      ]
+    },
+    {
+      "heading": "2. The session is looked up and its TTL refreshed in one step",
+      "body": "store.getAndTouch(sid) fetches the session AND slides its expiry forward, so no route has to remember to refresh."
+    }
+  ],
+  "relatedArtifactIds": ["art_xxxxxxxxxx"],
+  "suggestedQuestions": ["Where does the session get created in the first place?"]
+}`;
+
 // ---------------------------------------------------------------------------
 // #183 — EXAMPLE-ECHO GUARD.
 //
@@ -395,6 +418,7 @@ const EX_CODE_CHANGE: unknown = JSON.parse(EXAMPLE_CODE_CHANGE);
 const EX_REASONING: unknown = JSON.parse(EXAMPLE_REASONING);
 const EX_CHANGESET: unknown = JSON.parse(EXAMPLE_CHANGESET);
 const EX_DEBRIEF: unknown = JSON.parse(EXAMPLE_DEBRIEF);
+const EX_EXPLAINER: unknown = JSON.parse(EXAMPLE_EXPLAINER);
 
 // NOTE: no `optionTitles` — present_options matches on the context scalar
 // alone (the option-title set was a false-positive-prone arm, removed in the
@@ -449,6 +473,14 @@ const stepDescriptions = (o: unknown): string[] => pluckSet(o, "steps", "descrip
  *               narrative sentence (the debrief's distinctive scalar). A real
  *               debrief reusing the example TITLE with a different summary is
  *               admitted; only a verbatim summary replay is caught.
+ *  - explainer: overview ONLY — the example overview is a full, highly specific
+ *               paragraph (the explainer's distinctive scalar, exactly like the
+ *               debrief's summary and the changeset's title). The title ("How X
+ *               works here") is a common shape and is deliberately NOT an arm, so
+ *               a real explainer reusing the example TITLE with a different overview
+ *               is admitted; only a verbatim overview replay is caught. A title+
+ *               overview AND-match was strictly WEAKER — changing either field
+ *               defeated it — so it's replaced by the single distinctive scalar.
  */
 const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
   present_options: (d) =>
@@ -471,6 +503,7 @@ const ECHO_MATCHERS: Record<string, (data: unknown) => boolean> = {
     normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
   present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
   present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary")),
+  present_explainer: (d) => normEcho(prop(d, "overview")) === normEcho(prop(EX_EXPLAINER, "overview")),
 };
 
 /** The pointed, second-person-to-the-agent rejection. Fail-loud, in the grain
@@ -717,6 +750,29 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
   return admit("present_debrief", { title: titleParse.data.title, ...contentParse.data });
 }
 
+export function validatePresentExplainerInput(args: Record<string, unknown> | null | undefined): ValidationResult<z.infer<typeof ExplainerContentSchema>> {
+  // #190 A2 — the explainer's `title` is a real CONTENT field (part of the schema,
+  // .min(1)), so we validate the whole ExplainerContentSchema in one pass rather
+  // than extracting title first. That makes the #184 truncation lane MEANINGFUL
+  // here (unlike spec/changeset/debrief, whose title is extracted first): the
+  // canonical cutoff is a long `overview` streaming and the required `sections`
+  // array getting truncated away — overview-present / sections-absent is exactly
+  // the truncation signature. Route that to the no-example truncation error
+  // BEFORE the generic example-bearing one (the echo-able example is what burned
+  // us in #183/#184).
+  const result = ExplainerContentSchema.safeParse({
+    title: args?.title,
+    overview: args?.overview,
+    sections: args?.sections,
+    relatedArtifactIds: args?.relatedArtifactIds,
+    suggestedQuestions: args?.suggestedQuestions,
+  });
+  if (result.success) return admit("present_explainer", result.data);
+  const truncated = detectTruncatedCall("present_explainer", args, "overview", "sections");
+  if (truncated) return { ok: false, error: truncated };
+  return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER) };
+}
+
 export function validateLogReasoningInput(args: any): ValidationResult<z.infer<typeof ReasoningContentSchema>> {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -786,6 +842,10 @@ export const TOOL_INPUT_SCHEMAS = {
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
   present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE }),
+  // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
+  // non-empty `sections[]` are the required core; `title` lives IN the content
+  // schema (it doubles as the artifact title), so no .extend() is needed.
+  present_explainer: ExplainerContentSchema,
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's

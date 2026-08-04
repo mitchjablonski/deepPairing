@@ -25,6 +25,9 @@ const SpecArtifact = lazy(() => import("./artifacts/SpecArtifact").then((m) => (
 // #190 — the end-of-feature DEBRIEF (comprehension surface). Lazy like the
 // others so its coerceDebriefContent (Zod) stays out of the entry chunk.
 const DebriefArtifact = lazy(() => import("./artifacts/DebriefArtifact").then((m) => ({ default: m.DebriefArtifact })));
+// #190 A2 — the read-only EXPLAINER walk-through. Lazy like the others so its
+// coerceExplainerContent (Zod) stays out of the entry chunk.
+const ExplainerArtifact = lazy(() => import("./artifacts/ExplainerArtifact").then((m) => ({ default: m.ExplainerArtifact })));
 // #180 — the decision-comment thread with carryover markers. LAZY so its Zod
 // coercion (coerceDecisionContent) stays out of the entry chunk; only decision
 // artifacts mount it (every other type keeps the plain CommentThread below).
@@ -105,6 +108,7 @@ const typeLabels: Record<string, string> = {
   changeset: "Changesets",
   reasoning: "Reasoning",
   debrief: "Debriefs",
+  explainer: "Explainers",
 };
 
 function RelatedArtifacts({ ids }: { ids: string[] }) {
@@ -268,6 +272,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {artifact.type === "changeset" && <ChangesetArtifact artifact={artifact} />}
       {artifact.type === "decision" && <DecisionArtifactView artifact={artifact} />}
       {artifact.type === "debrief" && <DebriefArtifact artifact={artifact} />}
+      {artifact.type === "explainer" && <ExplainerArtifact artifact={artifact} />}
       </Suspense>
 
       {/* General comments */}

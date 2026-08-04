@@ -25629,6 +25629,34 @@ var DebriefContentSchema = external_exports.object({
    *  the same questionIndex comment lane. */
   openQuestions: external_exports.array(external_exports.string()).optional()
 });
+var ExplainerSectionSchema = external_exports.object({
+  // `.min(1)` — an untitled section in an ordered reading-list is degenerate
+  // (the numbered progression needs something to name). Same "empty is worse
+  // than absent" discipline the rest of the schemas use; the coercer stays
+  // lenient and defaults to "" so a partial render never crashes.
+  heading: external_exports.string().min(1).describe("Names this part of the walk-through"),
+  body: external_exports.string().describe("Markdown narration for this section, in plain English"),
+  /** Code evidence for this section (file:line + snippet + explanation). */
+  evidence: external_exports.array(EvidenceInputSchema).optional()
+});
+var ExplainerContentSchema = external_exports.object({
+  /** The walk-through's title (e.g. "How authentication works here"). `.min(1)` —
+   *  part of the required core; also half the echo fingerprint (title + overview). */
+  title: external_exports.string().min(1),
+  /** The one-paragraph "what you're about to read" — orients the reader before
+   *  the walk. `.min(1)` (required core; the other half of the echo fingerprint). */
+  overview: external_exports.string().min(1),
+  /** The ordered sections, read top-to-bottom as a numbered progression. Required
+   *  and non-empty — the walk IS the artifact; an explainer with no sections is
+   *  degenerate (and its absence is what the #184 truncation lane keys on). */
+  sections: external_exports.array(ExplainerSectionSchema).min(1),
+  /** Related artifacts the reader can drill into (rendered via ArtifactRefLink).
+   *  Optional per the backcompat convention. */
+  relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
+  /** Seed questions for the ask-anything thread — rendered as one-click chips
+   *  that prefill the composer. Optional per the backcompat convention. */
+  suggestedQuestions: external_exports.array(external_exports.string()).optional()
+});
 
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
@@ -25644,7 +25672,11 @@ var ArtifactTypeSchema = external_exports.enum([
   // #190 — the end-of-feature comprehension surface: ONE batched artifact that
   // summarizes what changed and why, the decisions the agent made alone, what
   // needs the human's eyes, and an ask-anything thread. The thesis's 80% case.
-  "debrief"
+  "debrief",
+  // #190 A2 — the read-only comprehension surface: a narrated, ordered
+  // walk-through of how something WORKS (code archaeology / onboarding / spike
+  // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
+  "explainer"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
@@ -26947,6 +26979,7 @@ var PROTOCOL_PREAMBLE = [
   "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (ONE artifact: per-file diffs + review state, for a refactor/feature touching several modules). present_code_change is the EXCEPTION \u2014 a genuinely single-file surgical change, or when the human asks to see an edit first. Don't stream a log_reasoning card per step \u2014 name concepts in the debrief instead.",
   "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE: the narrative of what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, and an ask-anything thread. The primary comprehension surface \u2014 put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again \u2014 let your pair review each artifact in the UI.",
+  "Explaining how existing code WORKS (onboarding, code archaeology like 'how does auth work here?', a spike readout) rather than reporting problems or digesting a change? Use present_explainer \u2014 a read-only, ordered walk-through: overview + sections[] each anchored to real Evidence, with an ask-anything thread. Not present_findings (that's for problems) and not present_debrief (that digests a change you just made).",
   "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content \u2014 do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
@@ -28175,6 +28208,27 @@ var EXAMPLE_DEBRIEF = `{
   ],
   "openQuestions": ["Should the limit apply per-account as well as per-IP?"]
 }`;
+var EXAMPLE_EXPLAINER = `{
+  "title": "How session authentication works here",
+  "overview": "You're about to walk the request path for an authenticated route: how the cookie is read, where the session is looked up and its TTL refreshed, and what happens when it has expired. Read top to bottom \u2014 each step points at the exact code.",
+  "sections": [
+    {
+      "heading": "1. The cookie is read at the middleware edge",
+      "body": "Every authenticated route flows through requireSession, which first pulls the session id out of the signed cookie \u2014 no id, straight to 401.",
+      "evidence": [
+        { "filePath": "auth/middleware.ts", "lineStart": 22, "lineEnd": 24,
+          "snippet": "const sid = readSessionCookie(req);\\nif (!sid) return res.status(401).end();",
+          "explanation": "The gate before any lookup." }
+      ]
+    },
+    {
+      "heading": "2. The session is looked up and its TTL refreshed in one step",
+      "body": "store.getAndTouch(sid) fetches the session AND slides its expiry forward, so no route has to remember to refresh."
+    }
+  ],
+  "relatedArtifactIds": ["art_xxxxxxxxxx"],
+  "suggestedQuestions": ["Where does the session get created in the first place?"]
+}`;
 var prop = (v, key) => v && typeof v === "object" ? v[key] : void 0;
 var normEcho = (v) => typeof v === "string" ? v.trim().toLowerCase() : "";
 var pluckSet = (v, listKey, field) => {
@@ -28191,6 +28245,7 @@ var EX_CODE_CHANGE = JSON.parse(EXAMPLE_CODE_CHANGE);
 var EX_REASONING = JSON.parse(EXAMPLE_REASONING);
 var EX_CHANGESET = JSON.parse(EXAMPLE_CHANGESET);
 var EX_DEBRIEF = JSON.parse(EXAMPLE_DEBRIEF);
+var EX_EXPLAINER = JSON.parse(EXAMPLE_EXPLAINER);
 var findingTitles = (o) => pluckSet(o, "findings", "title");
 var reqStatements = (o) => pluckSet(o, "requirements", "statement");
 var stepDescriptions = (o) => pluckSet(o, "steps", "description");
@@ -28202,7 +28257,8 @@ var ECHO_MATCHERS = {
   present_code_change: (d) => normEcho(prop(d, "filePath")) === normEcho(prop(EX_CODE_CHANGE, "filePath")) && normEcho(prop(d, "before")) === normEcho(prop(EX_CODE_CHANGE, "before")) && normEcho(prop(d, "after")) === normEcho(prop(EX_CODE_CHANGE, "after")),
   log_reasoning: (d) => normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) || normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
   present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
-  present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary"))
+  present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary")),
+  present_explainer: (d) => normEcho(prop(d, "overview")) === normEcho(prop(EX_EXPLAINER, "overview"))
 };
 function formatExampleEchoError(toolName) {
   const code = TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED;
@@ -28350,6 +28406,19 @@ function validatePresentDebriefInput(args) {
   }
   return admit("present_debrief", { title: titleParse.data.title, ...contentParse.data });
 }
+function validatePresentExplainerInput(args) {
+  const result = ExplainerContentSchema.safeParse({
+    title: args?.title,
+    overview: args?.overview,
+    sections: args?.sections,
+    relatedArtifactIds: args?.relatedArtifactIds,
+    suggestedQuestions: args?.suggestedQuestions
+  });
+  if (result.success) return admit("present_explainer", result.data);
+  const truncated = detectTruncatedCall("present_explainer", args, "overview", "sections");
+  if (truncated) return { ok: false, error: truncated };
+  return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER) };
+}
 function validateLogReasoningInput(args) {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -28392,7 +28461,11 @@ var TOOL_INPUT_SCHEMAS = {
   present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE })
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE }),
+  // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
+  // non-empty `sections[]` are the required core; `title` lives IN the content
+  // schema (it doubles as the artifact title), so no .extend() is needed.
+  present_explainer: ExplainerContentSchema
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -29327,8 +29400,8 @@ async function handlePresentOptions(ctx, args) {
 }
 
 // src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"];
-var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief"];
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"];
+var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
 
 // src/mcp/tools/check-feedback-delivery.ts
 function removedLineContent(art, filePath, oldLine) {
@@ -29362,6 +29435,12 @@ function describeDecisionSection(sectionId) {
 }
 function describeDebriefSection(sectionId) {
   const key = sectionId.slice("debrief:".length);
+  const m = /^(?:section:)?(\d+)$/.exec(key);
+  if (m) return `section #${Number(m[1]) + 1}`;
+  return key.replace(/-/g, " ");
+}
+function describeExplainerSection(sectionId) {
+  const key = sectionId.slice("explainer:".length);
   const m = /^(?:section:)?(\d+)$/.exec(key);
   if (m) return `section #${Number(m[1]) + 1}`;
   return key.replace(/-/g, " ");
@@ -29490,6 +29569,9 @@ ${s.replacementText}${note ? `
   }
   if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
     loc += ` \u2014 ${describeDebriefSection(c.target.sectionId)}`;
+  }
+  if (c.target.sectionId && c.target.sectionId.startsWith("explainer:")) {
+    loc += ` \u2014 ${describeExplainerSection(c.target.sectionId)}`;
   }
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` \u2014 on region ${regionRef}`;
@@ -29717,7 +29799,9 @@ async function handleCheckFeedback(ctx, args) {
     // #190 — `debrief` joins for the same reason: a rejected debrief (the human
     // says "this doesn't reflect what we built") must get the "Do NOT apply /
     // address the rejection" posture, not "You may proceed".
-    ["code_change", "spec", "research", "decision", "changeset", "debrief"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
+    // #190 A2 — `explainer` joins too: a rejected explainer ("this walk-through
+    // is wrong / misleading") must get "Do NOT apply", not "You may proceed".
+    ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
   let oldestPendingAge = "";
@@ -29746,6 +29830,8 @@ async function handleCheckFeedback(ctx, args) {
     suggestedAction = "Wait for findings review before proposing solutions.";
   } else if (pendingArts.some((a) => a.type === "debrief")) {
     suggestedAction = "The debrief is presented \u2014 the human is reading it. Answer any questions they raise, then continue polling.";
+  } else if (pendingArts.some((a) => a.type === "explainer")) {
+    suggestedAction = "The explainer is presented \u2014 the human is reading the walk-through. Answer any questions they raise, then continue polling.";
   }
   if (newComments.length > 0 && pendingArts.length > 0) {
     suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
@@ -30225,6 +30311,9 @@ var SUPERSEDE_VALIDATORS = {
   // #190 — a revised debrief must pass the same strict validator as
   // present_debrief (summary required, echo guard, optional-tolerant rest).
   debrief: validatePresentDebriefInput,
+  // #190 A2 — a revised explainer must pass the same strict validator as
+  // present_explainer (title + overview + non-empty sections, echo guard).
+  explainer: validatePresentExplainerInput,
   reasoning: validateLogReasoningInput
 };
 async function handleReviseArtifact(ctx, args) {
@@ -30825,6 +30914,58 @@ async function handlePresentDebrief(ctx, args) {
   };
 }
 
+// src/mcp/tools/present-explainer.ts
+async function handlePresentExplainer(ctx, args) {
+  const validated = validatePresentExplainerInput(args);
+  if (!validated.ok) return validated.error;
+  const { title, overview, sections, relatedArtifactIds, suggestedQuestions } = validated.data;
+  const proposals = [
+    title,
+    overview,
+    ...(sections ?? []).map((s) => s.heading)
+  ].filter(Boolean);
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_explainer", proposals, [], []);
+  if (!pre.ok) return pre.response;
+  const id = `art_${nanoid3(10)}`;
+  const content = {
+    title,
+    overview,
+    sections,
+    ...relatedArtifactIds && relatedArtifactIds.length > 0 ? { relatedArtifactIds } : {},
+    ...suggestedQuestions && suggestedQuestions.length > 0 ? { suggestedQuestions } : {}
+  };
+  const artifact = await ctx.store.createArtifact({
+    id,
+    type: "explainer",
+    title,
+    content,
+    relatedArtifactIds
+  });
+  const secretMatches = artifact.secretWarnings ?? [];
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_explainer", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
+  notifyResourcesListChanged(ctx.server);
+  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  await ctx.helpers.autoNameSession(artifact.title);
+  const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const nudge = await revisionNudge(ctx.store, "explainer", title, id);
+  const sectionCount = sections?.length ?? 0;
+  return {
+    content: [{
+      type: "text",
+      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions and comments.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+    }]
+  };
+}
+
 // src/mcp/tools/recall.ts
 async function handleRecall(ctx, args) {
   const { store } = ctx;
@@ -31331,6 +31472,14 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief)
       },
       {
+        name: "present_explainer",
+        annotations: { title: "Present explainer", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description: 'Present a read-only EXPLAINER: a narrated, ordered walk-through of how something WORKS. Reach for it when the human wants to UNDERSTAND existing code \u2014 code archaeology ("how does auth work here?"), onboarding a new area, or a spike readout \u2014 NOT when you have problems to report (that\'s present_findings) and NOT to digest a change you just made (that\'s present_debrief). It carries a `title`, a one-paragraph `overview` ("what you\'re about to read"), an ordered `sections[]` walk (each with a `heading`, markdown `body`, and optional `evidence[]` anchored to real code \u2014 filePath/lineStart/lineEnd/snippet/explanation, rendered with per-line commenting), optional `relatedArtifactIds[]` to drill into, and optional `suggestedQuestions[]` that become one-click chips. Deliberately NO problem-framing \u2014 no severity, significance, or recommendations; it explains, it doesn\'t flag.\n\nSchema note: required: `title`, `overview`, and a non-empty `sections[]` (each section needs a `heading`). Put the FULL explanation IN the content \u2014 "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the walk-through lives in the companion UI, don\'t re-narrate it in chat. Non-blocking: it records + returns immediately. The human reads it and can ask ANYTHING in the thread; call check_feedback for their questions and comments.',
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_explainer)
+      },
+      {
         name: "recall",
         annotations: { title: "Recall philosophy", readOnlyHint: true, openWorldHint: false },
         description: "Search deepPairing memory.\n\nModes:\n- `philosophy` \u2014 cross-project stances (avoid/prefer/mixed). Optional `stance` + `source` filters. Empty query lists the whole ledger.\n- `sessions` \u2014 past artifacts in THIS project. Requires a query.\n- `ledger` \u2014 cross-project moat digest (shaped/near-misses/blocked counts + top cited stances + seeded). Query ignored.\n- `any` (default) \u2014 unions philosophy + sessions, philosophy first. Requires a query.",
@@ -31746,6 +31895,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     "present_code_change",
     "present_changeset",
     "present_debrief",
+    "present_explainer",
     "log_reasoning",
     "revise_artifact",
     "post_pr_review",
@@ -31810,6 +31960,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handlePresentChangeset(ctx, args);
           case "present_debrief":
             return handlePresentDebrief(ctx, args);
+          case "present_explainer":
+            return handlePresentExplainer(ctx, args);
           case "check_feedback":
             return handleCheckFeedback(ctx, args);
           // III12 — case "request_horizon_check" removed. The workflow

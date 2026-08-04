@@ -22,8 +22,13 @@ import type { Artifact, Comment } from "@deeppairing/shared";
  *  `reasoning` is excluded (agent narration, no review cycle). #175 —
  *  `changeset` joins the set: a draft changeset genuinely awaits your review, so
  *  the `n` key and the changeset's own post-verdict auto-advance treat it as
- *  pending (it matches the server's PENDING_DRAFT_TYPES). */
-const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
+ *  pending (it matches the server's PENDING_DRAFT_TYPES). #190 — `debrief` (A1)
+ *  and `explainer` (A2) are review surfaces too: each renders the full
+ *  Approve/Request-changes/Reject triad and is a draft awaiting the human, so it
+ *  must nudge the PendingBanner just like the server counts it. This set must
+ *  stay equal to the server's PENDING_DRAFT_TYPES (minus `reasoning`) — pinned by
+ *  a parity test so the next artifact type can't silently miss it. */
+export const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"]);
 
 export function isDraftAwaitingReview(a: Artifact): boolean {
   return a.status === "draft" && REVIEWABLE_TYPES.has(a.type);

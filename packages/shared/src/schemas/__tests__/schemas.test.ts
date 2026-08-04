@@ -27,10 +27,11 @@ import {
   changesetArtifact,
   changesetCrossFileComment,
   debriefArtifact,
+  explainerArtifact,
   sampleComment,
   lineComment,
 } from "../../__fixtures__/artifacts.js";
-import { ChangesetContentSchema, DebriefContentSchema, DecisionOptionBaseSchema } from "../content-types.js";
+import { ChangesetContentSchema, DebriefContentSchema, ExplainerContentSchema, DecisionOptionBaseSchema } from "../content-types.js";
 
 describe("AgentEventSchema", () => {
   it("parses text events", () => {
@@ -273,6 +274,38 @@ describe("ArtifactSchema", () => {
 
   it("rejects a debrief with an EMPTY summary (.min(1) — empty is worse than absent)", () => {
     expect(() => DebriefContentSchema.parse({ summary: "" })).toThrow();
+  });
+
+  // #190 A2 — explainer is a first-class artifact type.
+  it("parses an explainer artifact and round-trips its content", () => {
+    const result = ArtifactSchema.parse(explainerArtifact);
+    expect(result.type).toBe("explainer");
+    const content = ExplainerContentSchema.parse(result.content);
+    expect(content.title.length).toBeGreaterThan(0);
+    expect(content.overview.length).toBeGreaterThan(0);
+    expect(content.sections).toHaveLength(3);
+    expect(content.sections[0]?.heading.length).toBeGreaterThan(0);
+    // Evidence anchored to real code survives the round-trip.
+    const ev = content.sections[1]?.evidence?.[0];
+    expect(ev && typeof ev === "object" ? (ev as any).filePath : "").toBe("auth/middleware.ts");
+    expect(content.relatedArtifactIds).toEqual(["art_changeset_001"]);
+    expect(content.suggestedQuestions).toHaveLength(2);
+  });
+
+  it("rejects an explainer with no title (a required core field)", () => {
+    expect(() => ExplainerContentSchema.parse({ overview: "o", sections: [{ heading: "h", body: "b" }] })).toThrow();
+  });
+
+  it("rejects an explainer with an EMPTY title (.min(1) — empty is worse than absent)", () => {
+    expect(() => ExplainerContentSchema.parse({ title: "", overview: "o", sections: [{ heading: "h", body: "b" }] })).toThrow();
+  });
+
+  it("rejects an explainer with an EMPTY overview (.min(1))", () => {
+    expect(() => ExplainerContentSchema.parse({ title: "t", overview: "", sections: [{ heading: "h", body: "b" }] })).toThrow();
+  });
+
+  it("rejects an explainer with no sections (the walk IS the artifact)", () => {
+    expect(() => ExplainerContentSchema.parse({ title: "t", overview: "o", sections: [] })).toThrow();
   });
 
   it("rejects a changeset file with an unknown changeType", () => {

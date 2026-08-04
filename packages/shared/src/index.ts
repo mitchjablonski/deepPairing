@@ -83,6 +83,7 @@ export {
   coerceReasoningContent,
   coerceChangesetContent,
   coerceDebriefContent,
+  coerceExplainerContent,
 } from "./schemas/coerce-content.js";
 
 export {
@@ -219,6 +220,8 @@ export {
   DebriefReviewItemSchema,
   DebriefDeferredSchema,
   DebriefContentSchema,
+  ExplainerSectionSchema,
+  ExplainerContentSchema,
   type Finding,
   type FindingSeverity,
   type ResearchContent,
@@ -247,6 +250,8 @@ export {
   type DebriefReviewItem,
   type DebriefDeferred,
   type DebriefContent,
+  type ExplainerSection,
+  type ExplainerContent,
 } from "./schemas/content-types.js";
 export {
   composeSendBackFeedback,

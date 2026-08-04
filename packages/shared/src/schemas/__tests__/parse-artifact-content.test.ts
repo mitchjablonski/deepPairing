@@ -160,6 +160,37 @@ describe("parseArtifactContent (U2)", () => {
     if (!r.ok) expect(r.error.issues[0]!.path.join(".")).toBe("summary");
   });
 
+  // #190 A2 — explainer content.
+  it("validates an explainer artifact via ExplainerContentSchema", async () => {
+    const r = parseArtifactContent(art("explainer", {
+      title: "How auth works here",
+      overview: "the request path for an authenticated route",
+      sections: [
+        { heading: "1. edge", body: "the cookie is read",
+          evidence: [{ filePath: "m.ts", lineStart: 1, lineEnd: 2, snippet: "x", explanation: "y" }] },
+      ],
+      relatedArtifactIds: ["art_cs"],
+      suggestedQuestions: ["where is the session created?"],
+    }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect((r.data as any).title).toBe("How auth works here");
+      expect((r.data as any).sections).toHaveLength(1);
+    }
+  });
+
+  it("rejects an explainer with no overview (a required core field)", async () => {
+    const r = parseArtifactContent(art("explainer", { title: "t", sections: [{ heading: "h", body: "b" }] }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.issues[0]!.path.join(".")).toBe("overview");
+  });
+
+  it("rejects an explainer with an empty sections array (the walk IS the artifact)", async () => {
+    const r = parseArtifactContent(art("explainer", { title: "t", overview: "o", sections: [] }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.issues[0]!.path.join(".")).toBe("sections");
+  });
+
   // Y5 — concepts hoisted into decision options + code_change content.
   it("Y5: validates a decision option carrying a concept", async () => {
     const r = parseArtifactContent(art("decision", {

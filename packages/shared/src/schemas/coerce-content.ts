@@ -23,6 +23,8 @@ import type {
   DebriefDecision,
   DebriefReviewItem,
   DebriefDeferred,
+  ExplainerContent,
+  ExplainerSection,
 } from "./content-types.js";
 
 /**
@@ -503,6 +505,35 @@ export function coerceDebriefContent(raw: unknown): DebriefContent {
   return out;
 }
 
+// --- explainer (#190 A2) ------------------------------------------------------
+
+function coerceExplainerSection(v: unknown): ExplainerSection {
+  const s = obj(v);
+  const out: ExplainerSection = {
+    heading: str(s.heading),
+    body: str(s.body),
+  };
+  // Same never-drop-data contract as coerceDebriefSection's evidence: keep
+  // strings AND objects (EvidenceInputSchema is a union).
+  const evidence = coerceEvidenceInputs(s.evidence);
+  if (evidence && evidence.length > 0) out.evidence = evidence as ExplainerSection["evidence"];
+  return out;
+}
+
+export function coerceExplainerContent(raw: unknown): ExplainerContent {
+  const c = obj(raw);
+  const out: ExplainerContent = {
+    // Defaults to "" (lenient) even though the strict schema requires .min(1) —
+    // a partial/legacy explainer must still render, never crash.
+    title: str(c.title),
+    overview: str(c.overview),
+    sections: arr(c.sections).map(coerceExplainerSection),
+  };
+  if (Array.isArray(c.relatedArtifactIds)) out.relatedArtifactIds = strArr(c.relatedArtifactIds);
+  if (Array.isArray(c.suggestedQuestions)) out.suggestedQuestions = strArr(c.suggestedQuestions);
+  return out;
+}
+
 // --- dispatcher ---------------------------------------------------------------
 
 /** Coerce by artifact type. Returns null for types with no structured content
@@ -518,6 +549,7 @@ export function coerceArtifactContent(
   | ReasoningContent
   | ChangesetContent
   | DebriefContent
+  | ExplainerContent
   | null {
   switch (artifact.type) {
     case "research": return coerceResearchContent(artifact.content);
@@ -528,6 +560,7 @@ export function coerceArtifactContent(
     case "reasoning": return coerceReasoningContent(artifact.content);
     case "changeset": return coerceChangesetContent(artifact.content);
     case "debrief": return coerceDebriefContent(artifact.content);
+    case "explainer": return coerceExplainerContent(artifact.content);
     default: return null;
   }
 }

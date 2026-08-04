@@ -376,6 +376,91 @@ export const debriefQuestionComment: Comment = {
   createdAt: "2026-04-02T10:32:00.000Z",
 };
 
+// #190 A2 — a read-only EXPLAINER walking through how session auth works. Ordered
+// sections, each anchored to real Evidence, NO problem-framing. Written in second
+// person TO the reader ("here's what you're about to read").
+export const explainerArtifact: Artifact = {
+  id: "art_explainer_001",
+  sessionId: "sess_1",
+  type: "explainer",
+  version: 1,
+  parentId: null,
+  title: "How session authentication works here",
+  status: "draft",
+  content: {
+    title: "How session authentication works here",
+    overview:
+      "You're about to walk the request path for an authenticated route: how the cookie is read, where the session is looked up and its TTL refreshed, and what happens when it has expired. Read top to bottom — each step points at the exact code.",
+    sections: [
+      {
+        heading: "1. The cookie is read at the middleware edge",
+        body: "Every authenticated route flows through `requireSession`. The first thing it does is pull the opaque session id out of the signed cookie — no id, no session, straight to 401.",
+        evidence: [
+          {
+            filePath: "auth/middleware.ts",
+            lineStart: 22,
+            lineEnd: 24,
+            snippet: "  const sid = readSessionCookie(req);\n  if (!sid) return res.status(401).end();",
+            language: "typescript",
+            explanation: "The gate before any lookup — an unauthenticated request never touches the store.",
+          },
+        ],
+      },
+      {
+        heading: "2. The session is looked up and its TTL refreshed in one step",
+        body: "`store.getAndTouch(sid)` both fetches the session AND slides its expiry forward. Doing it in one call is why no route has to remember to refresh — the sliding window is a side effect of the lookup.",
+        evidence: [
+          {
+            filePath: "auth/middleware.ts",
+            lineStart: 26,
+            lineEnd: 30,
+            snippet: "    const session = await store.getAndTouch(sid); // refreshes TTL\n    if (!session || session.expiresAt < Date.now()) {\n      clearSessionCookie(res);\n      return res.status(401).end();\n    }",
+            language: "typescript",
+            explanation: "The single choke point every authenticated route inherits — lookup, refresh, and expiry check together.",
+          },
+        ],
+      },
+      {
+        heading: "3. An expired session fails closed",
+        body: "If the session is missing or past its expiry, the cookie is cleared and the request is rejected — the code never transparently re-issues a session, so a genuinely stale login can't slip through.",
+      },
+    ],
+    relatedArtifactIds: ["art_changeset_001"],
+    suggestedQuestions: [
+      "Where does the session get created in the first place?",
+      "Does getAndTouch add a write on every request?",
+    ],
+  },
+  agentReasoning: "Onboarding walk-through of the session-auth request path.",
+  createdAt: "2026-04-02T11:00:00.000Z",
+  updatedAt: "2026-04-02T11:00:00.000Z",
+};
+
+// A grain comment on an explainer section (sectionId = `explainer:<index>`).
+export const explainerSectionComment: Comment = {
+  id: "cmt_explainer_sec_001",
+  sessionId: "sess_1",
+  target: { artifactId: "art_explainer_001", sectionId: "explainer:1" },
+  parentCommentId: null,
+  author: "human",
+  content: "This is the part I always forget — good to see it spelled out.",
+  acknowledged: false,
+  createdAt: "2026-04-02T11:01:00.000Z",
+};
+
+// An ask-anything question on the explainer (the question-priority lane).
+export const explainerQuestionComment: Comment = {
+  id: "cmt_explainer_q_001",
+  sessionId: "sess_1",
+  target: { artifactId: "art_explainer_001" },
+  parentCommentId: null,
+  author: "human",
+  intent: "question",
+  content: "Where does the session get created in the first place?",
+  acknowledged: false,
+  createdAt: "2026-04-02T11:02:00.000Z",
+};
+
 export const sampleComment: Comment = {
   id: "cmt_001",
   sessionId: "sess_1",

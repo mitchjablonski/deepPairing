@@ -508,6 +508,45 @@ const scenarios: Scenario[] = [
       });
     },
   },
+  {
+    // #190 A2 — the explainer delivery lanes: a grain comment (explainer:<key>
+    // sectionId → the new describeExplainerSection naming, its OWN namespace)
+    // and an ask-anything QUESTION (question-priority lane) on an explainer.
+    name: "explainer_grain_and_ask_anything",
+    seed: (store) => {
+      store.createArtifact({
+        id: "art_ex",
+        type: "explainer",
+        title: "How session authentication works here",
+        content: {
+          title: "How session authentication works here",
+          overview: "A walk of the request path for an authenticated route, top to bottom.",
+          sections: [
+            { heading: "1. The cookie is read at the edge", body: "requireSession pulls the session id out of the cookie." },
+            { heading: "2. The session is looked up and refreshed", body: "getAndTouch fetches and slides the expiry." },
+          ],
+          suggestedQuestions: ["Where does the session get created?"],
+        },
+      });
+      // Grain comment on an explainer section (explainer:<index>).
+      store.addComment({
+        id: "cmt_ex_grain",
+        artifactId: "art_ex",
+        content: "this is the part I always forget",
+        author: "human",
+        target: { artifactId: "art_ex", sectionId: "explainer:1" },
+      });
+      // Ask-anything QUESTION on the explainer.
+      store.addComment({
+        id: "cmt_ex_q",
+        artifactId: "art_ex",
+        content: "where does the session get created in the first place?",
+        author: "human",
+        intent: "question",
+        target: { artifactId: "art_ex" },
+      });
+    },
+  },
 ];
 
 describe("#188 — check_feedback byte-parity golden pins", () => {
@@ -529,6 +568,8 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
     scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "3fdcaf7107f306723a8d731c2c0484a09a172aa22cc4473fd4998950df2d47ce" },
     // #190 — NEW golden (13→14): captured against THIS tree's debrief delivery.
     debrief_grain_and_ask_anything: { prose: "44ff3814640812b73a02392dca742d42f4976784218104110186351495913bc9", struct: "a427507adc25895fc03114459c742c97d7b844062c1e20a80fd67d495f977183" },
+    // #190 A2 — NEW golden (14→15): captured against THIS tree's explainer delivery.
+    explainer_grain_and_ask_anything: { prose: "15a9549237fdc4658e97567d9f4da821788552a41c4fafa6e9dc5453cef14e39", struct: "5a83e0d5794392fca0e40522b57a6a9cc05214232f13e22af9920806da0dbac5" },
   };
 
   let idx = 0;

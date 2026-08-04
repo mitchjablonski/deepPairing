@@ -74,6 +74,16 @@ export function ClipboardSummaryIcon({ className = "" }: { className?: string })
   );
 }
 
+/** #190 A2 — an EXPLAINER is a guided walk-through: an open book reads as
+ *  "here's how this works, narrated". */
+export function BookOpenIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <path d="M7 3.5C6 2.7 4.6 2.3 3 2.3c-.6 0-1.1.05-1.5.15v8C1.9 10.35 2.4 10.3 3 10.3c1.6 0 3 .4 4 1.2M7 3.5c1-.8 2.4-1.2 4-1.2.6 0 1.1.05 1.5.15v8c-.4-.1-.9-.15-1.5-.15-1.6 0-3 .4-4 1.2M7 3.5v8" />
+    </svg>
+  );
+}
+
 /** Get the icon component for an artifact type */
 export function ArtifactIcon({ type, className = "" }: { type: string; className?: string }) {
   switch (type) {
@@ -87,6 +97,8 @@ export function ArtifactIcon({ type, className = "" }: { type: string; className
     case "spec": return <ListChecklistIcon className={className} />;
     // #190 — end-of-feature debrief.
     case "debrief": return <ClipboardSummaryIcon className={className} />;
+    // #190 A2 — read-only narrated walk-through.
+    case "explainer": return <BookOpenIcon className={className} />;
     default: return <FileTextIcon className={className} />;
   }
 }

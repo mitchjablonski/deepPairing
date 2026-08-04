@@ -8,6 +8,7 @@ import {
   ReasoningContentSchema,
   ChangesetContentSchema,
   DebriefContentSchema,
+  ExplainerContentSchema,
 } from "./content-types.js";
 
 export const ArtifactTypeSchema = z.enum([
@@ -24,6 +25,10 @@ export const ArtifactTypeSchema = z.enum([
   // summarizes what changed and why, the decisions the agent made alone, what
   // needs the human's eyes, and an ask-anything thread. The thesis's 80% case.
   "debrief",
+  // #190 A2 — the read-only comprehension surface: a narrated, ordered
+  // walk-through of how something WORKS (code archaeology / onboarding / spike
+  // readout). Sections anchored to Evidence, WITHOUT findings' problem-framing.
+  "explainer",
 ]);
 
 export type ArtifactType = z.infer<typeof ArtifactTypeSchema>;
@@ -217,7 +222,8 @@ export function parseArtifactContent(
   | ParseResult<import("./content-types.js").SpecContent>
   | ParseResult<import("./content-types.js").ReasoningContent>
   | ParseResult<import("./content-types.js").ChangesetContent>
-  | ParseResult<import("./content-types.js").DebriefContent> {
+  | ParseResult<import("./content-types.js").DebriefContent>
+  | ParseResult<import("./content-types.js").ExplainerContent> {
   const schema = (() => {
     switch (artifact.type) {
       case "decision":     return DecisionContentSchema;
@@ -228,6 +234,7 @@ export function parseArtifactContent(
       case "reasoning":    return ReasoningContentSchema;
       case "changeset":    return ChangesetContentSchema;
       case "debrief":      return DebriefContentSchema;
+      case "explainer":    return ExplainerContentSchema;
     }
   })();
   const result = schema.safeParse(artifact.content);

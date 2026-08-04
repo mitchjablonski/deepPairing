@@ -478,7 +478,11 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // #175 — `changeset` joins the set (a draft changeset awaits your review),
   // matching lib/pending.ts's REVIEWABLE_TYPES and the MCP PENDING_DRAFT_TYPES so
   // the in-app "waiting on you" count and this cross-project daemon badge agree.
-  const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
+  // #190 — `debrief` (A1) and `explainer` (A2) join for the same reason: each is
+  // a draft review surface, so the cross-project badge must count it just like
+  // the in-app banner does. Kept equal to PENDING_DRAFT_TYPES (minus `reasoning`)
+  // — a parity test pins all three sets so a new type can't miss one silently.
+  const PENDING_REVIEWABLE = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"]);
   function computeDaemonPendingCount(): number {
     let n = 0;
     for (const store of sessions.values()) {
