@@ -46,6 +46,18 @@ describe("first-call hint — always-on protocol preamble", () => {
     expect(hint).toMatch(/prototype/);
   });
 
+  it("#195 F1 — carries the Mermaid + annotated_code AUTHORING guidance (the only place it lives)", async () => {
+    // The preamble is the SOLE surface teaching how to author a diagram without
+    // a first-render break (grep-confirmed: nowhere else — not SKILL.md, not
+    // onboarding, not a validator). A future prose-trim must NOT silently drop
+    // it again, so pin the punctuation-quoting clause + the <br/> rule + the
+    // annotated_code "exact lines" clause here.
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/quote labels with punctuation like \(\)#:/);
+    expect(hint).toContain("`<br/>` not");
+    expect(hint).toMatch(/at the exact lines changing and why/);
+  });
+
   it("still leads with the happy-path choreography (visuals augment, don't replace it)", async () => {
     const hint = await buildFirstCallHint(store, 4000);
     expect(hint).toMatch(/present_spec, then present_plan/);

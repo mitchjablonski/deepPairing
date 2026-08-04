@@ -27230,7 +27230,7 @@ var PROTOCOL_PREAMBLE = [
   "  2. present_findings \u2014 after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
   "  3. check_feedback \u2014 poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options \u2014 each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
-  "  5. present_spec, then present_plan \u2014 non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]`); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
+  "  5. present_spec, then present_plan \u2014 non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
   "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first. Don't stream a log_reasoning card per step \u2014 name concepts in the debrief.",
   "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE: what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again \u2014 let your pair review in the UI.",
@@ -30406,7 +30406,13 @@ async function handleCheckFeedback(ctx, args) {
   }
   const hasCodeWork = allArtifacts.some((a) => a.type === "changeset" || a.type === "code_change");
   const hasDebrief = allArtifacts.some((a) => a.type === "debrief");
-  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && openQuestionCount === 0 && hasCodeWork && !hasDebrief;
+  let hasUnansweredQuestions = openQuestionCount > 0;
+  try {
+    const full = await store.getFullState();
+    hasUnansweredQuestions = collectUnansweredQuestions(full.comments ?? []).length > 0;
+  } catch {
+  }
+  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && hasCodeWork && !hasDebrief;
   if (owesDebrief) {
     suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
   }

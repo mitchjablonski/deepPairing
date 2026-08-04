@@ -410,17 +410,31 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
   // H1 — debrief-owed reinforcement. Heuristic (documented): nag ONLY when the
   // run is WINDING DOWN — no pending drafts to review, nothing freshly rejected
-  // to revise, and no open questions to answer (obligations DRAINED) — AND the
-  // session presented substantive code work (a changeset/code_change) this
-  // project but has no debrief yet. This keeps it off the mid-flight path
-  // (where suggestedAction is a "wait for review" instruction) and only fires it
-  // at the natural end-of-run moment the debrief rule targets.
+  // to revise, and NO question the agent still owes an answer on — AND the
+  // session presented substantive code work (a changeset/code_change) but has
+  // no debrief yet. This keeps it off the mid-flight path (where suggestedAction
+  // is a "wait for review" instruction) and only fires at the natural
+  // end-of-run moment the debrief rule targets.
+  //
+  // The "no unanswered question" gate is on PERSISTED state, not this poll's
+  // `openQuestionCount` (which counts UNACKNOWLEDGED questions — those drain
+  // after one poll even if never answered, so a stale-but-open question would
+  // wrongly let the nag fire on the next poll). We use the same
+  // collectUnansweredQuestions tail-walk (answeredByCommentId) every other
+  // surface uses, so the nag genuinely waits until questions are ANSWERED.
   const hasCodeWork = allArtifacts.some((a) => a.type === "changeset" || a.type === "code_change");
   const hasDebrief = allArtifacts.some((a) => a.type === "debrief");
+  let hasUnansweredQuestions = openQuestionCount > 0;
+  try {
+    const full = await store.getFullState();
+    hasUnansweredQuestions = collectUnansweredQuestions(full.comments ?? []).length > 0;
+  } catch {
+    // Best-effort — fall back to this-poll's unacknowledged count.
+  }
   const owesDebrief =
     pendingArts.length === 0 &&
     freshlyRejected.length === 0 &&
-    openQuestionCount === 0 &&
+    !hasUnansweredQuestions &&
     hasCodeWork &&
     !hasDebrief;
   if (owesDebrief) {

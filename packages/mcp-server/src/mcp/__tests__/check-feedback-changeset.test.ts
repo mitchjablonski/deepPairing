@@ -157,6 +157,29 @@ describe("check_feedback — H1 debrief-owed reinforcement", () => {
     expect(res.text).toContain("present_debrief");
   });
 
+  it("does NOT nag while a human question is still UNANSWERED, even after it drained from the poll", async () => {
+    // Fix 2: the guard is on PERSISTED unanswered state, not this poll's
+    // unacknowledged count. A question is delivered+acknowledged on poll 1 (it
+    // drains), but stays unanswered — so on poll 2 the nag must still be
+    // suppressed until the agent actually answers it.
+    const id = await presentChangeset();
+    await store.updateArtifactStatus(id, "approved", "ui_approve_button" as any);
+    await store.addComment({
+      id: "cmt_openq",
+      artifactId: id,
+      content: "does this survive a restart?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: id },
+    } as any);
+    // Poll 1 delivers + acknowledges the question (it drains from unacked).
+    const first = await callTool("check_feedback");
+    expect(first.text).not.toContain("no present_debrief yet");
+    // Poll 2: the question is drained from the unacked set but STILL unanswered.
+    const second = await callTool("check_feedback");
+    expect(second.text).not.toContain("no present_debrief yet");
+  });
+
   it("does NOT nag once a debrief has been presented", async () => {
     const id = await presentChangeset();
     await store.updateArtifactStatus(id, "approved", "ui_approve_button" as any);
