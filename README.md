@@ -32,9 +32,14 @@ Node 20.11+ (22+ recommended, and what CI runs), pnpm 10+. Then, to use it in yo
 
 ## What you get
 
-- **Decision cards.** Options arrive as cards you pick in the UI. High-stakes
-  ones capture your prediction + confidence up front; a later breadcrumb closes
-  the loop with a ✓/✗/◐ calibration retrospective against what you called.
+- **Decision cards.** Options arrive as cards you pick in the UI — pros, cons,
+  effort, and risk laid out side by side. Hard-to-reverse calls are flagged
+  "high stakes" so you see at a glance which choices are load-bearing.
+- **A closing debrief.** Every feature or autonomous run ends with one debrief
+  artifact: the narrative of what changed and why, the calls the agent made
+  without you, what still needs your eyes, and an ask-anything thread — so you
+  understand the change, not just approve it. For code archaeology ("how does
+  auth work here?") the agent narrates a read-only explainer walk-through.
 - **The rejection gate.** Reject an approach with a reason and a pre-flight
   gate stops the agent from re-proposing that concept here — before the edit
   lands. On your other projects it's flagged, not stopped (advisory), backed by
@@ -62,6 +67,10 @@ Node 20.11+ (22+ recommended, and what CI runs), pnpm 10+. Then, to use it in yo
 ![The project-wide decisions view — every choice made across every session of this project, what was chosen and why, searchable, with a jump back into the session where you made the call.](docs/assets/decisions-view.png)
 
 ![The Autonomy dial with the Detail (Rich / Terse) toggle — how much prose rides inside each artifact, orthogonal to how much structured review the pair does.](docs/assets/detail-density.png)
+
+![The end-of-run debrief — the narrative of what changed, the calls the agent made on its own (with the alternative it weighed), what needs your eyes, what was deferred, and an ask-anything thread.](docs/assets/debrief.png)
+
+![The read-only explainer — a numbered walk-through of how a flow works, each section anchored to the real code, for onboarding and code archaeology.](docs/assets/explainer.png)
 
 ## Why this exists
 
@@ -92,6 +101,7 @@ GATHER   → the agent investigates and presents findings with real evidence
 PRESENT  → options, specs, and plans land in the companion UI for you to read
 DECIDE   → you comment inline, pick options, ask "why", request revisions
 BUILD    → only after you've shaped the direction; changes show as diffs
+DEBRIEF  → the run ends with the story: what changed, why, what needs your eyes
 ```
 
 ![The companion UI — a finding with structured evidence reviewed inline, the syntax-highlighted code at issue, and the agent's turn up top.](docs/assets/review-surface.png)
@@ -151,9 +161,6 @@ the collaboration, not the headline:
 - **Three-layer memory, never merged.** Filesystem-sensed guardrails
   (migrations, CI), committable team conventions, and personal philosophy are
   surfaced to the agent separately.
-- **A calibration loop.** High-stakes decisions capture your prediction +
-  confidence; later a breadcrumb shows what you predicted before, with a ✓/✗/◐
-  retrospective to close the loop.
 
 ![The Ledger drawer — cross-project stances, each with the reason you gave when you rejected it.](docs/assets/ledger.png)
 

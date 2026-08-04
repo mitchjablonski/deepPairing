@@ -241,16 +241,6 @@ describe("HTTP Routes", () => {
       });
       expect(res.status).toBe(200);
     });
-
-    it("POST /api/retrospectives rejects an unknown verdict enum value", async () => {
-      const res = await app.request("/api/retrospectives", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decisionId: "d", verdict: "ok" }),
-      });
-      expect(res.status).toBe(400);
-      expect((await bodyOf(res)).code).toBe("validation_error");
-    });
   });
 
   describe("No-active-session handling (U0.6 prevention)", () => {

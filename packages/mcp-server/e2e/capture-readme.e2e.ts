@@ -387,6 +387,103 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
         });
       }
     }
+
+    // ------------------------------------------------------------------
+    // #194 E3 — the v0.1.22 COMPREHENSION surfaces the README now promises but
+    // the old shots never showed: the end-of-run DEBRIEF (the five lanes) and
+    // the read-only EXPLAINER walk-through. Seeded into their own session so
+    // they render as the primary artifact when captured.
+    // ------------------------------------------------------------------
+    const wrapSid = "auth-wrap";
+    await post(`/api/internal/sessions/${wrapSid}/register`, { title: "Single-flight refresh — wrap-up", project: "acme-api" });
+
+    // The DEBRIEF — narrative + decisions-made-alone + needs-your-eyes +
+    // deferred + open questions, told against the auth-refresh story above.
+    await post(`/api/internal/sessions/${wrapSid}/artifacts`, {
+      id: "debrief_auth",
+      type: "debrief",
+      title: "Debrief — single-flight the token refresh",
+      content: {
+        summary:
+          "I coalesced the concurrent token refresh behind one in-flight promise, routed the response interceptor through it, and added a test that fires N parallel 401s. Concurrent requests now share a single refresh instead of each rotating the token and invalidating the others.",
+        sections: [
+          {
+            title: "What changed",
+            body: "`refreshAccessToken()` is now wrapped in a module-level in-flight promise; the interceptor awaits it instead of starting its own refresh.",
+            concepts: [{ name: "single-flight / request coalescing", oneLineExplanation: "Run an expensive result once and hand every concurrent caller the same in-flight promise." }],
+          },
+        ],
+        decisionsMade: [
+          {
+            what: "Chose single-flight over a request-wide mutex",
+            why: "A mutex serializes every authed request; single-flight only coalesces the refresh and keeps the rest parallel.",
+            alternative: "A mutex around all authed requests (kills throughput under load).",
+          },
+        ],
+        needsYourEyes: [
+          {
+            what: "Whether the mobile client shares this interceptor",
+            why: "You asked in review — if it does, the fix has to cover both entry points.",
+            artifactRef: "res1",
+          },
+        ],
+        deferred: [
+          {
+            what: "Backing off on repeated refresh failures",
+            why: "Out of scope for the race fix; worth a follow-up so a dead provider doesn't hot-loop.",
+          },
+        ],
+        openQuestions: ["Should a failed refresh log the user out immediately, or retry once before bailing?"],
+      },
+    });
+
+    // The EXPLAINER — a read-only walk-through of how the refresh path works.
+    await post(`/api/internal/sessions/${wrapSid}/artifacts`, {
+      id: "explainer_auth",
+      type: "explainer",
+      title: "How the token refresh path works",
+      content: {
+        title: "How the token refresh path works",
+        overview:
+          "A read-only walk-through of the auth refresh flow after the single-flight fix — what happens when a request hits an expired access token, and why concurrent callers no longer invalidate each other.",
+        sections: [
+          {
+            heading: "The interceptor awaits one shared refresh",
+            body: "When any request 401s, the response interceptor awaits the module-level in-flight refresh promise instead of starting its own — so N concurrent 401s trigger exactly one POST /oauth/token.",
+            evidence: [
+              {
+                filePath: "src/auth/session.ts",
+                lineStart: 84,
+                lineEnd: 92,
+                language: "typescript",
+                snippet:
+                  "api.interceptors.response.use(undefined, async (err) => {\n  if (err.response?.status === 401) {\n    const token = await refreshInFlight();\n    err.config.headers.Authorization = `Bearer ${token}`;\n    return api(err.config);\n  }\n  throw err;\n});",
+                explanation: "refreshInFlight() returns the single shared promise — concurrent 401s coalesce onto it.",
+              },
+            ],
+          },
+          {
+            heading: "Why the tokens no longer invalidate each other",
+            body: "Because only one refresh runs, the provider rotates the refresh token exactly once; every waiting caller receives the same freshly-minted access token.",
+          },
+        ],
+        suggestedQuestions: ["Where is refreshInFlight defined?", "What happens if the single refresh itself 401s?"],
+      },
+    });
+
+    // Capture the DEBRIEF (assert the needs-your-eyes lane renders first).
+    await page.goto(`${base}/?session=${wrapSid}`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15_000 });
+    await page.getByText("Debrief — single-flight the token refresh").first().click();
+    await page.waitForSelector('[data-testid="debrief-needs-eyes"]', { timeout: 10_000 });
+    await page.waitForTimeout(800);
+    await shot("debrief.png");
+
+    // Capture the EXPLAINER (assert its ordered sections render first).
+    await page.getByText("How the token refresh path works").first().click();
+    await page.waitForSelector('[data-testid="explainer-section"]', { timeout: 10_000 });
+    await page.waitForTimeout(800);
+    await shot("explainer.png");
   } finally {
     // I1 — teardown BARRIER: block until the daemon is fully down (process
     // exited AND port released) before removing its dirs, so this opt-in spec

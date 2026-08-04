@@ -25938,9 +25938,9 @@ var DecisionRequestSchema = external_exports.object({
   options: external_exports.array(DecisionOptionSchema).min(2).max(4),
   /**
    * How consequential is this decision? Agent sets this on architecturally
-   * significant / hard-to-reverse choices. When "high", the UI asks the
-   * human for a prediction + confidence alongside their pick — the raw
-   * material for calibration tracking later.
+   * significant / hard-to-reverse choices. Drives the UI's visual weight on
+   * the decision card (the "high/medium stakes" badge) so the human sees at a
+   * glance which calls are load-bearing.
    */
   stakes: DecisionStakesSchema.optional()
 });
@@ -25949,11 +25949,12 @@ var DecisionResponseSchema = external_exports.object({
   optionId: external_exports.string(),
   reasoning: external_exports.string().optional(),
   /**
-   * Optional craft-development fields — captured primarily on high-stakes
-   * decisions. The UI prompts for these; the human can skip.
+   * Legacy craft-development fields, retained OPTIONAL for backward compat so
+   * decisions.json written before the calibration-loop cut (E3, #194) still
+   * parse. No live surface captures these anymore — the prediction-capture
+   * ritual was cut after 0/36 real high-stakes decisions ever recorded one.
    */
   confidence: DecisionConfidenceSchema.optional(),
-  /** What the human expects to happen as a result of this choice. */
   predictedOutcome: external_exports.string().optional()
 });
 
@@ -26539,11 +26540,6 @@ var PreferenceBodySchema = external_exports.object({
   autonomyLevel: AutonomyLevelSchema.optional(),
   detailDensity: DetailDensitySchema.optional()
 });
-var RetrospectiveBodySchema = external_exports.object({
-  decisionId: external_exports.string().min(1),
-  verdict: external_exports.enum(["right", "wrong", "mixed"]),
-  note: external_exports.string().max(2e3).optional()
-});
 var RenderFailureBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
   /** The stable PlanVisual.id of the diagram that failed. */
@@ -26610,23 +26606,6 @@ var TaskHandleSchema = external_exports.object({
   response: external_exports.unknown().optional(),
   createdAt: external_exports.string().datetime(),
   lastUpdatedAt: external_exports.string().datetime()
-});
-
-// ../shared/dist/schemas/retrospective.js
-var RetrospectiveVerdictSchema = external_exports.enum(["right", "wrong", "mixed"]);
-var RetrospectiveSchema = external_exports.object({
-  id: external_exports.string().min(1),
-  /** The decisionId this retrospective targets. */
-  decisionId: external_exports.string().min(1),
-  verdict: RetrospectiveVerdictSchema,
-  /** Optional note: what actually happened. Learning material. */
-  note: external_exports.string().optional(),
-  createdAt: external_exports.string().datetime()
-});
-var CreateRetrospectiveRequestSchema = external_exports.object({
-  decisionId: external_exports.string().min(1),
-  verdict: RetrospectiveVerdictSchema,
-  note: external_exports.string().max(2e3).optional()
 });
 
 // ../shared/dist/schemas/team-preferences.js
@@ -29578,7 +29557,7 @@ function formatLearnings(state) {
   sections.push(`# Learnings \u2014 ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named, predictions made, and approaches you won't re-propose.*"
+    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
   );
   sections.push("");
   const reasoningArtifacts = state.artifacts.filter(
@@ -29618,27 +29597,6 @@ function formatLearnings(state) {
       if (c.actions.length > 0) {
         const shown = c.actions.slice(0, 3);
         for (const act of shown) sections.push(`  - applied to: ${act}`);
-      }
-    }
-    sections.push("");
-  }
-  const decisionsWithPredictions = state.decisions.filter(
-    (d) => d.response?.predictedOutcome
-  );
-  if (decisionsWithPredictions.length > 0) {
-    sections.push("## Predictions captured");
-    sections.push("");
-    for (const d of decisionsWithPredictions) {
-      const chosen = d.options.find((o) => o.id === d.response?.optionId);
-      const confidence = d.response?.confidence;
-      sections.push(
-        `- **${d.context}**: chose _${chosen?.title ?? d.response?.optionId}_${confidence ? ` (${confidence} confidence)` : ""}`
-      );
-      sections.push(`  - Predicted: "${d.response.predictedOutcome}"`);
-      const retro = findRetrospective(state, d.decisionId);
-      if (retro) {
-        const mark = retro.verdict === "right" ? "\u2713" : retro.verdict === "wrong" ? "\u2717" : "\u25D0";
-        sections.push(`  - Looking back: ${mark} ${retro.verdict}${retro.note ? ` \u2014 "${retro.note}"` : ""}`);
       }
     }
     sections.push("");
@@ -29700,16 +29658,12 @@ function formatLearnings(state) {
       sections.push("");
     }
   }
-  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0 && !hasDebriefLearnings) {
+  if (conceptCounts.size === 0 && rows.length === 0 && !hasDebriefLearnings) {
     sections.push("_Nothing crystallized yet. Keep pairing \u2014 the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
     sections.push("");
   }
   sections.push(`*Generated from session ${state.sessionId} \u2014 [deepPairing](https://github.com/deeppairing).*`);
   return sections.join("\n");
-}
-function findRetrospective(state, decisionId) {
-  const retros = state.retrospectives;
-  return retros?.find((r) => r.decisionId === decisionId);
 }
 
 // src/mcp/tools/export-session.ts
@@ -29722,9 +29676,6 @@ async function handleExportSession(ctx, args) {
   if (format === "learnings") {
     if (typeof ctx.store.getSessionMemory === "function") {
       state.sessionMemory = await ctx.store.getSessionMemory();
-    }
-    if (typeof ctx.store.getRetrospectives === "function") {
-      state.retrospectives = await ctx.store.getRetrospectives();
     }
   }
   const markdown = formatSessionMarkdown(state, format);
@@ -30454,17 +30405,6 @@ The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do 
             option: rej,
             reason: rejectReason,
             sourceArtifactId: d.artifactId
-          });
-        }
-        const stakes = d.stakes ?? d.request?.stakes;
-        if (stakes === "high" && d.response?.predictedOutcome) {
-          broadcast({
-            type: "decision_resolved_hero",
-            artifactId: d.artifactId,
-            context: d.context,
-            chosenTitle: option.title,
-            predictedOutcome: d.response.predictedOutcome,
-            confidence: d.response.confidence
           });
         }
       }
@@ -31805,7 +31745,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_options",
         annotations: { title: "Present options", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present 2\u20134 options with pros/cons/effort/risk for the human to choose. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) \u2014 the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects via the philosophy ledger.\n\nSchema note: `options` is an array of 2\u20134 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 human selects in the companion UI; don't list options in chat. Call check_feedback for the selection. FF9 \u2014 stakes='high' enables opt-in prediction capture; check_feedback MAY include optional `predictedOutcome` + `confidence`.",
+        description: "Present 2\u20134 options with pros/cons/effort/risk for the human to choose. Y5: each option SHOULD include `concept` ({name, oneLineExplanation?}) \u2014 the underlying pattern (e.g. 'external cache service'). Concepts make rejections compound across projects via the philosophy ledger.\n\nSchema note: `options` is an array of 2\u20134 objects. `concept` optional but strongly preferred. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 human selects in the companion UI; don't list options in chat. Call check_feedback for the selection. Set stakes='high' on hard-to-reverse calls (schema/auth/infra) \u2014 the UI weights those decisions visually.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_options)
@@ -32050,7 +31990,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "export_session",
         annotations: { title: "Export session", readOnlyHint: true, openWorldHint: false },
-        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact \u2014 concepts named, predictions made, approaches rejected).",
+        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact \u2014 concepts named, approaches rejected).",
         inputSchema: {
           type: "object",
           properties: {

@@ -10,7 +10,6 @@ import { SimpleMarkdown } from "./SimpleMarkdown";
 import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
 import { DecisionDiagramFocus } from "./DecisionDiagramFocus";
-import { PredictionsBreadcrumb } from "./PredictionsBreadcrumb";
 import { useReplayStore } from "../stores/replay";
 import { OptionCard } from "./decision/OptionCard";
 import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
@@ -26,8 +25,8 @@ interface DecisionCardProps {
   /** Artifact id — needed for AskTrigger targeting per-option questions */
   artifactId?: string;
   /**
-   * Consequentiality — "high" triggers prediction + confidence capture
-   * after the human picks. Default: no prediction prompt.
+   * Consequentiality — "high"/"medium" render a stakes badge so the human
+   * sees which calls are load-bearing. Default: no badge.
    */
   stakes?: "low" | "medium" | "high";
   /** If set (e.g. in replay mode for past decisions), start in the resolved state. */
@@ -48,10 +47,10 @@ interface DecisionCardProps {
  * `submitting` flag wasn't visible synchronously.
  *
  * Now a single discriminated union enforces the lifecycle. Aux text
- * inputs (`reasoning`, `sendBackText`, `predictedOutcome`, `confidence`)
- * are independent — they're inputs to the phase transitions, not phase
- * state. Same for orthogonal UI toggles (`showReasoning`, `showSendBack`,
- * `showRepair`, `horizonRequested`, `focusedIndex`).
+ * inputs (`reasoning`, `sendBackText`) are independent — they're inputs to
+ * the phase transitions, not phase state. Same for orthogonal UI toggles
+ * (`showReasoning`, `showSendBack`, `showRepair`, `horizonRequested`,
+ * `focusedIndex`).
  *
  * Race-guard: a useRef mirrors the submission state synchronously so the
  * second tap of a rapid double-click short-circuits BEFORE setPhase
@@ -60,7 +59,6 @@ interface DecisionCardProps {
  */
 type DecisionPhase =
   | { kind: "idle" }
-  | { kind: "predicting"; optionId: string }
   | { kind: "submitting" }
   | { kind: "resolved"; optionId: string }
   | { kind: "sentBack" };
@@ -123,8 +121,6 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   >(null);
   /** Q3: horizon-check request state — one request per artifact view. */
   const [horizonRequested, setHorizonRequested] = useState<"3mo" | "1y" | "2y" | null>(null);
-  const [predictedOutcome, setPredictedOutcome] = useState(initialResolved?.predictedOutcome ?? "");
-  const [confidence, setConfidence] = useState<"low" | "medium" | "high" | "">(initialResolved?.confidence ?? "");
   /**
    * Send-back composer visibility (orthogonal to phase). After submit,
    * phase moves to "sentBack" terminal; this toggle just controls
@@ -142,16 +138,6 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const [rejectText, setRejectText] = useState("");
   const [rejectConcept, setRejectConcept] = useState("");
   const [rejectSent, setRejectSent] = useState(false);
-  // FF9 — opt-in for the prediction-capture phase on high-stakes
-  // decisions. Pre-FF9 every high-stakes pick was forced through the
-  // predicting modal, which the PMF council called the loudest
-  // remaining friction post-EE ("the prediction step now shouts
-  // because everything else has gone quiet"). Memory entry
-  // `feedback_optional_features.md` codifies the principle: opinionated
-  // agent behaviors should be opt-in, not always-on. Default off; user
-  // toggles "+ Capture prediction with my pick" before clicking an
-  // option to enter the predicting flow.
-  const [predictOptIn, setPredictOptIn] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // #174 — the Discuss badge count MUST use the SAME predicate the workbench
@@ -169,13 +155,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   const submitting = phase.kind === "submitting";
   const resolved = phase.kind === "resolved";
   const selectedId = phase.kind === "resolved" ? phase.optionId : null;
-  const pendingOptionId = phase.kind === "predicting" ? phase.optionId : null;
   const sendBackSent = phase.kind === "sentBack";
 
-  const submitSelection = async (
-    optionId: string,
-    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
-  ) => {
+  const submitSelection = async (optionId: string) => {
     // Sync race-guard: a rapid double-click would otherwise see phase=idle
     // on both calls (React state batches), and both would issue the POST.
     if (inFlightRef.current) return;
@@ -183,7 +165,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     setPhase({ kind: "submitting" });
     try {
       const id = decisionId ?? event.decisionId;
-      await resolveDecision(id, optionId, reasoning.trim() || undefined, prediction);
+      await resolveDecision(id, optionId, reasoning.trim() || undefined);
       // Stash what was ACTUALLY submitted (trimmed — matches the record),
       // then clear the draft so it can't shadow future resolved views.
       setSubmittedReasoning(reasoning.trim());
@@ -209,30 +191,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // would land in the historical session's store via owner routing).
     if (useReplayStore.getState().active) return;
     if (phase.kind !== "idle") return;
-    // FF9 — gate on stakes==='high' AND user opted in to prediction
-    // capture for THIS decision. Pre-FF9 the predicting phase fired
-    // unconditionally on high-stakes; users habituated to mashing
-    // through the modal and the calibration data quality dropped.
-    if (stakes === "high" && predictOptIn) {
-      setPhase({ kind: "predicting", optionId });
-      return;
-    }
     await submitSelection(optionId);
-  };
-
-  const confirmWithPrediction = async () => {
-    if (phase.kind !== "predicting") return;
-    const optionId = phase.optionId;
-    const prediction = {
-      confidence: (confidence || undefined) as "low" | "medium" | "high" | undefined,
-      predictedOutcome: predictedOutcome.trim() || undefined,
-    };
-    await submitSelection(optionId, prediction);
-  };
-
-  const skipPrediction = async () => {
-    if (phase.kind !== "predicting") return;
-    await submitSelection(phase.optionId);
   };
 
   // Keyboard navigation
@@ -304,12 +263,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
     el.addEventListener("keydown", handler);
     return () => el.removeEventListener("keydown", handler);
-    // handleSelect closes over phase/stakes/predictOptIn/reasoning — it MUST be
-    // in the deps or the Enter branch runs a stale closure. Field bug: on a
-    // high-stakes decision, toggling "Capture prediction with my pick" and then
-    // selecting via Enter (not click) resolved WITHOUT the prediction-capture
-    // phase, because the stale handler still saw predictOptIn=false. (The sibling
-    // shortcut effect below already lists handleSelect for the same reason.)
+    // handleSelect closes over phase/reasoning — it MUST be in the deps or the
+    // Enter branch runs a stale closure (the sibling shortcut effect below
+    // already lists handleSelect for the same reason).
   }, [focusedIndex, resolved, showReasoning, event.options, handleSelect]);
 
   // UX2 — auto-focus the card when a draft decision is shown, so its keyboard
@@ -375,8 +331,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       if (detail.action === "approve") {
         // F8 (M4) — decisions are the highest-stakes artifact and got the
         // LEAST confirmation: one `a` keystroke committed the resolution
-        // irreversibly (feeding the ledger + calibration data) while
-        // App.tsx's contract and the ? help both promise a 3s confirm.
+        // irreversibly (feeding the ledger) while App.tsx's contract and the
+        // ? help both promise a 3s confirm.
         // Arm the same countdown the footer uses; Escape/Cancel bails.
         const optionId = event.options[focusedIndex]?.id ?? event.options[0]?.id;
         if (optionId) setArmedSelect({ optionId, left: 3 });
@@ -481,7 +437,6 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
           selectedId={selectedId}
           reasoning={reasoning}
           agentPickedUp={agentPickedUp}
-          initialResolved={initialResolved}
           sessionId={sessionId}
           artifactId={artifactId}
           stakes={stakes}
@@ -545,8 +500,6 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     reasoning,
     setReasoning,
     onSelect: handleSelect,
-    predictOptIn,
-    setPredictOptIn,
   };
 
   return (
@@ -707,78 +660,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         </div>
       )}
 
-      {/* Prediction capture — only on high-stakes decisions, only after the
-          user has tentatively picked. Raw material for calibration tracking. */}
-      {pendingOptionId && (
-        <div className="mt-3 p-3 bg-accent-amber-dim/25 border border-accent-amber/30 rounded-lg space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-accent-amber">
-              Before you commit — quick prediction
-            </span>
-            <span className="text-2xs text-text-muted italic">(skippable; agent flagged this high-stakes)</span>
-          </div>
-
-          <div>
-            <label className="text-2xs text-text-muted block mb-1">
-              What do you expect to happen as a result?
-            </label>
-            <textarea
-              rows={2}
-              autoFocus
-              value={predictedOutcome}
-              onChange={(e) => setPredictedOutcome(e.target.value)}
-              placeholder="e.g. cache hit rate hits 85% within 2 weeks; no new p99 regressions…"
-              className="w-full px-2.5 py-1.5 bg-surface-secondary border border-border-default rounded text-xs text-text-primary
-                         placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-amber resize-none"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-2xs text-text-muted">Confidence:</span>
-            {(["low", "medium", "high"] as const).map((c) => (
-              <button
-                key={c}
-                onClick={() => setConfidence(c)}
-                className={`px-2 py-0.5 rounded text-2xs font-medium ${
-                  confidence === c
-                    ? "bg-accent-amber text-white"
-                    : "bg-surface-elevated text-text-muted hover:text-text-primary"
-                }`}
-              >
-                {c}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              onClick={confirmWithPrediction}
-              disabled={submitting}
-              className="px-3 py-1 text-xs font-medium bg-accent-violet-strong text-white rounded
-                         hover:bg-accent-violet-strong-hover disabled:opacity-50 transition-colors press-scale"
-            >
-              Commit with prediction
-            </button>
-            <button
-              onClick={skipPrediction}
-              disabled={submitting}
-              className="px-2.5 py-1 text-xs text-text-muted hover:text-text-primary transition-colors"
-            >
-              Skip, just commit
-            </button>
-            <button
-              onClick={() => setPhase({ kind: "idle" })}
-              disabled={submitting}
-              className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* X11 — escape-hatch footer (send-back + reasoning composers, FF9
-          prediction opt-in toggle, tertiary affordance row). */}
+      {/* X11 — escape-hatch footer (send-back + reasoning composers, tertiary
+          affordance row). */}
       <DecisionFooter {...footerProps} />
 
       {/* #174 — the focused discuss workbench. Reuses the same footerProps
@@ -846,8 +729,6 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
           optionId: record.response.optionId,
           reasoning: record.response.reasoning,
           resolvedAt: record.resolvedAt,
-          confidence: (record.response as any).confidence,
-          predictedOutcome: (record.response as any).predictedOutcome,
         }
       : undefined;
   } else if (liveResolved) {
@@ -855,20 +736,11 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
       optionId: liveResolved.optionId,
       reasoning: liveResolved.reasoning,
       resolvedAt: liveResolved.resolvedAt,
-      confidence: liveResolved.confidence,
-      predictedOutcome: liveResolved.predictedOutcome,
     };
   }
 
   return (
     <>
-      {/* N3.3: surface prior predictions on similar decisions so the user
-          can calibrate before choosing. Fires on EVERY decision — the
-          breadcrumb self-hides when nothing matches. */}
-      <PredictionsBreadcrumb
-        concept={`${artifact.title} ${dc.context ?? ""}`}
-        excludeArtifactId={artifact.id}
-      />
       <DecisionCard
         event={{
           type: "decision_request",

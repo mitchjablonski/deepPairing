@@ -259,8 +259,7 @@ Export the current session as markdown. Six formats:
 - `adr`: Architecture Decision Record format
 - `full`: Complete session with code evidence, decisions, and reasoning log
 - `replay`: Chronological walkthrough of the session
-- `learnings`: Teaching artifact — concepts named, predictions made,
-  approaches rejected
+- `learnings`: Teaching artifact — concepts named, approaches rejected
 
 ## Advanced Features
 
@@ -377,9 +376,10 @@ patterns) at the start of every session.
 deepPairing remembers decisions across sessions. **On your very first tool call
 of every session**, the response includes context from previous sessions:
 
-- **Rejected approaches**: Options the human explicitly rejected. NEVER propose
-  these again. The `present_*` tools will refuse the call with
-  `REJECTED_APPROACH_BLOCKED` if you try.
+- **Rejected approaches**: Options the human explicitly rejected in THIS
+  project. NEVER re-attempt these — once a rejection is on record, `present_*`
+  stops a matching re-proposal with `REJECTED_APPROACH_BLOCKED` (same-project
+  enforcement; a cross-project match only flags, it doesn't block).
 - **Approved patterns**: Approaches the human preferred. Default to these when
   facing similar decisions.
 - **Cross-project philosophy**: The user's stances on concepts across EVERY
@@ -412,11 +412,10 @@ Set `stakes: "high"` on present_options when the decision is architecturally
 significant or hard to reverse (schema changes, auth / billing flows, infra,
 language / framework choices, production-facing surfaces).
 
-On high-stakes decisions the companion UI gates the human's pick on a short
-prediction capture step: *"what do you expect to happen?"* plus a confidence
-chip. The data lands in the decision record so you — and future-you — can
-look back and calibrate. Use `"medium"` for most feature decisions and `"low"`
-for local / reversible choices. Default is unspecified (no prediction prompt).
+On high-stakes decisions the companion UI weights the decision card visually
+(a "high stakes" badge) so the human sees at a glance which calls are
+load-bearing. Use `"medium"` for most feature decisions and `"low"` for local /
+reversible choices. Default is unspecified (no stakes badge).
 
 If pre-flight refuses your call, do NOT retry with the same approach. Either
 revise to exclude the rejected path, or — if you believe conditions have

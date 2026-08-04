@@ -26,9 +26,9 @@ export const DecisionRequestSchema = z.object({
   options: z.array(DecisionOptionSchema).min(2).max(4),
   /**
    * How consequential is this decision? Agent sets this on architecturally
-   * significant / hard-to-reverse choices. When "high", the UI asks the
-   * human for a prediction + confidence alongside their pick — the raw
-   * material for calibration tracking later.
+   * significant / hard-to-reverse choices. Drives the UI's visual weight on
+   * the decision card (the "high/medium stakes" badge) so the human sees at a
+   * glance which calls are load-bearing.
    */
   stakes: DecisionStakesSchema.optional(),
 });
@@ -42,11 +42,12 @@ export const DecisionResponseSchema = z.object({
   optionId: z.string(),
   reasoning: z.string().optional(),
   /**
-   * Optional craft-development fields — captured primarily on high-stakes
-   * decisions. The UI prompts for these; the human can skip.
+   * Legacy craft-development fields, retained OPTIONAL for backward compat so
+   * decisions.json written before the calibration-loop cut (E3, #194) still
+   * parse. No live surface captures these anymore — the prediction-capture
+   * ritual was cut after 0/36 real high-stakes decisions ever recorded one.
    */
   confidence: DecisionConfidenceSchema.optional(),
-  /** What the human expects to happen as a result of this choice. */
   predictedOutcome: z.string().optional(),
 });
 

@@ -2,8 +2,8 @@
  * R5 — lock the canonical pairing fixture's shape. Hand-checked that the
  * transcript reads as a coherent 10-minute session; tests guard the
  * invariants the UI depends on (timestamps monotonic, artifacts covering
- * every type, question + answer linked, decision record prediction
- * captured).
+ * every type, question + answer linked, resolved decision record with
+ * recorded reasoning).
  */
 import { describe, it, expect } from "vitest";
 import { demoArtifacts, demoComments, demoDecisionRecords } from "../demo-session.js";
@@ -51,11 +51,11 @@ describe("demo-session fixture", () => {
     expect(answer!.parentCommentId).toBe(question!.id);
   });
 
-  it("exports a decision record with predictedOutcome + confidence (for the predictions breadcrumb)", () => {
+  it("exports a resolved decision record with recorded reasoning", () => {
     expect(demoDecisionRecords).toHaveLength(1);
     const rec = demoDecisionRecords[0]!;
-    expect(rec.response.predictedOutcome).toMatch(/migration/i);
-    expect(rec.response.confidence).toBe("medium");
+    expect(rec.response.optionId).toBe("argon");
+    expect(rec.response.reasoning).toMatch(/OWASP/i);
     expect(rec.decisionId).toBe("dec_hashing");
   });
 });

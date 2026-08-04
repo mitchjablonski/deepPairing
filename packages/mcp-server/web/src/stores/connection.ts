@@ -209,8 +209,6 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                   optionId: d.response.optionId,
                   reasoning: d.response.reasoning,
                   resolvedAt: d.resolvedAt,
-                  confidence: d.response.confidence,
-                  predictedOutcome: d.response.predictedOutcome,
                 });
               }
             }
@@ -340,8 +338,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           }
           // Bug3 — a cross-tab resolve must reflect without a reload. The
           // broadcast carries decisionId + optionId (+ reasoning); record it
-          // so a remounting DecisionCard opens resolved. (confidence/
-          // predictedOutcome aren't broadcast — they survive via hydrate.)
+          // so a remounting DecisionCard opens resolved.
           if (data.decisionId && data.optionId) {
             store.recordResolvedDecision(data.decisionId, {
               optionId: data.optionId,
@@ -513,8 +510,6 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                     optionId: d.response.optionId,
                     reasoning: d.response.reasoning,
                     resolvedAt: d.resolvedAt,
-                    confidence: d.response.confidence,
-                    predictedOutcome: d.response.predictedOutcome,
                   });
                 }
               }
@@ -572,23 +567,6 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             });
           });
           set({ connected: false });
-          break;
-
-        case "decision_resolved_hero":
-          // O7: captured prediction doesn't disappear into the decision
-          // record — it's a calibration moment worth pinning for a few
-          // seconds.
-          import("./toast").then(({ useToastStore }) => {
-            const chosen = String(data.chosenTitle ?? "");
-            const predicted = String(data.predictedOutcome ?? "").trim();
-            const confidence = data.confidence ? ` (${data.confidence} confidence)` : "";
-            useToastStore.getState().push({
-              kind: "success",
-              title: `✅ Chose ${chosen}`,
-              body: predicted ? `Prediction captured: "${predicted}"${confidence}` : undefined,
-              ttl: 7000,
-            });
-          });
           break;
       }
     });

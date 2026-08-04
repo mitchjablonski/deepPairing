@@ -77,10 +77,10 @@ const enrichedCodeChange: Artifact = {
 };
 
 // R5: extend the canonical demo with a spec (think-together), a high-stakes
-// decision that captures a prediction, and a second reasoning artifact that
-// names a different concept. The Try-Demo button now loads a fuller pairing
-// transcript — realistic enough to ground tests, screenshots, and the
-// onboarding walkthrough without constructing fixtures ad-hoc.
+// decision, and a second reasoning artifact that names a different concept.
+// The Try-Demo button now loads a fuller pairing transcript — realistic enough
+// to ground tests, screenshots, and the onboarding walkthrough without
+// constructing fixtures ad-hoc.
 
 const specArtifact: Artifact = {
   id: "art_spec_001",
@@ -159,7 +159,7 @@ const highStakesDecisionArtifact: Artifact = {
       },
     ],
   },
-  agentReasoning: "High-stakes because it's hard to reverse once hashes are written. Capturing a prediction so we can calibrate later.",
+  agentReasoning: "High-stakes because it's hard to reverse once hashes are written — flagging it so the choice gets weighed carefully.",
   relatedArtifactIds: ["art_spec_001"],
   createdAt: "2026-04-02T10:04:30.000Z",
   updatedAt: "2026-04-02T10:05:15.000Z",
@@ -241,10 +241,9 @@ export const demoComments: Comment[] = [
 ];
 
 /**
- * R5: a resolved decision record for the high-stakes hashing choice, with
- * predictedOutcome + confidence captured. Consumers that stage the demo
- * with decision records (not just artifacts) can surface the predictions
- * breadcrumb + retrospective affordance.
+ * R5: a resolved decision record for the high-stakes hashing choice. Consumers
+ * that stage the demo with decision records (not just artifacts) can surface
+ * the resolved-decision view with its recorded reasoning.
  */
 export const demoDecisionRecords = [
   {
@@ -257,8 +256,6 @@ export const demoDecisionRecords = [
     response: {
       optionId: "argon",
       reasoning: "OWASP recommendation + GPU resistance outweighs the one-time rehash migration.",
-      predictedOutcome: "Zero-downtime migration — 95% of users rehash within a week, the rest on next login.",
-      confidence: "medium" as const,
     },
     createdAt: "2026-04-02T10:04:30.000Z",
     resolvedAt: "2026-04-02T10:05:15.000Z",

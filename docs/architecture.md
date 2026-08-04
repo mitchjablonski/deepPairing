@@ -158,7 +158,6 @@ an edit) and short-circuits cheaply when there are no rejections seeded.
       preflight-traces.json       # Sidecar: what stances were considered
       annotations.json            # Per-artifact UI annotations
       session.json                # Session metadata + autonomy level
-      retrospectives.json         # P2 calibration outcomes
   team.json                       # Team-shared rules (commit to git)
   metrics.json                    # Local engagement counters
   hooks-state.json                # Stop-hook fire log

@@ -124,14 +124,6 @@ export const PreferenceBodySchema = z.object({
 });
 export type PreferenceBody = z.infer<typeof PreferenceBodySchema>;
 
-// POST /api/retrospectives — capture verdict on a past prediction.
-export const RetrospectiveBodySchema = z.object({
-  decisionId: z.string().min(1),
-  verdict: z.enum(["right", "wrong", "mixed"]),
-  note: z.string().max(2000).optional(),
-});
-export type RetrospectiveBody = z.infer<typeof RetrospectiveBodySchema>;
-
 // #176 (Option A) — POST /api/render-failures. The BROWSER reports a Mermaid
 // diagram that genuinely failed to render (after the client's #163 repair pass
 // also failed) so the AGENT learns its diagram is broken — today the client

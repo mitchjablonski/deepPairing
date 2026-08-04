@@ -216,15 +216,6 @@ export function SessionMetrics() {
                   : undefined
               }
             />
-            <MetricRow
-              label="Retrospectives"
-              value={metrics.counts.retrospectives.total}
-              detail={
-                metrics.counts.retrospectives.total > 0
-                  ? `${metrics.counts.retrospectives.right} right · ${metrics.counts.retrospectives.wrong} wrong · ${metrics.counts.retrospectives.mixed} mixed`
-                  : undefined
-              }
-            />
             <MetricRow label="Horizon checks" value={metrics.counts.horizonChecksRequested} />
             <MetricRow
               label="❓ Questions"

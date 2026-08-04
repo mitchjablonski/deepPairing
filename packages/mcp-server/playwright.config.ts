@@ -23,6 +23,14 @@ export default defineConfig({
   use: {
     headless: true,
     actionTimeout: 10_000,
+    // #194 M5 — the app's default theme is now "system" (was hard "dark"). The
+    // a11y specs' "— dark" variants DON'T set dp-theme; they relied on that old
+    // default, so under "system" they'd resolve to Chromium's default light and
+    // silently scan the wrong theme. Pin the emulated OS scheme to dark so the
+    // unset ("system") default resolves dark here, preserving each dark/light
+    // scan's intent. The explicit "light" specs set localStorage dp-theme and
+    // override via [data-theme="light"] regardless of this.
+    colorScheme: "dark",
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
 });

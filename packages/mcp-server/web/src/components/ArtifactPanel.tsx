@@ -193,6 +193,47 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
   );
 }
 
+// L1 (#194) — every artifact type this page version knows how to render. A
+// type NOT in this set falls through to UnsupportedArtifact instead of a blank
+// body (a stale cached tab meeting a newer daemon's future type).
+const KNOWN_ARTIFACT_TYPES = new Set<string>([
+  "research", "spec", "plan", "reasoning", "code_change",
+  "changeset", "decision", "debrief", "explainer",
+]);
+
+/**
+ * L1 (#194) — the graceful fallback for an unrecognized artifact type. Renders
+ * a quiet "reload to update" notice plus whatever human-readable text we can
+ * coerce off the raw content (summary / overview / title / context), so the
+ * surface is never empty even when this tab is older than the daemon.
+ */
+function UnsupportedArtifact({ artifact }: { artifact: Artifact }) {
+  const content = (artifact.content ?? {}) as Record<string, unknown>;
+  const rawText = ["summary", "overview", "context", "detail", "description"]
+    .map((k) => content[k])
+    .find((v): v is string => typeof v === "string" && v.trim().length > 0);
+  return (
+    <div
+      className="mx-3 my-3 p-4 rounded-lg border border-border-default bg-surface-elevated"
+      role="status"
+      data-testid="unsupported-artifact"
+    >
+      <div className="text-sm font-medium text-text-secondary">
+        This artifact type isn't supported by this page version — reload to update.
+      </div>
+      <div className="mt-1 text-2xs text-text-muted">
+        Type: <span className="font-mono">{String(artifact.type)}</span>
+      </div>
+      {(artifact.title || rawText) && (
+        <div className="mt-2 text-xs text-text-secondary">
+          {artifact.title && <div className="font-semibold text-text-primary">{artifact.title}</div>}
+          {rawText && <p className="mt-1 whitespace-pre-wrap">{rawText}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Exported for tests (#158 — the secret-warning banner renders here).
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
@@ -251,6 +292,14 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           the type-specific renderer (which contains the flagged text) even
           loads. Renders null unless the server-side scan matched. */}
       <SecretWarningBanner artifact={artifact} />
+
+      {/* L1 (#194) — a stale cached tab can receive a FUTURE artifact type a
+          newer daemon pushes; the type-specific renderer chain below has no
+          branch for it and would fall through to a BLANK body. Render a quiet
+          "reload to update" notice + whatever raw text we can coerce. Kept
+          OUTSIDE the lazy Suspense boundary (like the secret banner) so it
+          paints immediately and never waits on the lazy renderers it replaces. */}
+      {!KNOWN_ARTIFACT_TYPES.has(artifact.type) && <UnsupportedArtifact artifact={artifact} />}
 
       {/* D6 — lazy chunk boundary. MUST wrap every lazy component below
           (RevisionDiff included — review lesson: a suspension outside the
@@ -809,7 +858,15 @@ function ArtifactSidebar({
                 title={a.title}
               >
                 {collapsed ? (
-                  <div className="relative" title={`${typeLabels[a.type] ?? a.type} — ${statusLabels[a.status] ?? a.status}`}>
+                  // L7 (#194) — the collapsed icon-only rail (webview / narrow
+                  // width) must name the artifact, not just its type+status:
+                  // without the title an icon column is unreadable. Tooltip AND
+                  // aria-label carry "Type: title — status".
+                  <div
+                    className="relative"
+                    title={`${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`}
+                    aria-label={`${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`}
+                  >
                     <ArtifactIcon type={a.type} className={`w-4 h-4 ${isSelected ? "text-accent-blue" : "text-text-muted"}`} />
                     {isUnread && (
                       <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-accent-blue" />

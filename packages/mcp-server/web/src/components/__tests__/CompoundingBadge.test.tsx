@@ -30,7 +30,7 @@ describe("CompoundingBadge", () => {
     vi.stubGlobal("fetch", mockMetrics(14, 23));
     const onOpen = vi.fn();
     render(<CompoundingBadge onOpen={onOpen} />);
-    const btn = await screen.findByRole("button", { name: /cumulative taste/i });
+    const btn = await screen.findByRole("button", { name: /ledger stats/i });
     expect(btn.textContent).toContain("14"); // 🛡 blocks
     expect(btn.textContent).toContain("23"); // 🧭 ledger writes
     await userEvent.click(btn);

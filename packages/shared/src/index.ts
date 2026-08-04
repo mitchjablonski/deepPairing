@@ -95,7 +95,6 @@ export {
   PreferenceBodySchema,
   AutonomyLevelSchema,
   DetailDensitySchema,
-  RetrospectiveBodySchema,
   RenderFailureBodySchema,
   PromptBodySchema,
   SuggestionResolveBodySchema,
@@ -111,7 +110,6 @@ export {
   type PreferenceBody,
   type AutonomyLevel,
   type DetailDensity,
-  type RetrospectiveBody,
   type RenderFailureBody,
   type PromptBody,
 } from "./schemas/request-bodies.js";
@@ -159,15 +157,6 @@ export {
   type TaskKind,
   type TaskHandle,
 } from "./schemas/task-handle.js";
-
-export {
-  RetrospectiveVerdictSchema,
-  RetrospectiveSchema,
-  CreateRetrospectiveRequestSchema,
-  type RetrospectiveVerdict,
-  type Retrospective,
-  type CreateRetrospectiveRequest,
-} from "./schemas/retrospective.js";
 
 export {
   TeamPreferenceKindSchema,

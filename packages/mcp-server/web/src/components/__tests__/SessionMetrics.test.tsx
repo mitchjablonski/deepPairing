@@ -58,7 +58,8 @@ describe("SessionMetrics — R1 cumulative block", () => {
     expect(screen.getByText(/2 you · 1 team/)).toBeInTheDocument();
     expect(screen.getByText(/Ledger writes/)).toBeInTheDocument();
     expect(screen.getByText(/4 avoid · 3 prefer/)).toBeInTheDocument();
-    expect(screen.getByText(/1 right · 1 wrong · 0 mixed/)).toBeInTheDocument();
+    // #194 — the retrospectives tile was removed with the calibration-loop cut.
+    expect(screen.queryByText(/1 right · 1 wrong · 0 mixed/)).not.toBeInTheDocument();
     expect(screen.getByText(/5 answered/)).toBeInTheDocument();
   });
 
