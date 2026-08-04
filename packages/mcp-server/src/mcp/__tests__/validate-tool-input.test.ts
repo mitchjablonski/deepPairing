@@ -829,3 +829,116 @@ describe("#184 — truncated tool-call detection", () => {
     expect(store.getArtifacts()).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #195 F1 / H2 — CARDINALITY issues hoisted to the front + per-item dedup.
+//
+// formatValidationError showed issues in raw Zod order, so an array-level
+// violation (too few / too many options) got buried behind per-option field
+// noise ("…and 21 more"). These pin: the cardinality line is VISIBLE for the two
+// executed repros (1 option < min 2, 5 options > max 4), and N identical
+// per-item messages collapse to one line.
+// ---------------------------------------------------------------------------
+describe("#195 H2 — cardinality issues are hoisted + per-item messages deduped", () => {
+  it("1 option (min 2): the cardinality line is VISIBLE (not buried), example kept", async () => {
+    const { text, isError } = await call("present_options", {
+      context: "Pick something",
+      options: [
+        { id: "a", title: "Only one", description: "x", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+      ],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    // The array-level cardinality violation names `options` and is a too-small.
+    expect(text).toMatch(/options:.*(Too small|>=2|at least 2|2 items)/i);
+    // Structural error keeps the example dump.
+    expect(text).toMatch(/Expected shape/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("5 options (max 4): the cardinality too-big line is VISIBLE at the front", async () => {
+    const mk = (i: number) => ({
+      id: `o${i}`, title: `Opt ${i}`, description: "d", pros: ["p"], cons: ["c"], effort: "low", risk: "low", recommendation: i === 0,
+    });
+    const { text, isError } = await call("present_options", {
+      context: "Too many choices",
+      options: [mk(0), mk(1), mk(2), mk(3), mk(4)],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toMatch(/options:.*(Too big|<=4|at most 4|4 items)/i);
+    // The cardinality line sits at the FRONT — it's the first bulleted issue.
+    const firstBullet = text.split("•")[1] ?? "";
+    expect(firstBullet).toContain("options");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("collapses N identical per-option field omissions into ONE line", async () => {
+    // 4 options each missing ONLY `pros` → options.0.pros … options.3.pros, all
+    // the same message → one deduped line with a (4×) count, not four lines.
+    const mk = (i: number) => ({
+      id: `o${i}`, title: `Opt ${i}`, description: "d", cons: ["c"], effort: "low", risk: "low", recommendation: i === 0,
+      // pros omitted
+    });
+    const { text, isError } = await call("present_options", {
+      context: "Missing pros everywhere",
+      options: [mk(0), mk(1), mk(2), mk(3)],
+    });
+    expect(isError).toBe(true);
+    // The collapsed wildcard line + count, and NOT the four literal indexed paths.
+    expect(text).toContain("options[*].pros");
+    expect(text).toContain("(4×)");
+    expect(text).not.toContain("options.0.pros");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #195 F1 / L1 — TARGETED hint for trivial top-level scalar omissions.
+//
+// When EVERY issue is a missing/wrong-type TOP-LEVEL SCALAR, the fix is trivial,
+// so we emit a one-line targeted hint naming the field(s) and SKIP the example
+// dump (saves tokens + removes the echo-replay temptation). Structural/shape
+// errors still get the full example.
+// ---------------------------------------------------------------------------
+describe("#195 L1 — targeted hint for trivial scalar omissions (no example dump)", () => {
+  it("present_code_change missing ONLY a scalar (filePath) → targeted hint, NO example", async () => {
+    const { text, isError } = await call("present_code_change", {
+      // filePath missing; everything else present + valid
+      changeType: "modify",
+      before: "const x = 1;",
+      after: "const x = 2;",
+      reasoning: "bump",
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toContain("`filePath`");
+    // The whole point: no example dump for a trivial scalar omission.
+    expect(text).not.toMatch(/Expected shape/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("present_debrief missing ONLY summary → targeted hint names `summary`, NO example", async () => {
+    const { text, isError } = await call("present_debrief", {
+      title: "Debrief — something",
+      // summary omitted (the one required content field)
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toContain("`summary`");
+    expect(text).not.toMatch(/Expected shape/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("a STRUCTURAL error (findings as a string) STILL gets the full example dump", async () => {
+    const { text, isError } = await call("present_findings", {
+      summary: "x",
+      findings: "not an array", // array expected → structural, not a scalar omission
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    // Structural → example survives (the L1 shortcut must not swallow it).
+    expect(text).toMatch(/Expected shape/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+});

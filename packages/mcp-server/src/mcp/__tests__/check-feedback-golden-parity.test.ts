@@ -602,26 +602,35 @@ const scenarios: Scenario[] = [
 describe("#188 — check_feedback byte-parity golden pins", () => {
   // Captured against the PRE-refactor tree. A changed hash means the delivery
   // output drifted — investigate before updating.
+  // #195 F1 — REVISED against THIS tree. Three changes drove the drift:
+  //   M2 (questions-first suggestedAction) → PROSE drift on scenarios carrying an
+  //      open human question (spec_questions, followup_on_approved,
+  //      debrief_grain_and_ask_anything, explainer_grain_and_ask_anything).
+  //   M3 (busy-poll dedup) → STRUCT drift on EVERY busy (waiting/feedback) poll:
+  //      the top-level `suggestedAction` key is dropped from structuredContent
+  //      (prose keeps it). healthy_proceed (status 'proceed') and the
+  //      scoped_wait early-return path are UNCHANGED — byte-identical.
+  //   H1 (owes-debrief) did NOT move any golden here: it only fires when review
+  //      obligations are drained AND no open question exists; the sole candidate
+  //      (followup_on_approved) has an open follow-up question, so it's
+  //      suppressed there (its drift is M2+M3).
   const GOLDEN: Record<string, { prose: string; struct: string }> = {
     healthy_proceed: { prose: "8b519f1b41c0dd6d65a0a092bd981e011cb48e90d827b736ce6ad78a6a6ccf48", struct: "e2bd0b9559c88cb3a4a6bb303b4b3ce005fdc806e14b52880423527d5ec83736" },
-    session_directive_plus_secret_comment: { prose: "3c067c69713b33cc6da5303c3ed93b500c65017ee3aacc48638e65a30acd536c", struct: "f10ff7f3a5549450c324e1bd0cb4daa9c6ddeb48d4c8d5deef68174fb353debd" },
-    spec_questions_and_comments_lanes: { prose: "8e9a2e3c83e53f8ad477bd0d2650c0487d9a0a6a1e62b1f00c82ad61478c254b", struct: "593f35123c8c74c6722ffbfd3c40f9c1a8a0a2162b6ceca04126ede1fc28ea37" },
-    changeset_delline_crossfile_review: { prose: "177b5f2e9d46cbaf13a578d0a3a456e09072d3fc997c57db57873e48282236f6", struct: "52eac441e8fb3e3a059952b25e2850913a451e2308d4c81c94be84fbcf9b64cd" },
-    decision_grain_lanes: { prose: "47142a2cbf1bc293b48a63875d81db0080ec1822a4e5c2ec95ea32b5a9030819", struct: "1fdd5b45ff8415848c9406e533d0c30084caeb9630d1d2f55cd2ef7fb29659a5" },
-    decision_region_optionId: { prose: "162a7e68d53e4e7e2e7f1ba22827cec76f4dc9679447b2914cdf42dd3a0c2bbd", struct: "d863bd052d6a93b1f655b7a6536bf9365e11ec43be78a8bf4f1dae8bf0221884" },
-    suggestion_state_machine: { prose: "39ebef78697961ab901ba3dea151657bbf7b6dfd9fafdc0df92d570ba06af62f", struct: "84cde744d7a2a55f8fd37ccf48962056ca6c49ce16d424782ae81de0aaa99f69" },
-    followup_on_approved: { prose: "fd47ec30f3eef24c0a26909e211e986a6696d7a9f5d2bfb0e6fed4c8513d8c0b", struct: "2d83a1251c891c04e9a019f2215547c515d64fb872dd53ed05befe59ac138133" },
-    resolved_decision_verdict: { prose: "35b87b2f5e5249c83f92a667d105809398b39a701780e3cf2ec7404d70dc7f80", struct: "3a93d12770210ce1228b184f02f6627b28857f3a9055af5a5f30dcca18d9ef81" },
-    plan_verdict_and_status_change: { prose: "1168802c54dedd2053a9540b75c0e0781130a5613a6c0fa3a5bbd5fcee811659", struct: "dc469333b628b4536c30aeb870f16cd8d2ce5f78421c961197b989f839c92d9f" },
-    rejected_artifacts: { prose: "2c6c6c46465869df2603d0a58f09cc6c406809743dd8022ebf4db1557c0c3214", struct: "3bb03742768b09b798adc570b129bdaca3703de7420844d72bd1b0b01e2e1a40" },
-    render_failures: { prose: "2af7667132a1640f6544a8af05ce2d17268cb943bf6aeec20394ff51ccc5388b", struct: "0318b2371be9db67905f81389222fd07b7366b8086ce578c43ada8553f3f8db1" },
+    session_directive_plus_secret_comment: { prose: "3c067c69713b33cc6da5303c3ed93b500c65017ee3aacc48638e65a30acd536c", struct: "81948426b3d8f4463ba562c3a32e4fe7018fdac8b3260df8400b5f1925e75327" },
+    spec_questions_and_comments_lanes: { prose: "7724d7ea67ed5e897a3381026641f3f03862fbf908a5f8698fb1054b0401fd74", struct: "970844716010909a4d1ca4db8dc5f01bf0d8b9e4615f39695a1aadba10d54629" },
+    changeset_delline_crossfile_review: { prose: "177b5f2e9d46cbaf13a578d0a3a456e09072d3fc997c57db57873e48282236f6", struct: "47cdd41db83a4f65bfddb273f4fa15d870c7bb1d0244b7be30c3e0487a85ca5e" },
+    decision_grain_lanes: { prose: "47142a2cbf1bc293b48a63875d81db0080ec1822a4e5c2ec95ea32b5a9030819", struct: "280ce1a9f29e3188a685a2e5c04baed19c94285b4366d718065aa3109c80fd4b" },
+    decision_region_optionId: { prose: "162a7e68d53e4e7e2e7f1ba22827cec76f4dc9679447b2914cdf42dd3a0c2bbd", struct: "76cd0c12cdd435c9c222617bcb371b44e36d3fc5a5ce441d44dbb7d7dfbb9754" },
+    suggestion_state_machine: { prose: "39ebef78697961ab901ba3dea151657bbf7b6dfd9fafdc0df92d570ba06af62f", struct: "d20ab0f846f419450309357d1b30844e32a40b3f03e1e105ccdac5aabd10db08" },
+    followup_on_approved: { prose: "72317598460bd6f400d61671a7d293b641920fadbd4b2661483464de838a0089", struct: "6a2e15c5b446c698ce5d7c65b501615ce3b9e003da405b96e965fe7e18b2ec66" },
+    resolved_decision_verdict: { prose: "35b87b2f5e5249c83f92a667d105809398b39a701780e3cf2ec7404d70dc7f80", struct: "afe94a95e669369dcf79bd4ad42395ac57391708fff7faaa4e9f84cb68c587ea" },
+    plan_verdict_and_status_change: { prose: "1168802c54dedd2053a9540b75c0e0781130a5613a6c0fa3a5bbd5fcee811659", struct: "821c6892c1ed5494141fcc6a261883448788f82134ff17851cba66b2f98eaa8f" },
+    rejected_artifacts: { prose: "2c6c6c46465869df2603d0a58f09cc6c406809743dd8022ebf4db1557c0c3214", struct: "5b7f19c3cd653f6b7f2a130f56f7bc360f11b435dc5ab709e80d036fa51bb2d5" },
+    render_failures: { prose: "2af7667132a1640f6544a8af05ce2d17268cb943bf6aeec20394ff51ccc5388b", struct: "741a170e295d6aad143c82a15af79f9663b6e0b96d8f2070dbbca58393d26e14" },
     scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "3fdcaf7107f306723a8d731c2c0484a09a172aa22cc4473fd4998950df2d47ce" },
-    // #190 — NEW golden (13→14): captured against THIS tree's debrief delivery.
-    debrief_grain_and_ask_anything: { prose: "44ff3814640812b73a02392dca742d42f4976784218104110186351495913bc9", struct: "a427507adc25895fc03114459c742c97d7b844062c1e20a80fd67d495f977183" },
-    // #190 A2 — NEW golden (14→15): captured against THIS tree's explainer delivery.
-    explainer_grain_and_ask_anything: { prose: "15a9549237fdc4658e97567d9f4da821788552a41c4fafa6e9dc5453cef14e39", struct: "5a83e0d5794392fca0e40522b57a6a9cc05214232f13e22af9920806da0dbac5" },
-    // #193 E2 — NEW golden (15→16): per-item debrief grain delivery.
-    debrief_per_item_grain: { prose: "bb0995c0e54d14c13fd6e1d5fdf1b70fa740b86391f55926ae577dc659ba322a", struct: "1d885f1e452348eab95575e0d05544e5d6c39ccff9220aa4f0fe9da9216fa078" },
+    debrief_grain_and_ask_anything: { prose: "d3436c950b83aca46b9f494ef58bde9ffbffd40a29b29e9efb6177c57b42bf85", struct: "72dee06f32b6e37afd6ecba2b88ee7b88ae1aae3dec1147532456c64c9e795e0" },
+    explainer_grain_and_ask_anything: { prose: "ce50048d04ffc21c65fdf39fa0868de7add1db998efc3c66400a709bf429dad0", struct: "c8fac43ec0b49ec6c34c443b9d9b5d8d442019b142a21b68b1eacd66c53a4b92" },
+    debrief_per_item_grain: { prose: "bb0995c0e54d14c13fd6e1d5fdf1b70fa740b86391f55926ae577dc659ba322a", struct: "c9ab6cc8a184bf7242d296f379f4952036472f27fd3393b4ec7da9e28e9c110b" },
   };
 
   let idx = 0;

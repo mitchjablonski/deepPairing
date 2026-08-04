@@ -33,9 +33,17 @@ export const HEALTHY_CHECK_FEEDBACK_KEYS = [
 /**
  * Assert `sc` carries EXACTLY the canonical healthy top-level key set — no
  * lane-specific spread (suggestions / renderFailures / ledgerHealth) leaked in.
+ *
+ * M3 — `suggestedAction` rides structuredContent ONLY on the 'proceed' hot path.
+ * On a BUSY poll (status 'waiting'/'feedback') the verbatim echo is dropped (the
+ * prose preamble still carries it), so the expected key set excludes it there.
+ * The base arrays are always present regardless (they may be non-empty).
  */
 export function expectHealthyCheckFeedbackPayload(sc: Record<string, unknown>): void {
-  expect(Object.keys(sc).sort()).toEqual([...HEALTHY_CHECK_FEEDBACK_KEYS].sort());
+  const expected = [...HEALTHY_CHECK_FEEDBACK_KEYS];
+  const wanted =
+    sc.status === "proceed" ? expected : expected.filter((k) => k !== "suggestedAction");
+  expect(Object.keys(sc).sort()).toEqual([...wanted].sort());
 }
 
 /**

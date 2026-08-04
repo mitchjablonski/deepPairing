@@ -39,9 +39,13 @@ describe("check_feedback — rejected decision suggestedAction (#169)", () => {
     const res = await callTool("check_feedback");
     const sc = res.structuredContent as any;
 
-    expect(sc.suggestedAction).not.toContain("You may proceed");
-    expect(sc.suggestedAction).toContain("Do NOT apply");
-    expect(sc.suggestedAction).toContain("REJECTED");
+    // M3 — on a BUSY poll (status 'feedback') the suggestedAction rides the
+    // prose preamble only; structuredContent drops the verbatim echo. Assert
+    // the "Do NOT apply" posture on the prose.
+    expect(res.text).not.toContain("You may proceed");
+    expect(res.text).toContain("Do NOT apply");
+    expect(res.text).toContain("REJECTED");
+    expect(sc.suggestedAction).toBeUndefined();
     // The rejected decision is machine-readable in structuredContent.
     expect(sc.status).toBe("feedback");
     expect(sc.rejected.map((r: any) => r.id)).toContain(artId);

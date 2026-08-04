@@ -319,6 +319,17 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const totalComments = allComments.length;
   const autonomyLabel = await store.getAutonomyLevel();
 
+  // M2 — unanswered human questions in THIS poll (artifact-scoped questions the
+  // agent owes an answer). Computed here so suggestedAction can LEAD with them
+  // (the delivery loop that populates structuredQuestions runs later).
+  const openQuestionCount = allComments.filter(
+    (c) =>
+      c.author === "human" &&
+      c.intent === "question" &&
+      !c.answeredByCommentId &&
+      c.target.artifactId !== "__session__",
+  ).length;
+
   // FN2 — artifacts the human REJECTED that check_feedback hasn't reported
   // yet. Without this, suggestedAction falls through to "you may proceed"
   // right after a human rejects a code_change/spec/research (only plans had
@@ -395,6 +406,32 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // questions" block below.
   if (newComments.length > 0 && pendingArts.length > 0) {
     suggestedAction = `${suggestedAction} The human also left a comment — read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
+  }
+
+  // H1 — debrief-owed reinforcement. Heuristic (documented): nag ONLY when the
+  // run is WINDING DOWN — no pending drafts to review, nothing freshly rejected
+  // to revise, and no open questions to answer (obligations DRAINED) — AND the
+  // session presented substantive code work (a changeset/code_change) this
+  // project but has no debrief yet. This keeps it off the mid-flight path
+  // (where suggestedAction is a "wait for review" instruction) and only fires it
+  // at the natural end-of-run moment the debrief rule targets.
+  const hasCodeWork = allArtifacts.some((a) => a.type === "changeset" || a.type === "code_change");
+  const hasDebrief = allArtifacts.some((a) => a.type === "debrief");
+  const owesDebrief =
+    pendingArts.length === 0 &&
+    freshlyRejected.length === 0 &&
+    openQuestionCount === 0 &&
+    hasCodeWork &&
+    !hasDebrief;
+  if (owesDebrief) {
+    suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet — when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
+  }
+
+  // M2 — questions LEAD the suggestedAction: when the human left open questions,
+  // answering them comes before any rejection/comment guidance (which stays,
+  // just after). Prepend last so it sits at the very front.
+  if (openQuestionCount > 0) {
+    suggestedAction = `Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question). ${suggestedAction}`;
   }
 
   parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
@@ -760,6 +797,15 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     parts.push(`⚠️ No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.\nMention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
   }
 
+  // M1 — poll give-up ceiling. The escalation above is unbounded ("continue
+  // polling"); after ~6 consecutive empty polls, offer a SANCTIONED exit so the
+  // agent isn't stuck spinning forever. Only appears at high pollCount (the
+  // healthy/early payloads are byte-unchanged). This is TRUE thanks to #192 E1:
+  // artifacts persist and open questions carry over to the next run.
+  if (ctx.state.checkFeedbackPollCount >= 6 && pendingCount > 0) {
+    parts.push(`🛑 After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost — the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
+  }
+
   // B3 — the machine-readable mirror. status: feedback (something to act on),
   // waiting (drafts/decisions/plans pending), or proceed.
   // V-fix — a HUMAN status change (e.g. approving a v2 draft) IS actionable:
@@ -771,9 +817,17 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // #176 — a broken diagram the human is staring at is actionable: the agent
     // should fix + re-present, not sit in 'waiting'.
     renderFailures.length > 0;
+  const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
   const structuredContent = {
-    status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
-    suggestedAction,
+    status,
+    // M3 — busy-poll dedup: the full suggestedAction can run long on busy polls
+    // and it ALREADY rides the prose preamble ("Suggested action: …") verbatim.
+    // On a busy poll (waiting/feedback) drop the machine-readable echo — `status`
+    // + the structured lists carry the actionable signal, and the prose keeps
+    // the full text. On the healthy 'proceed' hot path the default is short and
+    // the byte-for-byte payload contract keeps it (see check-feedback-test-
+    // helpers HEALTHY_CHECK_FEEDBACK_KEYS).
+    ...(status === "proceed" ? { suggestedAction } : {}),
     companionUrl,
     serverVersion: SERVER_VERSION,
     summary: {

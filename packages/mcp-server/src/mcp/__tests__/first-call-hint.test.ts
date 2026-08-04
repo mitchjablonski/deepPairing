@@ -95,6 +95,37 @@ describe("first-call hint — always-on protocol preamble", () => {
  * shrink prose but the guidance must NEVER tell the agent to drop Evidence,
  * skip an artifact, or reduce the number of artifacts.
  */
+/**
+ * #195 M4 — pending-artifact inventory for a RESTARTED agent. The session store
+ * reloads across runs, so draft artifacts a prior run presented are still
+ * awaiting review on this run's first call. The hint surfaces a one-line
+ * obligations-tier inventory (counts + types) so the agent polls before piling
+ * on new work; absent entirely when nothing is pending.
+ */
+describe("first-call hint — #195 M4 pending-artifact inventory", () => {
+  it("surfaces a one-line count+types inventory when draft artifacts await review", async () => {
+    store.createArtifact({ id: "art_cs", type: "changeset", title: "Move TTL refresh", content: { files: [{ path: "a.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 1 }] }] }] } });
+    store.createArtifact({ id: "art_spec", type: "spec", title: "Session spec", content: { summary: "s", requirements: [] } });
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/2 artifacts you presented earlier still await review/);
+    expect(hint).toMatch(/changeset/);
+    expect(hint).toMatch(/spec/);
+    expect(hint).toMatch(/call check_feedback before presenting new work/);
+  });
+
+  it("is ABSENT when there are no pending draft artifacts", async () => {
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/still await/);
+  });
+
+  it("does NOT count an already-approved artifact as pending", async () => {
+    store.createArtifact({ id: "art_ap", type: "spec", title: "Approved spec", content: { summary: "s", requirements: [] } });
+    store.updateArtifactStatus("art_ap", "approved", "ui_approve_button" as never);
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/still await/);
+  });
+});
+
 describe("first-call hint — #139 detail density", () => {
   it("emits terse prose-tightening guidance when detailDensity is 'terse'", async () => {
     store.setDetailDensity("terse");

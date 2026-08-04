@@ -1,6 +1,7 @@
 import type { IStore } from "../store/store-interface.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
+import { PENDING_DRAFT_TYPES } from "./tools/types.js";
 
 /**
  * X4 — first-call hint builder, lifted out of server.ts so the CallTool
@@ -36,20 +37,23 @@ const POLICY_BUDGET_CHARS = 600;
 // fixed-size and essential, so it rides in the uncapped prefix and is NOT
 // charged against the contextual budget below. Faithful to SKILL.md.
 const PROTOCOL_PREAMBLE = [
-  "[deepPairing protocol] You're pairing — route findings/options/plans/answers through the MCP tools into the companion UI as artifacts, never as plain terminal text.",
-  "Voice: write TO your pair in second person (\"Here are two options — which fits your constraints?\"), not ABOUT them (\"User asked how to handle X.\"). Artifacts are a conversation, not an audit log.",
+  "[deepPairing protocol] You're pairing — route findings/options/plans/answers through the MCP tools into the companion UI as artifacts, not plain terminal text.",
+  "Voice: write TO your pair in second person (\"which fits?\"), not ABOUT them (\"User asked X\") — a conversation, not an audit log.",
+  // L2 — close-the-loop headline: the two highest-value rules, up top where they
+  // won't lose the reading lottery to the visuals paragraph below.
+  "Close the loop — two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief.",
   "Happy path, in order:",
   "  1. recall (mode='any') — check prior stances/decisions before proposing.",
-  "  2. present_findings — after researching; structured Evidence (filePath, lineStart, lineEnd, snippet). Not plain-text bullets.",
-  "  3. check_feedback — poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
-  "  4. present_options — surface EACH choice between approaches as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury a decision inside a plan step as an implied default, and never interleave decisions in a plan — that skips the pros/cons review and the ledger never learns your pick.",
-  "  5. present_spec, then present_plan — for non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (each a stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow — quote node/edge labels that contain punctuation like ()#: and use `<br/>` not `\\n` for line breaks); 'file_map' (the create/modify/delete set); 'annotated_code' (real `code`+`filePath` with line-anchored `annotations[]` — point at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (ONE artifact: per-file diffs + review state, for a refactor/feature touching several modules). present_code_change is the EXCEPTION — a genuinely single-file surgical change, or when the human asks to see an edit first. Don't stream a log_reasoning card per step — name concepts in the debrief instead.",
-  "  7. present_debrief — END every feature/autonomous run with exactly ONE: the narrative of what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, and an ask-anything thread. The primary comprehension surface — put the full story IN it, never 'details in chat'.",
-  "  8. check_feedback again — let your pair review each artifact in the UI.",
-  "Explaining how existing code WORKS (onboarding, code archaeology like 'how does auth work here?', a spike readout) rather than reporting problems or digesting a change? Use present_explainer — a read-only, ordered walk-through: overview + sections[] each anchored to real Evidence, with an ask-anything thread. Not present_findings (that's for problems) and not present_debrief (that digests a change you just made).",
-  "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content — do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
-  "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach.",
+  "  2. present_findings — after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
+  "  3. check_feedback — poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
+  "  4. present_options — each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
+  "  5. present_spec, then present_plan — non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]`); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
+  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first. Don't stream a log_reasoning card per step — name concepts in the debrief.",
+  "  7. present_debrief — END every feature/autonomous run with exactly ONE: what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread — the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
+  "  8. check_feedback again — let your pair review in the UI.",
+  "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer — a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made).",
+  "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content — don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
+  "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach.",
 ].join("\n");
 
 // #139 — detail-density (verbosity) guidance. This is a STANDING preference,
@@ -469,6 +473,25 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   try {
     const fullState = await store.getFullState();
     const allComments = fullState.comments ?? [];
+
+    // M4 — pending-artifact inventory for a RESTARTED agent. The session store
+    // is per-project and reloads across runs, so draft artifacts a PRIOR run
+    // presented are still awaiting review on this run's first call. Surface them
+    // in the uncapped obligations tier (counts + types only — budget-conscious,
+    // one line) so a restarted agent calls check_feedback before piling on new
+    // work. (On the very first call of a run, every draft is by definition from
+    // an earlier run.)
+    const pendingDrafts = (fullState.artifacts ?? []).filter(
+      (a: any) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type),
+    );
+    if (pendingDrafts.length > 0) {
+      const typeCounts = new Map<string, number>();
+      for (const a of pendingDrafts) typeCounts.set(a.type, (typeCounts.get(a.type) ?? 0) + 1);
+      const typesList = [...typeCounts.entries()].map(([t, n]) => `${n} ${t}`).join(", ");
+      blockingParts.push(
+        `\n📥 ${pendingDrafts.length} artifact${pendingDrafts.length === 1 ? "" : "s"} you presented earlier still await${pendingDrafts.length === 1 ? "s" : ""} review (${typesList}) — call check_feedback before presenting new work.`,
+      );
+    }
     // #192 — also exclude humanResolvedAt (a question the human marked done):
     // the tail-walk predicate this queue's other surfaces use treats a
     // human-resolved question as closed, so the preamble must not nag about it.

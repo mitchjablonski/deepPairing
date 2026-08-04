@@ -73,7 +73,8 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
       text:
         `Changeset "${artifact.title}" presented for review (${id}) — ${fileCount} file${fileCount === 1 ? "" : "s"}. ` +
         `The human reviews each file (and can comment across files) at localhost:${ctx.port}. ` +
-        `Call check_feedback for their per-file review state, comments, and verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their per-file review state, comments, and verdict. ` +
+        `When the feature wraps, end with present_debrief.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

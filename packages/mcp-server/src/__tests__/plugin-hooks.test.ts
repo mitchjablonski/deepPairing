@@ -125,4 +125,38 @@ describe("plugin hook bundles (smoke)", () => {
     const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
     expect(state.fires.at(-1).reason).toMatch(/no blocking drafts/);
   });
+
+  it.skipIf(!bundlesBuilt)("#195 F1 — stop nags on an unreviewed CHANGESET draft (now a blocking type)", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([{ id: "cs1", type: "changeset", status: "draft", createdAt: new Date().toISOString() }]),
+    );
+    runHook(stopBundle, "");
+    const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
+    expect(state.fires.at(-1).reason).toMatch(/pending artifacts/);
+  });
+
+  it.skipIf(!bundlesBuilt)("#195 F1 — stop nags DEBRIEF-OWED when code was presented+approved but no debrief exists", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([{ id: "cs1", type: "changeset", status: "approved", createdAt: new Date().toISOString() }]),
+    );
+    runHook(stopBundle, "");
+    const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
+    expect(state.fires.at(-1).reason).toMatch(/owes debrief/);
+  });
+
+  it.skipIf(!bundlesBuilt)("#195 F1 — no debrief-owed nag once a debrief has been presented", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([
+        { id: "cs1", type: "changeset", status: "approved", createdAt: new Date().toISOString() },
+        { id: "db1", type: "debrief", status: "draft", createdAt: new Date().toISOString() },
+      ]),
+    );
+    runHook(stopBundle, "");
+    const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
+    // A debrief exists → the debrief-owed condition is satisfied, so no nag.
+    expect(state.fires.at(-1).reason).not.toMatch(/owes debrief/);
+  });
 });

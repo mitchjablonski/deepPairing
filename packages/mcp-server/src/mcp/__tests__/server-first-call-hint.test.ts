@@ -861,7 +861,9 @@ describe("MCP Tool Handlers — firstCallHint", () => {
       expect(text).toMatch(/\[deepPairing protocol\]/);
       expect(text).toMatch(/present_findings/);
       expect(text).toMatch(/check_feedback/);
-      expect(text).toMatch(/never as plain terminal text/i);
+      // #195 L2 — preamble prose-trim tightened "never as plain terminal text"
+      // → "not plain terminal text" (same rule: route through tools as artifacts).
+      expect(text).toMatch(/not plain terminal text/i);
     });
 
     it("recall (read) — first call does NOT carry the hint", async () => {

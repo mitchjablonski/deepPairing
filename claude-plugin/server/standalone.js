@@ -27212,24 +27212,31 @@ var AUTONOMY_POLICY_LINE = {
   autonomous: "Proceed with recommended options. The human will review after. Only present decisions for high-risk or irreversible changes."
 };
 
+// src/mcp/tools/types.ts
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"];
+var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
+
 // src/mcp/first-call-hint.ts
 var HINT_BUDGET_CHARS = 1500;
 var POLICY_BUDGET_CHARS = 600;
 var PROTOCOL_PREAMBLE = [
-  "[deepPairing protocol] You're pairing \u2014 route findings/options/plans/answers through the MCP tools into the companion UI as artifacts, never as plain terminal text.",
-  'Voice: write TO your pair in second person ("Here are two options \u2014 which fits your constraints?"), not ABOUT them ("User asked how to handle X."). Artifacts are a conversation, not an audit log.',
+  "[deepPairing protocol] You're pairing \u2014 route findings/options/plans/answers through the MCP tools into the companion UI as artifacts, not plain terminal text.",
+  'Voice: write TO your pair in second person ("which fits?"), not ABOUT them ("User asked X") \u2014 a conversation, not an audit log.',
+  // L2 — close-the-loop headline: the two highest-value rules, up top where they
+  // won't lose the reading lottery to the visuals paragraph below.
+  "Close the loop \u2014 two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief.",
   "Happy path, in order:",
   "  1. recall (mode='any') \u2014 check prior stances/decisions before proposing.",
-  "  2. present_findings \u2014 after researching; structured Evidence (filePath, lineStart, lineEnd, snippet). Not plain-text bullets.",
-  "  3. check_feedback \u2014 poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
-  "  4. present_options \u2014 surface EACH choice between approaches as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury a decision inside a plan step as an implied default, and never interleave decisions in a plan \u2014 that skips the pros/cons review and the ledger never learns your pick.",
-  "  5. present_spec, then present_plan \u2014 for non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (each a stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow \u2014 quote node/edge labels that contain punctuation like ()#: and use `<br/>` not `\\n` for line breaks); 'file_map' (the create/modify/delete set); 'annotated_code' (real `code`+`filePath` with line-anchored `annotations[]` \u2014 point at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (ONE artifact: per-file diffs + review state, for a refactor/feature touching several modules). present_code_change is the EXCEPTION \u2014 a genuinely single-file surgical change, or when the human asks to see an edit first. Don't stream a log_reasoning card per step \u2014 name concepts in the debrief instead.",
-  "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE: the narrative of what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, and an ask-anything thread. The primary comprehension surface \u2014 put the full story IN it, never 'details in chat'.",
-  "  8. check_feedback again \u2014 let your pair review each artifact in the UI.",
-  "Explaining how existing code WORKS (onboarding, code archaeology like 'how does auth work here?', a spike readout) rather than reporting problems or digesting a change? Use present_explainer \u2014 a read-only, ordered walk-through: overview + sections[] each anchored to real Evidence, with an ask-anything thread. Not present_findings (that's for problems) and not present_debrief (that digests a change you just made).",
-  "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content \u2014 do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
-  "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach."
+  "  2. present_findings \u2014 after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
+  "  3. check_feedback \u2014 poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
+  "  4. present_options \u2014 each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
+  "  5. present_spec, then present_plan \u2014 non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]`); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
+  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first. Don't stream a log_reasoning card per step \u2014 name concepts in the debrief.",
+  "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE: what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
+  "  8. check_feedback again \u2014 let your pair review in the UI.",
+  "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer \u2014 a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made).",
+  "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content \u2014 don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
+  "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
 var DETAIL_DENSITY_RICH_GUIDANCE = "";
 var DETAIL_DENSITY_TERSE_GUIDANCE = [
@@ -27463,6 +27470,18 @@ ${philosophyParts.join("\n")}`
   try {
     const fullState = await store.getFullState();
     const allComments = fullState.comments ?? [];
+    const pendingDrafts = (fullState.artifacts ?? []).filter(
+      (a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type)
+    );
+    if (pendingDrafts.length > 0) {
+      const typeCounts = /* @__PURE__ */ new Map();
+      for (const a of pendingDrafts) typeCounts.set(a.type, (typeCounts.get(a.type) ?? 0) + 1);
+      const typesList = [...typeCounts.entries()].map(([t, n]) => `${n} ${t}`).join(", ");
+      blockingParts.push(
+        `
+\u{1F4E5} ${pendingDrafts.length} artifact${pendingDrafts.length === 1 ? "" : "s"} you presented earlier still await${pendingDrafts.length === 1 ? "s" : ""} review (${typesList}) \u2014 call check_feedback before presenting new work.`
+      );
+    }
     const unanswered = allComments.filter(
       (c) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && !c.humanResolvedAt
     );
@@ -28264,13 +28283,55 @@ var TOOL_ERROR_RETRYABLE = {
 };
 
 // src/mcp/validate-tool-input.ts
+function isArrayLevelIssue(i) {
+  if ((i.code === "too_small" || i.code === "too_big") && i.origin === "array") return true;
+  if (i.code === "invalid_type" && i.expected === "array") return true;
+  return false;
+}
+function isTopLevelScalarIssue(i) {
+  if (i.path.length !== 1) return false;
+  if (isArrayLevelIssue(i)) return false;
+  if (i.code === "invalid_type" && (i.expected === "array" || i.expected === "object")) return false;
+  return true;
+}
+function scalarTypeTag(i) {
+  if (i.code === "invalid_type" && i.expected) return i.expected;
+  if (i.code === "invalid_value") return "enum";
+  if ((i.code === "too_small" || i.code === "too_big") && i.origin) return i.origin;
+  return "value";
+}
+function collapsePath(path7) {
+  return path7.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+}
 function formatValidationError(toolName, err, example) {
-  const issues = err.issues.slice(0, 5).map((i) => {
-    const path7 = i.path.length ? i.path.join(".") : "(root)";
-    return `  \u2022 ${path7}: ${i.message}`;
+  const raw = err.issues;
+  if (raw.length > 0 && raw.every(isTopLevelScalarIssue)) {
+    const fields = raw.map((i) => `\`${i.path.join(".") || "(root)"}\` (${scalarTypeTag(i)})`).join(", ");
+    const text2 = `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 ${raw.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${fields}. Add/fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
+    return {
+      content: [{ type: "text", text: text2 }],
+      isError: true,
+      _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+    };
+  }
+  const cardinality = raw.filter(isArrayLevelIssue);
+  const rest = raw.filter((i) => !isArrayLevelIssue(i));
+  const ordered = [...cardinality, ...rest];
+  const groups = /* @__PURE__ */ new Map();
+  for (const i of ordered) {
+    const key = `${collapsePath(i.path)}||${i.message}`;
+    const g = groups.get(key);
+    if (g) g.count++;
+    else groups.set(key, { first: i, count: 1 });
+  }
+  const groupArr = [...groups.values()];
+  const issues = groupArr.slice(0, 5).map((g) => {
+    const path7 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
+    return `  \u2022 ${path7}: ${g.first.message}${suffix}`;
   });
-  const more = err.issues.length > 5 ? `
-  \u2022 \u2026and ${err.issues.length - 5} more` : "";
+  const more = groupArr.length > 5 ? `
+  \u2022 \u2026and ${groupArr.length - 5} more` : "";
   const text = `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 your input doesn't match the schema:
 ` + issues.join("\n") + more + `
 
@@ -29891,10 +29952,6 @@ async function handlePresentOptions(ctx, args) {
   };
 }
 
-// src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"];
-var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
-
 // src/mcp/tools/check-feedback-delivery.ts
 function removedLineContent(art, filePath, oldLine) {
   if (!art || art.type !== "changeset") return void 0;
@@ -30300,6 +30357,9 @@ async function handleCheckFeedback(ctx, args) {
   const allComments = await store.getUnacknowledgedComments();
   const totalComments = allComments.length;
   const autonomyLabel = await store.getAutonomyLevel();
+  const openQuestionCount = allComments.filter(
+    (c) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && c.target.artifactId !== "__session__"
+  ).length;
   const freshlyRejected = allArtifacts.filter(
     (a) => a.status === "rejected" && // #171 — changeset joins the verdict-reported set (same #195 bug class:
     // without it, a rejected changeset would fall through to "You may
@@ -30343,6 +30403,15 @@ async function handleCheckFeedback(ctx, args) {
   }
   if (newComments.length > 0 && pendingArts.length > 0) {
     suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
+  }
+  const hasCodeWork = allArtifacts.some((a) => a.type === "changeset" || a.type === "code_change");
+  const hasDebrief = allArtifacts.some((a) => a.type === "debrief");
+  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && openQuestionCount === 0 && hasCodeWork && !hasDebrief;
+  if (owesDebrief) {
+    suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
+  }
+  if (openQuestionCount > 0) {
+    suggestedAction = `Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question). ${suggestedAction}`;
   }
   parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
 Oldest pending: ${oldestPendingAge}` : ""}
@@ -30589,12 +30658,23 @@ The human is reviewing in the companion UI. Call check_feedback again to pick up
     parts.push(`\u26A0\uFE0F No human response after ${ctx.state.checkFeedbackPollCount} checks (~${ctx.state.checkFeedbackPollCount * 30}s). The human may not have the companion UI open.
 Mention in your response: "Please open http://localhost:${port} to review the artifacts." Then continue polling with check_feedback.`);
   }
+  if (ctx.state.checkFeedbackPollCount >= 6 && pendingCount > 0) {
+    parts.push(`\u{1F6D1} After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost \u2014 the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
+  }
   const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
   // should fix + re-present, not sit in 'waiting'.
   renderFailures.length > 0;
+  const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
   const structuredContent = {
-    status: hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed",
-    suggestedAction,
+    status,
+    // M3 — busy-poll dedup: the full suggestedAction can run long on busy polls
+    // and it ALREADY rides the prose preamble ("Suggested action: …") verbatim.
+    // On a busy poll (waiting/feedback) drop the machine-readable echo — `status`
+    // + the structured lists carry the actionable signal, and the prose keeps
+    // the full text. On the healthy 'proceed' hot path the default is short and
+    // the byte-for-byte payload contract keeps it (see check-feedback-test-
+    // helpers HEALTHY_CHECK_FEEDBACK_KEYS).
+    ...status === "proceed" ? { suggestedAction } : {},
     companionUrl,
     serverVersion: SERVER_VERSION,
     summary: {
@@ -31395,7 +31475,7 @@ async function handlePresentChangeset(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${ctx.port}. Call check_feedback for their per-file review state, comments, and verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${ctx.port}. Call check_feedback for their per-file review state, comments, and verdict. When the feature wraps, end with present_debrief.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -31883,7 +31963,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
               enum: ["feedback", "waiting", "proceed"],
               description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear."
             },
-            suggestedAction: { type: "string" },
+            suggestedAction: {
+              type: "string",
+              description: "The next action to take. Present on the 'proceed' hot path; on busy polls the full text rides the prose preamble instead (M3 dedup)."
+            },
             companionUrl: { type: "string", description: "I7 \u2014 the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
             serverVersion: { type: "string", description: "V-fix \u2014 the running deepPairing server version (same constant as MCP serverInfo). Read it to tell at a glance whether you're on stale code." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
@@ -31987,7 +32070,11 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
               }
             }
           },
-          required: ["status", "suggestedAction"]
+          // M3 — `suggestedAction` is present on the 'proceed' hot path but
+          // DROPPED on busy polls (the prose preamble carries the full text
+          // verbatim; `status` + the structured lists carry the machine signal).
+          // So only `status` is required.
+          required: ["status"]
         }
       },
       {
