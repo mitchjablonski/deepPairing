@@ -264,7 +264,7 @@ export function DecisionFooter({
               title="Reject this whole framing — you don't want any version of this. Remembered so the agent can't re-propose the same question."
               aria-label="Reject this framing — wrong question"
             >
-              ✕ Reject — wrong question
+              ✕ Reject
             </button>
           )}
         </div>

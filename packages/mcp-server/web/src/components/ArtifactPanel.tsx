@@ -726,9 +726,15 @@ function ArtifactSidebar({
       {/* Grouped artifact list */}
       {Array.from(visibleGroups.entries()).map(([label, items]) => (
         <div key={label}>
-          {/* Section header */}
-          {!collapsed && (
-            <div className="flex items-center gap-1.5 px-3 py-1 text-2xs font-semibold text-text-muted uppercase tracking-wide">
+          {/* Section header.
+              #189 — in Flow mode a singleton group's header is just the lone
+              artifact's own title in ALL-CAPS, one line above the row that
+              already shows it — pure noise that made a fresh session read as
+              framework chrome. Render the header only for a real GROUP (≥2
+              items). Type/Timeline headers name the bucket (a type or a date),
+              not the artifact, so they stay even for a single item. */}
+          {!collapsed && (grouping !== "flow" || items.length >= 2) && (
+            <div data-testid="sidebar-group-header" className="flex items-center gap-1.5 px-3 py-1 text-2xs font-semibold text-text-muted uppercase tracking-wide">
               {grouping === "type" && <ArtifactIcon type={label} className="w-3 h-3" />}
               {/* Bug4 — flow groups are keyed by root id; the header shows the
                   root artifact's (display-only) title, not the raw id. */}

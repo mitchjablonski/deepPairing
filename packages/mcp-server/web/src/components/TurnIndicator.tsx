@@ -213,11 +213,15 @@ export function TurnIndicator() {
         <button
           type="button"
           onClick={jumpToPending}
-          title={pending.length > 1 ? "Jump to the next item waiting on you" : "Jump to the item waiting on you"}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber shrink-0 hover:brightness-110 transition-[filter] cursor-pointer"
+          title={`Your turn — ${parts.join(", ")}${pending.length > 1 ? " · click to jump to the next item" : " · click to jump"}`}
+          // #189 — TRUNCATES instead of shrink-0. At the VS Code webview width
+          // (~900px) the full "Your turn — 1 finding, 1 decision, 1 change, 1
+          // plan" string forced the pill past the nav and garbled the labels.
+          // min-w-0 + truncate lets it yield; the full text stays in the title.
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-amber-dim text-accent-amber min-w-0 hover:brightness-110 transition-[filter] cursor-pointer"
         >
-          <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse" />
-          Your turn — {parts.join(", ")}
+          <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
+          <span className="truncate">Your turn — {parts.join(", ")}</span>
         </button>
         {questionsBadge}
       </div>

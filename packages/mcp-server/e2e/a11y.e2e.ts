@@ -1001,7 +1001,12 @@ test("a11y: the Autonomy popover (with the #139 detail-density toggle) has no se
   // The Autonomy control lives in the shell CHROME (header), so this test
   // depends only on the button rendering — NOT on any artifact loading (waiting
   // for [data-artifact-id] here just adds an unrelated session-load flake).
+  // #189 — autonomy was demoted into the Diagnostics (⋯) overflow menu; open
+  // that first, then the autonomy popover.
   await page.goto(`${baseURL}/?session=a11y`);
+  const diagBtn = page.getByRole("button", { name: /open diagnostics menu/i });
+  await diagBtn.waitFor({ timeout: 15000 });
+  await diagBtn.click();
   const autonomyBtn = page.getByRole("button", { name: /autonomy:/i });
   await autonomyBtn.waitFor({ timeout: 15000 });
   await autonomyBtn.click();

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import type { Artifact } from "@deeppairing/shared";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { useArtifactStore } from "../../stores/artifact";
+import { usePreferencesStore } from "../../stores/preferences";
 
 /**
  * #176 (Option A) — when a Mermaid diagram GENUINELY fails to render (the #163
@@ -94,5 +95,24 @@ describe("MermaidDiagram render-failure reporting (#176)", () => {
     render(<MermaidDiagram source="graph TD; A-->B" />);
     await waitFor(() => expect(screen.getByText(/Couldn.t render this diagram/i)).toBeInTheDocument());
     expect(renderFailureCalls()).toHaveLength(0);
+  });
+
+  it("#189 Fix 3 — a theme toggle on a broken diagram keeps the 'Reported' note and does NOT re-POST", async () => {
+    renderMock.mockRejectedValue(new Error("Parse error on line 2"));
+    render(<MermaidDiagram source="graph TD; A-->B" report={REPORT} />);
+    await waitFor(() => expect(renderFailureCalls()).toHaveLength(1));
+    expect(await screen.findByText(/Reported to the agent/i)).toBeInTheDocument();
+
+    // Toggle the app theme → the effect re-runs for the same (still-broken)
+    // source. The dedupe must keep suppressing the re-POST, but the note must
+    // NOT vanish: it WAS reported.
+    act(() => {
+      const cur = usePreferencesStore.getState().theme;
+      usePreferencesStore.getState().setTheme(cur === "light" ? "dark" : "light");
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText(/Reported to the agent/i)).toBeInTheDocument();
+    expect(renderFailureCalls()).toHaveLength(1); // still exactly one POST
+    usePreferencesStore.getState().setTheme("dark"); // restore for later tests
   });
 });

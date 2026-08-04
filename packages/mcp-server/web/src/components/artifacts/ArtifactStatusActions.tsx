@@ -10,7 +10,7 @@ interface ArtifactStatusActionsProps {
    *  parent supplies its own approve path — e.g. PlanArtifact's "Approve with
    *  modifications" while steps are unchecked. Without this, a plain Approve
    *  would silently approve the plan as-is and discard the human's step
-   *  deselections. Reject / Request revision / Respond / Ask stay available. */
+   *  deselections. Reject / Request changes / Respond / Ask stay available. */
   hideApprove?: boolean;
 }
 
@@ -514,9 +514,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             onClick={expandAndFocus}
             className="px-2.5 py-1 text-2xs font-medium text-text-secondary rounded border border-border-default
                        hover:text-text-primary hover:bg-surface-hover transition-all duration-[180ms] ease-out press-scale"
-            title="Respond, request a revision, or reject — opens the full review panel"
+            title="Respond, request changes, or reject — opens the full review panel"
           >
-            Respond / revise / reject…
+            Respond / request changes / reject…
           </button>
           <span className="text-2xs text-text-muted ml-auto" aria-hidden>
             ▼ full review at the end
@@ -609,9 +609,9 @@ export function ArtifactStatusActions({ artifact, hideApprove = false }: Artifac
             disabled={submitting || !comment.trim()}
             className="px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
                        hover:bg-accent-amber-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-            title={comment.trim() ? "Mark revised — agent will redraft" : "Add a reason first"}
+            title={comment.trim() ? "Request changes — agent will redraft" : "Add a reason first"}
           >
-            Request revision
+            Request changes
           </button>
           <button
             onClick={beginReject}

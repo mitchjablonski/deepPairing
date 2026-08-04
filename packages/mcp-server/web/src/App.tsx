@@ -10,8 +10,7 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
-import { AutonomySlider } from "./components/AutonomySlider";
-import { CompoundingBadge } from "./components/CompoundingBadge";
+import { DiagnosticsMenu } from "./components/DiagnosticsMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import { QuickAskModal } from "./components/QuickAskModal";
 import { SettingsSheet } from "./components/SettingsSheet";
@@ -24,8 +23,6 @@ import { ProjectDecisionsModal } from "./components/ProjectDecisionsModal";
 import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
-import { HookStatus } from "./components/HookStatus";
-import { PreflightBlockLog } from "./components/PreflightBlockLog";
 import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
@@ -389,9 +386,10 @@ function App() {
           <TurnIndicator />
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <CompoundingBadge onOpen={() => window.dispatchEvent(new CustomEvent("dp:open-your-taste"))} />
-          <AutonomySlider />
-          <span className="text-2xs text-text-muted mx-1">·</span>
+          {/* #189 — the ONE primary Ledger surface: the functional drawer. The
+              redundant compounding-stats "Ledger" pill moved into Diagnostics
+              (⋯) below, along with the autonomy dial, gate log, and hook log.
+              Nothing deleted — just no longer front-loaded. */}
           <button
             onClick={() => {
               // CC3 — when the user is on the cold-start IdleHome (no
@@ -414,7 +412,7 @@ function App() {
               <circle cx="6" cy="9.5" r="1" fill="currentColor" />
               <path d="M6 1.5v2M1.5 6h2M10.5 6h-2" />
             </svg>
-            <span className="hidden min-[700px]:inline">Ledger</span>
+            <span className="hidden min-[1100px]:inline">Ledger</span>
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
@@ -426,7 +424,7 @@ function App() {
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
             </svg>
-            <span className="hidden min-[700px]:inline">Conversation</span>
+            <span className="hidden min-[1100px]:inline">Conversation</span>
             {unansweredCount > 0 && (
               <span
                 className="ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full bg-accent-blue-strong text-white text-[9px] font-semibold leading-none"
@@ -448,16 +446,12 @@ function App() {
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3.5h8M2 6h8M2 8.5h5" />
             </svg>
-            <span className="hidden min-[700px]:inline">Decisions</span>
+            <span className="hidden min-[1100px]:inline">Decisions</span>
           </button>
-          <span className="text-2xs text-text-muted mx-1">·</span>
-          <PreflightBlockLog />
-          <span className="text-2xs text-text-muted mx-1">·</span>
-          <HookStatus />
           <span className="text-2xs text-text-muted mx-1">·</span>
           <button
             onClick={() => setShowPalette(true)}
-            className="hidden min-[700px]:inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            className="hidden min-[1100px]:inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
             title="Command palette (⌘K)"
           >
             <span>Search</span>
@@ -482,6 +476,8 @@ function App() {
           >
             <kbd className="font-mono">?</kbd>
           </button>
+          {/* #189 — the demoted diagnostics: autonomy, gate, hooks, taste stats. */}
+          <DiagnosticsMenu onOpenLedger={() => window.dispatchEvent(new CustomEvent("dp:open-your-taste"))} />
         </div>
       </div>
 

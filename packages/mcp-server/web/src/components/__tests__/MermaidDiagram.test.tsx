@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MermaidDiagram, repairMermaidSource } from "../MermaidDiagram";
+import { MermaidDiagram, repairMermaidSource, mermaidThemeFor } from "../MermaidDiagram";
 import { useOverlayStore } from "../../stores/overlay";
+import { usePreferencesStore } from "../../stores/preferences";
 
 // Mermaid needs real SVG layout, so mock it: control render() per test to
 // exercise both the success path and the fuzzy-safe fallback.
@@ -23,6 +24,44 @@ describe("MermaidDiagram", () => {
     render(<MermaidDiagram source="graph TD; A-->B" />);
     await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
     expect(screen.getByText("View source")).toBeInTheDocument();
+  });
+
+  it("#189 — themes mermaid to the app theme: light picks the light-filled 'default' theme, not 'dark'", async () => {
+    // The pure mapping: light nodes on white cards; dark nodes on the dark surface.
+    expect(mermaidThemeFor("light")).toBe("default");
+    expect(mermaidThemeFor("dark")).toBe("dark");
+
+    // And the component re-initializes mermaid to that theme before rendering,
+    // read from the live <html data-theme>. (Real node fills are exercised by the
+    // e2e light-mermaid check; the engine is mocked here.)
+    document.documentElement.setAttribute("data-theme", "light");
+    initializeMock.mockClear();
+    renderMock.mockResolvedValue({ svg: "<svg aria-label='diagram'><g class='node'></g></svg>" });
+    render(<MermaidDiagram source="graph TD; A-->B" />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    const themes = initializeMock.mock.calls.map((c) => (c[0] as { theme?: string })?.theme);
+    expect(themes[themes.length - 1]).toBe("default");
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("#189 Fix 2 — a theme toggle re-themes WITHOUT blanking the diagram (svg stays; no 'Rendering…')", async () => {
+    renderMock.mockResolvedValue({ svg: "<svg aria-label='diagram'><g class='node'></g></svg>" });
+    render(<MermaidDiagram source="graph TD; A-->B" />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+
+    // Toggle the app theme — a theme-only re-render (same source).
+    act(() => {
+      const cur = usePreferencesStore.getState().theme;
+      usePreferencesStore.getState().setTheme(cur === "light" ? "dark" : "light");
+    });
+    // Synchronously after the state flush the OLD svg is still mounted — it is
+    // NEVER nulled to the "Rendering diagram…" placeholder (which pre-fix
+    // unmounted DiagramRegionLayer and dropped an open region composer).
+    expect(document.querySelector(".dp-mermaid svg")).not.toBeNull();
+    expect(screen.queryByText(/Rendering diagram/i)).toBeNull();
+    // The re-themed svg swaps in on resolve; still present, never blanked.
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    usePreferencesStore.getState().setTheme("dark"); // restore for later tests
   });
 
   it("opens a fullscreen lightbox via Expand and closes it (✕ + Esc)", async () => {
