@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.1.22 — 2026-08-04
+
+The comprehension release. deepPairing's thesis has always had two halves — steer
+the agent, and *understand* what it did — and until now only the steering half was
+built. This release ships the comprehension half. Two new artifacts close a run
+instead of opening one: the **debrief** (end-of-run digest — what got decided
+without you, what still needs your eyes, what was deferred, what's still open) and
+the **explainer** (a narrated walk-through of the evidence, section by section,
+with no problem to fix — just "here's what this is and how it works"). Alongside
+them the agent's default output mode **flips**: a changeset at feature boundaries
+is now the norm and prose-in-chat is the exception, so the review surface — not the
+terminal — is where the work lands. Under the hood the `check_feedback` delivery
+path was paid down to a pure, golden-tested module, and the header chrome was
+lightened so the everyday surface is quieter. Two of the four changes grow the
+tool count (16 → 17) and every new field is optional, so an old daemon degrades
+gracefully (PRs #223, #224, #225, #226).
+
+### Added
+- **The `present_debrief` tool — the end-of-run digest (16th tool).** When a run
+  wraps, the agent can now hand you a single artifact that answers "what happened
+  while I was working?" in five lanes: **decisions made without you**, **needs your
+  eyes**, **deferred**, **open questions**, and a free-form **ask-anything** thread.
+  It's the comprehension counterpart to the steering artifacts — instead of asking
+  you to choose or approve *before* work, it accounts for work *after* it, so a run
+  ends with a reviewable summary rather than a wall of terminal scrollback. The
+  debrief lights the "waiting on you" PendingBanner and the cross-project badge like
+  any other artifact that wants your attention.
+- **The `present_explainer` tool — the narrated evidence walk-through (17th tool).**
+  A teaching artifact with no problem framing: ordered sections, each anchored to
+  real `Evidence` (file, lines, snippet), that walk you through how something works
+  — a subsystem, a flow, a change — the way a pair would talk you through the code.
+  Each section can carry **suggested-question chips** to seed the conversation, and
+  an **ask-anything** thread lets you go deeper on any part. This is the "explain
+  this to me" half of pairing, first-class on the review surface instead of buried
+  in chat.
+
+### Changed
+- **The default output mode flips to the review surface.** A **changeset at feature
+  boundaries** is now the agent's default deliverable; `code_change` is reserved for
+  **surgical** edits; and `log_reasoning` is demoted to *sparingly*. "Details are in
+  the chat" is now an explicit protocol **violation** — the work belongs on the
+  review surface where you can comment on it line by line, not in terminal prose
+  that scrolls away. Calibration guidance was demoted to match. A guidance-flip-drift
+  test guards the new defaults so the preamble and SKILL.md can't silently drift back.
+- **The header chrome is lightened.** Autonomy, gate, hooks, and Ledger controls
+  moved off the always-visible header into a **DiagnosticsMenu overflow** (a `⋯`
+  button that carries an amber attention-dot when something wants a look), so the
+  everyday surface is quieter and the diagnostic controls are one click away when
+  you need them. The three review verbs are unified — **accept / send back /
+  reject** — across every artifact, backed by a `reviewLifecycle` write-axis enum.
+  Mermaid re-initializes on a theme change **without unmounting an open composer**,
+  singleton flow-groups collapse, the 900px header no longer wraps, and a plan's
+  checkboxes no longer arrive pre-checked.
+
+### Internal
+- **`check_feedback` delivery is now a pure, golden-tested module.** The comment
+  delivery loop was extracted into a standalone `deliverComment` module with a
+  single unified scope predicate (one place decides whether a comment is in scope
+  for a given caller, instead of the logic being smeared across the handler). A
+  version-normalized golden-parity harness pins the payload shape across **14
+  scenarios**, and a shared healthy-payload test helper removes the duplicated
+  fixtures. No behavior change — this is groundwork paydown so the delivery path
+  stops being the release's most fragile surface.
+
 ## v0.1.21 — 2026-08-02
 
 The review surface finishes its sentences. Two field-driven gaps closed, both on
