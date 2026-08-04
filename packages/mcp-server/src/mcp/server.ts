@@ -183,7 +183,10 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
               enum: ["feedback", "waiting", "proceed"],
               description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear.",
             },
-            suggestedAction: { type: "string" },
+            suggestedAction: {
+              type: "string",
+              description: "The next action to take. Present on the 'proceed' hot path; on busy polls the full text rides the prose preamble instead (M3 dedup).",
+            },
             companionUrl: { type: "string", description: "I7 — the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
             serverVersion: { type: "string", description: "V-fix — the running deepPairing server version (same constant as MCP serverInfo). Read it to tell at a glance whether you're on stale code." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
@@ -287,7 +290,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
               },
             },
           },
-          required: ["status", "suggestedAction"],
+          // M3 — `suggestedAction` is present on the 'proceed' hot path but
+          // DROPPED on busy polls (the prose preamble carries the full text
+          // verbatim; `status` + the structured lists carry the machine signal).
+          // So only `status` is required.
+          required: ["status"],
         },
       },
       {

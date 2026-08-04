@@ -56,21 +56,120 @@ export type ValidationResult<T> =
   | { ok: false; error: ToolErrorResponse };
 
 /**
- * Format a Zod issue list into a single agent-facing message naming each
- * bad path, what was expected, and an inline example of the correct shape.
- * Mirrors the REJECTED_APPROACH_BLOCKED tone so the LLM's "I should retry
- * with a fixed input" reflex kicks in.
+ * A single Zod issue read through loose optional props (the Zod4 issue union
+ * varies by code: `expected` on invalid_type, `origin` on too_small/too_big).
+ * Kept lint-clean without asserting the full union.
+ */
+type LooseIssue = {
+  code?: string;
+  path: PropertyKey[];
+  message: string;
+  expected?: string;
+  origin?: string;
+};
+
+/**
+ * H2 — an ARRAY-LEVEL (cardinality) issue: too few / too many elements, or a
+ * required array that arrived as the wrong type entirely. These are exactly the
+ * violations a per-option field-noise slice buries ("…and 21 more"), so they
+ * get hoisted to the FRONT of the message.
+ */
+function isArrayLevelIssue(i: LooseIssue): boolean {
+  if ((i.code === "too_small" || i.code === "too_big") && i.origin === "array") return true;
+  if (i.code === "invalid_type" && i.expected === "array") return true;
+  return false;
+}
+
+/**
+ * L1 — a TOP-LEVEL SCALAR omission/mismatch: a required string/number/enum
+ * field that's missing, empty, or the wrong primitive type — path depth 1, no
+ * structural (array/object/nested) component. When EVERY issue is one of these,
+ * the fix is trivial and the full example dump is noise (and an echo-replay
+ * temptation), so we emit a one-line targeted hint instead of the example.
+ */
+function isTopLevelScalarIssue(i: LooseIssue): boolean {
+  if (i.path.length !== 1) return false;
+  if (isArrayLevelIssue(i)) return false;
+  if (i.code === "invalid_type" && (i.expected === "array" || i.expected === "object")) return false;
+  return true;
+}
+
+/** Human-readable type tag for the L1 targeted-hint line. */
+function scalarTypeTag(i: LooseIssue): string {
+  if (i.code === "invalid_type" && i.expected) return i.expected;
+  if (i.code === "invalid_value") return "enum";
+  if ((i.code === "too_small" || i.code === "too_big") && i.origin) return i.origin;
+  return "value";
+}
+
+/** Collapse numeric path indices to a wildcard so N identical per-item issues
+ *  (options[0..4].pros: required) dedupe to one line: options[*].pros. */
+function collapsePath(path: PropertyKey[]): string {
+  return path
+    .map((seg) => (typeof seg === "number" ? "[*]" : String(seg)))
+    .join(".")
+    .replace(/\.\[\*\]/g, "[*]");
+}
+
+/**
+ * Format a Zod issue list into a single agent-facing message.
+ *
+ * L1 — when ALL issues are trivial top-level scalar omissions, emit a one-line
+ * targeted hint and SKIP the example dump (saves ~487 tok + removes the
+ * echo-replay temptation). H2 — otherwise hoist array-level/cardinality issues
+ * to the FRONT (so "too few options" isn't buried behind per-option field
+ * noise) and dedupe identical per-item messages before slicing. Mirrors the
+ * REJECTED_APPROACH_BLOCKED tone so the LLM's "I should retry with a fixed
+ * input" reflex kicks in.
  */
 function formatValidationError(
   toolName: string,
   err: z.ZodError,
   example: string,
 ): ToolErrorResponse {
-  const issues = err.issues.slice(0, 5).map((i) => {
-    const path = i.path.length ? i.path.join(".") : "(root)";
-    return `  • ${path}: ${i.message}`;
+  const raw = err.issues as unknown as LooseIssue[];
+
+  // L1 — trivial top-level scalar omission(s): targeted hint, no example dump.
+  if (raw.length > 0 && raw.every(isTopLevelScalarIssue)) {
+    const fields = raw
+      .map((i) => `\`${i.path.join(".") || "(root)"}\` (${scalarTypeTag(i)})`)
+      .join(", ");
+    const text =
+      `INPUT_VALIDATION_FAILED: ${toolName} refused — ${raw.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${fields}. ` +
+      `Add/fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
+    return {
+      content: [{ type: "text", text }],
+      isError: true as const,
+      _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true },
+    };
+  }
+
+  // H2 — hoist cardinality/array-level issues ahead of per-field noise.
+  const cardinality = raw.filter(isArrayLevelIssue);
+  const rest = raw.filter((i) => !isArrayLevelIssue(i));
+  const ordered = [...cardinality, ...rest];
+
+  // Dedupe: collapse numeric indices so options[0..4].pros: required is ONE
+  // line. Singletons keep their literal path (so options.1.title stays exact).
+  const groups = new Map<string, { first: LooseIssue; count: number }>();
+  for (const i of ordered) {
+    const key = `${collapsePath(i.path)}||${i.message}`;
+    const g = groups.get(key);
+    if (g) g.count++;
+    else groups.set(key, { first: i, count: 1 });
+  }
+  const groupArr = [...groups.values()];
+  const issues = groupArr.slice(0, 5).map((g) => {
+    const path =
+      g.count > 1
+        ? collapsePath(g.first.path)
+        : g.first.path.length
+          ? g.first.path.join(".")
+          : "(root)";
+    const suffix = g.count > 1 ? ` (${g.count}×)` : "";
+    return `  • ${path}: ${g.first.message}${suffix}`;
   });
-  const more = err.issues.length > 5 ? `\n  • …and ${err.issues.length - 5} more` : "";
+  const more = groupArr.length > 5 ? `\n  • …and ${groupArr.length - 5} more` : "";
   const text =
     `INPUT_VALIDATION_FAILED: ${toolName} refused — your input doesn't match the schema:\n` +
     issues.join("\n") + more + "\n\n" +

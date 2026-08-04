@@ -463,8 +463,10 @@ describe("MCP Tool Handlers — feedback loop", () => {
         expect(res.text).not.toContain("Nothing arrived");
         // BOTH signals present: act on the comment AND the decision is still pending.
         expect(res.text).toContain("decision(s) pending");
-        expect(sc.suggestedAction).toContain("Wait for decision selection");
-        expect(sc.suggestedAction).toContain("also left a comment");
+        // M3 — busy poll: the suggestedAction rides the prose only (struct drops it).
+        expect(res.text).toContain("Wait for decision selection");
+        expect(res.text).toContain("also left a comment");
+        expect(sc.suggestedAction).toBeUndefined();
         // Acknowledged → not re-reported on the next poll.
         expect(store.getUnacknowledgedComments()).toHaveLength(0);
         // Full structuredContent shape preserved (V-fix fields on every path).

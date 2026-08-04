@@ -19,7 +19,12 @@ import path from "node:path";
 const HOOK_NAME = "stop";
 const STATE_CAP = 50;
 const MAX_AGE_MS = 30 * 60 * 1000;
-const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change"];
+// #195 F1 — `changeset` joins the blocking set: a drafted multi-file changeset
+// awaiting review is exactly the "don't declare done" case the hook guards.
+const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
+// #195 F1 — the code types whose presence WITHOUT a debrief means the run owes
+// one (the "end every run with exactly ONE present_debrief" rule).
+const CODE_TYPES = ["code_change", "changeset"];
 
 function projectRoot(): string {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -55,6 +60,10 @@ try {
   if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
 
   const now = Date.now();
+  // #195 F1 — remember the first session that owes a debrief (recent code work,
+  // no debrief). Only surfaced if NO blocking draft fired (blocking takes
+  // priority — it's a harder obligation).
+  let owesDebriefSession: string | null = null;
   for (const id of fs.readdirSync(sessionsDir)) {
     const af = path.join(sessionsDir, id, "artifacts.json");
     if (!fs.existsSync(af)) continue;
@@ -64,21 +73,38 @@ try {
     } catch {
       continue;
     }
-    const blocking =
-      Array.isArray(arr) &&
-      arr.some((x: { status?: string; type?: string; createdAt?: string }) => {
-        if (x?.status !== "draft") return false;
-        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;
-        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
-        if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
-        return true;
-      });
+    if (!Array.isArray(arr)) continue;
+    const blocking = arr.some((x: { status?: string; type?: string; createdAt?: string }) => {
+      if (x?.status !== "draft") return false;
+      if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;
+      const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
+      if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
+      return true;
+    });
     if (blocking) {
       // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
       // exit 2 showed Claude only an empty-stderr "Stop hook error".
       process.stderr.write("deepPairing: pending artifacts need review — call check_feedback\n");
       exit(0, "pending artifacts in " + id);
     }
+    // #195 F1 — debrief-owed: RECENT code work presented, no debrief yet. Age-
+    // guarded like the blocking check so an ancient session isn't nagged forever.
+    if (owesDebriefSession === null) {
+      const hasRecentCode = arr.some((x: { type?: string; createdAt?: string }) => {
+        if (!x?.type || !CODE_TYPES.includes(x.type)) return false;
+        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
+        return !t || now - t <= MAX_AGE_MS;
+      });
+      const hasDebrief = arr.some((x: { type?: string }) => x?.type === "debrief");
+      if (hasRecentCode && !hasDebrief) owesDebriefSession = id;
+    }
+  }
+  if (owesDebriefSession !== null) {
+    // Distinct debrief-owed nag — fail-open on stderr, exit 0, same as above.
+    process.stderr.write(
+      "deepPairing: code was presented but no present_debrief yet — end the run with one so your pair gets the walk-through\n",
+    );
+    exit(0, "owes debrief in " + owesDebriefSession);
   }
   exit(0, "pass: no blocking drafts");
 } catch (err) {

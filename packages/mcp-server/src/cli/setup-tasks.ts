@@ -279,14 +279,18 @@ try {
 
   const MAX_AGE_MS = 30 * 60 * 1000;
   const now = Date.now();
+  // #195 F1 — remember the first session that owes a debrief (recent code work,
+  // no debrief). Only surfaced if NO blocking draft fired (blocking wins).
+  let owesDebriefSession = null;
   for (const id of fs.readdirSync(sessionsDir)) {
     const af = path.join(sessionsDir, id, "artifacts.json");
     if (!fs.existsSync(af)) continue;
     let arr;
     try { arr = JSON.parse(fs.readFileSync(af, "utf-8")); } catch { continue; }
+    if (!Array.isArray(arr)) continue;
     const blocking = arr.some((x) => {
       if (x.status !== "draft") return false;
-      if (!["research", "spec", "plan", "decision", "code_change"].includes(x.type)) return false;
+      if (!["research", "spec", "plan", "decision", "code_change", "changeset"].includes(x.type)) return false;
       const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
       if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
       return true;
@@ -297,6 +301,20 @@ try {
       // exit 2 showed Claude only an empty-stderr "Stop hook error".
       exit(0, "pending artifacts in " + id);
     }
+    // #195 F1 — debrief-owed: RECENT code work presented, no debrief yet.
+    if (owesDebriefSession === null) {
+      const hasRecentCode = arr.some((x) => {
+        if (!["code_change", "changeset"].includes(x.type)) return false;
+        const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
+        return !t || now - t <= MAX_AGE_MS;
+      });
+      const hasDebrief = arr.some((x) => x.type === "debrief");
+      if (hasRecentCode && !hasDebrief) owesDebriefSession = id;
+    }
+  }
+  if (owesDebriefSession !== null) {
+    process.stderr.write("deepPairing: code was presented but no present_debrief yet — end the run with one so your pair gets the walk-through\\n");
+    exit(0, "owes debrief in " + owesDebriefSession);
   }
   exit(0, "pass: no blocking drafts");
 } catch (err) {

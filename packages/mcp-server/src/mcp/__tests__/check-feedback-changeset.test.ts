@@ -39,8 +39,10 @@ describe("check_feedback — rejected changeset (#171)", () => {
     const res = await callTool("check_feedback");
     const sc = res.structuredContent as any;
 
-    expect(sc.suggestedAction).not.toContain("You may proceed");
-    expect(sc.suggestedAction).toContain("Do NOT apply");
+    // M3 — busy poll: suggestedAction rides the prose only (struct drops it).
+    expect(res.text).not.toContain("You may proceed");
+    expect(res.text).toContain("Do NOT apply");
+    expect(sc.suggestedAction).toBeUndefined();
     expect(sc.status).toBe("feedback");
     expect(sc.rejected.map((r: any) => r.id)).toContain(id);
     expect(sc.rejected.find((r: any) => r.id === id).type).toBe("changeset");
@@ -78,7 +80,11 @@ describe("check_feedback — per-file review state (#171)", () => {
     expect(entry.filesReviewed).toBe(2);
     expect(entry.filesTotal).toBe(2);
     // The changeset is still a draft awaiting the whole-changeset verdict.
-    expect(sc.suggestedAction).toContain("changeset review");
+    // M3 — waiting poll: the suggestedAction rides the prose (struct drops it).
+    expect(res.text).toContain("changeset review");
+    expect(sc.suggestedAction).toBeUndefined();
+    // H1 — mid-flight (a draft still under review) must NOT nag about a debrief.
+    expect(res.text).not.toContain("no present_debrief yet");
   });
 
   it("#175 — surfaces a needs_changes disposition + its reason in pendingArtifacts", async () => {
@@ -136,6 +142,55 @@ describe("check_feedback — per-file review state (#171)", () => {
     expect(entry).toBeDefined();
     expect(entry.reviewState).toBeUndefined();
     expect(entry.filesTotal).toBeUndefined();
+  });
+});
+
+describe("check_feedback — H1 debrief-owed reinforcement", () => {
+  it("nags to end with present_debrief once code is presented, review drained, no debrief yet", async () => {
+    const id = await presentChangeset();
+    // Human approves the changeset → no pending draft, obligations drained.
+    await store.updateArtifactStatus(id, "approved", "ui_approve_button" as any);
+
+    const res = await callTool("check_feedback");
+    // The owes-debrief line rides the prose suggestedAction (winding-down moment).
+    expect(res.text).toContain("no present_debrief yet");
+    expect(res.text).toContain("present_debrief");
+  });
+
+  it("does NOT nag while a human question is still UNANSWERED, even after it drained from the poll", async () => {
+    // Fix 2: the guard is on PERSISTED unanswered state, not this poll's
+    // unacknowledged count. A question is delivered+acknowledged on poll 1 (it
+    // drains), but stays unanswered — so on poll 2 the nag must still be
+    // suppressed until the agent actually answers it.
+    const id = await presentChangeset();
+    await store.updateArtifactStatus(id, "approved", "ui_approve_button" as any);
+    await store.addComment({
+      id: "cmt_openq",
+      artifactId: id,
+      content: "does this survive a restart?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: id },
+    } as any);
+    // Poll 1 delivers + acknowledges the question (it drains from unacked).
+    const first = await callTool("check_feedback");
+    expect(first.text).not.toContain("no present_debrief yet");
+    // Poll 2: the question is drained from the unacked set but STILL unanswered.
+    const second = await callTool("check_feedback");
+    expect(second.text).not.toContain("no present_debrief yet");
+  });
+
+  it("does NOT nag once a debrief has been presented", async () => {
+    const id = await presentChangeset();
+    await store.updateArtifactStatus(id, "approved", "ui_approve_button" as any);
+    await callTool("present_debrief", {
+      title: "Debrief — TTL refresh",
+      summary: "We centralized the sliding-window TTL refresh into one middleware.",
+    });
+    // A human comment short-circuits the long-poll on the debrief draft.
+    await store.addComment({ id: "cmt_db", artifactId: id, content: "thanks", author: "human" } as any);
+    const res = await callTool("check_feedback");
+    expect(res.text).not.toContain("no present_debrief yet");
   });
 });
 

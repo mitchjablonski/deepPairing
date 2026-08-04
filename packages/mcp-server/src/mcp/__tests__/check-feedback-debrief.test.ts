@@ -58,8 +58,10 @@ describe("check_feedback — rejected debrief (#190)", () => {
     const res = await callTool("check_feedback");
     const sc = res.structuredContent as any;
 
-    expect(sc.suggestedAction).not.toContain("You may proceed");
-    expect(sc.suggestedAction).toContain("Do NOT apply");
+    // M3 — busy poll: suggestedAction rides the prose only (struct drops it).
+    expect(res.text).not.toContain("You may proceed");
+    expect(res.text).toContain("Do NOT apply");
+    expect(sc.suggestedAction).toBeUndefined();
     expect(sc.status).toBe("feedback");
     expect(sc.rejected.map((r: any) => r.id)).toContain(id);
     expect(sc.rejected.find((r: any) => r.id === id).type).toBe("debrief");
