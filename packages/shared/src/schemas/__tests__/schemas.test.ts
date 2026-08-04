@@ -271,6 +271,10 @@ describe("ArtifactSchema", () => {
     expect(() => DebriefContentSchema.parse({ sections: [] })).toThrow();
   });
 
+  it("rejects a debrief with an EMPTY summary (.min(1) — empty is worse than absent)", () => {
+    expect(() => DebriefContentSchema.parse({ summary: "" })).toThrow();
+  });
+
   it("rejects a changeset file with an unknown changeType", () => {
     expect(() =>
       ChangesetContentSchema.parse({ files: [{ path: "x", changeType: "renamed", hunks: [] }] }),

@@ -462,8 +462,12 @@ export const DebriefDeferredSchema = z.object({
 export type DebriefDeferred = z.infer<typeof DebriefDeferredSchema>;
 
 export const DebriefContentSchema = z.object({
-  /** The narrative — what we built and why. The anchor field. */
-  summary: z.string(),
+  /** The narrative — what we built and why. The anchor field. `.min(1)` for the
+   *  same "empty is worse than absent" discipline title/context/concept.name use:
+   *  an empty-narrative debrief on the flagship comprehension surface is a
+   *  degenerate artifact, not a valid one. (The coercer stays lenient and
+   *  defaults to "" so a legacy/partial render never crashes.) */
+  summary: z.string().min(1),
   /** Ordered walk of what changed. */
   sections: z.array(DebriefSectionSchema).optional(),
   /** Decisions the agent made without the human — the accountability block. */

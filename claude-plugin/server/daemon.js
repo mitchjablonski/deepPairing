@@ -22853,8 +22853,12 @@ var DebriefDeferredSchema = external_exports.object({
   why: external_exports.string().describe("Why it was deferred")
 });
 var DebriefContentSchema = external_exports.object({
-  /** The narrative — what we built and why. The anchor field. */
-  summary: external_exports.string(),
+  /** The narrative — what we built and why. The anchor field. `.min(1)` for the
+   *  same "empty is worse than absent" discipline title/context/concept.name use:
+   *  an empty-narrative debrief on the flagship comprehension surface is a
+   *  degenerate artifact, not a valid one. (The coercer stays lenient and
+   *  defaults to "" so a legacy/partial render never crashes.) */
+  summary: external_exports.string().min(1),
   /** Ordered walk of what changed. */
   sections: external_exports.array(DebriefSectionSchema).optional(),
   /** Decisions the agent made without the human — the accountability block. */

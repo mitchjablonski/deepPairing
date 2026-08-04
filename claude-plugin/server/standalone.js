@@ -25610,8 +25610,12 @@ var DebriefDeferredSchema = external_exports.object({
   why: external_exports.string().describe("Why it was deferred")
 });
 var DebriefContentSchema = external_exports.object({
-  /** The narrative — what we built and why. The anchor field. */
-  summary: external_exports.string(),
+  /** The narrative — what we built and why. The anchor field. `.min(1)` for the
+   *  same "empty is worse than absent" discipline title/context/concept.name use:
+   *  an empty-narrative debrief on the flagship comprehension surface is a
+   *  degenerate artifact, not a valid one. (The coercer stays lenient and
+   *  defaults to "" so a legacy/partial render never crashes.) */
+  summary: external_exports.string().min(1),
   /** Ordered walk of what changed. */
   sections: external_exports.array(DebriefSectionSchema).optional(),
   /** Decisions the agent made without the human — the accountability block. */
@@ -26958,7 +26962,7 @@ var DETAIL_DENSITY_TERSE_GUIDANCE = [
   // ways on the same tool. Each self-scopes, but the model shouldn't have to
   // infer the scoping: terse governs prose, the Autonomy dial governs whether
   // an artifact posts at all.
-  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)"
+  "  - Do NOT reduce the number of artifacts and do NOT skip present_options, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Code must still be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes. Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)"
 ].join("\n");
 var AUTONOMY_HINT_SUPERVISED = "";
 var AUTONOMY_HINT_BALANCED = [
@@ -26967,13 +26971,13 @@ var AUTONOMY_HINT_BALANCED = [
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs \u2014 not routine implementation choices with one reasonable answer.",
   "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings \u2192 options \u2192 spec/plan.",
-  "  - FLOOR (unchanged): present_code_change BEFORE every Write/Edit is still required \u2014 this dial only trims findings/options."
+  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; this dial trims findings/options, never the review record."
 ].join("\n");
 var AUTONOMY_HINT_AUTONOMOUS = [
   `
 \u{1F39A} Autonomy: AUTONOMOUS \u2014 the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
   "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
-  "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required \u2014 it is the review record.",
+  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; the human reviews the artifact, not raw edits on disk.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths."
 ].join("\n");
 function autonomyHintFor(level) {

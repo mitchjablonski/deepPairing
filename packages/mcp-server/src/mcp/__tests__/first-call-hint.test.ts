@@ -128,7 +128,11 @@ describe("first-call hint — #139 detail density", () => {
     // of phrasings-we-happened-to-avoid is theater — it can't catch a novel
     // floor-violating rewrite — so this test asserts presence, not absence.
     expect(hint).toMatch(/Do NOT reduce the number of artifacts/);
-    expect(hint).toMatch(/do NOT skip present_options or present_code_change/);
+    expect(hint).toMatch(/do NOT skip present_options/);
+    // #190 — the floor mandates a REVIEW SURFACE before code lands, without
+    // prescribing a per-edit card (batched present_changeset is the default).
+    expect(hint).toMatch(/PRESENTED FOR REVIEW BEFORE IT LANDS/);
+    expect(hint).toMatch(/present_changeset at feature boundaries by default/);
     expect(hint).toMatch(/NEVER omit `Evidence`/);
     // Pin the LITERAL evidence shape the agent must always attach — the whole
     // point of the floor is that terse trims prose, never the four Evidence
@@ -174,27 +178,28 @@ describe("first-call hint — #148 autonomy dial guidance", () => {
     expect(hint).not.toMatch(/Autonomy: BALANCED/);
   });
 
-  it("FLOOR — the autonomous block keeps present_code_change required and defers to guardrails", async () => {
+  it("FLOOR — the autonomous block keeps a review surface before code lands and defers to guardrails", async () => {
     store.setAutonomyLevel("autonomous");
     const hint = await buildFirstCallHint(store, 4000);
     // Positive-presence pins (a softening rewrite deletes one and fails here):
-    // the dial never lifts the pre-write review record…
-    expect(hint).toMatch(/present_code_change BEFORE every Write\/Edit is still required/);
-    expect(hint).toMatch(/it is the review record/);
+    // #190 — the dial never lifts the pre-land review record, but the floor no
+    // longer prescribes a per-edit card — batched present_changeset is default.
+    expect(hint).toMatch(/PRESENTED FOR REVIEW BEFORE IT LANDS/);
+    expect(hint).toMatch(/reviews the artifact, not raw edits on disk/);
     // …and guardrail-path escalation overrides the dial.
     expect(hint).toMatch(/guardrails override this dial/i);
     expect(hint).toMatch(/escalate to supervised/);
   });
 
-  it("FLOOR — the balanced block restates present_code_change too (review: 'go straight to the work' must not read as 'Edit directly')", async () => {
+  it("FLOOR — the balanced block restates the review-before-land floor too (review: 'go straight to the work' must not read as 'Edit directly')", async () => {
     // Review-caught asymmetry: stating the floor ONLY in the autonomous block
     // invites the inference that balanced's skip-license is broader — i.e.
     // that "skip findings and go straight to the work" licenses skipping the
-    // pre-write review record as well. Pin the floor in BOTH blocks.
+    // pre-land review record as well. Pin the floor in BOTH blocks.
     store.setAutonomyLevel("balanced");
     const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).toMatch(/present_code_change BEFORE every Write\/Edit is still required/);
-    expect(hint).toMatch(/this dial only trims findings\/options/);
+    expect(hint).toMatch(/PRESENTED FOR REVIEW BEFORE IT LANDS/);
+    expect(hint).toMatch(/never the review record/);
   });
 
   it("supervised (default) contributes the EMPTY STRING — and an explicit set equals never-set", async () => {
@@ -285,8 +290,8 @@ describe("first-call hint — S1: guardrails survive all 24 dial variants", () =
 });
 
 /**
- * S2 — the terse block's floor sentence ("do NOT skip present_options or
- * present_code_change") sits two lines above the autonomous block's "Skip
+ * S2 — the terse block's floor sentence ("do NOT skip present_options" + the
+ * review-before-land floor) sits two lines above the autonomous block's "Skip
  * the opening findings/options ceremony". Adjacent absolutes pointing
  * opposite ways on the same tool invite inconsistent behavior. The terse
  * line now states the division of labor: terse governs TEXT only; whether
@@ -299,7 +304,8 @@ describe("first-call hint — S2: terse/autonomy division of labor", () => {
     expect(hint).toContain("Terse governs TEXT only");
     expect(hint).toContain("Autonomy dial");
     // The floor sentence itself is intact (also pinned by the #139 FLOOR test).
-    expect(hint).toMatch(/do NOT skip present_options or present_code_change/);
+    expect(hint).toMatch(/do NOT skip present_options/);
+    expect(hint).toMatch(/PRESENTED FOR REVIEW BEFORE IT LANDS/);
   });
 
   it("the clause coexists with the autonomous block without weakening either side", async () => {

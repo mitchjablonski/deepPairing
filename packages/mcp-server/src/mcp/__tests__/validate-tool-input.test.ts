@@ -637,6 +637,17 @@ describe("#183 — example-echo guard", () => {
     expect(text).toContain("INPUT_VALIDATION_FAILED");
     expect(store.getArtifacts()).toHaveLength(0);
   });
+
+  it("REJECTS a debrief with an EMPTY summary (.min(1) — empty is worse than absent)", async () => {
+    const { text, isError } = await call("present_debrief", {
+      title: "Debrief — something",
+      summary: "", // present but empty → the flagship comprehension surface with no narrative
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toContain("summary");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
