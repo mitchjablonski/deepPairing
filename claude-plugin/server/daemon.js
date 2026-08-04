@@ -26531,21 +26531,89 @@ function formatSessionMarkdown(state, format = "full") {
       return formatFull(state);
   }
 }
+function isShippedArtifact(a) {
+  return a.status !== "superseded" && a.status !== "rejected" && a.status !== "retracted";
+}
+function rejectionNote(a) {
+  if (a.status !== "rejected" && a.status !== "retracted") return null;
+  const verb = a.status === "rejected" ? "rejected" : "retracted";
+  return `> \u26A0\uFE0F **Rejected (not built)** \u2014 this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.
+`;
+}
+function decisionOwningArtifact(state, d) {
+  if (!d.artifactId) return void 0;
+  return state.artifacts.find((a) => a.id === d.artifactId);
+}
+function decisionIsRejected(state, d) {
+  const a = decisionOwningArtifact(state, d);
+  return !!a && (a.status === "rejected" || a.status === "retracted");
+}
+var VOICE_RULES = [
+  // --- you (contractions first, then possessive, then bare) ---
+  [/\byou['’]re\b/gi, "the reviewer is"],
+  [/\byou['’]ll\b/gi, "the reviewer will"],
+  [/\byou['’]ve\b/gi, "the reviewer has"],
+  [/\byou['’]d\b/gi, "the reviewer would"],
+  [/\byour\b/gi, "the reviewer's"],
+  [/\byou\b/gi, "the reviewer"],
+  // --- we ---
+  [/\bwe['’]re\b/gi, "the pair is"],
+  [/\bwe['’]ll\b/gi, "the pair will"],
+  [/\bwe['’]ve\b/gi, "the pair has"],
+  [/\bwe['’]d\b/gi, "the pair would"],
+  [/\bour\b/gi, "the pair's"],
+  [/\bwe\b/gi, "the pair"],
+  // --- I (capital only; the standalone rule excludes \w AND / so "I/O",
+  //     "I18n" etc. never match) ---
+  [/\bI['’]ve\b/g, "the agent has"],
+  [/\bI['’]m\b/g, "the agent is"],
+  [/\bI['’]ll\b/g, "the agent will"],
+  [/\bI['’]d\b/g, "the agent would"],
+  [/(?<![\w/])I(?![\w/])/g, "the agent"],
+  [/\bmy\b/gi, "the agent's"]
+];
+var CODE_SEGMENT = /```[\s\S]*?```|`[^`]*`/g;
+function transformProse(seg, atTextStart) {
+  let out = seg;
+  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
+  const boundary = atTextStart ? /(^|[.!?]\s+|\n\s*)([a-z])/g : /([.!?]\s+|\n\s*)([a-z])/g;
+  return out.replace(boundary, (_m, pre, ch) => pre + ch.toUpperCase());
+}
+function neutralizeVoice(text) {
+  if (!text) return text ?? "";
+  let result = "";
+  let lastIndex = 0;
+  let atTextStart = true;
+  for (const m of text.matchAll(CODE_SEGMENT)) {
+    const idx = m.index ?? 0;
+    const prose = text.slice(lastIndex, idx);
+    if (prose) {
+      result += transformProse(prose, atTextStart);
+      atTextStart = false;
+    }
+    result += m[0];
+    atTextStart = false;
+    lastIndex = idx + m[0].length;
+  }
+  const tail = text.slice(lastIndex);
+  if (tail) result += transformProse(tail, atTextStart);
+  return result;
+}
 function formatPrDescription(state) {
   const sections = [];
   sections.push("## Summary\n");
-  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && isShippedArtifact(a));
   for (const d of debriefs) {
     const content = coerceDebriefContent(d.content);
-    if (content.summary) sections.push(`${content.summary}
+    if (content.summary) sections.push(`${neutralizeVoice(content.summary)}
 `);
     if (content.needsYourEyes?.length) {
       sections.push("**What needs review:**");
-      for (const n of content.needsYourEyes) sections.push(`- ${n.what} \u2014 ${n.why}`);
+      for (const n of content.needsYourEyes) sections.push(`- ${neutralizeVoice(n.what)} \u2014 ${neutralizeVoice(n.why)}`);
       sections.push("");
     }
   }
-  const resolved = state.decisions.filter((d) => d.response);
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
   if (resolved.length > 0) {
     sections.push("### Decisions\n");
     for (const d of resolved) {
@@ -26557,7 +26625,7 @@ function formatPrDescription(state) {
     }
     sections.push("");
   }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
   for (const plan of plans) {
     const steps = coercePlanContent(plan.content).steps;
     if (steps.length > 0) {
@@ -26570,7 +26638,7 @@ function formatPrDescription(state) {
       sections.push("");
     }
   }
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
   if (research.length > 0) {
     const findings = research.flatMap((r) => coerceResearchContent(r.content).findings);
     const highFindings = findings.filter((f) => f.significance === "high");
@@ -26593,23 +26661,23 @@ function formatAdr(state) {
   sections.push(`**Date**: ${date5}`);
   sections.push(`**Status**: Accepted
 `);
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
   if (research.length > 0) {
     sections.push("## Context\n");
     for (const r of research) {
       const content = coerceResearchContent(r.content);
-      if (content.summary) sections.push(content.summary + "\n");
+      if (content.summary) sections.push(neutralizeVoice(content.summary) + "\n");
       for (const f of content.findings ?? []) {
         sections.push(`### ${f.title ?? f.category}
 `);
-        sections.push(f.detail);
+        sections.push(neutralizeVoice(f.detail));
         if (f.impact) sections.push(`
-**Impact**: ${f.impact}`);
+**Impact**: ${neutralizeVoice(f.impact)}`);
         sections.push("");
       }
     }
   }
-  const resolved = state.decisions.filter((d) => d.response);
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
   if (resolved.length > 0) {
     sections.push("## Decision\n");
     for (const d of resolved) {
@@ -26620,7 +26688,7 @@ function formatAdr(state) {
       sections.push(`Chosen: **${chosen?.title}** \u2014 ${chosen?.description ?? ""}`);
       if (d.response?.reasoning) {
         sections.push(`
-Reasoning: ${d.response.reasoning}`);
+Reasoning: ${neutralizeVoice(d.response.reasoning)}`);
       }
       if (rejected.length > 0) {
         sections.push("\nRejected alternatives:");
@@ -26631,7 +26699,7 @@ Reasoning: ${d.response.reasoning}`);
       sections.push("");
     }
   }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
   if (plans.length > 0) {
     sections.push("## Consequences\n");
     for (const plan of plans) {
@@ -26668,12 +26736,16 @@ function formatDebriefSections(state) {
   const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
   for (const d of debriefs) {
     const content = coerceDebriefContent(d.content);
-    sections.push(`## Debrief \u2014 ${d.title}
+    const t = (d.title ?? "").trim();
+    const heading = /^debrief\b/i.test(t) ? t : `Debrief \u2014 ${t || "Session"}`;
+    sections.push(`## ${heading}
 `);
+    const note = rejectionNote(d);
+    if (note) sections.push(note);
     if (content.summary) sections.push(`${content.summary}
 `);
     if (content.sections?.length) {
-      sections.push("### What changed\n");
+      sections.push("### Walkthrough\n");
       for (const s of content.sections) {
         sections.push(`#### ${s.title}
 `);
@@ -26724,6 +26796,8 @@ function formatExplainerSections(state) {
     const content = coerceExplainerContent(ex.content);
     sections.push(`## Explainer \u2014 ${content.title || ex.title}
 `);
+    const note = rejectionNote(ex);
+    if (note) sections.push(note);
     if (content.overview) sections.push(`${content.overview}
 `);
     content.sections?.forEach((s, i) => {
@@ -26743,6 +26817,8 @@ function formatSpecSections(state) {
     const content = coerceSpecContent(sp.content);
     sections.push(`## Spec \u2014 ${sp.title}
 `);
+    const note = rejectionNote(sp);
+    if (note) sections.push(note);
     if (content.objective) sections.push(`**Objective**: ${content.objective}
 `);
     if (content.context) sections.push(`${content.context}
@@ -26766,6 +26842,8 @@ function formatChangesetSections(state) {
     const content = coerceChangesetContent(cs.content);
     sections.push(`## Changeset \u2014 ${cs.title}
 `);
+    const note = rejectionNote(cs);
+    if (note) sections.push(note);
     if (content.summary) sections.push(`${content.summary}
 `);
     for (const file2 of content.files ?? []) {
@@ -26800,6 +26878,8 @@ function formatFull(state) {
     sections.push("## Findings\n");
     for (const r of research) {
       const content = coerceResearchContent(r.content);
+      const note = rejectionNote(r);
+      if (note) sections.push(note);
       if (content.summary) sections.push(`${content.summary}
 `);
       for (const f of content.findings ?? []) {
@@ -26849,6 +26929,8 @@ function formatFull(state) {
       const chosen = d.options.find((o) => o.id === d.response?.optionId);
       sections.push(`### ${d.context}
 `);
+      const dNote = decisionIsRejected(state, d) ? rejectionNote(decisionOwningArtifact(state, d)) : null;
+      if (dNote) sections.push(dNote);
       sections.push(`**Selected**: ${chosen?.title ?? d.response?.optionId}`);
       if (d.response?.reasoning) sections.push(`**Reasoning**: ${d.response.reasoning}`);
       sections.push("\nOptions considered:");
@@ -26865,6 +26947,8 @@ function formatFull(state) {
     for (const plan of plans) {
       sections.push(`### ${plan.title}
 `);
+      const rejNote = rejectionNote(plan);
+      if (rejNote) sections.push(rejNote);
       const review = state.planReviews.find((p) => p.artifactId === plan.id);
       if (review?.verdict) sections.push(`**Status**: ${review.verdict}
 `);
@@ -26893,9 +26977,9 @@ function formatFull(state) {
   return sections.join("\n");
 }
 function getSessionTitle(state) {
-  const firstDecision = state.decisions[0];
+  const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
   if (firstDecision) return firstDecision.context;
-  const firstResearch = state.artifacts.find((a) => a.type === "research");
+  const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
   if (firstResearch) return firstResearch.title;
   return "Session " + state.sessionId;
 }

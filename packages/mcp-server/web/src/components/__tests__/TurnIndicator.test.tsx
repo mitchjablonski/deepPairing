@@ -256,7 +256,7 @@ describe("B1 — the 'Your turn' pill is a jump button, not a dead label", () =>
 });
 
 describe("F8 (M6) — the questions badge stops promising check-ins from dead sessions", () => {
-  it("says 'agent exited' when every unanswered question's owning session is dead", () => {
+  it("badge drops 'waiting' and the pill states 'Agent exited' when the owning session is dead", () => {
     useConnectionStore.setState({
       connected: true,
       sessionId: "s1",
@@ -272,6 +272,43 @@ describe("F8 (M6) — the questions badge stops promising check-ins from dead se
       },
     });
     render(<TurnIndicator />);
+    // M3 (#196) — the exited state is stated ONCE, canonically, by the agent's
+    // -turn pill (not repeated in the questions badge).
     expect(screen.getByText(/agent exited/i)).toBeInTheDocument();
+    // F8/M6 intent survives: the badge never promises a check-in from a dead
+    // session. It reads "1 question unanswered", not "waiting".
+    expect(screen.getByText(/1 question unanswered/i)).toBeInTheDocument();
+    expect(screen.queryByText(/question.*waiting/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("#196 F2 — banner-soup dedup (M4)", () => {
+  it("collapses the 'Your turn' pill to a count when PendingBanner is visible", () => {
+    seedConnected();
+    seedArtifact({ id: "d1", type: "code_change", status: "draft" });
+    render(<TurnIndicator pendingBannerVisible />);
+    // The verbatim breakdown moves to the banner; the header keeps a count.
+    expect(screen.getByText(/1 for you/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Your turn — 1 change/i)).not.toBeInTheDocument();
+    // The affordance survives: still a jump button by accessible name.
+    expect(screen.getByRole("button", { name: /your turn/i })).toBeInTheDocument();
+  });
+
+  it("keeps the full 'Your turn' pill when the banner is absent (default)", () => {
+    seedConnected();
+    seedArtifact({ id: "d1", type: "code_change", status: "draft" });
+    render(<TurnIndicator />);
+    expect(screen.getByText(/Your turn — 1 change/i)).toBeInTheDocument();
+  });
+
+  it("collapses the questions badge to a count when ResumeQuestionsBanner is visible", () => {
+    seedConnected();
+    seedArtifact({ id: "art_1" });
+    seedComment("art_1");
+    render(<TurnIndicator questionsBannerVisible />);
+    // No "N questions waiting/unanswered" label — the banner carries it. The
+    // jump affordance stays via the accessible name.
+    expect(screen.queryByText(/question.*(waiting|unanswered)/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /unanswered question/i })).toBeInTheDocument();
   });
 });

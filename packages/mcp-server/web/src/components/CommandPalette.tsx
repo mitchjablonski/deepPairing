@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
-import { usePreferencesStore } from "../stores/preferences";
+import { usePreferencesStore, resolveTheme } from "../stores/preferences";
 import { useModal } from "../hooks/useModal";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
@@ -92,11 +92,17 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         onClose();
       },
     });
+    // L4 (#196) — flip AWAY from the RESOLVED appearance, not the raw setting.
+    // From the "system" default a naive dark↔light flip could set the theme the
+    // OS already shows (a no-op first click). This lands on an explicit
+    // dark/light; returning to "system" stays in the Settings sheet (the
+    // palette is a fast binary flip, not a three-way cycle).
+    const resolvedAppearance = resolveTheme(theme);
     items.push({
       id: "action_toggle_theme",
-      label: `Switch to ${theme === "dark" ? "light" : "dark"} mode`,
+      label: `Switch to ${resolvedAppearance === "dark" ? "light" : "dark"} mode`,
       type: "action",
-      action: () => { setTheme(theme === "dark" ? "light" : "dark"); onClose(); },
+      action: () => { setTheme(resolvedAppearance === "dark" ? "light" : "dark"); onClose(); },
     });
     items.push({
       id: "action_toggle_sidebar",

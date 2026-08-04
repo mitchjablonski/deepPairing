@@ -91,17 +91,22 @@ function applyFontSize(size: FontSize): void {
   document.documentElement.setAttribute("data-font-size", size);
 }
 
+/**
+ * Resolve a Theme to the appearance actually on screen. "system" consults
+ * prefers-color-scheme (defaulting to dark when matchMedia is unavailable, e.g.
+ * SSR/jsdom). Exported so the command-palette toggle can flip AWAY from the
+ * RESOLVED appearance rather than the raw setting — from "system" the raw value
+ * isn't "dark"/"light", so a naive dark↔light flip could no-op against the OS.
+ */
+export function resolveTheme(theme: Theme): "dark" | "light" {
+  if (theme !== "system") return theme;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return "dark";
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
 function applyTheme(theme: Theme): void {
   if (typeof document === "undefined") return;
-
-  const resolved =
-    theme === "system"
-      ? window.matchMedia("(prefers-color-scheme: light)").matches
-        ? "light"
-        : "dark"
-      : theme;
-
-  document.documentElement.setAttribute("data-theme", resolved);
+  document.documentElement.setAttribute("data-theme", resolveTheme(theme));
 }
 
 export const usePreferencesStore = create<PreferencesState>((set, get) => {

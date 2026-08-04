@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatSessionMarkdown } from "../format-markdown.js";
+import { formatSessionMarkdown, neutralizeVoice } from "../format-markdown.js";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function makeState(overrides: {
@@ -324,9 +324,12 @@ describe("formatSessionMarkdown", () => {
       expect(md).not.toContain("Nothing crystallized yet");
     });
 
-    it("formatPrDescription leads with the debrief summary + what-needs-review", () => {
+    it("formatPrDescription leads with the debrief summary + what-needs-review (neutralized, #196 M1)", () => {
       const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "pr-description");
-      expect(md).toContain("You moved session validation into a shared guard.");
+      // F2 (M1) — the pair-voice "You moved…" is neutralized for the teammate
+      // reading the PR; no second-person address survives.
+      expect(md).not.toContain("You moved session validation");
+      expect(md).toContain("The reviewer moved session validation into a shared guard.");
       expect(md).toContain("**What needs review:**");
       expect(md).toContain("The 401 redirect target");
     });
@@ -349,6 +352,217 @@ describe("formatSessionMarkdown", () => {
       expect(md).not.toContain("## Explainer");
       expect(md).not.toContain("## Spec");
       expect(md).not.toContain("## Changeset");
+    });
+
+    // F2 (#196 M2) — debrief markdown defects.
+    it("formatFull renames the walk-lane group header to Walkthrough (no 'What changed' collision)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [debrief] }), "full");
+      expect(md).toContain("### Walkthrough");
+      expect(md).not.toContain("### What changed");
+    });
+
+    it("formatFull does not double-prefix a debrief whose title already carries the word", () => {
+      const prefixed = makeArtifact("debrief", "Debrief — auth refactor", {
+        summary: "A summary.",
+        sections: [{ title: "The guard", body: "b" }],
+      });
+      const md = formatSessionMarkdown(makeState({ artifacts: [prefixed] }), "full");
+      expect(md).toContain("## Debrief — auth refactor");
+      expect(md).not.toContain("Debrief — Debrief");
+    });
+  });
+
+  // F2 (#196 H1) — rejected/retracted work must not read as SHIPPED. External
+  // formats (pr-description, adr) drop it entirely; the full record keeps it but
+  // marks it "Rejected (not built)". Shaped after the demo's rejected
+  // ConfigStore-singleton finding (demo-script.ts) — the executed repro.
+  describe("#196 F2 — rejected work is not shipped-as-built", () => {
+    const rejectedResearch = makeArtifact(
+      "research",
+      "Config loader refactor — proposed approach",
+      {
+        summary: "Add a global mutable state singleton for config access across services.",
+        findings: [{
+          category: "Architecture",
+          title: "Introduce ConfigStore global singleton",
+          detail: "A shared mutable ConfigStore would cache config across services.",
+          significance: "high",
+          severity: "medium",
+          recommendation: "Add a ConfigStore class exported as a singleton.",
+        }],
+      },
+      "rejected",
+    );
+
+    it("pr-description EXCLUDES a rejected finding entirely (demo repro)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [rejectedResearch] }), "pr-description");
+      expect(md).not.toContain("Introduce ConfigStore global singleton");
+      expect(md).not.toContain("### Key Findings");
+    });
+
+    it("adr EXCLUDES rejected research from Context", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [rejectedResearch] }), "adr");
+      expect(md).not.toContain("Introduce ConfigStore global singleton");
+      expect(md).not.toContain("global mutable state singleton");
+    });
+
+    it("full INCLUDES the rejected finding but marks it 'Rejected (not built)'", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [rejectedResearch] }), "full");
+      expect(md).toContain("Introduce ConfigStore global singleton");
+      expect(md).toContain("Rejected (not built)");
+      // The marker precedes the finding it applies to.
+      expect(md.indexOf("Rejected (not built)")).toBeLessThan(md.indexOf("Introduce ConfigStore global singleton"));
+    });
+
+    it("a retracted plan is dropped from pr-description but marked in full", () => {
+      const retractedPlan = makeArtifact("plan", "Risky migration", {
+        steps: [{ description: "Drop the users table", reasoning: "start clean" }],
+      }, "retracted");
+      const pr = formatSessionMarkdown(makeState({ artifacts: [retractedPlan] }), "pr-description");
+      expect(pr).not.toContain("Drop the users table");
+      const full = formatSessionMarkdown(makeState({ artifacts: [retractedPlan] }), "full");
+      expect(full).toContain("Drop the users table");
+      expect(full).toContain("Rejected (not built)");
+    });
+
+    it("approved work still ships clean (no marker leaks onto a normal run)", () => {
+      const approved = makeArtifact("research", "Audit", {
+        summary: "Clean.",
+        findings: [{ category: "Sec", title: "Real issue", detail: "d", significance: "high" }],
+      });
+      const full = formatSessionMarkdown(makeState({ artifacts: [approved] }), "full");
+      expect(full).toContain("Real issue");
+      expect(full).not.toContain("Rejected (not built)");
+      const pr = formatSessionMarkdown(makeState({ artifacts: [approved] }), "pr-description");
+      expect(pr).toContain("Real issue");
+    });
+  });
+
+  // F2 (#196 M1) — neutral voice for external formats only.
+  describe("#196 F2 — neutral voice for external formats", () => {
+    const voiceDebrief = makeArtifact("debrief", "Config loader debrief", {
+      summary: "You rejected the global ConfigStore, so I pivoted to a lazy loader.",
+      needsYourEyes: [{ what: "The retry cap", why: "product-specific" }],
+    });
+
+    it("pr-description strips second-person pair voice", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [voiceDebrief] }), "pr-description");
+      expect(md).not.toMatch(/\bYou\b/);
+      expect(md).not.toMatch(/\bI\b/);
+      expect(md).toContain("The reviewer rejected the global ConfigStore");
+      expect(md).toContain("the agent pivoted to a lazy loader");
+    });
+
+    it("full export KEEPS the pair voice (faithful session record)", () => {
+      const md = formatSessionMarkdown(makeState({ artifacts: [voiceDebrief] }), "full");
+      expect(md).toContain("You rejected the global ConfigStore, so I pivoted to a lazy loader.");
+    });
+  });
+
+  // F2 (#196 M1, hardened in review #232) — neutralizeVoice must not mangle
+  // ordinary pair prose. The pre-fix rules glued "'re"/"'ll" onto noun phrases,
+  // rewrote code identifiers, and split "I/O". These pin the fixes.
+  describe("#196 F2 — neutralizeVoice hostile repro", () => {
+    // A glued contraction ("the pair're", "the reviewer'll") is a rule gap.
+    // NB: possessives ("the reviewer's", "the pair's") are LEGITIMATE, so the
+    // guard targets contraction remnants (re|ll|ve|d) only — not a bare "'".
+    const GLUED = /\bthe (?:reviewer|pair|agent)['’](?:re|ll|ve|d)\b/;
+
+    it("expands you/we/I contractions instead of gluing them onto a noun phrase", () => {
+      const out = neutralizeVoice("We're refactoring so you'll get testable config; you've seen we'll batch it, and we'd cache your results. I've moved it and I'd defer the rest.");
+      expect(out).not.toMatch(GLUED);
+      expect(out).toContain("The pair is refactoring");
+      expect(out).toContain("the reviewer will get testable config");
+      expect(out).toContain("the reviewer has seen");
+      expect(out).toContain("the pair will batch it");
+      expect(out).toContain("the pair would cache the reviewer's results");
+      expect(out).toContain("The agent has moved it");
+      expect(out).toContain("the agent would defer the rest");
+    });
+
+    it("leaves code identifiers untouched — inline spans AND fenced blocks", () => {
+      const inline = neutralizeVoice("Call `you.method()` to read your config.");
+      expect(inline).toContain("`you.method()`");
+      expect(inline).toContain("the reviewer's config");
+      const fenced = neutralizeVoice("```ts\nconst you = 1; // we keep this and your setting\n```\nAfter, you review it.");
+      expect(fenced).toContain("const you = 1; // we keep this and your setting");
+      expect(fenced).toContain("the reviewer review it"); // prose after the block IS transformed
+      expect(fenced).not.toMatch(GLUED);
+    });
+
+    it("does not split 'I/O' (slash-adjacent capital I is not a pronoun)", () => {
+      const out = neutralizeVoice("I/O bound work: you've profiled it.");
+      expect(out).toContain("I/O bound work");
+      expect(out).not.toContain("the agent/O");
+    });
+
+    it("the reviewer's exact ADR repro produces sane English + no rewritten identifiers", () => {
+      const adrProse = "We're moving config to a loader. You'll call `you.method()`; the `we` var is gone. I/O is unchanged, and you've approved it.";
+      const state = makeState({
+        artifacts: [makeArtifact("research", "Config audit", {
+          summary: adrProse,
+          findings: [{ category: "Architecture", detail: adrProse, significance: "high" }],
+        })],
+      });
+      const md = formatSessionMarkdown(state, "adr");
+      expect(md).not.toMatch(GLUED);
+      expect(md).toContain("`you.method()`"); // identifier preserved
+      expect(md).toContain("the `we` var is gone"); // inline-code `we` preserved
+      expect(md).toContain("I/O is unchanged");
+      expect(md).toContain("The pair is moving config");
+      expect(md).toContain("the reviewer has approved it");
+      expect(md).not.toMatch(/\bYou\b/);
+    });
+
+    it("re-capitalizes sentence starts but not after an inline code span mid-sentence", () => {
+      const out = neutralizeVoice("You did X. call `foo()` and you continue.");
+      expect(out).toContain("The reviewer did X.");
+      // The word after the inline span stays lowercase (mid-sentence).
+      expect(out).toContain("and the reviewer continue");
+    });
+  });
+
+  // F2 (#196 Fix 3, review #232) — decisions whose owning artifact was
+  // rejected/retracted must not read as shipped in external formats.
+  describe("#196 F2 — rejected decisions are gated (via decision.artifactId link)", () => {
+    const mkDecision = (over: any = {}) => ({
+      decisionId: "d_rej",
+      artifactId: "art_dec_rej",
+      context: "Where do rate-limit counters live?",
+      options: [{ id: "a", title: "Redis", description: "shared" }, { id: "b", title: "In-process", description: "per-node" }],
+      response: { optionId: "a", reasoning: "shared store" },
+      createdAt: "2026-01-01T00:00:00Z",
+      ...over,
+    });
+
+    it("pr-description + adr EXCLUDE a decision whose artifact is rejected", () => {
+      const state = makeState({
+        artifacts: [makeArtifact("decision", "Counter store", {}, "rejected")],
+        decisions: [mkDecision()],
+      });
+      state.artifacts[0]!.id = "art_dec_rej";
+      const pr = formatSessionMarkdown(state, "pr-description");
+      expect(pr).not.toContain("Where do rate-limit counters live?");
+      const adr = formatSessionMarkdown(state, "adr");
+      expect(adr).not.toContain("Where do rate-limit counters live?");
+    });
+
+    it("full KEEPS the rejected decision but marks it 'Rejected (not built)'", () => {
+      const state = makeState({
+        artifacts: [makeArtifact("decision", "Counter store", {}, "rejected")],
+        decisions: [mkDecision()],
+      });
+      state.artifacts[0]!.id = "art_dec_rej";
+      const full = formatSessionMarkdown(state, "full");
+      expect(full).toContain("Where do rate-limit counters live?");
+      expect(full).toContain("Rejected (not built)");
+    });
+
+    it("a decision with NO resolvable artifact stays ungated (documented gap)", () => {
+      // artifactId points at nothing in state → we can't prove rejection.
+      const state = makeState({ decisions: [mkDecision({ artifactId: "art_missing" })] });
+      const pr = formatSessionMarkdown(state, "pr-description");
+      expect(pr).toContain("Where do rate-limit counters live?");
     });
   });
 });

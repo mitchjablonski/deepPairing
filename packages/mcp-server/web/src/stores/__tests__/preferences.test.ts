@@ -1,8 +1,35 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { usePreferencesStore, EDITOR_PRESETS, SIDEBAR_WIDTHS } from "../preferences";
+import { usePreferencesStore, EDITOR_PRESETS, SIDEBAR_WIDTHS, resolveTheme } from "../preferences";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("L4 (#196) — resolveTheme (toggle flips away from the RESOLVED appearance)", () => {
+  // This file runs in the `web-node` project (no DOM), so provide a minimal
+  // window with matchMedia for resolveTheme's prefers-color-scheme probe.
+  const stubPrefersLight = (light: boolean) => {
+    vi.stubGlobal("window", {
+      matchMedia: (q: string) => ({ matches: q.includes("light") ? light : !light }),
+    });
+  };
+
+  it("explicit themes resolve to themselves", () => {
+    expect(resolveTheme("dark")).toBe("dark");
+    expect(resolveTheme("light")).toBe("light");
+  });
+
+  it("'system' resolves to the OS appearance — a light-OS user resolves to light", () => {
+    stubPrefersLight(true);
+    expect(resolveTheme("system")).toBe("light");
+    // The palette toggle therefore flips to dark (not a no-op).
+    expect(resolveTheme("system") === "dark" ? "light" : "dark").toBe("dark");
+  });
+
+  it("'system' resolves to dark for a dark-OS user", () => {
+    stubPrefersLight(false);
+    expect(resolveTheme("system")).toBe("dark");
+  });
 });
 
 describe("preferences store — buildEditorLink", () => {
