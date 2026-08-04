@@ -6,6 +6,10 @@ import {
   coercePlanContent,
   coerceResearchContent,
   coerceReasoningContent,
+  coerceDebriefContent,
+  coerceExplainerContent,
+  coerceSpecContent,
+  coerceChangesetContent,
 } from "@deeppairing/shared";
 
 interface SessionState {
@@ -61,6 +65,22 @@ function formatPrDescription(state: SessionState): string {
   const sections: string[] = [];
 
   sections.push("## Summary\n");
+
+  // #192 — the debrief summary IS the human-readable "what this PR does" the
+  // description wants. Lead the Summary with it (narrative + what needs the
+  // reviewer's eyes) when a debrief exists; ADR deliberately omits this (see
+  // the format-markdown test) because an ADR is a decision record, not a change
+  // narrative, and the decision/context blocks already carry its substance.
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  for (const d of debriefs) {
+    const content = coerceDebriefContent(d.content);
+    if (content.summary) sections.push(`${content.summary}\n`);
+    if (content.needsYourEyes?.length) {
+      sections.push("**What needs review:**");
+      for (const n of content.needsYourEyes) sections.push(`- ${n.what} — ${n.why}`);
+      sections.push("");
+    }
+  }
 
   // Decisions made
   const resolved = state.decisions.filter((d) => d.response);
@@ -175,6 +195,170 @@ function formatAdr(state: SessionState): string {
   return sections.join("\n");
 }
 
+// --- #192 (coverage H1) — comprehension-artifact sections ---
+//
+// The debrief IS the session digest and export `full` IS the session report, so
+// the two must connect: pre-#192 formatFull/formatLearnings/formatPrDescription
+// filtered hardcoded type lists that omitted debrief + explainer (and the older
+// spec + changeset), so the end-of-run comprehension surfaces never reached any
+// export. Each helper renders ONLY when its artifact type is present, so a
+// session without the new types produces byte-identical output.
+
+/** Push evidence lines (file:line anchor + fenced snippet + explanation) for a
+ *  list of EvidenceInput (string | Evidence object) — the same shape debrief and
+ *  explainer sections carry. Mirrors formatFull's findings-evidence rendering so
+ *  the three surfaces read identically. */
+function pushEvidenceLines(sections: string[], evidence: unknown): void {
+  if (!Array.isArray(evidence)) return;
+  for (const ev of evidence) {
+    if (typeof ev === "string") {
+      sections.push(`> ${ev}`);
+      sections.push("");
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const e = ev as { filePath?: string; lineStart?: number; lineEnd?: number; snippet?: string; language?: string; explanation?: string };
+    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
+    if (e.snippet) {
+      sections.push("```" + (e.language ?? ""));
+      sections.push(e.snippet);
+      sections.push("```");
+    }
+    if (e.explanation) sections.push(`> ${e.explanation}`);
+    sections.push("");
+  }
+}
+
+/** The debrief rendered as markdown — the five lanes (narrative + ordered
+ *  sections, decisions made without you, needs-your-eyes, deferred, open
+ *  questions). Reusable by formatFull and (its summary) formatPrDescription. */
+function formatDebriefSections(state: SessionState): string[] {
+  const sections: string[] = [];
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  for (const d of debriefs) {
+    const content = coerceDebriefContent(d.content);
+    sections.push(`## Debrief — ${d.title}\n`);
+    if (content.summary) sections.push(`${content.summary}\n`);
+
+    if (content.sections?.length) {
+      sections.push("### What changed\n");
+      for (const s of content.sections) {
+        sections.push(`#### ${s.title}\n`);
+        if (s.body) sections.push(`${s.body}\n`);
+        if (s.concepts?.length) {
+          for (const c of s.concepts) {
+            sections.push(`- *Concept*: **${c.name}**${c.oneLineExplanation ? ` — ${c.oneLineExplanation}` : ""}`);
+          }
+          sections.push("");
+        }
+        pushEvidenceLines(sections, s.evidence);
+      }
+    }
+
+    if (content.decisionsMade?.length) {
+      sections.push("### Decisions I made without you\n");
+      for (const dm of content.decisionsMade) {
+        sections.push(`- **${dm.what}** — ${dm.why}${dm.alternative ? ` *(considered but not taken: ${dm.alternative})*` : ""}`);
+      }
+      sections.push("");
+    }
+
+    if (content.needsYourEyes?.length) {
+      sections.push("### Needs your eyes\n");
+      for (const n of content.needsYourEyes) {
+        sections.push(`- **${n.what}** — ${n.why}`);
+      }
+      sections.push("");
+    }
+
+    if (content.deferred?.length) {
+      sections.push("### Deferred\n");
+      for (const df of content.deferred) {
+        sections.push(`- **${df.what}** — ${df.why}`);
+      }
+      sections.push("");
+    }
+
+    if (content.openQuestions?.length) {
+      sections.push("### Open questions\n");
+      for (const q of content.openQuestions) sections.push(`- ${q}`);
+      sections.push("");
+    }
+  }
+  return sections;
+}
+
+/** The explainer rendered as markdown — the ordered walk-through (overview +
+ *  numbered sections, each with its evidence). */
+function formatExplainerSections(state: SessionState): string[] {
+  const sections: string[] = [];
+  const explainers = state.artifacts.filter((a) => a.type === "explainer" && a.status !== "superseded");
+  for (const ex of explainers) {
+    const content = coerceExplainerContent(ex.content);
+    sections.push(`## Explainer — ${content.title || ex.title}\n`);
+    if (content.overview) sections.push(`${content.overview}\n`);
+    content.sections?.forEach((s, i) => {
+      sections.push(`### ${i + 1}. ${s.heading}\n`);
+      if (s.body) sections.push(`${s.body}\n`);
+      pushEvidenceLines(sections, s.evidence);
+    });
+  }
+  return sections;
+}
+
+/** Spec artifacts rendered as markdown — objective + requirements (each with
+ *  rationale + acceptance criteria). #192 secondary: the review flagged spec as
+ *  a pre-existing formatFull omission alongside debrief/explainer. */
+function formatSpecSections(state: SessionState): string[] {
+  const sections: string[] = [];
+  const specs = state.artifacts.filter((a) => a.type === "spec" && a.status !== "superseded");
+  for (const sp of specs) {
+    const content = coerceSpecContent(sp.content);
+    sections.push(`## Spec — ${sp.title}\n`);
+    if (content.objective) sections.push(`**Objective**: ${content.objective}\n`);
+    if (content.context) sections.push(`${content.context}\n`);
+    if (content.requirements?.length) {
+      sections.push("### Requirements\n");
+      for (const r of content.requirements) {
+        sections.push(`- **${r.id}**${r.priority ? ` _(${r.priority})_` : ""}: ${r.statement}`);
+        if (r.rationale) sections.push(`  - *Why*: ${r.rationale}`);
+        for (const ac of r.acceptanceCriteria ?? []) sections.push(`  - ✓ ${ac}`);
+      }
+      sections.push("");
+    }
+  }
+  return sections;
+}
+
+/** Changeset artifacts rendered as markdown — per-file unified diffs. #192
+ *  secondary: the changeset is the batched code surface; a full report should
+ *  carry what actually changed. */
+function formatChangesetSections(state: SessionState): string[] {
+  const sections: string[] = [];
+  const changesets = state.artifacts.filter((a) => a.type === "changeset" && a.status !== "superseded");
+  for (const cs of changesets) {
+    const content = coerceChangesetContent(cs.content);
+    sections.push(`## Changeset — ${cs.title}\n`);
+    if (content.summary) sections.push(`${content.summary}\n`);
+    for (const file of content.files ?? []) {
+      sections.push(`### \`${file.path}\` (${file.changeType})\n`);
+      if (file.hunks?.length) {
+        sections.push("```diff");
+        for (const hunk of file.hunks) {
+          if (hunk.header) sections.push(hunk.header);
+          for (const line of hunk.lines ?? []) {
+            const prefix = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+            sections.push(`${prefix}${line.content}`);
+          }
+        }
+        sections.push("```");
+      }
+      sections.push("");
+    }
+  }
+  return sections;
+}
+
 // --- Full Export ---
 
 function formatFull(state: SessionState): string {
@@ -236,6 +420,9 @@ function formatFull(state: SessionState): string {
     }
   }
 
+  // Spec (#192) — objective + requirements, when a spec artifact exists.
+  sections.push(...formatSpecSections(state));
+
   // Decisions
   const resolved = state.decisions.filter((d) => d.response);
   if (resolved.length > 0) {
@@ -272,6 +459,16 @@ function formatFull(state: SessionState): string {
       sections.push("");
     }
   }
+
+  // Changeset (#192) — the batched code surface, per-file unified diffs.
+  sections.push(...formatChangesetSections(state));
+
+  // Debrief (#192) — the end-of-run session digest (the five lanes). This IS
+  // the report's narrative of what changed and why the agent decided as it did.
+  sections.push(...formatDebriefSections(state));
+
+  // Explainer (#192) — read-only walk-through of how something works.
+  sections.push(...formatExplainerSections(state));
 
   // Reasoning log
   const reasoning = state.artifacts.filter((a) => a.type === "reasoning");
@@ -746,7 +943,41 @@ function formatLearnings(state: SessionState): string {
     sections.push("");
   }
 
-  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0) {
+  // --- From the debrief (#192) ---
+  // The debrief's decisionsMade (calls the agent made alone + why) is prime
+  // learning material — the reasoning you'd otherwise have to reconstruct. Its
+  // deferred + openQuestions are the open threads worth carrying forward.
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  const debriefDecisions = debriefs.flatMap((d) => coerceDebriefContent(d.content).decisionsMade ?? []);
+  const debriefDeferred = debriefs.flatMap((d) => coerceDebriefContent(d.content).deferred ?? []);
+  const debriefOpen = debriefs.flatMap((d) => coerceDebriefContent(d.content).openQuestions ?? []);
+  const hasDebriefLearnings = debriefDecisions.length > 0 || debriefDeferred.length > 0 || debriefOpen.length > 0;
+  if (hasDebriefLearnings) {
+    sections.push("## From the debrief");
+    sections.push("");
+    if (debriefDecisions.length > 0) {
+      sections.push("### Calls the agent made on its own");
+      sections.push("");
+      for (const dm of debriefDecisions) {
+        sections.push(`- **${dm.what}** — ${dm.why}${dm.alternative ? ` _(considered: ${dm.alternative})_` : ""}`);
+      }
+      sections.push("");
+    }
+    if (debriefDeferred.length > 0) {
+      sections.push("### Deferred");
+      sections.push("");
+      for (const df of debriefDeferred) sections.push(`- **${df.what}** — ${df.why}`);
+      sections.push("");
+    }
+    if (debriefOpen.length > 0) {
+      sections.push("### Still open");
+      sections.push("");
+      for (const q of debriefOpen) sections.push(`- ${q}`);
+      sections.push("");
+    }
+  }
+
+  if (conceptCounts.size === 0 && decisionsWithPredictions.length === 0 && rows.length === 0 && !hasDebriefLearnings) {
     sections.push("_Nothing crystallized yet. Keep pairing — the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
     sections.push("");
   }

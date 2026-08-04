@@ -42,6 +42,7 @@ import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
 import { buildPingPayload, decidePing, sendPing } from "../ping.js";
+import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../version.js";
 import {
   fsHonorsPosixMode,
@@ -499,6 +500,24 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     return n;
   }
 
+  // #192 (serving H1) — enumerate unanswered human questions across all of this
+  // daemon's sessions, using the SAME tail-walk predicate every UI surface and
+  // the first-call hint / check_feedback carryover use (collectUnansweredQuestions
+  // — the queue's single definition). This is the INVERSE of pendingCount: those
+  // are the AGENT's turn (a question the human asked, still owed an answer). The
+  // cross-project switcher and the "waiting for Claude" affordance read it so a
+  // question outliving its run stays visible.
+  function computeDaemonUnansweredCount(): number {
+    let n = 0;
+    for (const store of sessions.values()) {
+      try {
+        const comments = store.getFullState().comments ?? [];
+        n += collectUnansweredQuestions(comments).length;
+      } catch { /* skip a store that can't render state */ }
+    }
+    return n;
+  }
+
   app.get("/api/daemon-info", (c) => {
     // AA4 — projectHash is the value the browser must send back in
     // X-Project-Hash for any X-Session-Id'd request. Advertised here so a
@@ -508,7 +527,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     // wrapper's ensureDaemon can tell "this daemon is running OLD code" and
     // restart it instead of silently adopting the stale process. This is the
     // authoritative source (daemon.json mirrors it for a no-HTTP probe).
-    return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, version, pendingCount: computeDaemonPendingCount() });
+    return c.json({ pid: process.pid, projectRoot, projectHash: daemonProjectHash, startedAt, version, pendingCount: computeDaemonPendingCount(), unansweredQuestionCount: computeDaemonUnansweredCount() });
   });
 
   // MP1 (multi-project spike) — discover every live deepPairing daemon so the

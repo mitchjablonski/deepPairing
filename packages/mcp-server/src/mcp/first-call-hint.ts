@@ -469,8 +469,11 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
   try {
     const fullState = await store.getFullState();
     const allComments = fullState.comments ?? [];
+    // #192 — also exclude humanResolvedAt (a question the human marked done):
+    // the tail-walk predicate this queue's other surfaces use treats a
+    // human-resolved question as closed, so the preamble must not nag about it.
     const unanswered = allComments.filter(
-      (c: any) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId,
+      (c: any) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && !c.humanResolvedAt,
     );
     const revisionRequested = unanswered.filter(
       (c: any) => typeof c.target?.sectionId === "string" && c.target.sectionId.startsWith("decision_revision_requested"),
@@ -488,8 +491,13 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       );
     }
     if (plainUnanswered.length > 0) {
+      // #192 (serving H1) — these persist across runs (the session store is
+      // per-project and reloads), so a question asked after a previous run ended
+      // — e.g. on a debrief/explainer ask-anything thread right as the agent
+      // stopped polling — surfaces here on this run's FIRST call. Drain them
+      // before starting new work.
       blockingParts.push(
-        `\n❓ ${plainUnanswered.length} unanswered question${plainUnanswered.length === 1 ? "" : "s"} from the human. Call check_feedback to read them, then reply with answer_question (not a plain comment) so the UI links the answer to the question.`,
+        `\n❓ ${plainUnanswered.length} unanswered human question${plainUnanswered.length === 1 ? "" : "s"} await${plainUnanswered.length === 1 ? "s" : ""} — some may be from earlier runs. Call check_feedback to see and answer them, then reply with answer_question (not a plain comment) so the UI links the answer to the question. Drain these before new work.`,
       );
     }
 

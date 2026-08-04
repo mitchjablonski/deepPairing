@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
-import { computePending } from "../lib/pending";
+import { computePending, summarizeTurnParts } from "../lib/pending";
 import { isUnansweredQuestion } from "../lib/unanswered";
 import { buildThreads } from "../lib/threading";
 
@@ -153,11 +153,6 @@ export function TurnIndicator() {
   // this used an inline filter that omitted code_change, so a draft code change
   // showed "1 waiting" in the banner but "Agent working"/"Up to date" here.
   const pending = computePending(artifacts).drafts;
-  const draftResearch = pending.filter((a) => a.type === "research" || a.type === "spec");
-  const pendingDecisions = pending.filter((a) => a.type === "decision");
-  const pendingPlans = pending.filter((a) => a.type === "plan");
-  const pendingChanges = pending.filter((a) => a.type === "code_change");
-
   const totalPending = pending.length;
 
   // Q4 — badge rendered alongside the turn pill. Violet = "waiting on agent"
@@ -184,19 +179,11 @@ export function TurnIndicator() {
   ) : null;
 
   if (totalPending > 0) {
-    const parts: string[] = [];
-    if (draftResearch.length > 0) {
-      parts.push(`${draftResearch.length} finding${draftResearch.length > 1 ? "s" : ""}`);
-    }
-    if (pendingDecisions.length > 0) {
-      parts.push(`${pendingDecisions.length} decision${pendingDecisions.length > 1 ? "s" : ""}`);
-    }
-    if (pendingChanges.length > 0) {
-      parts.push(`${pendingChanges.length} change${pendingChanges.length > 1 ? "s" : ""}`);
-    }
-    if (pendingPlans.length > 0) {
-      parts.push(`${pendingPlans.length} plan${pendingPlans.length > 1 ? "s" : ""}`);
-    }
+    // #192 (usability H1) — the bucket-table summary counts EVERY reviewable
+    // type (changeset/debrief/explainer included) and falls back to "N items"
+    // if a future type isn't yet bucketed, so this can never render a dangling
+    // "Your turn —" while the tab badge shows a count.
+    const parts = summarizeTurnParts(pending);
 
     // B1 — the strongest CTA in the app was a plain div: the user read "Your
     // turn" then had to go hunt in the sidebar. Clicking jumps to the first

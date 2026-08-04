@@ -8,6 +8,7 @@ import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
+import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { DiagnosticsMenu } from "./components/DiagnosticsMenu";
@@ -538,6 +539,10 @@ function App() {
           review happens inside ArtifactStatusActions. */}
       {/* Pending decision/plan banner */}
       <PendingBanner />
+
+      {/* #192 — questions the human asked that the agent never answered, shown
+          only when no agent is live (it exited) with a one-click resume prompt. */}
+      <ResumeQuestionsBanner />
 
       {/* Main content.
           III10 — when the WS is connected but no wrapper has registered a

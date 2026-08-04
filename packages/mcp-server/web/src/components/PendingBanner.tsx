@@ -67,6 +67,23 @@ export function PendingBanner() {
             </button>
           </span>
         ))}
+        {/* #192 (usability L8) — the chip strip is capped at 3, so with 5+
+            pending the debrief/explainer (created last, at the end of a run) fell
+            off silently. A quiet "+N more" jumps to the first hidden draft
+            (advancing into the tail like the n-key), and its title lists them. */}
+        {drafts.length > 3 && (
+          <button
+            onClick={() => selectArtifact(drafts[3]!.id)}
+            // Sits on the chip background (like the sibling chips) rather than the
+            // darker banner surface so the small text keeps AA contrast (a bare
+            // text-accent-amber/70 on the banner bg fails 4.5:1 — caught by axe).
+            className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
+            title={`${drafts.length - 3} more waiting: ${drafts.slice(3).map((d) => d.title).join(", ")}`}
+            aria-label={`${drafts.length - 3} more waiting — jump to the next`}
+          >
+            +{drafts.length - 3} more
+          </button>
+        )}
       </div>
     </div>
   );

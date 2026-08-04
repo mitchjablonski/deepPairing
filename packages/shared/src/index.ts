@@ -260,3 +260,12 @@ export {
 } from "./changeset-review.js";
 export { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./schemas/content-types.js";
 export { normalizeConceptKey } from "./normalize.js";
+export {
+  threadRootId,
+  buildThreads,
+  isUnansweredQuestion,
+  countUnansweredQuestions,
+  collectUnansweredQuestions,
+  type Thread,
+  type UnansweredQuestion,
+} from "./unanswered.js";

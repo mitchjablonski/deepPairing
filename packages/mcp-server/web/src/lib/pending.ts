@@ -34,6 +34,44 @@ export function isDraftAwaitingReview(a: Artifact): boolean {
   return a.status === "draft" && REVIEWABLE_TYPES.has(a.type);
 }
 
+/**
+ * #192 (usability H1) — the noun buckets the TurnIndicator "Your turn — …"
+ * summary is built from, ordered for display. EVERY REVIEWABLE_TYPE must map to
+ * exactly one bucket or the summary silently omits it: pre-#192 the summary
+ * counted only research/spec, decision, code_change and plan, so with ONLY a
+ * changeset/debrief/explainer pending it rendered a dangling "Your turn —"
+ * (nothing after the dash) while the tab badge correctly said 3. `spec` shares
+ * the "finding" bucket with research (historical grouping). A parity test pins
+ * flatMap(types) === REVIEWABLE_TYPES so the NEXT type can't miss it.
+ */
+export const TURN_PART_BUCKETS: ReadonlyArray<{ types: readonly string[]; noun: string }> = [
+  { types: ["research", "spec"], noun: "finding" },
+  { types: ["decision"], noun: "decision" },
+  { types: ["code_change"], noun: "change" },
+  { types: ["changeset"], noun: "changeset" },
+  { types: ["plan"], noun: "plan" },
+  { types: ["debrief"], noun: "debrief" },
+  { types: ["explainer"], noun: "explainer" },
+];
+
+/**
+ * Build the "Your turn — …" summary parts (e.g. ["1 finding", "1 changeset"])
+ * from the pending drafts. Defensive fallback: if no bucket matched but drafts
+ * exist (a brand-new type not yet bucketed), returns ["N items"] so the caller
+ * never renders a dangling dash.
+ */
+export function summarizeTurnParts(pending: Artifact[]): string[] {
+  const parts: string[] = [];
+  for (const bucket of TURN_PART_BUCKETS) {
+    const n = pending.filter((a) => bucket.types.includes(a.type)).length;
+    if (n > 0) parts.push(`${n} ${bucket.noun}${n > 1 ? "s" : ""}`);
+  }
+  if (parts.length === 0 && pending.length > 0) {
+    parts.push(`${pending.length} item${pending.length > 1 ? "s" : ""}`);
+  }
+  return parts;
+}
+
 export function isUnresolvedQuestion(c: Comment): boolean {
   return (
     c.author === "human" &&

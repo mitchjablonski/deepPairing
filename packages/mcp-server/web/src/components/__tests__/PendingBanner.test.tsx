@@ -24,6 +24,32 @@ describe("PendingBanner", () => {
     expect(screen.getByText(/1 item waiting for you/i)).toBeInTheDocument();
   });
 
+  it("#192 (usability L8) — with 5 pending, shows a '+N more' affordance for the chips beyond the first 3", async () => {
+    for (let i = 0; i < 5; i++) {
+      useArtifactStore.getState().addArtifact(
+        art({ id: `d${i}`, type: "decision", title: `draft ${i}`, status: "draft", content: { context: "x", options: [], decisionId: `dec${i}` } }),
+      );
+    }
+    render(<PendingBanner />);
+    expect(screen.getByText(/5 items waiting for you/i)).toBeInTheDocument();
+    // The debrief/explainer created last must not silently fall off: a "+2 more"
+    // affordance jumps to the first hidden draft.
+    const more = screen.getByRole("button", { name: /2 more waiting/i });
+    expect(more).toHaveTextContent("+2 more");
+    await userEvent.click(more);
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("d3");
+  });
+
+  it("#192 — no '+N more' affordance when 3 or fewer are pending", () => {
+    for (let i = 0; i < 3; i++) {
+      useArtifactStore.getState().addArtifact(
+        art({ id: `d${i}`, type: "decision", title: `draft ${i}`, status: "draft", content: { context: "x", options: [], decisionId: `dec${i}` } }),
+      );
+    }
+    render(<PendingBanner />);
+    expect(screen.queryByText(/more waiting/i)).not.toBeInTheDocument();
+  });
+
   it("UX5 — quick Dismiss is two-step: first click confirms, second marks obsolete", async () => {
     useArtifactStore.getState().addArtifact(art({ id: "d1", type: "decision", title: "pick a cache", status: "draft", content: { context: "x", options: [], decisionId: "dec" } }));
     const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
