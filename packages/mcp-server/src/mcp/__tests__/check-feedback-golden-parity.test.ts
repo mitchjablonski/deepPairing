@@ -7,6 +7,7 @@ import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { SERVER_VERSION } from "../../version.js";
 
 /**
  * #188 (PAYDOWN) — BYTE-PARITY pin for the check_feedback delivery refactor.
@@ -24,6 +25,13 @@ import { setGlobalStoreForTests } from "../../store/global-store.js";
  * render-failure/status-change paths). We pin the sha256 of the prose and of
  * JSON.stringify(structuredContent). The GOLDEN hashes were captured against the
  * PRE-refactor tree; any drift in wording or structured shape fails loudly.
+ *
+ * VERSION-NORMALIZED: `SERVER_VERSION` is stripped from the hashed content — the
+ * prose preamble carries `deepPairing v${SERVER_VERSION}` and the struct carries
+ * `serverVersion`, so a raw hash would churn every release (this project bumps
+ * per release). We replace the version with "<version>" before hashing (the same
+ * technique the ledger-health GOLDEN_HEALTHY_STRUCT_SHA256 pin uses), so the
+ * goldens guard real content without becoming per-release churn.
  *
  * Date is frozen (toFake:['Date'] only, so the real long-poll timer is
  * untouched) so createdAt / statusHistory `at` / "Oldest pending" ages are
@@ -268,6 +276,37 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    name: "decision_region_optionId",
+    seed: (store) => {
+      store.createArtifact({
+        id: "art_dregion",
+        type: "decision",
+        title: "Auth topology",
+        content: {
+          question: "Where does the gate live?",
+          options: [
+            { id: "opt_a", title: "argon2id", description: "memory-hard", pros: [], cons: [] },
+          ],
+          visuals: [{ id: "vis_1", type: "diagram", source: "flowchart TD\n  AuthGate-->Login" }],
+        },
+      });
+      // A region comment on an OPTION's diagram: optionId + visualId + region
+      // with labels → exercises structuredRegionFields' optionId branch
+      // ({ optionId, visualId, region:{ x,y,w,h, nearNodes } }).
+      store.addComment({
+        id: "cmt_dregion",
+        artifactId: "art_dregion",
+        content: "this gate node needs a fallback",
+        author: "human",
+        target: {
+          optionId: "opt_a",
+          visualId: "vis_1",
+          region: { x: 0.15, y: 0.25, w: 0.35, h: 0.45, labels: ["AuthGate", "Login"] },
+        },
+      });
+    },
+  },
+  {
     name: "suggestion_state_machine",
     seed: (store) => {
       store.createArtifact({
@@ -426,18 +465,19 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
   // Captured against the PRE-refactor tree. A changed hash means the delivery
   // output drifted — investigate before updating.
   const GOLDEN: Record<string, { prose: string; struct: string }> = {
-    healthy_proceed: { prose: "79e2e81c0e941ad0284b66b5d93ed786026552e8697987858453f7feef8517a0", struct: "2c7dca736a65f5e61ffbaa47c1cc42adf0df67b141aba7c549eed86bb8504975" },
-    session_directive_plus_secret_comment: { prose: "46ac67ce6930e8c6c33bd503597ebe2d14f8dfe573547e9f1cdb690be9e65cbd", struct: "4f89a4b2432d3fb434f0c8cb9adbdc8af924aad4de0d70fa55156e5fae75a958" },
-    spec_questions_and_comments_lanes: { prose: "1431e83d5133fdec0cb39b67410dcc50fe6f892c429fdc30d6723c6f290dd3fc", struct: "7418e7c9b0ebe74c8b6d45a4c1fb84672e95688360cf6d489245ca6b5a989253" },
-    changeset_delline_crossfile_review: { prose: "d857d6e1f95fd11b7e099efc16491cd5b2efcc046c409bf6ac650f51e6e428e5", struct: "39b0b63567e30bf275d6b8bdc6683f3ac43fe6e52f46cf90308ccf7d8abecfbd" },
-    decision_grain_lanes: { prose: "e5c1ebe0d54881fb6ca9211c1748307b630a2509bdeacb13a792fd697f1f78bc", struct: "af1b9e3a7efab75ae292cea4bc788522c175760d064401fece52fa082b7ae0e1" },
-    suggestion_state_machine: { prose: "1201858c420f39ae4f4a2fd42e9c77f4df9c2112391825369203200bee292d7c", struct: "b0a69a290569493aedbc2278abec4ff67d5a1fc5827fde7538d912718e1abde7" },
-    followup_on_approved: { prose: "abd1ca53a8f5824cdb1f33c1f01c2d0a64d69ff24995e83071038ca074d06d35", struct: "0e1b3de8b5d11b4ffe5aaec259ecf0bf077c18ddb8e8204667c4dd4aead31dc4" },
-    resolved_decision_verdict: { prose: "66ff94bfce4eddb0703f16fa080924be0d54dd3f7d3dbdb85ae8d6d48df957e7", struct: "a5bfa3c9949e4716c3dc0f09395d40240b9f5059b39c064b6958bae1d4cdd980" },
-    plan_verdict_and_status_change: { prose: "bfee87aacb63987273a7b2f703de5820f0d112f266fd8f762ed9eee53941e74e", struct: "ad10b0119588526716c2320e5968244a07026f3d016bae2bcb99a54f668e748a" },
-    rejected_artifacts: { prose: "d2cec22faf08b855ed911e59d4e23b8604b8a59e134ca8681925fd137533898d", struct: "988d1dab9953f48a3795de587e8c150ab3c0b635e094b137479ebbf17fd67f3c" },
-    render_failures: { prose: "cbe1cdcb76ac5ae3b9691c2f28e04cac1fb0b3bf5533152fcd6940c2fb2adf08", struct: "b7505399b99c18364d97d04628c82a0d19d9447340fd4cca99ffd5baf11f5e3e" },
-    scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "eb98a12f4c5188d3d1692a76994501b444968a36afa92bd9069d3e8345584a85" },
+    healthy_proceed: { prose: "8b519f1b41c0dd6d65a0a092bd981e011cb48e90d827b736ce6ad78a6a6ccf48", struct: "e2bd0b9559c88cb3a4a6bb303b4b3ce005fdc806e14b52880423527d5ec83736" },
+    session_directive_plus_secret_comment: { prose: "3c067c69713b33cc6da5303c3ed93b500c65017ee3aacc48638e65a30acd536c", struct: "f10ff7f3a5549450c324e1bd0cb4daa9c6ddeb48d4c8d5deef68174fb353debd" },
+    spec_questions_and_comments_lanes: { prose: "8e9a2e3c83e53f8ad477bd0d2650c0487d9a0a6a1e62b1f00c82ad61478c254b", struct: "593f35123c8c74c6722ffbfd3c40f9c1a8a0a2162b6ceca04126ede1fc28ea37" },
+    changeset_delline_crossfile_review: { prose: "177b5f2e9d46cbaf13a578d0a3a456e09072d3fc997c57db57873e48282236f6", struct: "52eac441e8fb3e3a059952b25e2850913a451e2308d4c81c94be84fbcf9b64cd" },
+    decision_grain_lanes: { prose: "47142a2cbf1bc293b48a63875d81db0080ec1822a4e5c2ec95ea32b5a9030819", struct: "1fdd5b45ff8415848c9406e533d0c30084caeb9630d1d2f55cd2ef7fb29659a5" },
+    decision_region_optionId: { prose: "162a7e68d53e4e7e2e7f1ba22827cec76f4dc9679447b2914cdf42dd3a0c2bbd", struct: "d863bd052d6a93b1f655b7a6536bf9365e11ec43be78a8bf4f1dae8bf0221884" },
+    suggestion_state_machine: { prose: "39ebef78697961ab901ba3dea151657bbf7b6dfd9fafdc0df92d570ba06af62f", struct: "84cde744d7a2a55f8fd37ccf48962056ca6c49ce16d424782ae81de0aaa99f69" },
+    followup_on_approved: { prose: "fd47ec30f3eef24c0a26909e211e986a6696d7a9f5d2bfb0e6fed4c8513d8c0b", struct: "2d83a1251c891c04e9a019f2215547c515d64fb872dd53ed05befe59ac138133" },
+    resolved_decision_verdict: { prose: "35b87b2f5e5249c83f92a667d105809398b39a701780e3cf2ec7404d70dc7f80", struct: "3a93d12770210ce1228b184f02f6627b28857f3a9055af5a5f30dcca18d9ef81" },
+    plan_verdict_and_status_change: { prose: "1168802c54dedd2053a9540b75c0e0781130a5613a6c0fa3a5bbd5fcee811659", struct: "dc469333b628b4536c30aeb870f16cd8d2ce5f78421c961197b989f839c92d9f" },
+    rejected_artifacts: { prose: "2c6c6c46465869df2603d0a58f09cc6c406809743dd8022ebf4db1557c0c3214", struct: "3bb03742768b09b798adc570b129bdaca3703de7420844d72bd1b0b01e2e1a40" },
+    render_failures: { prose: "2af7667132a1640f6544a8af05ce2d17268cb943bf6aeec20394ff51ccc5388b", struct: "0318b2371be9db67905f81389222fd07b7366b8086ce578c43ada8553f3f8db1" },
+    scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "3fdcaf7107f306723a8d731c2c0484a09a172aa22cc4473fd4998950df2d47ce" },
   };
 
   let idx = 0;
@@ -446,8 +486,15 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
       const store = new FileStore(tmpDir, `s_golden_${idx++}`);
       scenario.seed(store);
       const res = await handleCheckFeedback(makeCtx(store, scenario.args), scenario.args ?? {});
-      const prose = (res.content[0] as { text: string }).text;
-      const struct = JSON.stringify(res.structuredContent);
+      // VERSION-NORMALIZED — strip SERVER_VERSION from BOTH surfaces (see the
+      // file header): the prose preamble carries `deepPairing v${SERVER_VERSION}`
+      // and the struct carries `serverVersion`. Object-spread keeps serverVersion
+      // in its original key position, so only the value changes (order-stable).
+      const prose = ((res.content[0] as { text: string }).text).split(SERVER_VERSION).join("<version>");
+      const struct = JSON.stringify({
+        ...(res.structuredContent as Record<string, unknown>),
+        serverVersion: "<version>",
+      });
       const proseSha = sha(prose);
       const structSha = sha(struct);
       expect(proseSha, `prose drift for ${scenario.name}\n---PROSE---\n${prose}`).toBe(GOLDEN[scenario.name]!.prose);
