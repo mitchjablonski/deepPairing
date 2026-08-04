@@ -864,6 +864,14 @@ export class FileStore implements IStore {
     return this.comments.filter((c) => c.target.artifactId === artifactId);
   }
 
+  /** #192 — ALL comments, in-memory (no disk read). Mirrors getArtifacts() so the
+   *  daemon's per-poll unanswered-question count can avoid getFullState()'s
+   *  preferences.json re-read (the PP4 anti-pattern the pendingCount path
+   *  deliberately dodges). */
+  getComments(): Comment[] {
+    return this.comments;
+  }
+
   getUnacknowledgedComments(): Comment[] {
     return this.comments.filter((c) => !c.acknowledged);
   }

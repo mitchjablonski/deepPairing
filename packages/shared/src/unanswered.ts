@@ -75,7 +75,17 @@ export function buildThreads(comments: Comment[]): Thread[] {
 }
 
 /** True when the thread's TAIL-walk lands on an open human question. */
-export function isUnansweredQuestion(comment: Comment, replies: Comment[]): boolean {
+/**
+ * The tail-walk itself, returning WHICH comment is the open question the thread
+ * is waiting on (or null when it's not waiting). This is the load-bearing detail
+ * behind `isUnansweredQuestion`: for the I4 common flow — human comment → agent
+ * reply → human asks a FOLLOW-UP question as a reply — the open question is the
+ * FOLLOW-UP (the thread TAIL), NOT the thread root. Any surface that needs to
+ * ANSWER the question (carryover delivery, the resume banner's jump target) must
+ * target THIS comment, not the root, or it answers the wrong comment and the
+ * queue goes silent while the real question is never addressed.
+ */
+export function findOpenQuestion(comment: Comment, replies: Comment[]): Comment | null {
   const isOpenHumanQuestion = (m: Comment): boolean => {
     const x = m as {
       intent?: string;
@@ -92,11 +102,15 @@ export function isUnansweredQuestion(comment: Comment, replies: Comment[]): bool
   const chain = [comment, ...replies];
   for (let i = chain.length - 1; i >= 0; i--) {
     const m = chain[i]!;
-    if (m.author !== "human") return false; // agent had the last substantive word
-    if ((m as { intent?: string }).intent === "question") return isOpenHumanQuestion(m);
+    if (m.author !== "human") return null; // agent had the last substantive word
+    if ((m as { intent?: string }).intent === "question") return isOpenHumanQuestion(m) ? m : null;
     // human non-question — context; keep walking back
   }
-  return false;
+  return null;
+}
+
+export function isUnansweredQuestion(comment: Comment, replies: Comment[]): boolean {
+  return findOpenQuestion(comment, replies) !== null;
 }
 
 /**
@@ -112,10 +126,15 @@ export function countUnansweredQuestions(comments: Comment[]): number {
   return n;
 }
 
-/** One unanswered-question queue entry: the root question comment, its replies,
- *  and the artifact it targets (drill-in reference). */
+/** One unanswered-question queue entry. `question` is the ACTUAL open-question
+ *  comment the tail-walk landed on — the one to answer / jump to (which for a
+ *  follow-up asked as a reply is NOT the thread `root`). `root` is kept for
+ *  thread context; `artifactId` is the drill-in reference. */
 export interface UnansweredQuestion {
   artifactId: string;
+  /** The open question to answer (answer_question commentId = question.id). */
+  question: Comment;
+  /** The thread root (may be a non-question comment for reply-questions). */
   root: Comment;
   replies: Comment[];
 }
@@ -125,16 +144,21 @@ export interface UnansweredQuestion {
  * flat comment list (a session store's full comment set). The queue whose
  * definition is the SAME tail-walk every UI surface uses, exposed for the server
  * so a question asked AFTER a run ends gets picked up on the NEXT run without the
- * human re-raising it. Sorted oldest-first (createdAt) so the earliest-owed
- * question leads.
+ * human re-raising it. Sorted oldest-first by the QUESTION's createdAt so the
+ * earliest-owed question leads.
  */
 export function collectUnansweredQuestions(comments: Comment[]): UnansweredQuestion[] {
   const out: UnansweredQuestion[] = [];
   for (const t of buildThreads(comments)) {
-    if (isUnansweredQuestion(t.root, t.replies)) {
-      out.push({ artifactId: t.root.target?.artifactId ?? "", root: t.root, replies: t.replies });
+    const question = findOpenQuestion(t.root, t.replies);
+    if (question) {
+      // Anchor on the QUESTION's artifact (a reply inherits the root's target,
+      // but read from the question comment so an odd reply target still points
+      // where the human is looking).
+      const artifactId = question.target?.artifactId ?? t.root.target?.artifactId ?? "";
+      out.push({ artifactId, question, root: t.root, replies: t.replies });
     }
   }
-  out.sort((a, b) => (a.root.createdAt ?? "").localeCompare(b.root.createdAt ?? ""));
+  out.sort((a, b) => (a.question.createdAt ?? "").localeCompare(b.question.createdAt ?? ""));
   return out;
 }

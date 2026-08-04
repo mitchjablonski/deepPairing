@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { Comment } from "../schemas/comment.js";
 import {
   isUnansweredQuestion,
+  findOpenQuestion,
   countUnansweredQuestions,
   collectUnansweredQuestions,
   buildThreads,
@@ -58,16 +59,32 @@ describe("#192 — shared unanswered-question queue (the ONE tail-walk definitio
     expect(out[1]!.artifactId).toBe("art_2");
   });
 
-  it("collectUnansweredQuestions: a follow-up question asked as a reply still counts (tail-walk)", () => {
-    // Human comments, agent replies, human asks a follow-up question on the reply.
+  it("collectUnansweredQuestions: a follow-up question asked as a reply targets the FOLLOW-UP, not the root (Fix 1)", () => {
+    // The I4 common flow: human comments, agent replies, human asks a follow-up
+    // question ON the reply. The open question is the FOLLOW-UP (thread tail).
+    // Pre-Fix-1 the entry pointed at `root` (a non-question comment) — so the
+    // agent would answer the wrong comment and the real question went unaddressed.
     const comments = [
-      c({ id: "root", intent: "comment", createdAt: "2026-01-01T00:00:00.000Z" } as any),
-      c({ id: "agent1", author: "agent", parentCommentId: "root", createdAt: "2026-01-01T00:01:00.000Z" }),
-      c({ id: "followup", intent: "question", parentCommentId: "agent1", createdAt: "2026-01-01T00:02:00.000Z" } as any),
+      c({ id: "root", content: "here's a thought", intent: "comment", createdAt: "2026-01-01T00:00:00.000Z" } as any),
+      c({ id: "agent1", author: "agent", content: "noted", parentCommentId: "root", createdAt: "2026-01-01T00:01:00.000Z" }),
+      c({ id: "followup", content: "but does it handle retries?", intent: "question", parentCommentId: "agent1", createdAt: "2026-01-01T00:02:00.000Z" } as any),
     ];
     const out = collectUnansweredQuestions(comments);
     expect(out.length).toBe(1);
-    // The queue entry roots at the thread root (the original comment).
+    // `question` is the actual open question to answer (answer_question commentId).
+    expect(out[0]!.question.id).toBe("followup");
+    expect(out[0]!.question.content).toBe("but does it handle retries?");
+    // `root` is retained only for thread context.
     expect(out[0]!.root.id).toBe("root");
+  });
+
+  it("findOpenQuestion returns the specific open-question comment (or null)", () => {
+    const root = c({ id: "root", intent: "comment" } as any);
+    const agent = c({ id: "a", author: "agent", parentCommentId: "root", createdAt: "2026-01-01T00:01:00.000Z" });
+    const followup = c({ id: "fu", intent: "question", parentCommentId: "a", createdAt: "2026-01-01T00:02:00.000Z" } as any);
+    expect(findOpenQuestion(root, [agent, followup])?.id).toBe("fu");
+    // An agent reply after the follow-up closes it → null.
+    const agentAnswer = c({ id: "a2", author: "agent", parentCommentId: "fu", createdAt: "2026-01-01T00:03:00.000Z" });
+    expect(findOpenQuestion(root, [agent, followup, agentAnswer])).toBeNull();
   });
 });

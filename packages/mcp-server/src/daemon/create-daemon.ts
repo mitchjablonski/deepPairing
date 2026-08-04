@@ -511,8 +511,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     let n = 0;
     for (const store of sessions.values()) {
       try {
-        const comments = store.getFullState().comments ?? [];
-        n += collectUnansweredQuestions(comments).length;
+        // PP4 — getComments() is the in-memory array; getFullState() would
+        // additionally re-read preferences.json from disk per session on every
+        // /api/daemon-info poll (the sibling pendingCount path dodges this too).
+        n += collectUnansweredQuestions(store.getComments()).length;
       } catch { /* skip a store that can't render state */ }
     }
     return n;

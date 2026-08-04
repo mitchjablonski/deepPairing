@@ -60,7 +60,7 @@ describe("#192 — ResumeQuestionsBanner (questions waiting for Claude)", () => 
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("copy button writes a paste-able resume prompt to the clipboard", async () => {
+  it("copy button writes a paste-able resume prompt to the clipboard and confirms success", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     seedQuestion("art_1");
@@ -69,5 +69,19 @@ describe("#192 — ResumeQuestionsBanner (questions waiting for Claude)", () => 
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText.mock.calls[0]![0]).toMatch(/check_feedback/);
     expect(writeText.mock.calls[0]![0]).toMatch(/answer_question/);
+    expect(await screen.findByRole("button", { name: /copied/i })).toBeInTheDocument();
+  });
+
+  // Fix 3 — in the VS Code webview navigator.clipboard is undefined; the button
+  // must NOT lie with "Copied ✓", and the count/jump must keep working.
+  it("does NOT claim 'Copied ✓' when the clipboard API is unavailable (VS Code webview)", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    seedQuestion("art_1");
+    render(<ResumeQuestionsBanner />);
+    // The count is still shown (the strip still surfaces the queue).
+    expect(screen.getByText(/1 question waiting for claude/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /copy resume prompt/i }));
+    expect(screen.queryByRole("button", { name: /copied/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy resume prompt/i })).toBeInTheDocument();
   });
 });

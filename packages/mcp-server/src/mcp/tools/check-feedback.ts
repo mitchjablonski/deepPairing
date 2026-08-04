@@ -498,23 +498,41 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   try {
     const full = await store.getFullState();
     const carryover = collectUnansweredQuestions(full.comments ?? []);
-    // Don't double-report a question already delivered in THIS poll's drain.
+    // Don't double-report a comment already delivered in THIS poll — questions
+    // (structuredQuestions) AND directives/comments (structuredComments, which
+    // includes the __session__ directive drain). Belt-and-suspenders alongside
+    // the __session__ exclusion below.
     const deliveredIds = new Set<string>();
     for (const q of structuredQuestions) {
       const id = (q.commentId ?? q.id) as string | undefined;
       if (id) deliveredIds.add(id);
     }
-    const older = carryover.filter((q) => !deliveredIds.has(q.root.id));
+    for (const q of structuredComments) {
+      const id = (q.id ?? q.commentId) as string | undefined;
+      if (id) deliveredIds.add(id);
+    }
+    const older = carryover.filter(
+      (q) =>
+        // FIX 1 — target/dedupe the ACTUAL open-question comment (the tail-walk
+        // landing, which for a reply-question is NOT the thread root).
+        !deliveredIds.has(q.question.id) &&
+        // HUNCH — a __session__ question is drained as a DIRECTIVE above (and
+        // acknowledged); collecting it here too would double-surface it in the
+        // same poll. Session directives never carry over as questions.
+        q.artifactId !== "__session__",
+    );
     if (older.length > 0) {
       for (const q of older) {
         structuredCarryover.push({
-          commentId: q.root.id,
+          commentId: q.question.id,
           artifactId: q.artifactId,
-          content: String(q.root.content ?? "").slice(0, 200),
+          content: String(q.question.content ?? "").slice(0, 200),
         });
       }
+      // FIX 4 — carry the secret-warning note the normal drain appends, so a
+      // carried-over question that may contain a pasted credential is flagged.
       const lines = older.map(
-        (q) => `  • ${q.artifactId || "(session)"} — comment ${q.root.id}: "${String(q.root.content ?? "").slice(0, 120)}"`,
+        (q) => `  • ${q.artifactId || "(session)"} — comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`,
       );
       parts.push(
         `↩️ ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier — the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:\n${lines.join("\n")}`,

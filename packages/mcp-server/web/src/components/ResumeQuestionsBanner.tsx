@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Comment } from "@deeppairing/shared";
-import { buildThreads, isUnansweredQuestion } from "@deeppairing/shared";
+import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 
@@ -27,15 +27,13 @@ export function ResumeQuestionsBanner() {
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const [copied, setCopied] = useState(false);
 
+  // Reuse the SAME shared queue definition the server carryover uses, so the
+  // banner's count + jump target agree with what the agent will receive. The
+  // collector targets the ACTUAL open-question comment (Fix 1 — for a reply
+  // follow-up that's the tail, not the thread root) and its artifact.
   const unanswered = useMemo(() => {
-    const out: Array<{ artifactId: string; comment: Comment }> = [];
-    for (const [artifactId, list] of Object.entries(comments)) {
-      for (const t of buildThreads(list as Comment[])) {
-        if (isUnansweredQuestion(t.root, t.replies)) out.push({ artifactId, comment: t.root });
-      }
-    }
-    out.sort((a, b) => a.comment.createdAt.localeCompare(b.comment.createdAt));
-    return out;
+    const all = Object.values(comments).flat() as Comment[];
+    return collectUnansweredQuestions(all);
   }, [comments]);
 
   // No agent is live when no registered session reports live !== false (an
@@ -50,13 +48,18 @@ export function ResumeQuestionsBanner() {
     `Call check_feedback to see them (they arrive as an "unanswered questions carried over" block), then reply to each with answer_question so the answer links to my question in the companion UI.`;
 
   const copy = async () => {
+    // Fix 3 — only claim success after an ACTUAL resolve. In the VS Code webview
+    // (this component's own target) navigator.clipboard is undefined; `await
+    // undefined` wouldn't throw, so the old optional-chain lied with "Copied ✓".
+    // Branch on presence; the count + jump keep working either way.
+    const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    if (!writeText) return;
     try {
-      await navigator.clipboard?.writeText(resumePrompt);
+      await writeText(resumePrompt);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard denied (permissions/older browser) — non-fatal; the strip
-      // still surfaces the count and the jump affordance.
+      // Clipboard denied (permissions) — non-fatal; don't claim success.
     }
   };
 
