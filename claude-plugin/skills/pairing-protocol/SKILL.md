@@ -1,6 +1,6 @@
 ---
 name: pairing-protocol
-description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_code_change, log_reasoning, recall, revise_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
+description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_changeset, present_code_change, present_debrief, log_reasoning, recall, revise_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
 ---
 
 # deepPairing Collaboration Protocol
@@ -48,6 +48,20 @@ Prefer:
 This applies everywhere prose lands in front of the human: the `context` of
 `present_options`, the `detail` of a finding, the `reasoning` of a code change,
 the `reason` on `revise_artifact`. It's pairing, not narration.
+
+## Cadence — decisions real-time, comprehension batched
+
+Two rhythms, and they're different:
+
+- **Decisions happen in real time.** A real choice (`present_options`), a spec,
+  a plan — surface it *before* you build, one card at a time, so the human can
+  redirect while it's cheap. Don't batch these.
+- **Comprehension batches at feature boundaries.** How the code actually came
+  together is best understood as ONE walk-through at the end, not as a stream of
+  per-edit cards the human skims and forgets. So for CODE, the DEFAULT is a
+  batched `present_changeset` at each feature boundary, and the run ENDS with one
+  `present_debrief`. Per-edit `present_code_change` and per-step `log_reasoning`
+  are the *exceptions*, not the beat.
 
 ## When to use which tool
 
@@ -99,17 +113,38 @@ the `reason` on `revise_artifact`. It's pairing, not narration.
   **annotated_code** = the exact lines changing · **prototype** = how it feels.
   Give each visual a STABLE `id` and keep it across revisions so the human's
   comment threads on a diagram survive you redrawing it.
-- **`present_code_change`** — call this BEFORE the Write/Edit, for **every**
-  code change you make, with diff + reasoning. No exceptions: this includes
-  small follow-on edits, new files (tests, configs), and each file of a
-  multi-file change — not just the "main" file. A change written straight to
-  disk without a present_code_change never reaches the human's review surface;
-  they can't see or comment on it. If you make five edits, that's five
-  present_code_change calls. It's the per-change record, not optional ceremony.
-- **`log_reasoning`** — BEFORE every Edit or Write. **Name the underlying
-  concept** in the `concept` field (e.g. "dependency inversion",
-  "optimistic UI"). This is the pairing-learning lever — surface the
-  pattern so the human learns it, not just the fix.
+- **`present_changeset`** — **the DEFAULT for presenting code.** When a piece of
+  work spans 2+ files (a feature, a refactor, a bug fix touching several
+  modules), present the whole thing as ONE changeset at the feature boundary:
+  unified diffs per file, per-file review state, comments that anchor across
+  files. This is the batched comprehension surface — the human reviews the change
+  as a unit and dispositions each file, instead of skimming a stream of per-edit
+  cards. Reach for it by default whenever you've finished a coherent slice of
+  work.
+- **`present_code_change`** — the **exception**, not the beat. Use it only for a
+  genuinely SINGLE-file, surgical change, or when the human explicitly asks to
+  see an edit before it lands. For anything spanning multiple files, batch into a
+  `present_changeset` instead. (A change written straight to disk still needs a
+  review surface — but the default surface is the changeset, not a card per
+  edit.)
+- **`present_debrief`** — **END EVERY feature or autonomous run with exactly
+  ONE.** This is the primary comprehension surface (the thesis's 80% case):
+  summarize what changed and why (the narrative), walk the `sections[]` (each
+  with its named `concepts[]` — this is where concept-naming LIVES now, not in a
+  stream of per-step cards), own the `decisionsMade[]` you made WITHOUT the human
+  (the accountability block), flag `needsYourEyes[]` (the prioritized review
+  list), note what you `deferred[]`, and invite questions. The human reads it and
+  can ask ANYTHING in the thread. Put the FULL story IN the debrief content —
+  don't leave the real explanation in chat. If the debrief changes, `supersede`
+  it; don't post a second one.
+- **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
+  that cadence got zero engagement, and concept-naming now lives in the debrief's
+  `sections[].concepts`. Reach for `log_reasoning` only for a genuinely
+  STANDALONE piece of reasoning worth interrupting for (a surprising tradeoff, a
+  non-obvious constraint you want on the record before you act). When you do use
+  it, still **name the underlying concept** in the `concept` field — that's the
+  learning lever. It stays functional for back-compat; it's just no longer the
+  default beat.
 - **`revise_artifact`** — one tool, three modes for taking something back:
   - `mode: "supersede"` + new `content` → creates a v(N+1) draft linked via
     parentId; the old one flips to "superseded". **Default to this whenever you
@@ -221,3 +256,13 @@ to supervised for changes touching these paths.
 - Stop polling and ask the human in the terminal.
 - Bail to terminal to apologize mid-flight — use `revise_artifact` with `mode: "retract"`.
 - Set `stakes: "high"` on every decision — reserve it for genuinely significant ones.
+- **Write "details in chat" (or "see chat", "explained above") inside an
+  artifact.** The full deliberation belongs IN the artifact content — the `why`
+  of a decision, the narrative and `decisionsMade` of a debrief, the `reasoning`
+  of a change. Pointing the review surface back at the terminal defeats it and is
+  a protocol violation. If it's worth the human's review, write it in the
+  artifact.
+- Stream a `present_code_change` per edit for multi-file work, or a
+  `log_reasoning` per step — batch code into `present_changeset` and end with one
+  `present_debrief` instead.
+- Finish a feature or autonomous run WITHOUT a `present_debrief`.

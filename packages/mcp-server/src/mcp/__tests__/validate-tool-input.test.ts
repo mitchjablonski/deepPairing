@@ -591,6 +591,63 @@ describe("#183 — example-echo guard", () => {
     expect(isError).toBeFalsy();
     expect(store.getArtifacts()).toHaveLength(1);
   });
+
+  // #190 — present_debrief keys the echo guard on the SUMMARY scalar (a full
+  // distinctive narrative sentence). Pre-fix, an agent replaying the validation
+  // example verbatim would mint a junk "rate limiting" debrief in the real
+  // session (the #183 class); this verifies the guard nets it.
+  it("REJECTS the present_debrief example (summary fingerprint) end-to-end", async () => {
+    const { text, isError } = await call("present_debrief", {
+      title: "Debrief — rate limiting on the auth endpoints",
+      summary:
+        "We added IP-based rate limiting to /login and /reset so credential-stuffing is throttled without hurting real users. Here is the walk of what changed, the calls I made alone, and what I'd like your eyes on.",
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("EXAMPLE_ECHO_REJECTED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("ADMITS a real debrief that reuses the example TITLE but a different summary (title is NOT a fingerprint)", async () => {
+    const { isError } = await call("present_debrief", {
+      title: "Debrief — rate limiting on the auth endpoints", // deliberately the example title
+      summary: "We shipped a token-bucket limiter on the write endpoints and tuned the burst allowance.",
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+
+  it("ADMITS a real, distinctive debrief and records it (only summary is required)", async () => {
+    const { isError } = await call("present_debrief", {
+      title: "Debrief — sliding-window session TTL",
+      summary: "We moved the TTL refresh into one middleware so every route inherits it.",
+      sections: [{ title: "Centralized the refresh", body: "requireSession now calls getAndTouch." }],
+      decisionsMade: [{ what: "Fail closed on expiry", why: "safer default" }],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+    expect(store.getArtifacts()[0]!.type).toBe("debrief");
+  });
+
+  it("REJECTS a debrief with no summary and creates NO artifact", async () => {
+    const { text, isError } = await call("present_debrief", {
+      title: "Debrief — something",
+      // summary omitted → the one required content field is missing
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("REJECTS a debrief with an EMPTY summary (.min(1) — empty is worse than absent)", async () => {
+    const { text, isError } = await call("present_debrief", {
+      title: "Debrief — something",
+      summary: "", // present but empty → the flagship comprehension surface with no narrative
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toContain("summary");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

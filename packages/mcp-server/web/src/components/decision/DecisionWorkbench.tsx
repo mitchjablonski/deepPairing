@@ -412,9 +412,11 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
           )}
         </div>
 
-        {/* Decision-level actions — reuse DecisionFooter verbatim. */}
+        {/* Decision-level actions — reuse DecisionFooter verbatim, plus the
+            #190 calibration actions ("+ Add reasoning" / "+ Capture prediction")
+            which live ONLY here now, not on the compact inline card. */}
         <div className="border-t border-border-default bg-surface-secondary px-4 py-1">
-          <DecisionFooter {...footerProps} />
+          <DecisionFooter {...footerProps} showCalibrationActions />
         </div>
       </div>
 

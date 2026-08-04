@@ -129,6 +129,37 @@ describe("parseArtifactContent (U2)", () => {
     expect(r.ok).toBe(false);
   });
 
+  // #190 — debrief content.
+  it("validates a debrief artifact via DebriefContentSchema (summary-only is valid)", async () => {
+    const r = parseArtifactContent(art("debrief", { summary: "what we built" }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.data as any).summary).toBe("what we built");
+  });
+
+  it("validates a fully-populated debrief (sections + concepts + evidence + decisionsMade + needsYourEyes)", async () => {
+    const r = parseArtifactContent(art("debrief", {
+      summary: "TTL refactor",
+      sections: [{
+        title: "Centralized refresh", body: "getAndTouch in middleware",
+        concepts: [{ name: "sliding window" }],
+        evidence: [{ filePath: "m.ts", lineStart: 1, lineEnd: 2, snippet: "x", explanation: "y" }],
+        changesetRef: "art_cs",
+      }],
+      decisionsMade: [{ what: "fail closed", why: "safer", alternative: "auto-renew" }],
+      needsYourEyes: [{ what: "the expiry check", why: "auth path", artifactRef: "art_cs" }],
+      deferred: [{ what: "rotation", why: "scope" }],
+      openQuestions: ["survive restart?"],
+    }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.data as any).sections).toHaveLength(1);
+  });
+
+  it("rejects a debrief with no summary (the one required field)", async () => {
+    const r = parseArtifactContent(art("debrief", { sections: [] }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.issues[0]!.path.join(".")).toBe("summary");
+  });
+
   // Y5 — concepts hoisted into decision options + code_change content.
   it("Y5: validates a decision option carrying a concept", async () => {
     const r = parseArtifactContent(art("decision", {

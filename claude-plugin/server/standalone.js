@@ -25579,6 +25579,56 @@ var ChangesetContentSchema = external_exports.object({
    *  changeset-review route), keyed by file path. */
   reviewReasons: ChangesetReviewReasonsSchema.optional()
 });
+var DebriefSectionSchema = external_exports.object({
+  title: external_exports.string(),
+  body: external_exports.string().describe("The narrative for this part of the change, in plain English"),
+  /** Named concepts applied here — same shape as reasoning/decision concepts so
+   *  the UI reuses ConceptCallout. THE learning lever: name the pattern, not just
+   *  the fix. */
+  concepts: external_exports.array(ReasoningConceptSchema).optional(),
+  /** Code evidence for this section (file:line + snippet + explanation), rendered
+   *  through the shared Evidence/CommentableCode stack. Accepts a legacy string
+   *  reference or a rich Evidence object (EvidenceInputSchema). */
+  evidence: external_exports.array(EvidenceInputSchema).optional(),
+  /** The changeset artifact id this section walks through (drill-in link). */
+  changesetRef: external_exports.string().optional().describe("Artifact id of the changeset this section explains"),
+  /** Other underlying artifact ids this section references (drill-in links). */
+  artifactRefs: external_exports.array(external_exports.string()).optional()
+});
+var DebriefDecisionSchema = external_exports.object({
+  what: external_exports.string().describe("What you decided on your own"),
+  why: external_exports.string().describe("Why you made that call"),
+  alternative: external_exports.string().optional().describe("The alternative you considered but did not take")
+});
+var DebriefReviewItemSchema = external_exports.object({
+  what: external_exports.string().describe("What the human should review"),
+  why: external_exports.string().describe("Why it warrants their eyes"),
+  artifactRef: external_exports.string().optional().describe("Artifact id to open for this item")
+});
+var DebriefDeferredSchema = external_exports.object({
+  what: external_exports.string().describe("What was left undone"),
+  why: external_exports.string().describe("Why it was deferred")
+});
+var DebriefContentSchema = external_exports.object({
+  /** The narrative — what we built and why. The anchor field. `.min(1)` for the
+   *  same "empty is worse than absent" discipline title/context/concept.name use:
+   *  an empty-narrative debrief on the flagship comprehension surface is a
+   *  degenerate artifact, not a valid one. (The coercer stays lenient and
+   *  defaults to "" so a legacy/partial render never crashes.) */
+  summary: external_exports.string().min(1),
+  /** Ordered walk of what changed. */
+  sections: external_exports.array(DebriefSectionSchema).optional(),
+  /** Decisions the agent made without the human — the accountability block. */
+  decisionsMade: external_exports.array(DebriefDecisionSchema).optional(),
+  /** The prioritized review list — "look at these first". */
+  needsYourEyes: external_exports.array(DebriefReviewItemSchema).optional(),
+  /** What was left undone and why. */
+  deferred: external_exports.array(DebriefDeferredSchema).optional(),
+  /** Reuses the existing open-question machinery (spec/plan host these the same
+   *  way) — questions the agent wants the human to weigh in on, threaded through
+   *  the same questionIndex comment lane. */
+  openQuestions: external_exports.array(external_exports.string()).optional()
+});
 
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
@@ -25590,7 +25640,11 @@ var ArtifactTypeSchema = external_exports.enum([
   "spec",
   // #171 — a change spanning 2+ files, reviewed as one unit (unified diffs +
   // per-file review state). Single-file changes stay `code_change`.
-  "changeset"
+  "changeset",
+  // #190 — the end-of-feature comprehension surface: ONE batched artifact that
+  // summarizes what changed and why, the decisions the agent made alone, what
+  // needs the human's eyes, and an ask-anything thread. The thesis's 80% case.
+  "debrief"
 ]);
 var ArtifactStatusSchema = external_exports.enum([
   "draft",
@@ -26890,8 +26944,9 @@ var PROTOCOL_PREAMBLE = [
   "  3. check_feedback \u2014 poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
   "  4. present_options \u2014 surface EACH choice between approaches as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury a decision inside a plan step as an implied default, and never interleave decisions in a plan \u2014 that skips the pros/cons review and the ledger never learns your pick.",
   "  5. present_spec, then present_plan \u2014 for non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (each a stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow \u2014 quote node/edge labels that contain punctuation like ()#: and use `<br/>` not `\\n` for line breaks); 'file_map' (the create/modify/delete set); 'annotated_code' (real `code`+`filePath` with line-anchored `annotations[]` \u2014 point at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. present_code_change BEFORE every Write/Edit \u2014 EVERY change, incl. small follow-ons, new files, and each file of a multi-file change (5 edits = 5 calls). A write straight to disk never reaches the human's review surface. + log_reasoning (name the concept). For a change that spans 2+ FILES reviewed as one unit (a refactor/feature touching several modules), use present_changeset instead \u2014 one artifact with per-file diffs + review state; single-file stays present_code_change.",
-  "  7. check_feedback again \u2014 let your pair review each artifact in the UI.",
+  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (ONE artifact: per-file diffs + review state, for a refactor/feature touching several modules). present_code_change is the EXCEPTION \u2014 a genuinely single-file surgical change, or when the human asks to see an edit first. Don't stream a log_reasoning card per step \u2014 name concepts in the debrief instead.",
+  "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE: the narrative of what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, and an ask-anything thread. The primary comprehension surface \u2014 put the full story IN it, never 'details in chat'.",
+  "  8. check_feedback again \u2014 let your pair review each artifact in the UI.",
   "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content \u2014 do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
@@ -26907,7 +26962,7 @@ var DETAIL_DENSITY_TERSE_GUIDANCE = [
   // ways on the same tool. Each self-scopes, but the model shouldn't have to
   // infer the scoping: terse governs prose, the Autonomy dial governs whether
   // an artifact posts at all.
-  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)"
+  "  - Do NOT reduce the number of artifacts and do NOT skip present_options, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Code must still be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes. Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)"
 ].join("\n");
 var AUTONOMY_HINT_SUPERVISED = "";
 var AUTONOMY_HINT_BALANCED = [
@@ -26916,13 +26971,13 @@ var AUTONOMY_HINT_BALANCED = [
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs \u2014 not routine implementation choices with one reasonable answer.",
   "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings \u2192 options \u2192 spec/plan.",
-  "  - FLOOR (unchanged): present_code_change BEFORE every Write/Edit is still required \u2014 this dial only trims findings/options."
+  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; this dial trims findings/options, never the review record."
 ].join("\n");
 var AUTONOMY_HINT_AUTONOMOUS = [
   `
 \u{1F39A} Autonomy: AUTONOMOUS \u2014 the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
   "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
-  "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required \u2014 it is the review record.",
+  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; the human reviews the artifact, not raw edits on disk.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths."
 ].join("\n");
 function autonomyHintFor(level) {
@@ -28087,6 +28142,39 @@ var EXAMPLE_CHANGESET = `{
       "hunks": [ { "lines": [ { "kind": "add", "content": "  expiresAt: number;", "newLine": 12 } ] } ] }
   ]
 }`;
+var EXAMPLE_DEBRIEF = `{
+  "title": "Debrief \u2014 rate limiting on the auth endpoints",
+  "summary": "We added IP-based rate limiting to /login and /reset so credential-stuffing is throttled without hurting real users. Here is the walk of what changed, the calls I made alone, and what I'd like your eyes on.",
+  "sections": [
+    {
+      "title": "Added a sliding-window limiter middleware",
+      "body": "Requests to the auth routes now pass through a limiter keyed on client IP.",
+      "concepts": [
+        { "name": "sliding-window rate limiting",
+          "oneLineExplanation": "counts requests in a moving time window instead of fixed buckets, so bursts at a boundary can't slip through" }
+      ],
+      "evidence": [
+        { "filePath": "api/middleware/limit.ts", "lineStart": 12, "lineEnd": 14,
+          "snippet": "if (window.count(ip) > MAX) return res.status(429).end();",
+          "explanation": "The choke point every auth route inherits." }
+      ],
+      "changesetRef": "art_xxxxxxxxxx"
+    }
+  ],
+  "decisionsMade": [
+    { "what": "Return 429 with a Retry-After rather than a silent drop.",
+      "why": "A silent drop makes the limit undebuggable for legitimate clients.",
+      "alternative": "Fail open on limiter errors \u2014 rejected as too permissive for auth." }
+  ],
+  "needsYourEyes": [
+    { "what": "The MAX threshold", "why": "Too low locks out real users; worth your call.",
+      "artifactRef": "art_xxxxxxxxxx" }
+  ],
+  "deferred": [
+    { "what": "Distributed limiter state", "why": "In-memory is fine single-instance; revisit when we scale out." }
+  ],
+  "openQuestions": ["Should the limit apply per-account as well as per-IP?"]
+}`;
 var prop = (v, key) => v && typeof v === "object" ? v[key] : void 0;
 var normEcho = (v) => typeof v === "string" ? v.trim().toLowerCase() : "";
 var pluckSet = (v, listKey, field) => {
@@ -28102,6 +28190,7 @@ var EX_PLAN = JSON.parse(EXAMPLE_PLAN);
 var EX_CODE_CHANGE = JSON.parse(EXAMPLE_CODE_CHANGE);
 var EX_REASONING = JSON.parse(EXAMPLE_REASONING);
 var EX_CHANGESET = JSON.parse(EXAMPLE_CHANGESET);
+var EX_DEBRIEF = JSON.parse(EXAMPLE_DEBRIEF);
 var findingTitles = (o) => pluckSet(o, "findings", "title");
 var reqStatements = (o) => pluckSet(o, "requirements", "statement");
 var stepDescriptions = (o) => pluckSet(o, "steps", "description");
@@ -28112,7 +28201,8 @@ var ECHO_MATCHERS = {
   present_plan: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_PLAN, "title")) && echoSetEq(stepDescriptions(d), stepDescriptions(EX_PLAN)),
   present_code_change: (d) => normEcho(prop(d, "filePath")) === normEcho(prop(EX_CODE_CHANGE, "filePath")) && normEcho(prop(d, "before")) === normEcho(prop(EX_CODE_CHANGE, "before")) && normEcho(prop(d, "after")) === normEcho(prop(EX_CODE_CHANGE, "after")),
   log_reasoning: (d) => normEcho(prop(d, "action")) === normEcho(prop(EX_REASONING, "action")) || normEcho(prop(d, "reasoning")) === normEcho(prop(EX_REASONING, "reasoning")),
-  present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title"))
+  present_changeset: (d) => normEcho(prop(d, "title")) === normEcho(prop(EX_CHANGESET, "title")),
+  present_debrief: (d) => normEcho(prop(d, "summary")) === normEcho(prop(EX_DEBRIEF, "summary"))
 };
 function formatExampleEchoError(toolName) {
   const code = TOOL_ERROR_CODES.EXAMPLE_ECHO_REJECTED;
@@ -28242,6 +28332,24 @@ function validatePresentChangesetInput(args) {
   }
   return admit("present_changeset", { title: titleParse.data.title, ...contentParse.data });
 }
+function validatePresentDebriefInput(args) {
+  const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
+  if (!titleParse.success) {
+    return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF) };
+  }
+  const contentParse = DebriefContentSchema.safeParse({
+    summary: args?.summary,
+    sections: args?.sections,
+    decisionsMade: args?.decisionsMade,
+    needsYourEyes: args?.needsYourEyes,
+    deferred: args?.deferred,
+    openQuestions: args?.openQuestions
+  });
+  if (!contentParse.success) {
+    return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF) };
+  }
+  return admit("present_debrief", { title: titleParse.data.title, ...contentParse.data });
+}
 function validateLogReasoningInput(args) {
   const result = ReasoningContentSchema.safeParse({
     action: args?.action,
@@ -28281,7 +28389,10 @@ var TOOL_INPUT_SCHEMAS = {
   // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
   // HUMAN-driven (set via the review route), so they're omitted from the
   // advertised input — the agent never sends them.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE })
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
+  // #190 — the end-of-feature debrief. `summary` is the only required content
+  // field (all others optional-tolerant); title is artifact-level.
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -29216,8 +29327,8 @@ async function handlePresentOptions(ctx, args) {
 }
 
 // src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
-var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset"];
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"];
+var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief"];
 
 // src/mcp/tools/check-feedback-delivery.ts
 function removedLineContent(art, filePath, oldLine) {
@@ -29248,6 +29359,12 @@ function describeDecisionSection(sectionId) {
   if (m) return `${m[1]} #${Number(m[2]) + 1}`;
   if (sectionId === "summary") return "summary";
   return sectionId;
+}
+function describeDebriefSection(sectionId) {
+  const key = sectionId.slice("debrief:".length);
+  const m = /^(?:section:)?(\d+)$/.exec(key);
+  if (m) return `section #${Number(m[1]) + 1}`;
+  return key.replace(/-/g, " ");
 }
 function structuredRegionFields(t) {
   const region = t.region;
@@ -29370,6 +29487,9 @@ ${s.replacementText}${note ? `
   }
   if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
     loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
+  }
+  if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
+    loc += ` \u2014 ${describeDebriefSection(c.target.sectionId)}`;
   }
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` \u2014 on region ${regionRef}`;
@@ -29594,7 +29714,10 @@ async function handleCheckFeedback(ctx, args) {
     (a) => a.status === "rejected" && // #171 — changeset joins the verdict-reported set (same #195 bug class:
     // without it, a rejected changeset would fall through to "You may
     // proceed" the instant the human rejects the approach).
-    ["code_change", "spec", "research", "decision", "changeset"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
+    // #190 — `debrief` joins for the same reason: a rejected debrief (the human
+    // says "this doesn't reflect what we built") must get the "Do NOT apply /
+    // address the rejection" posture, not "You may proceed".
+    ["code_change", "spec", "research", "decision", "changeset", "debrief"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
   let oldestPendingAge = "";
@@ -29621,6 +29744,8 @@ async function handleCheckFeedback(ctx, args) {
     suggestedAction = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     suggestedAction = "Wait for findings review before proposing solutions.";
+  } else if (pendingArts.some((a) => a.type === "debrief")) {
+    suggestedAction = "The debrief is presented \u2014 the human is reading it. Answer any questions they raise, then continue polling.";
   }
   if (newComments.length > 0 && pendingArts.length > 0) {
     suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
@@ -30097,6 +30222,9 @@ var SUPERSEDE_VALIDATORS = {
   // changeset (e.g. files: "nope") superseded straight to disk as a silently
   // empty v2 with no error for the agent to self-correct from.
   changeset: validatePresentChangesetInput,
+  // #190 — a revised debrief must pass the same strict validator as
+  // present_debrief (summary required, echo guard, optional-tolerant rest).
+  debrief: validatePresentDebriefInput,
   reasoning: validateLogReasoningInput
 };
 async function handleReviseArtifact(ctx, args) {
@@ -30641,6 +30769,62 @@ async function handlePresentChangeset(ctx, args) {
   };
 }
 
+// src/mcp/tools/present-debrief.ts
+async function handlePresentDebrief(ctx, args) {
+  const validated = validatePresentDebriefInput(args);
+  if (!validated.ok) return validated.error;
+  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions } = validated.data;
+  const proposals = [
+    title,
+    summary,
+    ...(sections ?? []).map((s) => s.title),
+    ...(decisionsMade ?? []).map((d) => d.what)
+  ].filter(Boolean);
+  const proposalConcepts = (sections ?? []).flatMap((s) => (s.concepts ?? []).map((c) => c.name)).filter(Boolean);
+  const pre = await ctx.helpers.preflightRejectedApproaches("present_debrief", proposals, [], proposalConcepts);
+  if (!pre.ok) return pre.response;
+  const id = `art_${nanoid3(10)}`;
+  const content = {
+    summary,
+    ...sections && sections.length > 0 ? { sections } : {},
+    ...decisionsMade && decisionsMade.length > 0 ? { decisionsMade } : {},
+    ...needsYourEyes && needsYourEyes.length > 0 ? { needsYourEyes } : {},
+    ...deferred && deferred.length > 0 ? { deferred } : {},
+    ...openQuestions && openQuestions.length > 0 ? { openQuestions } : {}
+  };
+  const artifact = await ctx.store.createArtifact({
+    id,
+    type: "debrief",
+    title,
+    content,
+    relatedArtifactIds: args?.relatedFindings
+  });
+  const secretMatches = artifact.secretWarnings ?? [];
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_debrief", pre.trace);
+  ctx.broadcast({ type: "artifact_created", artifact });
+  if (secretMatches.length > 0) {
+    ctx.broadcast({
+      type: "secret_warning",
+      artifactId: artifact.id,
+      patterns: secretMatches.map((m) => m.pattern),
+      labels: secretMatches.map((m) => m.label)
+    });
+  }
+  notifyResourcesListChanged(ctx.server);
+  await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  await ctx.helpers.autoNameSession(artifact.title);
+  const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const nudge = await revisionNudge(ctx.store, "debrief", title, id);
+  const sectionCount = sections?.length ?? 0;
+  const eyesCount = needsYourEyes?.length ?? 0;
+  return {
+    content: [{
+      type: "text",
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions, comments, and verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+    }]
+  };
+}
+
 // src/mcp/tools/recall.ts
 async function handleRecall(ctx, args) {
   const { store } = ctx;
@@ -30985,7 +31169,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "log_reasoning",
         annotations: { title: "Log reasoning", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Log the reasoning for an action before taking it. Pairs with present_code_change for the per-edit checkpoint cadence (WHY + WHAT \u2014 together they give the human a chance to redirect BEFORE the diff is on disk).\n\nSchema note: required: `action`, `reasoning`. Name the underlying concept in `concept` whenever one applies \u2014 that's the human's learning lever. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: REQUIRED BEFORE EACH SIGNIFICANT EDIT. Don't just chat-explain.",
+        description: "Log a STANDALONE piece of reasoning worth interrupting for (a surprising tradeoff, a non-obvious constraint) before you act. Use SPARINGLY \u2014 do NOT stream a card per step; for a feature, concept-naming now lives in present_debrief's sections[].concepts.\n\nSchema note: required: `action`, `reasoning`. Name the underlying concept in `concept` whenever one applies \u2014 that's the human's learning lever. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: sparingly, for genuinely standalone reasoning \u2014 NOT a per-edit default. Kept functional for back-compat; end features with present_debrief instead. Don't just chat-explain.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.log_reasoning)
@@ -31125,7 +31309,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_code_change",
         annotations: { title: "Present code change", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) \u2014 name the pattern (e.g. 'work factor tuning') so cross-project preflight matches it.\n\nSchema note: required: `filePath`, `changeType`, `after`, `reasoning`. `concept` strongly preferred. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: REQUIRED BEFORE EACH Write/Edit/MultiEdit on a file not yet approved this session \u2014 per-edit checkpoint, not one-shot. Batched implementation skipping checkpoints is a protocol violation. SINGLE REVIEW SURFACE \u2014 companion UI only, don't paste in chat. Call check_feedback for the verdict.",
+        description: "Present a SINGLE-file code change as a before/after diff with reasoning. Y5: include `concept` ({name, oneLineExplanation?}) \u2014 name the pattern so cross-project preflight matches it.\n\nSchema note: required: `filePath`, `changeType`, `after`, `reasoning`. `concept` strongly preferred. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: the EXCEPTION, not the default. Use it only for a genuinely single-file, surgical change, or when the human asks to see an edit first. For a change spanning 2+ FILES, batch into present_changeset instead (then end with present_debrief). SINGLE REVIEW SURFACE \u2014 companion UI only, don't paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_code_change)
@@ -31137,6 +31321,14 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
+      },
+      {
+        name: "present_debrief",
+        annotations: { title: "Present debrief", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description: 'At the end of a feature or autonomous run, present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: only `summary` is required; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes). SINGLE REVIEW SURFACE \u2014 don\'t re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.',
+        // D4 — derived from the validator's zod shape (validate-tool-input.ts);
+        // advertisement and validation can no longer drift.
+        inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief)
       },
       {
         name: "recall",
@@ -31553,6 +31745,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     "present_plan",
     "present_code_change",
     "present_changeset",
+    "present_debrief",
     "log_reasoning",
     "revise_artifact",
     "post_pr_review",
@@ -31615,6 +31808,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handlePresentCodeChange(ctx, args);
           case "present_changeset":
             return handlePresentChangeset(ctx, args);
+          case "present_debrief":
+            return handlePresentDebrief(ctx, args);
           case "check_feedback":
             return handleCheckFeedback(ctx, args);
           // III12 — case "request_horizon_check" removed. The workflow

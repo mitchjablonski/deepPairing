@@ -337,7 +337,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       // #171 — changeset joins the verdict-reported set (same #195 bug class:
       // without it, a rejected changeset would fall through to "You may
       // proceed" the instant the human rejects the approach).
-      ["code_change", "spec", "research", "decision", "changeset"].includes(a.type) &&
+      // #190 — `debrief` joins for the same reason: a rejected debrief (the human
+      // says "this doesn't reflect what we built") must get the "Do NOT apply /
+      // address the rejection" posture, not "You may proceed".
+      ["code_change", "spec", "research", "decision", "changeset", "debrief"].includes(a.type) &&
       !ctx.state.reportedRejectedVerdicts.has(a.id),
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
@@ -369,6 +372,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     suggestedAction = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     suggestedAction = "Wait for findings review before proposing solutions.";
+  } else if (pendingArts.some((a) => a.type === "debrief")) {
+    // #190 — a debrief is the end-of-run comprehension surface; the human reads
+    // it and may ask questions. Answer any questions (answer_question) and keep
+    // polling until they close it out.
+    suggestedAction = "The debrief is presented — the human is reading it. Answer any questions they raise, then continue polling.";
   }
 
   // GH#152 — when the human COMMENTED while an artifact is still awaiting its

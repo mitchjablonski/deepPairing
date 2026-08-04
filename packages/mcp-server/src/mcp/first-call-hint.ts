@@ -44,8 +44,9 @@ const PROTOCOL_PREAMBLE = [
   "  3. check_feedback — poll in a loop (~30s each; on WAITING, call again). Don't stop to ask in the terminal.",
   "  4. present_options — surface EACH choice between approaches as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury a decision inside a plan step as an implied default, and never interleave decisions in a plan — that skips the pros/cons review and the ledger never learns your pick.",
   "  5. present_spec, then present_plan — for non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (each a stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow — quote node/edge labels that contain punctuation like ()#: and use `<br/>` not `\\n` for line breaks); 'file_map' (the create/modify/delete set); 'annotated_code' (real `code`+`filePath` with line-anchored `annotations[]` — point at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. present_code_change BEFORE every Write/Edit — EVERY change, incl. small follow-ons, new files, and each file of a multi-file change (5 edits = 5 calls). A write straight to disk never reaches the human's review surface. + log_reasoning (name the concept). For a change that spans 2+ FILES reviewed as one unit (a refactor/feature touching several modules), use present_changeset instead — one artifact with per-file diffs + review state; single-file stays present_code_change.",
-  "  7. check_feedback again — let your pair review each artifact in the UI.",
+  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (ONE artifact: per-file diffs + review state, for a refactor/feature touching several modules). present_code_change is the EXCEPTION — a genuinely single-file surgical change, or when the human asks to see an edit first. Don't stream a log_reasoning card per step — name concepts in the debrief instead.",
+  "  7. present_debrief — END every feature/autonomous run with exactly ONE: the narrative of what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, and an ask-anything thread. The primary comprehension surface — put the full story IN it, never 'details in chat'.",
+  "  8. check_feedback again — let your pair review each artifact in the UI.",
   "REVISING something you already presented (a plan/spec/decision you're iterating on after feedback or a better idea)? Call revise_artifact (mode='supersede') with its id + the new content — do NOT re-post a fresh present_*. Re-posting orphans the thread and hides what changed; superseding links the versions and gives your pair a clean before/after diff.",
   "Pull the full protocol from the deeppairing://onboarding resource. present_* refuse proposals matching a past rejected approach.",
 ].join("\n");
@@ -64,10 +65,11 @@ const DETAIL_DENSITY_RICH_GUIDANCE = "";
 //
 // TERSE: shrink the PROSE around each artifact — never the review surface.
 // The FLOOR is load-bearing and stated explicitly here: every artifact still
-// posts, present_options still surfaces genuine tradeoffs, present_code_change
-// still precedes writes, and Evidence (filePath/lineStart/lineEnd/snippet) is
-// ALWAYS attached. Terse means less explanation AROUND the evidence, never less
-// evidence and never fewer artifacts.
+// posts, present_options still surfaces genuine tradeoffs, code is still
+// PRESENTED FOR REVIEW BEFORE IT LANDS (#190 — batched present_changeset by
+// default, present_code_change for single-file/surgical changes), and Evidence
+// (filePath/lineStart/lineEnd/snippet) is ALWAYS attached. Terse means less
+// explanation AROUND the evidence, never less evidence and never fewer artifacts.
 const DETAIL_DENSITY_TERSE_GUIDANCE = [
   "\n✂️ Detail density: TERSE — the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
   "  - Keep each finding's `detail` and `recommendation` to 1–2 sentences. Lead with the evidence; skip preamble and restatement of the task.",
@@ -79,7 +81,7 @@ const DETAIL_DENSITY_TERSE_GUIDANCE = [
   // ways on the same tool. Each self-scopes, but the model shouldn't have to
   // infer the scoping: terse governs prose, the Autonomy dial governs whether
   // an artifact posts at all.
-  "  - Do NOT reduce the number of artifacts, do NOT skip present_options or present_code_change, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)",
+  "  - Do NOT reduce the number of artifacts and do NOT skip present_options, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Code must still be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes. Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)",
 ].join("\n");
 
 // #148 — autonomy-level guidance. Same delivery pattern as #139's detail
@@ -109,17 +111,17 @@ const AUTONOMY_HINT_BALANCED = [
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs — not routine implementation choices with one reasonable answer.",
   "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings → options → spec/plan.",
-  "  - FLOOR (unchanged): present_code_change BEFORE every Write/Edit is still required — this dial only trims findings/options.",
+  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; this dial trims findings/options, never the review record.",
 ].join("\n");
 //
 // AUTONOMOUS: bias to motion — but the FLOOR is stated explicitly and is
-// load-bearing: present_code_change before every write is the human's review
-// record and is NEVER lifted by this dial, and project guardrails (the 🛡
+// load-bearing: code is PRESENTED FOR REVIEW BEFORE IT LANDS (the human's review
+// record) and that is NEVER lifted by this dial, and project guardrails (the 🛡
 // section, when present) still escalate specific paths back to supervised.
 const AUTONOMY_HINT_AUTONOMOUS = [
   `\n🎚 Autonomy: AUTONOMOUS — the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
   "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
-  "  - FLOOR (this dial never lifts it): present_code_change BEFORE every Write/Edit is still required — it is the review record.",
+  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; the human reviews the artifact, not raw edits on disk.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths.",
 ].join("\n");
 

@@ -401,6 +401,47 @@ test.beforeAll(async () => {
   await fetch(`${baseURL}/api/internal/sessions/a11ylate/artifacts/cs_late/status`, {
     method: "POST", headers: h, body: JSON.stringify({ status: "approved" }),
   }).then((r) => { if (!r.ok) throw new Error(`seed late changeset approve failed: ${r.status}`); });
+
+  // #190 — the end-of-feature DEBRIEF in its OWN session so BOTH theme scans
+  // mount the full comprehension surface (summary + a section carrying a concept
+  // + token-rich evidence, the accountability "calls I made on my own" block,
+  // the needsYourEyes review list with its drill-in link, deferred, and the
+  // ask-anything thread). The #187 hollow-net lesson: the helper SELECTS it and
+  // opens the summary grain composer so the new grain-thread surface is scanned
+  // for real, not just seeded.
+  const regDebrief = await fetch(`${baseURL}/api/internal/sessions/a11ydebrief/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regDebrief.ok) throw new Error(`seed debrief register failed: ${regDebrief.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11ydebrief/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "debrief_a11y", type: "debrief", title: "Debrief — sliding-window session TTL",
+      content: {
+        summary: "We moved the sliding-window session-TTL refresh into the auth middleware so every authenticated route inherits it for free. Here's the walk, the calls I made without you, and what I'd like your eyes on.",
+        sections: [
+          {
+            title: "Centralized the TTL refresh in middleware",
+            body: "`requireSession` now calls `store.getAndTouch(sid)`, which refreshes the expiry as a side effect of the lookup — no route has to remember to do it.",
+            concepts: [{ name: "sliding-window expiration", oneLineExplanation: "each authenticated request pushes the session's expiry forward, so active users are never logged out mid-session" }],
+            // Token-rich TS (string, comment, keyword, number, punctuation) so the
+            // scan measures the syntax palette on this surface too — the same rule
+            // the research evidence seed follows.
+            evidence: [{ filePath: "auth/middleware.ts", lineStart: 26, lineEnd: 30, snippet: 'const session = await store.getAndTouch(sid); // refreshes TTL\nif (!session || session.expiresAt < Date.now()) {\n  clearSessionCookie(res);\n  return res.status(401).end();\n}', explanation: "The single choke point every authenticated route flows through." }],
+            changesetRef: "cs_debrief_ref",
+          },
+        ],
+        decisionsMade: [
+          { what: "Return 401 and clear the cookie on an expired session rather than transparently re-issuing one.", why: "A silent re-issue would mask a stale session and weaken the security posture; failing closed is the safer default.", alternative: "Auto-renew any session seen within a grace window — rejected as too permissive for an auth path." },
+        ],
+        needsYourEyes: [
+          { what: "The expiry check in the middleware diff", why: "It changes the auth failure path for every route at once — worth a careful read before we ship.", artifactRef: "cs_debrief_ref" },
+        ],
+        deferred: [
+          { what: "Refresh-token rotation", why: "Out of scope; the sliding window covers the active-session case. Flag it if you want it next." },
+        ],
+        openQuestions: ["Should the sliding window survive a server restart, or is an in-memory store acceptable here?"],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed debrief failed: ${r.status}`); });
 });
 
 test.afterAll(async () => {
@@ -974,6 +1015,57 @@ test("a11y: session view in the LIGHT theme has no serious/critical axe violatio
   const chSerious = chResults.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(chSerious, `axe violations (cheat-sheet, light):\n${fmt(chSerious)}`).toEqual([]);
   await page.keyboard.press("Escape");
+});
+
+/** #190 — mount the DEBRIEF comprehension surface for real before scanning (the
+ *  #187 hollow-net lesson). Selects the debrief, waits for every block (summary,
+ *  the section's concept + evidence, the accountability block, needsYourEyes, and
+ *  the always-visible ask-anything composer), opens the summary grain composer so
+ *  the grain-thread surface is scanned too, then settles finite animations so axe
+ *  never samples a mid-fade frame. */
+async function openDebrief(page: import("@playwright/test").Page): Promise<void> {
+  await page.click('[data-artifact-item="debrief_a11y"]');
+  await page.waitForSelector('[data-artifact-id="debrief_a11y"]', { timeout: 15000 });
+  // The accountability + review blocks prove the full renderer mounted.
+  await page.getByTestId("debrief-decision").first().waitFor({ timeout: 15000 });
+  await page.getByTestId("debrief-needs-eyes").first().waitFor({ timeout: 15000 });
+  // The ask-anything thread is the marquee surface — its composer is always
+  // visible; wait for it so the scan measures the thread OPEN.
+  await page.getByLabel("Comment on this debrief").waitFor({ timeout: 15000 });
+  // Open the summary block's grain composer so its scoped thread is scanned too.
+  await page.getByRole("button", { name: "Comment on What we built" }).click();
+  await page.getByLabel("Comment on What we built").waitFor({ timeout: 15000 });
+  // Token-rich evidence highlights async (shiki) — wait for a colored span so the
+  // syntax palette is actually measured, not plain uncolored text.
+  await page.waitForSelector(
+    '[data-artifact-id="debrief_a11y"] .bg-surface-code span[style*="color:"]',
+    { timeout: 15000 },
+  );
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+test("a11y (#190): the DEBRIEF surface (ask-anything thread open) has no serious/critical axe violations — dark", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11ydebrief`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await openDebrief(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (debrief, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+test("a11y (#190): the DEBRIEF surface (ask-anything thread open) has no serious/critical axe violations — light", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+  await page.goto(`${baseURL}/?session=a11ydebrief`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openDebrief(page);
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(serious, `axe violations (debrief, light):\n${fmt(serious)}`).toEqual([]);
 });
 
 test("a11y: project-wide decisions view has no serious/critical axe violations", async ({ page }) => {

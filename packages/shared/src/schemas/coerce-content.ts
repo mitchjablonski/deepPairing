@@ -18,6 +18,11 @@ import type {
   ChangesetHunk,
   ChangesetHunkLine,
   ChangesetReviewState,
+  DebriefContent,
+  DebriefSection,
+  DebriefDecision,
+  DebriefReviewItem,
+  DebriefDeferred,
 } from "./content-types.js";
 
 /**
@@ -436,6 +441,68 @@ export function coerceChangesetContent(raw: unknown): ChangesetContent {
   return out;
 }
 
+// --- debrief (#190) -----------------------------------------------------------
+
+/** Concepts array → fully-shaped, empty-concept-dropping list (matches the
+ *  schema's `.min(1)` name rule via coerceConcept). */
+function coerceConcepts(v: unknown): { name: string; oneLineExplanation?: string }[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map(coerceConcept).filter((c): c is { name: string; oneLineExplanation?: string } => !!c);
+  return out;
+}
+
+/** Evidence array → keep strings AND objects (EvidenceInputSchema is a union;
+ *  never-drop-data contract — mirror coerceFinding's evidence handling). */
+function coerceEvidenceInputs(v: unknown): unknown[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v.filter((x) => typeof x === "string" || isObj(x));
+}
+
+function coerceDebriefSection(v: unknown): DebriefSection {
+  const s = obj(v);
+  const out: DebriefSection = {
+    title: str(s.title),
+    body: str(s.body),
+  };
+  const concepts = coerceConcepts(s.concepts);
+  if (concepts && concepts.length > 0) out.concepts = concepts;
+  const evidence = coerceEvidenceInputs(s.evidence);
+  if (evidence && evidence.length > 0) out.evidence = evidence as DebriefSection["evidence"];
+  if (typeof s.changesetRef === "string") out.changesetRef = s.changesetRef;
+  if (Array.isArray(s.artifactRefs)) out.artifactRefs = strArr(s.artifactRefs);
+  return out;
+}
+
+function coerceDebriefDecision(v: unknown): DebriefDecision {
+  const d = obj(v);
+  const out: DebriefDecision = { what: str(d.what), why: str(d.why) };
+  if (typeof d.alternative === "string") out.alternative = d.alternative;
+  return out;
+}
+
+function coerceDebriefReviewItem(v: unknown): DebriefReviewItem {
+  const r = obj(v);
+  const out: DebriefReviewItem = { what: str(r.what), why: str(r.why) };
+  if (typeof r.artifactRef === "string") out.artifactRef = r.artifactRef;
+  return out;
+}
+
+function coerceDebriefDeferred(v: unknown): DebriefDeferred {
+  const d = obj(v);
+  return { what: str(d.what), why: str(d.why) };
+}
+
+export function coerceDebriefContent(raw: unknown): DebriefContent {
+  const c = obj(raw);
+  const out: DebriefContent = { summary: str(c.summary) };
+  if (Array.isArray(c.sections)) out.sections = c.sections.map(coerceDebriefSection);
+  if (Array.isArray(c.decisionsMade)) out.decisionsMade = c.decisionsMade.map(coerceDebriefDecision);
+  if (Array.isArray(c.needsYourEyes)) out.needsYourEyes = c.needsYourEyes.map(coerceDebriefReviewItem);
+  if (Array.isArray(c.deferred)) out.deferred = c.deferred.map(coerceDebriefDeferred);
+  if (Array.isArray(c.openQuestions)) out.openQuestions = strArr(c.openQuestions);
+  return out;
+}
+
 // --- dispatcher ---------------------------------------------------------------
 
 /** Coerce by artifact type. Returns null for types with no structured content
@@ -450,6 +517,7 @@ export function coerceArtifactContent(
   | CodeChangeContent
   | ReasoningContent
   | ChangesetContent
+  | DebriefContent
   | null {
   switch (artifact.type) {
     case "research": return coerceResearchContent(artifact.content);
@@ -459,6 +527,7 @@ export function coerceArtifactContent(
     case "code_change": return coerceCodeChangeContent(artifact.content);
     case "reasoning": return coerceReasoningContent(artifact.content);
     case "changeset": return coerceChangesetContent(artifact.content);
+    case "debrief": return coerceDebriefContent(artifact.content);
     default: return null;
   }
 }

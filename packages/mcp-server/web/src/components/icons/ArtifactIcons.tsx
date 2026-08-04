@@ -62,6 +62,18 @@ export function ListChecklistIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/** #190 — a DEBRIEF is the end-of-feature wrap-up: a clipboard/summary glyph
+ *  (a checked-off board) reads as "here's the account of what happened". */
+export function ClipboardSummaryIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <path d="M4 2.5H3a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1v-8a1 1 0 00-1-1h-1" />
+      <path d="M5 1.5h4a0.5 0.5 0 01.5.5v1a0.5 0.5 0 01-.5.5H5a0.5 0.5 0 01-.5-.5v-1a0.5 0.5 0 01.5-.5z" />
+      <path d="M4.3 7l0.6 0.6 1.1-1.2M8 7h2M4.3 10l0.6 0.6 1.1-1.2M8 10h2" />
+    </svg>
+  );
+}
+
 /** Get the icon component for an artifact type */
 export function ArtifactIcon({ type, className = "" }: { type: string; className?: string }) {
   switch (type) {
@@ -73,6 +85,8 @@ export function ArtifactIcon({ type, className = "" }: { type: string; className
     case "changeset": return <GitBranchIcon className={className} />;
     case "reasoning": return <BrainIcon className={className} />;
     case "spec": return <ListChecklistIcon className={className} />;
+    // #190 — end-of-feature debrief.
+    case "debrief": return <ClipboardSummaryIcon className={className} />;
     default: return <FileTextIcon className={className} />;
   }
 }

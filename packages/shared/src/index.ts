@@ -82,6 +82,7 @@ export {
   coerceCodeChangeContent,
   coerceReasoningContent,
   coerceChangesetContent,
+  coerceDebriefContent,
 } from "./schemas/coerce-content.js";
 
 export {
@@ -213,6 +214,11 @@ export {
   ChangesetReviewStateSchema,
   ChangesetReviewReasonsSchema,
   ChangesetContentSchema,
+  DebriefSectionSchema,
+  DebriefDecisionSchema,
+  DebriefReviewItemSchema,
+  DebriefDeferredSchema,
+  DebriefContentSchema,
   type Finding,
   type FindingSeverity,
   type ResearchContent,
@@ -236,6 +242,11 @@ export {
   type ChangesetReviewState,
   type ChangesetReviewReasons,
   type ChangesetContent,
+  type DebriefSection,
+  type DebriefDecision,
+  type DebriefReviewItem,
+  type DebriefDeferred,
+  type DebriefContent,
 } from "./schemas/content-types.js";
 export {
   composeSendBackFeedback,

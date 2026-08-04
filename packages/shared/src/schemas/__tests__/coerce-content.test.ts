@@ -7,6 +7,7 @@ import {
   coerceCodeChangeContent,
   coerceReasoningContent,
   coerceChangesetContent,
+  coerceDebriefContent,
   coerceArtifactContent,
 } from "../coerce-content.js";
 
@@ -254,11 +255,60 @@ describe("coerceChangesetContent (#171)", () => {
   });
 });
 
+describe("coerceDebriefContent (#190)", () => {
+  it("empty → summary '' and no throw; optional blocks omitted", () => {
+    const out = coerceDebriefContent({});
+    expect(out).toEqual({ summary: "" });
+  });
+  it("non-array section/list fields → omitted (not crashed)", () => {
+    const out = coerceDebriefContent({ summary: "s", sections: "nope", decisionsMade: 3, needsYourEyes: {}, deferred: null, openQuestions: "x" });
+    expect(out).toEqual({ summary: "s" });
+  });
+  it("coerces sections field-by-field, dropping empty concepts and keeping string+object evidence", () => {
+    const out = coerceDebriefContent({
+      summary: "we built it",
+      sections: [
+        {
+          title: "T",
+          body: "B",
+          concepts: [{ name: "sliding window", oneLineExplanation: "moving window" }, { name: "" }, "junk"],
+          evidence: ["legacy ref", { filePath: "a.ts", lineStart: 1, lineEnd: 2, snippet: "x", explanation: "why" }, 42],
+          changesetRef: "art_cs",
+          artifactRefs: ["art_1", 9],
+        },
+      ],
+    });
+    const sec = out.sections![0]!;
+    expect(sec.title).toBe("T");
+    // empty-name concept + non-object dropped (matches schema .min(1))
+    expect(sec.concepts).toEqual([{ name: "sliding window", oneLineExplanation: "moving window" }]);
+    // string ref AND structured evidence survive; the number is dropped
+    expect(sec.evidence).toHaveLength(2);
+    expect(sec.evidence![0]).toBe("legacy ref");
+    expect(sec.changesetRef).toBe("art_cs");
+    expect(sec.artifactRefs).toEqual(["art_1"]); // non-string dropped
+  });
+  it("coerces decisionsMade / needsYourEyes / deferred / openQuestions", () => {
+    const out = coerceDebriefContent({
+      summary: "s",
+      decisionsMade: [{ what: "w", why: "y", alternative: "alt" }, { what: "w2", why: "y2" }],
+      needsYourEyes: [{ what: "check this", why: "risky", artifactRef: "art_cs" }],
+      deferred: [{ what: "later", why: "scope" }],
+      openQuestions: ["Q1?", 5],
+    });
+    expect(out.decisionsMade).toEqual([{ what: "w", why: "y", alternative: "alt" }, { what: "w2", why: "y2" }]);
+    expect(out.needsYourEyes).toEqual([{ what: "check this", why: "risky", artifactRef: "art_cs" }]);
+    expect(out.deferred).toEqual([{ what: "later", why: "scope" }]);
+    expect(out.openQuestions).toEqual(["Q1?"]); // non-string dropped
+  });
+});
+
 describe("coerceArtifactContent dispatcher", () => {
   it("routes by type and returns null for an unknown/contentless type", () => {
     expect(coerceArtifactContent({ type: "plan", content: {} })).toEqual({ steps: [], estimatedChanges: 0 });
     expect(coerceArtifactContent({ type: "reasoning" as any, content: { action: "a", reasoning: "r" } })).toMatchObject({ action: "a" });
     expect(coerceArtifactContent({ type: "changeset", content: {} })).toEqual({ files: [] });
+    expect(coerceArtifactContent({ type: "debrief", content: { summary: "s" } })).toEqual({ summary: "s" });
     expect(coerceArtifactContent({ type: "unknown" as any, content: {} })).toBeNull();
   });
 });

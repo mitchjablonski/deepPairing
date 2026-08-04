@@ -10,6 +10,7 @@ import {
   validatePresentOptionsInput,
   validatePresentCodeChangeInput,
   validatePresentChangesetInput,
+  validatePresentDebriefInput,
   validateLogReasoningInput,
 } from "../validate-tool-input.js";
 
@@ -29,6 +30,9 @@ const SUPERSEDE_VALIDATORS: Record<string, SupersedeValidator> = {
   // changeset (e.g. files: "nope") superseded straight to disk as a silently
   // empty v2 with no error for the agent to self-correct from.
   changeset: validatePresentChangesetInput,
+  // #190 — a revised debrief must pass the same strict validator as
+  // present_debrief (summary required, echo guard, optional-tolerant rest).
+  debrief: validatePresentDebriefInput,
   reasoning: validateLogReasoningInput,
 };
 

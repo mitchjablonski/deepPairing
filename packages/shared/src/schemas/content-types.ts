@@ -398,3 +398,87 @@ export const ChangesetContentSchema = z.object({
   reviewReasons: ChangesetReviewReasonsSchema.optional(),
 });
 export type ChangesetContent = z.infer<typeof ChangesetContentSchema>;
+
+// --- Debrief (#190 — the end-of-feature comprehension surface) --------------
+//
+// The product's thesis — "shared understanding after building a feature, with a
+// place to ask questions" — had NO artifact type. Real-usage data (253 artifacts
+// over 45 days): per-file code_change cards were skimmed at 44s median while
+// decisions/specs got minutes of genuine deliberation, and streamed reasoning
+// cards got ZERO engagement. Cadence verdict: decisions stay real-time,
+// COMPREHENSION BATCHES. The debrief is the missing batched half — presented
+// ONCE at the end of a feature/autonomous run: what changed, why, what the agent
+// decided alone, and what needs the human's eyes — with an ask-anything thread.
+//
+// All fields optional-tolerant per repo convention: only `summary` (the
+// narrative — the thesis's core field) anchors the schema; a debrief carrying
+// just a summary is valid.
+
+/** One section of the ordered walk of what changed. Body is the narrative;
+ *  concepts name the patterns the human learns (the pairing lever, reused from
+ *  reasoning); evidence anchors the claim to real code; changesetRef/artifactRefs
+ *  link to the underlying artifacts a reviewer can drill into. */
+export const DebriefSectionSchema = z.object({
+  title: z.string(),
+  body: z.string().describe("The narrative for this part of the change, in plain English"),
+  /** Named concepts applied here — same shape as reasoning/decision concepts so
+   *  the UI reuses ConceptCallout. THE learning lever: name the pattern, not just
+   *  the fix. */
+  concepts: z.array(ReasoningConceptSchema).optional(),
+  /** Code evidence for this section (file:line + snippet + explanation), rendered
+   *  through the shared Evidence/CommentableCode stack. Accepts a legacy string
+   *  reference or a rich Evidence object (EvidenceInputSchema). */
+  evidence: z.array(EvidenceInputSchema).optional(),
+  /** The changeset artifact id this section walks through (drill-in link). */
+  changesetRef: z.string().optional().describe("Artifact id of the changeset this section explains"),
+  /** Other underlying artifact ids this section references (drill-in links). */
+  artifactRefs: z.array(z.string()).optional(),
+});
+export type DebriefSection = z.infer<typeof DebriefSectionSchema>;
+
+/** A decision the agent made WITHOUT the human — the accountability section.
+ *  `what` was decided, `why`, and the `alternative` considered but not taken. */
+export const DebriefDecisionSchema = z.object({
+  what: z.string().describe("What you decided on your own"),
+  why: z.string().describe("Why you made that call"),
+  alternative: z.string().optional().describe("The alternative you considered but did not take"),
+});
+export type DebriefDecision = z.infer<typeof DebriefDecisionSchema>;
+
+/** One explicit review-priority item — the "look here first" list. Links to the
+ *  underlying artifact the reviewer should open. */
+export const DebriefReviewItemSchema = z.object({
+  what: z.string().describe("What the human should review"),
+  why: z.string().describe("Why it warrants their eyes"),
+  artifactRef: z.string().optional().describe("Artifact id to open for this item"),
+});
+export type DebriefReviewItem = z.infer<typeof DebriefReviewItemSchema>;
+
+/** Something left undone and the reason — sets expectations honestly. */
+export const DebriefDeferredSchema = z.object({
+  what: z.string().describe("What was left undone"),
+  why: z.string().describe("Why it was deferred"),
+});
+export type DebriefDeferred = z.infer<typeof DebriefDeferredSchema>;
+
+export const DebriefContentSchema = z.object({
+  /** The narrative — what we built and why. The anchor field. `.min(1)` for the
+   *  same "empty is worse than absent" discipline title/context/concept.name use:
+   *  an empty-narrative debrief on the flagship comprehension surface is a
+   *  degenerate artifact, not a valid one. (The coercer stays lenient and
+   *  defaults to "" so a legacy/partial render never crashes.) */
+  summary: z.string().min(1),
+  /** Ordered walk of what changed. */
+  sections: z.array(DebriefSectionSchema).optional(),
+  /** Decisions the agent made without the human — the accountability block. */
+  decisionsMade: z.array(DebriefDecisionSchema).optional(),
+  /** The prioritized review list — "look at these first". */
+  needsYourEyes: z.array(DebriefReviewItemSchema).optional(),
+  /** What was left undone and why. */
+  deferred: z.array(DebriefDeferredSchema).optional(),
+  /** Reuses the existing open-question machinery (spec/plan host these the same
+   *  way) — questions the agent wants the human to weigh in on, threaded through
+   *  the same questionIndex comment lane. */
+  openQuestions: z.array(z.string()).optional(),
+});
+export type DebriefContent = z.infer<typeof DebriefContentSchema>;

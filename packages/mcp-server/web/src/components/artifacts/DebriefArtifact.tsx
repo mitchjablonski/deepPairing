@@ -1,0 +1,385 @@
+import { useMemo, useState, type ReactNode } from "react";
+import type { Artifact, Comment, DebriefContent } from "@deeppairing/shared";
+import { coerceDebriefContent } from "@deeppairing/shared";
+import { useArtifactStore } from "../../stores/artifact";
+import { useChainComments } from "../../hooks/useChainComments";
+import { SimpleMarkdown } from "../SimpleMarkdown";
+import { ConceptBadge } from "../ConceptBadge";
+import { CommentThread } from "../CommentThread";
+import { ArtifactStatusActions } from "./ArtifactStatusActions";
+import { renderEvidence } from "./ResearchArtifact";
+import { OpenQuestionSection } from "./OpenQuestionSection";
+
+/**
+ * #190 — the end-of-feature DEBRIEF renderer (the comprehension surface).
+ *
+ * A debrief is written in SECOND PERSON to your pair: here's what we built and
+ * why, the calls I made without you (the accountability block), what I'd like
+ * your eyes on, and what I left for later — with an ask-anything thread at the
+ * bottom.
+ *
+ * Reuse, not rebuild:
+ *   - concepts → ConceptBadge (the shared dense concept treatment DecisionCard +
+ *     CodeChangeArtifact already use — the learning lever: name the pattern).
+ *   - evidence → renderEvidence/EvidenceItem exported from ResearchArtifact (the
+ *     exact Evidence + CommentableCode + FileViewer wiring).
+ *   - the ask-anything + per-block grain composers → CommentThread (Comment +
+ *     Ask intents), the same component the decision workbench threads.
+ *   - the unified verb triad → ArtifactStatusActions (Approve / Request changes
+ *     / Reject), dropped in like every other renderer.
+ *
+ * Grain commenting: every block is commentable at a sectionId grain the server
+ * delivery layer already parses — EXACTLY:
+ *   - summary          → `debrief:summary`
+ *   - ordered walk[i]  → `debrief:<i>`  (0-based)
+ *   - decisionsMade    → `debrief:decisions`
+ *   - needsYourEyes    → `debrief:needs-your-eyes`
+ *   - deferred         → `debrief:deferred`
+ */
+
+interface DebriefArtifactProps {
+  artifact: Artifact;
+}
+
+/** Focus/select an underlying artifact from a drill-in link. Prefers the store
+ *  action (directly testable) and also dispatches the app-wide focus event
+ *  App.tsx listens for, so the selection works from any surface. */
+function focusArtifact(id: string): void {
+  useArtifactStore.getState().selectArtifact(id);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: id } }));
+  }
+}
+
+/** A drill-in link to an underlying artifact (changeset / other). Clicking
+ *  SELECTS that artifact in the panel. */
+function ArtifactRefLink({ id, label }: { id: string; label?: string }) {
+  const artifacts = useArtifactStore((s) => s.artifacts);
+  const title = artifacts.find((a) => a.id === id)?.title;
+  return (
+    <button
+      type="button"
+      onClick={() => focusArtifact(id)}
+      data-testid="debrief-artifact-ref"
+      className="inline-flex items-center gap-1 px-2 py-0.5 bg-surface-elevated border border-border-subtle
+                 rounded text-2xs text-text-secondary hover:border-accent-blue hover:text-accent-blue transition-colors"
+      title={`Open ${title ?? id}`}
+    >
+      <span aria-hidden="true">↗</span>
+      {label ?? title ?? id}
+    </button>
+  );
+}
+
+/**
+ * A lightweight per-block grain-comment surface. Renders the block's existing
+ * grain thread (if any) and a "💬 Comment" toggle that reveals a scoped
+ * CommentThread posting to `{ artifactId, sectionId }`. Kept deliberately small
+ * — the workbench's rail pattern, distilled to one block.
+ */
+function BlockGrain({
+  artifactId,
+  sectionId,
+  label,
+  comments,
+}: {
+  artifactId: string;
+  sectionId: string;
+  label: string;
+  comments: Comment[];
+}) {
+  const grain = useMemo(
+    () => comments.filter((c) => c.target.sectionId === sectionId),
+    [comments, sectionId],
+  );
+  const [open, setOpen] = useState(false);
+  const show = open || grain.length > 0;
+
+  return (
+    <div className="mt-2">
+      {!show && (
+        <button
+          type="button"
+          data-grain-affordance
+          onClick={() => setOpen(true)}
+          aria-label={`Comment on ${label}`}
+          className="inline-flex items-center gap-1 text-2xs text-text-muted hover:text-accent-blue transition-colors press-scale"
+        >
+          <span aria-hidden="true">💬</span> Comment
+        </button>
+      )}
+      {show && (
+        <div className="rounded-lg border border-border-default bg-surface-elevated p-2.5">
+          <div className="text-2xs uppercase tracking-wide text-text-muted font-semibold mb-1.5">
+            Comment on {label}
+          </div>
+          <CommentThread
+            artifactId={artifactId}
+            comments={grain}
+            target={{ artifactId, sectionId }}
+            placeholder={`Comment on ${label} — the agent sees it anchored here…`}
+            submitLabel="Comment"
+            textareaLabel={`Comment on ${label}`}
+            secondarySubmitLabel="Ask"
+            secondarySubmitTitle={`Ask the agent a question about ${label}`}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A titled block wrapper: heading + content + its grain-comment surface. */
+function DebriefBlock({
+  artifactId,
+  sectionId,
+  title,
+  comments,
+  children,
+}: {
+  artifactId: string;
+  sectionId: string;
+  title: string;
+  comments: Comment[];
+  children: ReactNode;
+}) {
+  return (
+    <section className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2">
+      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">{title}</h4>
+      {children}
+      <BlockGrain artifactId={artifactId} sectionId={sectionId} label={title} comments={comments} />
+    </section>
+  );
+}
+
+export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
+  // Coercion boundary — turn raw/partial/legacy content into a fully-shaped
+  // DebriefContent so the renderer can trust the shape (mirrors how
+  // ResearchArtifact / ChangesetArtifact memoize their coercers at the source).
+  const content = useMemo<DebriefContent>(
+    () => coerceDebriefContent(artifact.content),
+    [artifact.content],
+  );
+  const comments = useChainComments(artifact.id);
+
+  const sections = content.sections ?? [];
+  const decisionsMade = content.decisionsMade ?? [];
+  const needsYourEyes = content.needsYourEyes ?? [];
+  const deferred = content.deferred ?? [];
+  const openQuestions = content.openQuestions ?? [];
+
+  return (
+    <div className="space-y-4">
+      {/* Summary — the narrative headline, always present. */}
+      <DebriefBlock
+        artifactId={artifact.id}
+        sectionId="debrief:summary"
+        title="What we built"
+        comments={comments}
+      >
+        <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
+      </DebriefBlock>
+
+      {/* The ordered walk of what changed. */}
+      {sections.length > 0 && (
+        <div className="space-y-3">
+          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+            The walk ({sections.length})
+          </h4>
+          {sections.map((section, i) => {
+            const sectionId = `debrief:${i}`;
+            const grain = comments.filter((c) => c.target.sectionId === sectionId);
+            return (
+              <section
+                key={i}
+                data-comment-anchor={sectionId}
+                className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2"
+              >
+                <div className="text-sm font-semibold text-text-primary">{section.title}</div>
+                {section.body && (
+                  <SimpleMarkdown text={section.body} className="text-xs text-text-secondary space-y-1" />
+                )}
+
+                {/* Concepts — the learning lever (reuse ConceptBadge). */}
+                {Array.isArray(section.concepts) && section.concepts.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {section.concepts.map((c, ci) => (
+                      <ConceptBadge key={ci} name={c.name} explanation={c.oneLineExplanation} size="md" />
+                    ))}
+                  </div>
+                )}
+
+                {/* Evidence — reuse the Research renderer (Evidence +
+                    CommentableCode). The section index doubles as findingIndex:
+                    a debrief has no findings, so the namespace is its own. */}
+                {section.evidence != null &&
+                  renderEvidence(section.evidence, artifact.id, i, comments)}
+
+                {/* Drill-in links to the underlying artifacts. */}
+                {(section.changesetRef || (section.artifactRefs && section.artifactRefs.length > 0)) && (
+                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                    <span className="text-2xs text-text-muted">Drill in:</span>
+                    {section.changesetRef && <ArtifactRefLink id={section.changesetRef} />}
+                    {section.artifactRefs?.map((ref) => (
+                      <ArtifactRefLink key={ref} id={ref} />
+                    ))}
+                  </div>
+                )}
+
+                <BlockGrain
+                  artifactId={artifact.id}
+                  sectionId={sectionId}
+                  label={section.title || `section ${i + 1}`}
+                  comments={grain}
+                />
+              </section>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Decisions I made on my own — the accountability block, visually
+          distinct (amber, the "look here" tone). */}
+      {decisionsMade.length > 0 && (
+        <DebriefBlock
+          artifactId={artifact.id}
+          sectionId="debrief:decisions"
+          title="Calls I made on my own"
+          comments={comments}
+        >
+          <p className="text-2xs text-text-muted -mt-1">
+            Decisions I took without checking with you first — push back if any of these are wrong.
+          </p>
+          <div className="space-y-2">
+            {decisionsMade.map((d, i) => (
+              <div
+                key={i}
+                data-testid="debrief-decision"
+                className="rounded-md border-l-2 border-accent-amber bg-accent-amber-dim/20 p-2.5 space-y-1"
+              >
+                <div className="text-xs font-medium text-text-primary">{d.what}</div>
+                <div className="text-2xs text-text-secondary">
+                  <span className="text-text-muted">Why: </span>
+                  {d.why}
+                </div>
+                {d.alternative && (
+                  <div className="text-2xs text-text-secondary">
+                    <span className="text-text-muted">Alternative I considered: </span>
+                    {d.alternative}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </DebriefBlock>
+      )}
+
+      {/* Needs your eyes — the prioritized review list, each item linking to
+          its underlying artifact. */}
+      {needsYourEyes.length > 0 && (
+        <DebriefBlock
+          artifactId={artifact.id}
+          sectionId="debrief:needs-your-eyes"
+          title="Needs your eyes"
+          comments={comments}
+        >
+          <ol className="space-y-2 list-none">
+            {needsYourEyes.map((item, i) => (
+              <li
+                key={i}
+                data-testid="debrief-needs-eyes"
+                className="rounded-md border-l-2 border-accent-blue bg-accent-blue-dim/15 p-2.5 space-y-1"
+              >
+                <div className="flex items-start gap-2">
+                  <span className="text-2xs font-bold text-accent-blue mt-0.5 shrink-0">{i + 1}</span>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="text-xs font-medium text-text-primary">{item.what}</div>
+                    <div className="text-2xs text-text-secondary">
+                      <span className="text-text-muted">Why: </span>
+                      {item.why}
+                    </div>
+                    {item.artifactRef && (
+                      <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </DebriefBlock>
+      )}
+
+      {/* Deferred — what I left undone + why. */}
+      {deferred.length > 0 && (
+        <DebriefBlock
+          artifactId={artifact.id}
+          sectionId="debrief:deferred"
+          title="Left for later"
+          comments={comments}
+        >
+          <ul className="space-y-1.5">
+            {deferred.map((d, i) => (
+              <li key={i} data-testid="debrief-deferred" className="text-xs text-text-secondary flex items-start gap-2">
+                <span className="text-text-muted mt-0.5 shrink-0" aria-hidden="true">•</span>
+                <span>
+                  <span className="font-medium text-text-primary">{d.what}</span>
+                  <span className="text-text-muted"> — {d.why}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </DebriefBlock>
+      )}
+
+      {/* Open questions — MY questions for YOU. Reuse the shared
+          OpenQuestionSection (spec/plan/research host it identically), so each
+          answer rides the questionIndex comment lane the server delivery already
+          resolves against content.openQuestions. */}
+      {openQuestions.length > 0 && (
+        <div className="space-y-2" data-testid="debrief-open-questions">
+          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+            Open questions ({openQuestions.length})
+          </h4>
+          <p className="text-2xs text-text-muted -mt-1">
+            Things I'd like your call on — answer any inline.
+          </p>
+          <div className="space-y-1.5">
+            {openQuestions.map((q, i) => (
+              <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ask-anything thread — questions post with intent:"question" (the
+          question-priority lane) via CommentThread's secondary submit. */}
+      <div className="pt-3 border-t border-border-default space-y-2">
+        <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+          Ask me anything
+        </h4>
+        <p className="text-2xs text-text-muted">
+          Anything unclear about what I did? Ask — I'll answer on my next turn.
+        </p>
+        <CommentThread
+          artifactId={artifact.id}
+          comments={comments.filter(
+            (c) =>
+              c.target.sectionId == null &&
+              c.target.lineStart == null &&
+              c.target.findingIndex == null,
+          )}
+          target={{ artifactId: artifact.id }}
+          placeholder="Comment on this debrief, or ask a question…"
+          submitLabel="Comment"
+          textareaLabel="Comment on this debrief"
+          secondarySubmitLabel="Ask"
+          secondarySubmitTitle="Ask the agent a question about this debrief"
+          roomy
+        />
+      </div>
+
+      {/* Unified verb triad — Approve / Request changes / Reject. */}
+      <ArtifactStatusActions artifact={artifact} />
+    </div>
+  );
+}

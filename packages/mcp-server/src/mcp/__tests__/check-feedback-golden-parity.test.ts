@@ -459,6 +459,55 @@ const scenarios: Scenario[] = [
     seed: () => {},
     args: { waitFor: "decision" },
   },
+  {
+    // #190 — the debrief delivery lanes: a grain comment (debrief:<key>
+    // sectionId → the new describeDebriefSection naming), an ask-anything
+    // QUESTION (question-priority lane), and a question answering an open
+    // question (questionIndex lane) on a debrief artifact.
+    name: "debrief_grain_and_ask_anything",
+    seed: (store) => {
+      store.createArtifact({
+        id: "art_db",
+        type: "debrief",
+        title: "Debrief — sliding-window session TTL",
+        content: {
+          summary: "We moved the TTL refresh into one middleware so every route inherits it.",
+          sections: [
+            { title: "Centralized the refresh", body: "requireSession now calls getAndTouch.", concepts: [{ name: "sliding window" }] },
+          ],
+          decisionsMade: [{ what: "fail closed on expiry", why: "safer default" }],
+          needsYourEyes: [{ what: "the expiry check", why: "auth path for every route", artifactRef: "art_db" }],
+          openQuestions: ["Should the window survive a server restart?"],
+        },
+      });
+      // Grain comment on a debrief section (debrief:<index>).
+      store.addComment({
+        id: "cmt_db_grain",
+        artifactId: "art_db",
+        content: "the single choke point is exactly right",
+        author: "human",
+        target: { artifactId: "art_db", sectionId: "debrief:0" },
+      });
+      // Ask-anything QUESTION on the debrief.
+      store.addComment({
+        id: "cmt_db_q",
+        artifactId: "art_db",
+        content: "does getAndTouch add a write on every request?",
+        author: "human",
+        intent: "question",
+        target: { artifactId: "art_db" },
+      });
+      // Question answering the debrief's open question (questionIndex lane).
+      store.addComment({
+        id: "cmt_db_oq",
+        artifactId: "art_db",
+        content: "in-memory is fine for now",
+        author: "human",
+        intent: "question",
+        target: { artifactId: "art_db", questionIndex: 0 },
+      });
+    },
+  },
 ];
 
 describe("#188 — check_feedback byte-parity golden pins", () => {
@@ -478,6 +527,8 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
     rejected_artifacts: { prose: "2c6c6c46465869df2603d0a58f09cc6c406809743dd8022ebf4db1557c0c3214", struct: "3bb03742768b09b798adc570b129bdaca3703de7420844d72bd1b0b01e2e1a40" },
     render_failures: { prose: "2af7667132a1640f6544a8af05ce2d17268cb943bf6aeec20394ff51ccc5388b", struct: "0318b2371be9db67905f81389222fd07b7366b8086ce578c43ada8553f3f8db1" },
     scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "3fdcaf7107f306723a8d731c2c0484a09a172aa22cc4473fd4998950df2d47ce" },
+    // #190 — NEW golden (13→14): captured against THIS tree's debrief delivery.
+    debrief_grain_and_ask_anything: { prose: "44ff3814640812b73a02392dca742d42f4976784218104110186351495913bc9", struct: "a427507adc25895fc03114459c742c97d7b844062c1e20a80fd67d495f977183" },
   };
 
   let idx = 0;
