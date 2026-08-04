@@ -137,20 +137,25 @@ Two rhythms, and they're different:
   can ask ANYTHING in the thread. Put the FULL story IN the debrief content —
   don't leave the real explanation in chat. If the debrief changes, `supersede`
   it; don't post a second one.
-- **`present_explainer`** — when the human wants to UNDERSTAND how existing code
-  WORKS, not to hear about problems in it. Reach for it for code archaeology
-  ("how does auth work here?"), onboarding someone to an area, or a spike readout.
-  It's a read-only, narrated walk-through: a `title`, a one-paragraph `overview`
-  ("what you're about to read"), and ordered `sections[]` — each a `heading`, a
-  markdown `body`, and `evidence[]` anchored to real code (filePath + lineStart +
-  lineEnd + snippet + explanation), rendered through the same per-line-commentable
-  code block as everything else. Add `suggestedQuestions[]` to seed the
-  ask-anything thread with one-click chips, and `relatedArtifactIds[]` to link
-  artifacts the reader can drill into. Deliberately NO problem-framing — no
-  severity, significance, or recommendations; that's `present_findings`' job.
-  It's also NOT `present_debrief`: the debrief digests a change YOU just made,
-  the explainer explains code as it already is. Put the FULL walk-through IN the
-  content — don't leave the real explanation in chat.
+- **`present_explainer`** — fires on HUMAN PULL: an explicit "explain X / how
+  does this work / walk me through it" request, or a needs-your-eyes drill-in
+  where the human asked to understand an area before deciding. It teaches how
+  existing code WORKS, not what's wrong with it — code archaeology, onboarding, a
+  spike readout. NEVER fire it as an automatic run-closer (that's
+  `present_debrief`) — an unrequested, no-call-to-action explainer is exactly the
+  push that got reasoning cards 1% engagement. If you DO initiate one unprompted,
+  it MUST carry `suggestedQuestions[]` — the one-click chips ARE the call to
+  action that keeps it from dying unread. It's a read-only, narrated
+  walk-through: a `title`, a one-paragraph `overview` ("what you're about to
+  read"), and ordered `sections[]` — each a `heading`, a markdown `body`, and
+  `evidence[]` anchored to real code (filePath + lineStart + lineEnd + snippet +
+  explanation), rendered through the same per-line-commentable code block as
+  everything else. Add `relatedArtifactIds[]` to link artifacts the reader can
+  drill into. Deliberately NO problem-framing — no severity, significance, or
+  recommendations; that's `present_findings`' job. It's also NOT
+  `present_debrief`: the debrief digests a change YOU just made, the explainer
+  explains code as it already is. Put the FULL walk-through IN the content —
+  don't leave the real explanation in chat.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
   that cadence got zero engagement, and concept-naming now lives in the debrief's
   `sections[].concepts`. Reach for `log_reasoning` only for a genuinely

@@ -21,6 +21,21 @@ export type { DecisionRecord, PlanReviewRecord };
 export type { ProjectGuardrail };
 
 /**
+ * #193 E2 — artifact types whose rejection captures NO cross-project taste
+ * stance. Both are comprehension surfaces, not proposed approaches: the
+ * EXPLAINER teaches how existing code already works, and the DEBRIEF accounts
+ * for work already done. Rejecting either is a "redo this write-up" gesture, not
+ * "never do it this way again" — so the reject-concept ledger (project-local
+ * rejectedApproaches AND the global philosophy mirror) must never be written for
+ * them. Enforced store-authoritatively in `recordRejectedApproach` and echoed at
+ * the HTTP status route so no `ledger_write` is even broadcast.
+ */
+export const LEDGER_EXEMPT_REJECT_TYPES: ReadonlySet<ArtifactType> = new Set<ArtifactType>([
+  "explainer",
+  "debrief",
+]);
+
+/**
  * File-based store for deepPairing artifacts, comments, and decisions.
  * Stores data in .deeppairing/ directory within the project root.
  * In-memory cache with debounced disk flush.
@@ -1274,6 +1289,21 @@ export class FileStore implements IStore {
     concept?: string;
   }): void {
     const { description, reason, sourceArtifactId, concept } = params;
+    // #193 E2 — STORE-AUTHORITATIVE ledger guard (mirrors the #187 follow-up
+    // stamping: the store owns the invariant so the client can neither forge
+    // nor suppress it). The comprehension artifacts are NOT proposed approaches:
+    // an EXPLAINER teaches how existing code works, a DEBRIEF accounts for work
+    // already done. Rejecting either captures NO taste-stance — there is no
+    // approach being weighed — so we refuse to write a cross-project ledger key
+    // (or the project-local rejectedApproaches entry) for them. The plain
+    // `rejected` STATUS still lands (updateArtifactStatus ran earlier); only the
+    // stance capture is suppressed. Resolved from the source artifact's type so
+    // the guard holds no matter which route reaches here (the HTTP status route
+    // guards too, but this is the last word).
+    if (sourceArtifactId) {
+      const src = this.artifacts.find((a) => a.id === sourceArtifactId);
+      if (src && LEDGER_EXEMPT_REJECT_TYPES.has(src.type)) return;
+    }
     // Phase-1 (D) — before recording, check whether this rejection is a "gate
     // escape": the human is re-flagging an artifact the gate ADMITTED, with
     // ZERO lexical overlap against everything the gate weighed. That's the

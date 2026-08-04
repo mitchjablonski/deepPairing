@@ -208,4 +208,76 @@ describe("RevisionDiff", () => {
     expect(screen.getByText("Mongo")).toBeInTheDocument(); // removed
     expect(screen.getByText("Postgres")).toBeInTheDocument(); // changed (matched by id)
   });
+
+  it("#193 E2 — diffs an EXPLAINER's section list (headings + bodies)", () => {
+    const v1 = mkArtifact({
+      id: "ex1",
+      type: "explainer",
+      version: 1,
+      content: {
+        title: "How auth works",
+        overview: "A walk of the request path.",
+        sections: [
+          { heading: "Read the cookie", body: "requireSession reads the cookie." },
+          { heading: "Old detour", body: "this section goes away" },
+        ],
+      },
+    });
+    const v2 = mkArtifact({
+      id: "ex2",
+      type: "explainer",
+      version: 2,
+      parentId: "ex1",
+      content: {
+        title: "How auth works",
+        overview: "A walk of the request path.",
+        sections: [
+          { heading: "Read the cookie", body: "requireSession reads the SIGNED cookie." }, // changed (body)
+          { heading: "Refresh the TTL", body: "getAndTouch slides the window." }, // added
+        ],
+      },
+    });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+
+    render(<RevisionDiff artifact={v2} />);
+    expect(screen.getByText("Sections")).toBeInTheDocument();
+    expect(screen.getByText("Refresh the TTL")).toBeInTheDocument(); // added
+    expect(screen.getByText("Old detour")).toBeInTheDocument(); // removed
+    expect(screen.getByText("Read the cookie")).toBeInTheDocument(); // changed (matched by heading)
+  });
+
+  it("#193 E2 — diffs a DEBRIEF lane-by-lane (summary / sections / calls / eyes / deferred)", () => {
+    const v1 = mkArtifact({
+      id: "db1",
+      type: "debrief",
+      version: 1,
+      content: {
+        summary: "We moved the TTL refresh.",
+        decisionsMade: [{ what: "fail closed", why: "safer" }],
+        needsYourEyes: [{ what: "the expiry check", why: "auth path" }],
+        deferred: [{ what: "token rotation", why: "out of scope" }],
+      },
+    });
+    const v2 = mkArtifact({
+      id: "db2",
+      type: "debrief",
+      version: 2,
+      parentId: "db1",
+      content: {
+        summary: "We moved the TTL refresh into middleware.", // changed
+        decisionsMade: [{ what: "fail closed", why: "safer" }], // unchanged
+        needsYourEyes: [{ what: "the new test", why: "covers the window" }], // added + removed
+        deferred: [{ what: "token rotation", why: "out of scope" }], // unchanged
+      },
+    });
+    useArtifactStore.getState().addArtifact(v1);
+    useArtifactStore.getState().addArtifact(v2);
+
+    render(<RevisionDiff artifact={v2} />);
+    expect(screen.getByText("Debrief")).toBeInTheDocument();
+    expect(screen.getByText("Summary")).toBeInTheDocument(); // changed lane
+    expect(screen.getByText(/Needs eyes · the new test/)).toBeInTheDocument(); // added
+    expect(screen.getByText(/Needs eyes · the expiry check/)).toBeInTheDocument(); // removed
+  });
 });

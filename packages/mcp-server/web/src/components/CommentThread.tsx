@@ -57,6 +57,12 @@ interface CommentThreadProps {
   // never clobbering an in-progress draft on every render. Omitted everywhere
   // else, so existing threads are byte-for-byte unchanged.
   prefill?: { text: string; nonce: number };
+  // #193 E2 — a bare focus signal (no text): bump this number to focus + scroll
+  // the composer into view WITHOUT touching the draft. The explainer's "Ask
+  // more" acknowledge button uses it to jump the reader to the ask-anything box.
+  // Nonce-gated like `prefill`, so it fires only on a fresh bump. Omitted
+  // everywhere else → existing threads unchanged.
+  focusSignal?: number;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -188,6 +194,7 @@ export function CommentThread({
   roomy,
   carryoverFor,
   prefill,
+  focusSignal,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -209,7 +216,17 @@ export function CommentThread({
     setInput(prefill.text);
     composerRef.current?.focus?.();
   }, [prefill, setInput]);
-  
+
+  // #193 E2 — bare focus signal (no draft mutation): focus + scroll the composer
+  // when the caller bumps `focusSignal`. Nonce-gated so it fires per bump only.
+  const lastFocusSignal = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (focusSignal == null || focusSignal === lastFocusSignal.current) return;
+    lastFocusSignal.current = focusSignal;
+    composerRef.current?.focus?.();
+    composerRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [focusSignal]);
+
 
   // #164 round 2 — intent is set only by the explicit Ask button; the primary
   // path (button, ⌘⏎) posts a plain comment. NOTE: callers must invoke via an

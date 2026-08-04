@@ -230,6 +230,58 @@ describe("ArtifactStatusActions — draft interactions", () => {
   });
 });
 
+describe("#193 E2 — acknowledge mode (the explainer lifecycle)", () => {
+  it("renders Got it + Ask more and NO verdict verbs / no textarea", () => {
+    render(<ArtifactStatusActions artifact={artifact()} acknowledgeMode onAskMore={() => {}} />);
+    expect(screen.getByRole("button", { name: /got it/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ask more/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reject$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /request changes/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("Got it marks the artifact approved (no concept)", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} acknowledgeMode />);
+    await userEvent.click(screen.getByRole("button", { name: /got it/i }));
+    await waitFor(() => {
+      const call = (fetch as any).mock.calls.find((c: any) => String(c[0]).includes("/status"));
+      expect(call).toBeTruthy();
+      expect(call[1].body).toContain('"status":"approved"');
+      expect(call[1].body).not.toContain('"concept"');
+    });
+  });
+
+  it("Ask more invokes the onAskMore callback", async () => {
+    const onAskMore = vi.fn();
+    render(<ArtifactStatusActions artifact={artifact()} acknowledgeMode onAskMore={onAskMore} />);
+    await userEvent.click(screen.getByRole("button", { name: /ask more/i }));
+    expect(onAskMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("the approved chip reads 'Got it' in acknowledge mode", () => {
+    render(<ArtifactStatusActions artifact={artifact({ status: "approved" })} acknowledgeMode />);
+    expect(screen.getByText("Got it")).toBeInTheDocument();
+    expect(screen.queryByText("Approved")).not.toBeInTheDocument();
+  });
+});
+
+describe("#193 E2 — suppressRejectConcept (the debrief de-fanged reject)", () => {
+  it("Reject is one step: no 'name the pattern' field, no concept sent", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} suppressRejectConcept />);
+    await userEvent.type(screen.getByRole("textbox"), "redo the digest — too terse");
+    await userEvent.click(screen.getByRole("button", { name: /^reject$/i }));
+    // No ledger prompt…
+    expect(screen.queryByLabelText(/what pattern are you rejecting/i)).not.toBeInTheDocument();
+    // …and the reject POST carries NO concept.
+    await waitFor(() => {
+      const call = (fetch as any).mock.calls.find((c: any) => String(c[0]).includes("/status"));
+      expect(call).toBeTruthy();
+      expect(call[1].body).toContain('"status":"rejected"');
+      expect(call[1].body).not.toContain('"concept"');
+    });
+  });
+});
+
 describe("ArtifactStatusActions — keyboard shortcut event", () => {
   it("dp:artifact-shortcut(approve) arms the 3s countdown", async () => {
     vi.useFakeTimers();

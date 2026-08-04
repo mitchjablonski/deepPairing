@@ -61,11 +61,36 @@ describe("ExplainerArtifact — renders the walk-through", () => {
     expect(screen.getByTestId("explainer-related")).toBeInTheDocument();
   });
 
-  it("shows the unified verb triad (Approve / Request changes / Reject)", () => {
+  it("#193 E2 — the read-only acknowledge footer: Got it + Ask more, NO verdict verbs", () => {
     render(<ExplainerArtifact artifact={explainerArtifact} />);
-    expect(screen.getByRole("button", { name: /^approve$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /request changes/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^reject$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /got it/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ask more/i })).toBeInTheDocument();
+    // Nothing here proposes an approach → no reject / request-changes.
+    expect(screen.queryByRole("button", { name: /request changes/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reject$/i })).not.toBeInTheDocument();
+  });
+
+  it("#193 E2 — Got it marks the explainer approved (reuses the status machinery)", async () => {
+    const user = userEvent.setup();
+    render(<ExplainerArtifact artifact={explainerArtifact} />);
+    await user.click(screen.getByRole("button", { name: /got it/i }));
+    await waitFor(() => {
+      const statusCall = (globalThis.fetch as any).mock.calls.find(([u]: any[]) =>
+        String(u).includes("/api/artifacts/art_explainer_001/status"),
+      );
+      expect(statusCall).toBeTruthy();
+      expect(statusCall[1].body).toContain('"status":"approved"');
+      // No cross-project stance is ever sent for a comprehension artifact.
+      expect(statusCall[1].body).not.toContain('"concept"');
+    });
+  });
+
+  it("#193 E2 — Ask more focuses the ask-anything composer", async () => {
+    const user = userEvent.setup();
+    render(<ExplainerArtifact artifact={explainerArtifact} />);
+    await user.click(screen.getByRole("button", { name: /ask more/i }));
+    const composer = screen.getByLabelText("Comment on this explainer");
+    await waitFor(() => expect(document.activeElement).toBe(composer));
   });
 });
 

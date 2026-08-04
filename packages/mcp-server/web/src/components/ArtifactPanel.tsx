@@ -99,6 +99,16 @@ const statusLabels: Record<string, string> = {
   obsolete: "Overcome by new information",
 };
 
+/** #193 E2 — the status label, type-aware. A DRAFT explainer is not "awaiting
+ *  review" — it's a read-only walk-through the human should READ; the verdict
+ *  framing ("Draft, awaiting review") mis-casts it. Say "New — for you to read"
+ *  so the chip matches its acknowledge (Got it) footer. Every other type/status
+ *  is unchanged. */
+function statusLabelFor(artifact: Artifact): string {
+  if (artifact.type === "explainer" && artifact.status === "draft") return "New — for you to read";
+  return statusLabels[artifact.status] ?? artifact.status;
+}
+
 const typeLabels: Record<string, string> = {
   research: "Research",
   spec: "Specs",
@@ -220,7 +230,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
             {/* U6 — friendly label + glyph, matching the sidebar; not the raw
                 enum ("superseded"/"reviewing"). */}
             {statusGlyph[artifact.status] ? `${statusGlyph[artifact.status]} ` : ""}
-            {statusLabels[artifact.status] ?? artifact.status}
+            {statusLabelFor(artifact)}
           </span>
           {artifact.version > 1 && (
             <span className="text-2xs text-text-muted">v{artifact.version}</span>
@@ -275,7 +285,15 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {artifact.type === "explainer" && <ExplainerArtifact artifact={artifact} />}
       </Suspense>
 
-      {/* General comments */}
+      {/* General comments.
+          #193 E2 (usability M2) — the DEBRIEF and EXPLAINER carry their OWN
+          "Ask me anything" composer (the conversational surface for the whole
+          artifact). Rendering this second artifact-level thread underneath
+          stacked a redundant composer — two boxes posting the same
+          artifact-level comment. Fold it away for those two types; the
+          renderer's ask-anything thread is the single composer. Every other type
+          keeps this thread byte-for-byte unchanged. */}
+      {artifact.type !== "debrief" && artifact.type !== "explainer" && (
       <div className="pt-3 border-t border-border-default">
         <h4 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
           Comments
@@ -292,6 +310,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <CommentThread artifactId={artifact.id} comments={generalComments} />
         )}
       </div>
+      )}
     </m.div>
   );
 }

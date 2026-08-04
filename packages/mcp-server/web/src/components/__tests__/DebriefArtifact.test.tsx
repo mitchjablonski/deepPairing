@@ -137,4 +137,53 @@ describe("DebriefArtifact — grain comments", () => {
       expect(body.target.sectionId).toBe("debrief:summary");
     });
   });
+
+  it("#193 E2 — a per-item needs-your-eyes comment carries `debrief:needs-your-eyes:<i>`", async () => {
+    const user = userEvent.setup();
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+
+    // The needsYourEyes item's own grain affordance (label = the item's `what`).
+    const item = screen.getByTestId("debrief-needs-eyes");
+    await user.click(within(item).getByRole("button", { name: /Comment on/i }));
+    const composer = within(item).getByLabelText(/Comment on/i);
+    await user.type(composer, "checked — looks right");
+    await user.click(within(item).getByRole("button", { name: "Comment" }));
+
+    await waitFor(() => {
+      const body = lastCommentPost();
+      expect(body.target.sectionId).toBe("debrief:needs-your-eyes:0");
+    });
+  });
+});
+
+describe("DebriefArtifact — #193 E2 lifecycle", () => {
+  it("renders 'Needs your eyes' ABOVE the narrative (what must I look at, first)", () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const eyes = screen.getByText("Needs your eyes");
+    const summary = screen.getByText("What we built");
+    // Node order: needs-your-eyes precedes the summary block in the DOM.
+    expect(eyes.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("Reject is de-fanged — one step, no 'name the pattern' field, no concept sent", async () => {
+    const user = userEvent.setup();
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    // A rejected debrief means "redo the digest", not a remembered rule.
+    // The verdict textarea (ArtifactStatusActions) — type the redo reason there.
+    const verdictBox = screen.getByPlaceholderText(/respond to the agent/i);
+    await user.type(verdictBox, "please redo the summary — too terse");
+    await user.click(screen.getByRole("button", { name: /^reject$/i }));
+
+    // No cross-project ledger prompt appears…
+    expect(screen.queryByLabelText(/what pattern are you rejecting/i)).not.toBeInTheDocument();
+    // …and the status POST is a plain reject with NO concept.
+    await waitFor(() => {
+      const statusCall = (globalThis.fetch as any).mock.calls.find(([u]: any[]) =>
+        String(u).includes("/api/artifacts/art_debrief_001/status"),
+      );
+      expect(statusCall).toBeTruthy();
+      expect(statusCall[1].body).toContain('"status":"rejected"');
+      expect(statusCall[1].body).not.toContain('"concept"');
+    });
+  });
 });
