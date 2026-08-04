@@ -38,7 +38,13 @@ export const CommentTargetSchema = z.object({
   // D8 (H1) — open questions are now answerable; index into openQuestions[].
   questionIndex: z.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: z.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
-  suggestion: z.string().optional().describe("Suggested code replacement for this line"),
+  // TOLERATED-LEGACY (#188) — the deprecated one-line `target.suggestion` STRING.
+  // No producer has emitted it since #199 (the web composer emits only the
+  // first-class `comment.suggestion` OBJECT), and #188 deleted its check_feedback
+  // consumer branch. Kept optional here ONLY so old stored comments that carry it
+  // still PARSE on read — never written, never delivered. Do not re-consume it;
+  // the canonical surface is `CommentSuggestionSchema` (see `suggestion` below).
+  suggestion: z.string().optional().describe("Deprecated (tolerated-legacy, #188): old one-line suggested replacement; parse-only, not delivered"),
   // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
   // screenshot: the agent gets the hit-tested node ids + labels (which it can
   // locate in the Mermaid source it authored) plus the normalized rect. Every

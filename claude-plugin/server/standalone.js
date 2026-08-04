@@ -25724,7 +25724,13 @@ var CommentTargetSchema = external_exports.object({
   // D8 (H1) — open questions are now answerable; index into openQuestions[].
   questionIndex: external_exports.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: external_exports.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
-  suggestion: external_exports.string().optional().describe("Suggested code replacement for this line"),
+  // TOLERATED-LEGACY (#188) — the deprecated one-line `target.suggestion` STRING.
+  // No producer has emitted it since #199 (the web composer emits only the
+  // first-class `comment.suggestion` OBJECT), and #188 deleted its check_feedback
+  // consumer branch. Kept optional here ONLY so old stored comments that carry it
+  // still PARSE on read — never written, never delivered. Do not re-consume it;
+  // the canonical surface is `CommentSuggestionSchema` (see `suggestion` below).
+  suggestion: external_exports.string().optional().describe("Deprecated (tolerated-legacy, #188): old one-line suggested replacement; parse-only, not delivered"),
   // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
   // screenshot: the agent gets the hit-tested node ids + labels (which it can
   // locate in the Mermaid source it authored) plus the normalized rect. Every
@@ -29213,25 +29219,7 @@ async function handlePresentOptions(ctx, args) {
 var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset"];
 
-// src/mcp/tools/check-feedback.ts
-init_version();
-
-// src/store/rejected-option-recorder.ts
-var MAX_REASON_LEN = 240;
-function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
-  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
-  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
-  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
-}
-async function recordRejectedOption(store, broadcast, params) {
-  const { context, option, reason, sourceArtifactId } = params;
-  const description = `${context}: ${option.title}`;
-  const concept = option.concept?.name ?? option.description ?? void 0;
-  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
-  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
-}
-
-// src/mcp/tools/check-feedback.ts
+// src/mcp/tools/check-feedback-delivery.ts
 function removedLineContent(art, filePath, oldLine) {
   if (!art || art.type !== "changeset") return void 0;
   const files = art.content?.files;
@@ -29245,47 +29233,8 @@ function removedLineContent(art, filePath, oldLine) {
   }
   return void 0;
 }
-function ledgerHealthField() {
-  try {
-    const health = getGlobalStore().getHealth();
-    if (health.state !== "frozen") return {};
-    return {
-      ledgerHealth: {
-        state: "frozen",
-        ledgerPath: health.ledgerPath,
-        ...health.backupPath ? { backupPath: health.backupPath } : {},
-        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `node packages/mcp-server/dist/cli/init.js doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
-      }
-    };
-  } catch {
-    return {};
-  }
-}
 function commentSecretNote(c) {
   return c.secretWarnings?.length ? " \u26A0 possible secret in this comment" : "";
-}
-function changesetReviewField(a) {
-  if (a.type !== "changeset") return {};
-  const content = a.content;
-  const files = Array.isArray(content?.files) ? content.files : [];
-  if (files.length === 0) return {};
-  const raw = content?.reviewState ?? {};
-  const reviewState = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === "reviewed" || v === "needs_changes" || v === "skipped") reviewState[k] = v;
-  }
-  const rawReasons = content?.reviewReasons ?? {};
-  const reviewReasons = {};
-  for (const [k, v] of Object.entries(rawReasons)) {
-    if (typeof v === "string" && v.length > 0) reviewReasons[k] = v;
-  }
-  const filesReviewed = files.filter((f) => {
-    const s = f.path ? reviewState[f.path] : void 0;
-    return s === "reviewed" || s === "needs_changes" || s === "skipped";
-  }).length;
-  const out = { reviewState, filesReviewed, filesTotal: files.length };
-  if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
-  return out;
 }
 function describeRegionRef(region) {
   if (!region) return "";
@@ -29319,6 +29268,203 @@ function structuredRegionFields(t) {
   }
   return region.labels?.length ? { region: { labels: region.labels } } : {};
 }
+function commonTargetFields(c, removedLine) {
+  return {
+    lineStart: c.target.lineStart,
+    findingIndex: c.target.findingIndex,
+    questionIndex: c.target.questionIndex,
+    requirementId: c.target.requirementId,
+    // #171 — file dimension for a changeset line comment, and the full anchor
+    // list for a cross-file thread. Spread only when present so the healthy/
+    // no-file payload is byte-for-byte unchanged.
+    ...c.target.filePath ? { filePath: c.target.filePath } : {},
+    // #186 — old-side (removed-line) marking + content. Spread ONLY for a
+    // del-side comment so new-side delivery is byte-for-byte unchanged.
+    ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
+    ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
+    // #140/#173 — a plan/spec region comment carries ONLY the human-meaningful
+    // labels (byte-for-byte as before); a DECISION region comment (optionId set)
+    // carries optionId + visualId + rect + nearNodes so the anchor survives a
+    // re-render (#163). See structuredRegionFields.
+    ...structuredRegionFields(c.target)
+  };
+}
+function deliverComment(c, artsForTargets) {
+  if (c.suggestion) {
+    const s = c.suggestion;
+    const range = s.lineEnd > s.lineStart ? `${s.lineStart}\u2013${s.lineEnd}` : `${s.lineStart}`;
+    const loc2 = `${c.target.filePath ?? "code"}:${range}`;
+    const summary = suggestionSummary(c.target.filePath, s.lineStart, s.lineEnd);
+    const why = c.content.trim();
+    const note = why.length > 0 && why !== summary ? why : void 0;
+    const respond = `answer_question commentId="${c.id}"`;
+    const tookCounter = s.state === "applied" && !!s.counter && s.appliedInVersion == null;
+    let prose;
+    if (s.state === "insisted" && s.appliedInVersion == null) {
+      prose = `- \u{1F527} INSISTED EDIT [${loc2}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter \u2014 apply it VERBATIM, do not re-argue:
+${s.replacementText}
+    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`;
+    } else if (tookCounter) {
+      const counterBody = s.counter?.replacementText ? `apply your counter-proposal:
+${s.counter.replacementText}` : `revise the code per your counter's reasoning${s.counter?.reason ? ` ("${s.counter.reason}")` : ""}`;
+      prose = `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 ${counterBody} and stamp the version.
+    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`;
+    } else {
+      prose = `- \u{1F527} SUGGESTED EDIT [${loc2}]${commentSecretNote(c)} The human proposes replacing:
+${s.originalText}
+  with:
+${s.replacementText}${note ? `
+  Why: ${note}` : ""}
+    \u2192 Respond via ${respond}: suggestionState:"applied" (+ appliedInVersion) to ship it verbatim or with an extension you name in \`answer\`, OR suggestionState:"countered" (+ your reason in \`answer\`) to propose a different edit.`;
+    }
+    return {
+      bucket: "suggestion",
+      prose,
+      structured: {
+        commentId: c.id,
+        artifactId: c.target.artifactId,
+        state: s.state,
+        file: c.target.filePath,
+        lineStart: s.lineStart,
+        lineEnd: s.lineEnd,
+        originalText: s.originalText,
+        replacementText: s.replacementText,
+        ...note ? { note } : {},
+        ...s.counter ? { counter: s.counter } : {},
+        // #187 — a suggested edit posted to an approved artifact is a follow-up;
+        // spread only when stamped so normal delivery stays byte-unchanged.
+        ...c.followUp ? { followUp: true } : {}
+      },
+      isFollowUp: false
+    };
+  }
+  let loc = c.target.artifactId;
+  if (c.target.filePath) loc += ` ${c.target.filePath}`;
+  if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+  let removedLine;
+  if (c.target.side === "old" && c.target.filePath && c.target.lineStart != null) {
+    removedLine = removedLineContent(
+      artsForTargets.find((a) => a.id === c.target.artifactId),
+      c.target.filePath,
+      c.target.lineStart
+    );
+    loc += removedLine != null ? ` (removed line: "${removedLine}")` : ` (removed line)`;
+  }
+  const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
+  if (anchors.length >= 2) {
+    loc += ` \u2014 cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" \u2194 ")}`;
+  }
+  if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
+  if (c.target.questionIndex != null) {
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    const qs = art?.content?.openQuestions;
+    const qText = qs?.[c.target.questionIndex];
+    loc += qText ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")` : ` (answers open question #${c.target.questionIndex + 1})`;
+  }
+  if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
+  if (c.target.optionId) {
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    const opts = art?.content?.options;
+    const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
+    loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
+  }
+  if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
+    loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
+  }
+  const regionRef = describeRegionRef(c.target.region);
+  if (regionRef) loc += ` \u2014 on region ${regionRef}`;
+  const followUpPrefix = c.followUp ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] ` : "";
+  if (c.intent === "question" && !c.answeredByCommentId) {
+    return {
+      bucket: "question",
+      prose: `- \u2753 QUESTION [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
+    \u2192 Answer via answer_question with commentId="${c.id}"`,
+      structured: {
+        commentId: c.id,
+        artifactId: c.target.artifactId,
+        content: c.content,
+        // #187 — spread ONLY when the store stamped it (posted to an approved
+        // artifact via the late lane) so normal delivery is byte-unchanged.
+        ...c.followUp ? { followUp: true } : {},
+        ...commonTargetFields(c, removedLine)
+      },
+      isFollowUp: !!c.followUp
+    };
+  }
+  return {
+    bucket: "comment",
+    prose: `- [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    structured: {
+      id: c.id,
+      artifactId: c.target.artifactId,
+      kind: "comment",
+      content: c.content,
+      // #187 — see the question path: present only for a late follow-up.
+      ...c.followUp ? { followUp: true } : {},
+      ...commonTargetFields(c, removedLine)
+    },
+    isFollowUp: !!c.followUp
+  };
+}
+
+// src/mcp/tools/check-feedback.ts
+init_version();
+
+// src/store/rejected-option-recorder.ts
+var MAX_REASON_LEN = 240;
+function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
+  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
+  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
+  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
+}
+async function recordRejectedOption(store, broadcast, params) {
+  const { context, option, reason, sourceArtifactId } = params;
+  const description = `${context}: ${option.title}`;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
+  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
+}
+
+// src/mcp/tools/check-feedback.ts
+function ledgerHealthField() {
+  try {
+    const health = getGlobalStore().getHealth();
+    if (health.state !== "frozen") return {};
+    return {
+      ledgerHealth: {
+        state: "frozen",
+        ledgerPath: health.ledgerPath,
+        ...health.backupPath ? { backupPath: health.backupPath } : {},
+        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `node packages/mcp-server/dist/cli/init.js doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
+      }
+    };
+  } catch {
+    return {};
+  }
+}
+function changesetReviewField(a) {
+  if (a.type !== "changeset") return {};
+  const content = a.content;
+  const files = Array.isArray(content?.files) ? content.files : [];
+  if (files.length === 0) return {};
+  const raw = content?.reviewState ?? {};
+  const reviewState = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === "reviewed" || v === "needs_changes" || v === "skipped") reviewState[k] = v;
+  }
+  const rawReasons = content?.reviewReasons ?? {};
+  const reviewReasons = {};
+  for (const [k, v] of Object.entries(rawReasons)) {
+    if (typeof v === "string" && v.length > 0) reviewReasons[k] = v;
+  }
+  const filesReviewed = files.filter((f) => {
+    const s = f.path ? reviewState[f.path] : void 0;
+    return s === "reviewed" || s === "needs_changes" || s === "skipped";
+  }).length;
+  const out = { reviewState, filesReviewed, filesTotal: files.length };
+  if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
+  return out;
+}
 function deriveTransition(a) {
   const history = a.statusHistory;
   if (!Array.isArray(history) || history.length === 0) {
@@ -29327,6 +29473,21 @@ function deriveTransition(a) {
   const last = history[history.length - 1];
   const prev = history.length >= 2 ? history[history.length - 2] : void 0;
   return { previousStatus: prev?.status, at: last?.at ?? a.updatedAt };
+}
+function scopeHasSignal(scope, signals) {
+  switch (scope) {
+    case "comments":
+      return signals.comments > 0;
+    case "decision":
+      return signals.decisions > 0 || signals.comments > 0;
+    case "plan_review":
+      return signals.decidedPlans > 0 || signals.comments > 0;
+    case "artifact_status":
+      return signals.decidedAny > 0 || signals.decisions > 0 || signals.comments > 0;
+    case "any":
+    default:
+      return signals.comments > 0 || signals.decisions > 0;
+  }
 }
 async function handleCheckFeedback(ctx, args) {
   const { store, server, broadcast, port } = ctx;
@@ -29345,22 +29506,12 @@ async function handleCheckFeedback(ctx, args) {
   const decidedAny = allArtsForScope.filter(
     (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected"
   );
-  const hasImmediateFor = (scope) => {
-    switch (scope) {
-      case "comments":
-        return unackComments.length > 0;
-      case "decision":
-        return resolvedDecs.length > 0 || unackComments.length > 0;
-      case "plan_review":
-        return decidedPlans.length > 0 || unackComments.length > 0;
-      case "artifact_status":
-        return decidedAny.length > 0 || resolvedDecs.length > 0 || unackComments.length > 0;
-      case "any":
-      default:
-        return unackComments.length > 0 || resolvedDecs.length > 0;
-    }
-  };
-  const hasImmediate = hasImmediateFor(waitForScope) || pendingRenderFailuresAtGate.length > 0;
+  const hasImmediate = scopeHasSignal(waitForScope, {
+    comments: unackComments.length,
+    decisions: resolvedDecs.length,
+    decidedPlans: decidedPlans.length,
+    decidedAny: decidedAny.length
+  }) || pendingRenderFailuresAtGate.length > 0;
   if (!hasImmediate) {
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
@@ -29403,20 +29554,12 @@ async function handleCheckFeedback(ctx, args) {
     const decidedAnyPostWake = allArtsPostWake.filter(
       (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected"
     );
-    const scopeSatisfied = (() => {
-      switch (waitForScope) {
-        case "comments":
-          return newComments.length > 0;
-        case "decision":
-          return newResolved.length > 0 || newComments.length > 0;
-        case "plan_review":
-          return decidedPlansPostWake.length > 0 || newComments.length > 0;
-        case "artifact_status":
-          return decidedAnyPostWake.length > 0 || newResolved.length > 0 || newComments.length > 0;
-        default:
-          return true;
-      }
-    })();
+    const scopeSatisfied = scopeHasSignal(waitForScope, {
+      comments: newComments.length,
+      decisions: newResolved.length,
+      decidedPlans: decidedPlansPostWake.length,
+      decidedAny: decidedAnyPostWake.length
+    });
     const newRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
       return {
@@ -29514,170 +29657,23 @@ Adjust your approach based on this guidance.`);
     const otherLines = [];
     const artsForTargets = await store.getArtifacts();
     let anyFollowUp = false;
-    const followUpPrefix = (c) => {
-      if (!c.followUp) return "";
-      anyFollowUp = true;
-      const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-      const title = art?.title ?? c.target.artifactId;
-      return `[follow-up on the APPROVED/RESOLVED artifact "${title}"] `;
-    };
     for (const c of artifactCommentsSorted) {
-      if (c.suggestion) {
-        const s = c.suggestion;
-        const range = s.lineEnd > s.lineStart ? `${s.lineStart}\u2013${s.lineEnd}` : `${s.lineStart}`;
-        const loc2 = `${c.target.filePath ?? "code"}:${range}`;
-        const summary = suggestionSummary(c.target.filePath, s.lineStart, s.lineEnd);
-        const why = c.content.trim();
-        const note = why.length > 0 && why !== summary ? why : void 0;
-        const respond = `answer_question commentId="${c.id}"`;
-        const tookCounter = s.state === "applied" && !!s.counter && s.appliedInVersion == null;
-        if (s.state === "insisted" && s.appliedInVersion == null) {
-          suggestionLines.push(
-            `- \u{1F527} INSISTED EDIT [${loc2}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter \u2014 apply it VERBATIM, do not re-argue:
-${s.replacementText}
-    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`
-          );
-        } else if (tookCounter) {
-          const counterBody = s.counter?.replacementText ? `apply your counter-proposal:
-${s.counter.replacementText}` : `revise the code per your counter's reasoning${s.counter?.reason ? ` ("${s.counter.reason}")` : ""}`;
-          suggestionLines.push(
-            `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 ${counterBody} and stamp the version.
-    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`
-          );
-        } else {
-          suggestionLines.push(
-            `- \u{1F527} SUGGESTED EDIT [${loc2}]${commentSecretNote(c)} The human proposes replacing:
-${s.originalText}
-  with:
-${s.replacementText}${note ? `
-  Why: ${note}` : ""}
-    \u2192 Respond via ${respond}: suggestionState:"applied" (+ appliedInVersion) to ship it verbatim or with an extension you name in \`answer\`, OR suggestionState:"countered" (+ your reason in \`answer\`) to propose a different edit.`
-          );
-        }
-        structuredSuggestions.push({
-          commentId: c.id,
-          artifactId: c.target.artifactId,
-          state: s.state,
-          file: c.target.filePath,
-          lineStart: s.lineStart,
-          lineEnd: s.lineEnd,
-          originalText: s.originalText,
-          replacementText: s.replacementText,
-          ...note ? { note } : {},
-          ...s.counter ? { counter: s.counter } : {},
-          // #187 — a suggested edit posted to an approved artifact is a follow-up;
-          // spread only when stamped so normal delivery stays byte-unchanged.
-          ...c.followUp ? { followUp: true } : {}
-        });
-        continue;
+      const delivery = deliverComment(c, artsForTargets);
+      if (delivery.isFollowUp) anyFollowUp = true;
+      switch (delivery.bucket) {
+        case "suggestion":
+          suggestionLines.push(delivery.prose);
+          structuredSuggestions.push(delivery.structured);
+          break;
+        case "question":
+          questionLines.push(delivery.prose);
+          structuredQuestions.push(delivery.structured);
+          break;
+        case "comment":
+          otherLines.push(delivery.prose);
+          structuredComments.push(delivery.structured);
+          break;
       }
-      let loc = c.target.artifactId;
-      if (c.target.filePath) loc += ` ${c.target.filePath}`;
-      if (c.target.lineStart) loc += `:${c.target.lineStart}`;
-      let removedLine;
-      if (c.target.side === "old" && c.target.filePath && c.target.lineStart != null) {
-        removedLine = removedLineContent(
-          artsForTargets.find((a) => a.id === c.target.artifactId),
-          c.target.filePath,
-          c.target.lineStart
-        );
-        loc += removedLine != null ? ` (removed line: "${removedLine}")` : ` (removed line)`;
-      }
-      const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
-      if (anchors.length >= 2) {
-        loc += ` \u2014 cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" \u2194 ")}`;
-      }
-      if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
-      if (c.target.questionIndex != null) {
-        const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-        const qs = art?.content?.openQuestions;
-        const qText = qs?.[c.target.questionIndex];
-        loc += qText ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")` : ` (answers open question #${c.target.questionIndex + 1})`;
-      }
-      if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
-      if (c.target.optionId) {
-        const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-        const opts = art?.content?.options;
-        const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
-        loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
-      }
-      if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
-        loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
-      }
-      const regionRef = describeRegionRef(c.target.region);
-      if (regionRef) loc += ` \u2014 on region ${regionRef}`;
-      if (c.intent === "question" && !c.answeredByCommentId) {
-        questionLines.push(
-          `- \u2753 QUESTION [${loc}] ${followUpPrefix(c)}${c.content}${commentSecretNote(c)}
-    \u2192 Answer via answer_question with commentId="${c.id}"`
-        );
-        structuredQuestions.push({
-          commentId: c.id,
-          artifactId: c.target.artifactId,
-          content: c.content,
-          // #187 — spread ONLY when the store stamped it (posted to an approved
-          // artifact via the late lane) so normal delivery is byte-unchanged.
-          ...c.followUp ? { followUp: true } : {},
-          lineStart: c.target.lineStart,
-          findingIndex: c.target.findingIndex,
-          questionIndex: c.target.questionIndex,
-          requirementId: c.target.requirementId,
-          // #171 — file dimension for a changeset line comment, and the full
-          // anchor list for a cross-file thread. Spread only when present so
-          // the healthy/no-file payload is byte-for-byte unchanged.
-          ...c.target.filePath ? { filePath: c.target.filePath } : {},
-          // #186 — old-side (removed-line) marking + content. Spread ONLY for a
-          // del-side comment so new-side delivery is byte-for-byte unchanged.
-          ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
-          ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
-          // #140/#173 — a plan/spec region comment carries ONLY the human-
-          // meaningful labels (byte-for-byte as before); a DECISION region
-          // comment (optionId set) carries optionId + visualId + rect +
-          // nearNodes so the anchor survives a re-render (#163). See
-          // structuredRegionFields.
-          ...structuredRegionFields(c.target)
-        });
-        continue;
-      }
-      if (c.target.suggestion) {
-        const filePath = c.target.filePath ?? "unknown";
-        const line = c.target.lineStart ?? "?";
-        otherLines.push(`- [SUGGESTION for ${filePath}:${line}]${commentSecretNote(c)} Replace with:
-    ${c.target.suggestion}`);
-        structuredComments.push({
-          id: c.id,
-          artifactId: c.target.artifactId,
-          kind: "suggestion",
-          content: c.content,
-          suggestion: c.target.suggestion,
-          filePath: c.target.filePath,
-          lineStart: c.target.lineStart
-        });
-        continue;
-      }
-      otherLines.push(`- [${loc}] ${followUpPrefix(c)}${c.content}${commentSecretNote(c)}`);
-      structuredComments.push({
-        id: c.id,
-        artifactId: c.target.artifactId,
-        kind: "comment",
-        content: c.content,
-        // #187 — see structuredQuestions: present only for a late follow-up.
-        ...c.followUp ? { followUp: true } : {},
-        lineStart: c.target.lineStart,
-        findingIndex: c.target.findingIndex,
-        questionIndex: c.target.questionIndex,
-        requirementId: c.target.requirementId,
-        // #171 — see structuredQuestions: file dimension + cross-file anchors,
-        // present only when the comment carries them.
-        ...c.target.filePath ? { filePath: c.target.filePath } : {},
-        // #186 — old-side (removed-line) marking + content; new-side unchanged.
-        ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
-        ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
-        // #140/#173 — plan/spec: labels only (byte-for-byte); decision region
-        // (optionId set): optionId + visualId + rect + nearNodes. See
-        // structuredRegionFields.
-        ...structuredRegionFields(c.target)
-      });
     }
     if (questionLines.length > 0) {
       parts.push(`Human questions (${questionLines.length}) \u2014 answer these before proceeding:

@@ -6,6 +6,11 @@ import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
+import {
+  expectHealthyCheckFeedbackPayload,
+  normalizedHealthyStructSha,
+  GOLDEN_HEALTHY_STRUCT_SHA256,
+} from "./check-feedback-test-helpers.js";
 
 /**
  * H2-1 (#144) — a FROZEN cross-project philosophy ledger was INVISIBLE: v0.1.6
@@ -96,22 +101,11 @@ describe("#139 — check_feedback healthy payload is unchanged (no detailDensity
     const sc = res.structuredContent as Record<string, unknown>;
 
     // The exact healthy key set (companionUrl present because port=4000>0;
-    // ledgerHealth omitted because the ledger is healthy).
-    expect(Object.keys(sc).sort()).toEqual(
-      [
-        "comments",
-        "companionUrl",
-        "decisions",
-        "pendingArtifacts",
-        "questions",
-        "rejected",
-        "serverVersion",
-        "statusChanges",
-        "status",
-        "suggestedAction",
-        "summary",
-      ].sort(),
-    );
+    // ledgerHealth omitted because the ledger is healthy) — now the ONE shared
+    // contract (#188). This empty-session payload is ALSO the canonical healthy
+    // golden: pin its version-normalized sha so any shape/wording drift fails.
+    expectHealthyCheckFeedbackPayload(sc);
+    expect(normalizedHealthyStructSha(sc)).toBe(GOLDEN_HEALTHY_STRUCT_SHA256);
     // The feature must not appear anywhere in the poll payload.
     expect("detailDensity" in sc).toBe(false);
     expect(JSON.stringify(sc)).not.toMatch(/detailDensity|detail density/i);

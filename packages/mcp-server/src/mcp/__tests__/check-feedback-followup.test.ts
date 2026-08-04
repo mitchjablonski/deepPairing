@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -112,6 +113,9 @@ describe("check_feedback — late follow-up lane (#187)", () => {
     expect(res.text).not.toContain("FOLLOW-UP FEEDBACK");
 
     const sc = res.structuredContent as any;
+    // #188 — a plain draft-review comment leaves the shared healthy top-level
+    // contract intact; the lane delta is no `followUp` flag on the entry.
+    expectHealthyCheckFeedbackPayload(sc as Record<string, unknown>);
     const entry = sc.comments.find((c: any) => c.id === "cmt_normal");
     expect(entry).toBeDefined();
     expect("followUp" in entry).toBe(false);

@@ -6,6 +6,7 @@ import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
 import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
 /**
  * #158 — check_feedback tells the AGENT about a scanner-flagged pending
@@ -145,23 +146,10 @@ describe("#160 — check_feedback marks scanner-flagged comments (text only)", (
     expect(text).not.toContain("rename the helper ⚠");
 
     // TEXT ONLY: the structured payload's top-level key set is the locked
-    // healthy set — no secretWarnings / per-comment warning key appears.
+    // healthy set (#188 shared contract) — no secretWarnings / per-comment
+    // warning key appears. The lane delta: the secret note is prose-only.
     const sc = res.structuredContent as Record<string, unknown>;
-    expect(Object.keys(sc).sort()).toEqual(
-      [
-        "comments",
-        "companionUrl",
-        "decisions",
-        "pendingArtifacts",
-        "questions",
-        "rejected",
-        "serverVersion",
-        "statusChanges",
-        "status",
-        "suggestedAction",
-        "summary",
-      ].sort(),
-    );
+    expectHealthyCheckFeedbackPayload(sc);
     expect(JSON.stringify(sc)).not.toMatch(/possible secret/);
   });
 

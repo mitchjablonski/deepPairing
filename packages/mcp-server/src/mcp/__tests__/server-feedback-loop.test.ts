@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -54,6 +55,9 @@ describe("MCP Tool Handlers — feedback loop", () => {
       const empty = await callTool("check_feedback");
       expect(empty.structuredContent).toMatchObject({ status: "proceed" });
       expect(typeof (empty.structuredContent as any).suggestedAction).toBe("string");
+      // #188 — an empty session is the canonical healthy payload: pin its exact
+      // top-level key set via the shared contract helper.
+      expectHealthyCheckFeedbackPayload(empty.structuredContent as Record<string, unknown>);
       // I7 — every check_feedback carries the LIVE companion UI URL built from
       // the daemon's real port (harness fixture: 4000), so the polling agent
       // never has to guess it. Field report: an agent hallucinated "5173".

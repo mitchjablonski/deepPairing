@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { composeSendBackFeedback } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -128,6 +129,9 @@ describe("check_feedback — per-file review state (#171)", () => {
     await store.addComment({ id: "cmt_rf1", artifactId: artId, content: "looks fine", author: "human" } as any);
     const res = await callTool("check_feedback");
     const sc = res.structuredContent as any;
+    // #188 — top-level payload is the shared healthy contract; the lane delta is
+    // that a non-changeset pending entry carries no review-state fields.
+    expectHealthyCheckFeedbackPayload(sc as Record<string, unknown>);
     const entry = sc.pendingArtifacts[0];
     expect(entry).toBeDefined();
     expect(entry.reviewState).toBeUndefined();
