@@ -37,6 +37,11 @@ export interface FeatureOverridesFile {
 
 const VERSION = 1 as const;
 
+// #206 (I1, review Fix 2) — log the "file is a newer version" case at most once
+// per process, so a future v2 written by a newer daemon doesn't spam the log on
+// every read while an older daemon is (safely) ignoring it.
+let loggedUnknownVersion = false;
+
 /** The reserved key that pulls an artifact OUT of every feature. Mirrors
  *  session-scan's UNGROUPED_ID (kept in sync via the assignment write path). */
 export const UNGROUPED_KEY = "__ungrouped__";
@@ -76,6 +81,20 @@ export function readFeatureOverridesFile(projectRoot: string): FeatureOverridesF
   try {
     if (!fs.existsSync(file)) return emptyOverrides();
     const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<FeatureOverridesFile>;
+    // #206 (I1, review Fix 2) — GATE on version instead of blindly coercing to 1.
+    // A future v2 file (written by a newer daemon) may carry a shape this reader
+    // doesn't understand; down-sanitizing it through the v1 shape would silently
+    // corrupt or drop the newer data on the next write. Treat an unknown version
+    // as empty (the derived grouping still works) rather than misinterpret it.
+    if (parsed?.version !== VERSION) {
+      if (!loggedUnknownVersion) {
+        loggedUnknownVersion = true;
+        console.error(
+          `[deepPairing] feature-overrides.json has version ${String(parsed?.version)} (this daemon understands ${VERSION}); ignoring its overrides to avoid corrupting newer data.`,
+        );
+      }
+      return emptyOverrides();
+    }
     return {
       version: VERSION,
       groupTitles: sanitizeRecord(parsed?.groupTitles),
@@ -146,6 +165,14 @@ export function assignArtifactToFeature(
   } else if (rawKey === UNGROUPED_KEY) {
     file.artifactAssignments[id] = UNGROUPED_KEY;
   } else {
+    // #206 (I1, review Fix 3) — DELIBERATE: an arbitrary target key that matches
+    // no existing group ESTABLISHES a new one (groupByFeature will materialize it
+    // with a de-slugged label). A move is allowed to create a feature, not only
+    // file into an existing one; this whole path is auth-gated (hash + bearer),
+    // so it's the human's own deliberate act, never an untrusted caller's.
+    // normalizeFeatureId is idempotent (review Fix 1), so re-normalizing a group
+    // id the UI posted back (e.g. "milestone-7") is a no-op — the artifact lands
+    // in exactly the group the human clicked, never a divergent twin.
     const normalized = normalizeFeatureId(rawKey)?.slug ?? rawKey.slice(0, FEATURE_ID_MAX);
     file.artifactAssignments[id] = normalized;
   }

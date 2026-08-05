@@ -25061,17 +25061,24 @@ function normalizeFeaturePrefix(rawTitle) {
   }
   const f = title.match(/^feature\s*(?::\s*|\s+[-–—]\s+)(.+)$/i);
   if (f) {
-    const inner = f[1].trim();
-    const slug = slugify2(inner);
-    if (slug) return { slug, label: prettifyLabel(inner) };
+    const mined = mineInner(f[1]);
+    if (mined) return mined;
   }
   const b = title.match(/^\[([^\]]+)\]/);
   if (b) {
-    const inner = b[1].trim();
-    const slug = slugify2(inner);
-    if (slug) return { slug, label: prettifyLabel(inner) };
+    const mined = mineInner(b[1]);
+    if (mined) return mined;
   }
   return null;
+}
+function mineInner(rawInner) {
+  const inner = rawInner.trim();
+  if (!inner) return null;
+  const mined = normalizeFeaturePrefix(inner);
+  if (mined) return mined;
+  const slug = slugify2(inner);
+  if (!slug) return null;
+  return { slug, label: prettifyLabel(inner) };
 }
 var FEATURE_ID_MAX = 80;
 function normalizeFeatureId(raw2) {
@@ -26876,6 +26883,7 @@ import path10 from "node:path";
 import fs10 from "node:fs";
 import path9 from "node:path";
 var VERSION2 = 1;
+var loggedUnknownVersion = false;
 var UNGROUPED_KEY = "__ungrouped__";
 var TITLE_MAX = 120;
 function overridesPath(projectRoot2) {
@@ -26899,6 +26907,15 @@ function readFeatureOverridesFile(projectRoot2) {
   try {
     if (!fs10.existsSync(file2)) return emptyOverrides();
     const parsed = JSON.parse(fs10.readFileSync(file2, "utf-8"));
+    if (parsed?.version !== VERSION2) {
+      if (!loggedUnknownVersion) {
+        loggedUnknownVersion = true;
+        console.error(
+          `[deepPairing] feature-overrides.json has version ${String(parsed?.version)} (this daemon understands ${VERSION2}); ignoring its overrides to avoid corrupting newer data.`
+        );
+      }
+      return emptyOverrides();
+    }
     return {
       version: VERSION2,
       groupTitles: sanitizeRecord(parsed?.groupTitles),

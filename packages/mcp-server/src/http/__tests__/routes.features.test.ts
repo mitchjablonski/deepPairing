@@ -97,6 +97,36 @@ describe("POST /api/features/overrides", () => {
     expect(m9.artifactRefs.map((r: { artifactId: string }) => r.artifactId).sort()).toEqual(["a1", "a2"]);
   });
 
+  it("moving into a '[M7]' group lands the artifact IN that group, not a divergent twin (#206 Fix 1)", async () => {
+    // Review repro: a "[M7]"-titled group exists; the UI Move… posts that group's
+    // OWN id back. Pre-Fix-1 the id ("m7") re-normalized to "milestone-7" on the
+    // assign path, so the moved artifact split into a SECOND group. With the
+    // idempotent normalizer, the group id and the re-normalized key agree, so the
+    // artifact lands in the ONE group the human clicked. Fails on revert.
+    ctx.store.createArtifact({ id: "m7a", type: "plan", title: "[M7] logout flow", content: {} });
+    ctx.store.createArtifact({ id: "loose", type: "plan", title: "unrelated loose end", content: {} });
+    ctx.store.forceFlush();
+
+    // The group the UI shows for the [M7] artifact — its id is what Move… posts.
+    const before = await (await ctx.app.request("/api/features")).json();
+    const namedBefore = before.groups.filter((g: { id: string }) => g.id !== "__ungrouped__");
+    expect(namedBefore).toHaveLength(1);
+    const groupId = namedBefore[0].id;
+
+    await ctx.app.request("/api/features/overrides", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "assign", artifactId: "loose", groupKey: groupId }),
+    });
+
+    const after = await (await ctx.app.request("/api/features")).json();
+    const namedAfter = after.groups.filter((g: { id: string }) => g.id !== "__ungrouped__");
+    // Exactly ONE named group (no divergent twin), and it now holds BOTH artifacts.
+    expect(namedAfter).toHaveLength(1);
+    expect(namedAfter[0].id).toBe(groupId);
+    expect(namedAfter[0].artifactRefs.map((r: { artifactId: string }) => r.artifactId).sort()).toEqual(["loose", "m7a"]);
+  });
+
   it("rejects a malformed body with 400", async () => {
     const res = await ctx.app.request("/api/features/overrides", {
       method: "POST",

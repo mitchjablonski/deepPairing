@@ -40,6 +40,18 @@ describe("readFeatureOverrides — old stores load clean", () => {
     expect(readFeatureOverridesFile(tmpDir).groupTitles).toEqual({});
   });
 
+  it("a FUTURE version file is ignored (empty), not down-sanitized (#206 Fix 2)", () => {
+    // A v2 file written by a newer daemon may carry a shape this reader doesn't
+    // understand; coercing it through the v1 shape would corrupt/drop newer data
+    // on the next write. Gate on version → treat unknown as empty.
+    fs.mkdirSync(path.dirname(overridesPath()), { recursive: true });
+    fs.writeFileSync(
+      overridesPath(),
+      JSON.stringify({ version: 99, groupTitles: { "milestone-6": "from the future" }, artifactAssignments: { a1: "milestone-6" } }),
+    );
+    expect(readFeatureOverridesFile(tmpDir)).toEqual({ version: 1, groupTitles: {}, artifactAssignments: {} });
+  });
+
   it("drops malformed entries but keeps well-shaped ones", () => {
     fs.mkdirSync(path.dirname(overridesPath()), { recursive: true });
     fs.writeFileSync(

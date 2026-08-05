@@ -605,20 +605,39 @@ export function normalizeFeaturePrefix(rawTitle: string): FeaturePrefix | null {
   //    corpus) is NOT mis-mined as feature "extractor research: …".
   const f = title.match(/^feature\s*(?::\s*|\s+[-–—]\s+)(.+)$/i);
   if (f) {
-    const inner = f[1]!.trim();
-    const slug = slugify(inner);
-    if (slug) return { slug, label: prettifyLabel(inner) };
+    const mined = mineInner(f[1]!);
+    if (mined) return mined;
   }
 
   // 4. "[X] …" — bracket-tag; the tag is the feature name.
   const b = title.match(/^\[([^\]]+)\]/);
   if (b) {
-    const inner = b[1]!.trim();
-    const slug = slugify(inner);
-    if (slug) return { slug, label: prettifyLabel(inner) };
+    const mined = mineInner(b[1]!);
+    if (mined) return mined;
   }
 
   return null;
+}
+
+/**
+ * #206 (I1, review Fix 1) — resolve the inner text of a "Feature: X" / "[X]" tag
+ * to a canonical prefix. Run the inner text through the miner FIRST, so a tag
+ * that names a numbered milestone/phase converges with the equivalent TITLE
+ * prefix — "[M7]" and "Feature: Milestone 7" both land on `milestone-7`, exactly
+ * as "M7 …" / "Milestone 7 …" titles do. This is ALSO what makes the whole
+ * family idempotent: without it, "[M7]" → slug "m7", and re-normalizing "m7"
+ * re-fired the M-short-form miner → "milestone-7" (a Move onto the "[M7]" group
+ * then mis-filed the artifact into a NEW group). Falls back to slugging the raw
+ * inner text for a non-numeric feature name ("[auth]" → "auth").
+ */
+function mineInner(rawInner: string): FeaturePrefix | null {
+  const inner = rawInner.trim();
+  if (!inner) return null;
+  const mined = normalizeFeaturePrefix(inner);
+  if (mined) return mined;
+  const slug = slugify(inner);
+  if (!slug) return null;
+  return { slug, label: prettifyLabel(inner) };
 }
 
 /** #206 (I1) — the length cap shared by the schema, the `feature` tool param,

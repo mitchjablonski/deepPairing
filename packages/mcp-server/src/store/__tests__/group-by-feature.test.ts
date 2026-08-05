@@ -82,6 +82,13 @@ describe("normalizeFeaturePrefix — table-pinned corpus shapes", () => {
     ["Feature - billing export", { slug: "billing-export", label: "Billing export" }],
     ["[search] fuzzy ranking", { slug: "search", label: "Search" }],
     ["[Auth] logout flow", { slug: "auth", label: "Auth" }],
+    // #206 review Fix 1 — a bracket/Feature tag naming a NUMBERED milestone/phase
+    // mines its inner text FIRST, so it converges with the equivalent title
+    // prefix ("[M7]" ↔ "M7 …" ↔ "Milestone 7 …") AND makes the family idempotent.
+    ["[M7] logout flow", { slug: "milestone-7", label: "Milestone 7" }],
+    ["[Milestone 6] backfill", { slug: "milestone-6", label: "Milestone 6" }],
+    ["Feature: M7", { slug: "milestone-7", label: "Milestone 7" }],
+    ["Feature: Phase 0", { slug: "phase-0", label: "Phase 0" }],
     // Case-insensitivity.
     ["MILESTONE 6 — shout", { slug: "milestone-6", label: "Milestone 6" }],
     // Prefix-only titles still classify.
@@ -114,6 +121,33 @@ describe("normalizeFeaturePrefix — table-pinned corpus shapes", () => {
     expect(normalizeFeaturePrefix("Milestone 6 — em")).toEqual({ slug: "milestone-6", label: "Milestone 6" });
     expect(normalizeFeaturePrefix("Milestone 6 – en")).toEqual({ slug: "milestone-6", label: "Milestone 6" });
     expect(normalizeFeaturePrefix("Feature — payments")).toEqual({ slug: "payments", label: "Payments" });
+  });
+
+  // #206 review Fix 1 — the PROPERTY that closes the mis-file bug: every slug the
+  // normalizer can PRODUCE must re-normalize to ITSELF. Without it, a Move onto a
+  // group whose id re-mined ("m7" → "milestone-7") re-filed the artifact into a
+  // divergent twin group. We derive the slug set from the full pinned table (+
+  // the raw-tag forms normalizeFeatureId adds) rather than hand-listing, so a
+  // future non-idempotent slug can't slip in unpinned.
+  it("is IDEMPOTENT: normalizeFeatureId(slug).slug === slug for every producible slug", () => {
+    const producedSlugs = new Set<string>();
+    for (const [title, expected] of CASES) {
+      if (expected) producedSlugs.add(expected.slug);
+      // Also feed each raw title through normalizeFeatureId (the agent-tag path).
+      const viaTag = normalizeFeatureId(title);
+      if (viaTag) producedSlugs.add(viaTag.slug);
+    }
+    // Belt-and-suspenders: the exact hostile/short forms the review flagged.
+    for (const raw of ["[M7]", "m7", "M7", "Milestone 7", "milestone-7", "[Milestone 6]", "Feature: M7"]) {
+      const r = normalizeFeatureId(raw);
+      if (r) producedSlugs.add(r.slug);
+    }
+    expect(producedSlugs.size).toBeGreaterThan(0);
+    for (const slug of producedSlugs) {
+      const re = normalizeFeatureId(slug);
+      expect(re, `slug ${slug} did not re-normalize`).not.toBeNull();
+      expect(re!.slug, `slug ${slug} is NOT idempotent`).toBe(slug);
+    }
   });
 });
 
