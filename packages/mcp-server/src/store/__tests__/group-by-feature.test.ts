@@ -1,0 +1,275 @@
+// #203 (H2) — the Features view's derived read-model: normalizeFeaturePrefix
+// (table-pinned to real corpus shapes + hostile inputs) and groupByFeature
+// (parentId-beats-prefix conflict, aggregates, Ungrouped-last ordering).
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { FileStore } from "../file-store.js";
+import { normalizeFeaturePrefix, groupByFeature } from "../session-scan.js";
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-features-"));
+});
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+/** Write a session's on-disk files directly — full control of createdAt,
+ *  parentId, titles, decisions and comments (the reader is a pure disk walk, so
+ *  precise fixtures are the clearest test). */
+function writeSession(
+  sessionId: string,
+  artifacts: Array<Record<string, unknown>>,
+  decisions: Array<Record<string, unknown>> = [],
+  comments: Array<Record<string, unknown>> = [],
+): void {
+  const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(artifacts));
+  if (decisions.length) fs.writeFileSync(path.join(dir, "decisions.json"), JSON.stringify(decisions));
+  if (comments.length) fs.writeFileSync(path.join(dir, "comments.json"), JSON.stringify(comments));
+}
+
+/** A minimal on-disk artifact (satisfies salvageArray's "id" key + the fields
+ *  groupByFeature reads). */
+function art(o: {
+  id: string;
+  title: string;
+  type?: string;
+  status?: string;
+  parentId?: string | null;
+  createdAt?: string;
+  content?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    id: o.id,
+    sessionId: "s",
+    type: o.type ?? "plan",
+    version: 1,
+    parentId: o.parentId ?? null,
+    title: o.title,
+    status: o.status ?? "draft",
+    content: o.content ?? {},
+    agentReasoning: null,
+    createdAt: o.createdAt ?? "2026-01-01T00:00:00.000Z",
+    updatedAt: o.createdAt ?? "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("normalizeFeaturePrefix — table-pinned corpus shapes", () => {
+  const CASES: Array<[string, { slug: string; label: string } | null]> = [
+    // Real corpus shapes.
+    ["Milestone 6 — content quota backfill", { slug: "milestone-6", label: "Milestone 6" }],
+    ["Milestone 12: retry ceiling", { slug: "milestone-12", label: "Milestone 12" }],
+    ["Phase 0: bootstrap", { slug: "phase-0", label: "Phase 0" }],
+    ["Phase 3 — daemon reliability", { slug: "phase-3", label: "Phase 3" }],
+    // Short milestone form collapses into the SAME group as the long form.
+    ["M6 — quota UI", { slug: "milestone-6", label: "Milestone 6" }],
+    ["m6: quota persistence", { slug: "milestone-6", label: "Milestone 6" }],
+    // Feature: X and [X] name the feature directly.
+    ["Feature: auth revamp", { slug: "auth-revamp", label: "Auth revamp" }],
+    ["Feature - billing export", { slug: "billing-export", label: "Billing export" }],
+    ["[search] fuzzy ranking", { slug: "search", label: "Search" }],
+    ["[Auth] logout flow", { slug: "auth", label: "Auth" }],
+    // Case-insensitivity.
+    ["MILESTONE 6 — shout", { slug: "milestone-6", label: "Milestone 6" }],
+    // Prefix-only titles still classify.
+    ["Milestone 6", { slug: "milestone-6", label: "Milestone 6" }],
+    // Plain titles → Ungrouped.
+    ["Refactor the token bucket", null],
+    ["Add a retry cap to the crawler", null],
+    // Hostile: empty / whitespace.
+    ["", null],
+    ["   ", null],
+    // Hostile: a word that merely starts with M+letters (no digit) or M+digit
+    // with no boundary must NOT false-match the short-milestone form.
+    ["MP3 tagger rewrite", null],
+    ["m5stack firmware", null],
+    ["Marketing dashboard", null],
+    // Hostile: empty bracket / bracket with no sluggable content.
+    ["[] nothing", null],
+    ["[!!] punctuation only", null],
+  ];
+
+  it.each(CASES)("normalizes %j", (title, expected) => {
+    expect(normalizeFeaturePrefix(title)).toEqual(expected);
+  });
+
+  it("mines unicode em/en-dash separators the same as a hyphen", () => {
+    expect(normalizeFeaturePrefix("Milestone 6 — em")).toEqual({ slug: "milestone-6", label: "Milestone 6" });
+    expect(normalizeFeaturePrefix("Milestone 6 – en")).toEqual({ slug: "milestone-6", label: "Milestone 6" });
+    expect(normalizeFeaturePrefix("Feature — payments")).toEqual({ slug: "payments", label: "Payments" });
+  });
+});
+
+describe("groupByFeature — grouping", () => {
+  it("returns the empty shape when no sessions dir exists", () => {
+    expect(FileStore.groupByFeature(tmpDir)).toEqual({ groups: [], failedSessions: [] });
+  });
+
+  it("groups artifacts sharing a mined prefix, and puts plain titles in Ungrouped (last)", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Milestone 6 — quota backfill", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "a2", title: "M6 — quota UI", createdAt: "2026-01-01T02:00:00.000Z" }),
+      art({ id: "a3", title: "Refactor token bucket", createdAt: "2026-01-01T03:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    const m6 = groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.title).toBe("Milestone 6");
+    expect(m6.artifactCount).toBe(2);
+    // Timeline order is createdAt ascending.
+    expect(m6.artifactRefs.map((r) => r.artifactId)).toEqual(["a1", "a2"]);
+    // Ungrouped bucket exists and is LAST.
+    expect(groups.at(-1)!.id).toBe("__ungrouped__");
+    expect(groups.at(-1)!.ungrouped).toBe(true);
+    expect(groups.at(-1)!.artifactRefs.map((r) => r.artifactId)).toEqual(["a3"]);
+  });
+
+  it("all-plain-titles → one Ungrouped group only", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Fix the crawler" }),
+      art({ id: "a2", title: "Tune the cache" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.id).toBe("__ungrouped__");
+    expect(groups[0]!.artifactCount).toBe(2);
+  });
+
+  it("parentId chain BEATS the child's own prefix (a superseded v2 stays with its v1's group even if retitled)", () => {
+    writeSession("s1", [
+      // v1 is grouped by prefix into Milestone 6.
+      art({ id: "v1", title: "Milestone 6 — quota backfill", status: "superseded", createdAt: "2026-01-01T01:00:00.000Z" }),
+      // v2 is a child of v1, RE-TITLED with a DIFFERENT prefix (Milestone 7).
+      // The chain wins: v2 joins Milestone 6, NOT Milestone 7.
+      art({ id: "v2", title: "Milestone 7 — retitled", parentId: "v1", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    const m6 = groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.artifactRefs.map((r) => r.artifactId).sort()).toEqual(["v1", "v2"]);
+    // No stray Milestone 7 group was created from v2's own prefix.
+    expect(groups.find((g) => g.id === "milestone-7")).toBeUndefined();
+  });
+
+  it("an ungrouped parent lets a prefixed child keep its own prefix", () => {
+    writeSession("s1", [
+      art({ id: "p", title: "Plain root", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "c", title: "Phase 2 — child", parentId: "p", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    expect(groups.find((g) => g.id === "phase-2")!.artifactRefs.map((r) => r.artifactId)).toEqual(["c"]);
+    expect(groups.at(-1)!.id).toBe("__ungrouped__"); // the plain root
+  });
+
+  it("orders grouped features by most-recent activity, Ungrouped always last", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Milestone 1 — old", createdAt: "2026-01-01T00:00:00.000Z" }),
+      art({ id: "a2", title: "Milestone 9 — recent", createdAt: "2026-06-01T00:00:00.000Z" }),
+      art({ id: "a3", title: "loose end", createdAt: "2026-12-01T00:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    expect(groups.map((g) => g.id)).toEqual(["milestone-9", "milestone-1", "__ungrouped__"]);
+  });
+
+  it("survives a parentId cycle (corrupt data) without hanging, falling back to own prefix", () => {
+    writeSession("s1", [
+      art({ id: "x", title: "Milestone 4 — a", parentId: "y" }),
+      art({ id: "y", title: "Milestone 4 — b", parentId: "x" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    expect(groups.find((g) => g.id === "milestone-4")!.artifactCount).toBe(2);
+  });
+});
+
+describe("groupByFeature — aggregates", () => {
+  it("counts open items: an unresolved decision + a debrief needsYourEyes + an unanswered question, scoped to the group", () => {
+    writeSession(
+      "s1",
+      [
+        art({ id: "dec1", title: "Milestone 6 — cache choice", type: "decision", createdAt: "2026-01-01T01:00:00.000Z" }),
+        art({
+          id: "db1", title: "Milestone 6 — debrief", type: "debrief", createdAt: "2026-01-01T02:00:00.000Z",
+          content: { summary: "did stuff", needsYourEyes: [{ what: "check the expiry math", why: "auth path", artifactRef: "dec1" }] },
+        }),
+        art({ id: "cs1", title: "Milestone 6 — changeset", type: "changeset", createdAt: "2026-01-01T03:00:00.000Z" }),
+        // A DIFFERENT feature — its open items must NOT leak into Milestone 6.
+        art({ id: "other", title: "Phase 9 — unrelated", type: "decision", createdAt: "2026-01-01T04:00:00.000Z" }),
+      ],
+      [
+        // Unresolved (no response) → open item in Milestone 6.
+        { decisionId: "d1", artifactId: "dec1", context: "Which cache backend?", options: [], createdAt: "2026-01-01T01:00:00.000Z" },
+        // Resolved → NOT an open item.
+        { decisionId: "d2", artifactId: "other", context: "Unrelated?", options: [{ id: "o1", title: "yes" }], response: { optionId: "o1" }, createdAt: "2026-01-01T04:00:00.000Z" },
+      ],
+      [
+        // An OPEN human question on the debrief (Milestone 6).
+        { id: "q1", author: "human", intent: "question", content: "why the 15m TTL?", target: { artifactId: "db1" }, parentCommentId: null, createdAt: "2026-01-01T05:00:00.000Z" },
+      ],
+    );
+    const { groups } = groupByFeature(tmpDir);
+    const m6 = groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.openItemCount).toBe(3);
+    const kinds = m6.openItems.map((i) => i.kind).sort();
+    expect(kinds).toEqual(["decision", "needs_eyes", "question"]);
+    const decItem = m6.openItems.find((i) => i.kind === "decision")!;
+    expect(decItem.label).toBe("Which cache backend?");
+    expect(decItem.artifactId).toBe("dec1");
+    const eyes = m6.openItems.find((i) => i.kind === "needs_eyes")!;
+    expect(eyes.label).toBe("check the expiry math");
+    expect(eyes.artifactId).toBe("dec1"); // follows artifactRef
+    const q = m6.openItems.find((i) => i.kind === "question")!;
+    expect(q.commentId).toBe("q1");
+    // The resolved decision in Phase 9 is not an open item.
+    expect(groups.find((g) => g.id === "phase-9")!.openItemCount).toBe(0);
+  });
+
+  it("a decision whose origin artifact was superseded (closedUnresolved) is NOT an open item", () => {
+    writeSession(
+      "s1",
+      [art({ id: "dec1", title: "Milestone 6 — choice", type: "decision", status: "superseded" })],
+      [{ decisionId: "d1", artifactId: "dec1", context: "?", options: [], createdAt: "2026-01-01T00:00:00.000Z" }],
+    );
+    const m6 = groupByFeature(tmpDir).groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.openItemCount).toBe(0);
+  });
+
+  it("unions code_change.filePath + changeset.files[].path, deduped + sorted, with cross-group 'alsoIn'", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Milestone 6 — edit", type: "code_change", content: { filePath: "src/b.ts" } }),
+      art({ id: "a2", title: "Milestone 6 — batch", type: "changeset", content: { files: [{ path: "src/a.ts" }, { path: "src/b.ts" }] } }),
+      // A different group also touches src/a.ts → intersection breadcrumb.
+      art({ id: "a3", title: "Phase 9 — edit", type: "code_change", content: { filePath: "src/a.ts" } }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    const m6 = groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.fileTouches.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"]); // deduped + sorted
+    expect(m6.fileTouches.find((f) => f.path === "src/a.ts")!.alsoIn).toEqual(["Phase 9"]);
+    expect(m6.fileTouches.find((f) => f.path === "src/b.ts")!.alsoIn).toEqual([]);
+  });
+});
+
+describe("groupByFeature — read tolerance", () => {
+  it("reports a whole-file-unreadable artifacts.json in failedSessions, never throwing", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "bad");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "artifacts.json"), "not json ]");
+    writeSession("good", [art({ id: "g1", title: "Milestone 2 — ok" })]);
+    const { groups, failedSessions } = groupByFeature(tmpDir);
+    expect(groups.find((g) => g.id === "milestone-2")).toBeDefined();
+    expect(failedSessions).toEqual([{ sessionId: "bad", reason: expect.any(String) }]);
+  });
+
+  it("degrades to empty decisions/comments when those files are corrupt (artifacts still group)", () => {
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "s1");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify([art({ id: "a1", title: "Milestone 6 — x" })]));
+    fs.writeFileSync(path.join(dir, "decisions.json"), "{ broken");
+    fs.writeFileSync(path.join(dir, "comments.json"), "also broken");
+    const m6 = groupByFeature(tmpDir).groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.artifactCount).toBe(1);
+    expect(m6.openItemCount).toBe(0);
+  });
+});

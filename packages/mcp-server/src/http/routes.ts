@@ -1712,6 +1712,25 @@ export function createHttpRoutes(
     }
   });
 
+  // #203 (H2) — the Features view's read route. A DERIVED read-model: every
+  // artifact across every session grouped into features by title-prefix +
+  // parentId chains, with per-group open items + file touches. Read-only,
+  // project-scoped (walks every session's artifacts/decisions/comments), takes
+  // no body and no session lookup — so the AA4 wrong-store threat model doesn't
+  // apply; the global X-Project-Hash middleware is the gate, exactly like
+  // /api/decisions and /api/search. Returns the empty shape when no projectRoot
+  // (test fixtures / bad cwd), and DEGRADES to empty rather than 500 on a
+  // read/shape bug (same discipline as /api/decisions).
+  app.get("/api/features", (c) => {
+    if (!projectRoot) return c.json({ groups: [], failedSessions: [] });
+    try {
+      return c.json(FileStore.groupByFeature(projectRoot));
+    } catch (err) {
+      log(`[features] read failed, returning empty: ${err}`);
+      return c.json({ groups: [], failedSessions: [] });
+    }
+  });
+
   // Cross-session search
   app.get("/api/search", (c) => {
     if (!projectRoot) return c.json({ results: [] });

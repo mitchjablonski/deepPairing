@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, Comment } from "@deeppairing/shared";
+import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { salvageArray } from "./salvage.js";
 import type { DecisionRecord } from "./store-interface.js";
 
@@ -502,4 +503,463 @@ export function listAllDecisions(
   decisions.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return { decisions, failedSessions };
+}
+
+// ===========================================================================
+// #203 (H2) — the Features view, slice 1: a DERIVED read-model that groups a
+// project's artifacts into FEATURES. A feature is a bag of artifacts ORTHOGONAL
+// to the session boundary — the dominant real shape is ONE long rolling session
+// holding MANY features, which humans already hand-label with "Milestone N" /
+// "Phase N" title prefixes (an observed workaround). This walks the same
+// on-disk `.deeppairing/sessions/*` listAllDecisions does — zero schema change,
+// zero migration, zero agent obligation, no persisted collection. It is
+// read-tolerant end-to-end: a malformed session is SKIPPED (reported in
+// failedSessions), never thrown.
+// ===========================================================================
+
+/** A normalized feature prefix: a STABLE slug (the group id — see
+ *  normalizeFeaturePrefix's contract) plus a human-readable label. */
+export interface FeaturePrefix {
+  slug: string;
+  label: string;
+}
+
+/** slug: lowercase, non-alphanumeric runs → single "-", trimmed. Stable across
+ *  reads (no time/hash input) so a group's id never moves under the UI. */
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Prettify a mined feature name for display: collapse whitespace, strip a
+ *  trailing separator, upper-case the first character. Deliberately light — it
+ *  is the human's own text, not ours to rewrite. */
+function prettifyLabel(s: string): string {
+  const t = s.replace(/\s+/g, " ").replace(/[\s:.\-–—]+$/, "").trim();
+  return t.length > 0 ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+
+/**
+ * #203 — the ONE grouping heuristic, exported pure so its behavior is
+ * table-pinned in tests. Mines a leading FEATURE prefix from an artifact title,
+ * case-insensitively, stripping the separator (space / colon / dot / any dash —
+ * hyphen, en-dash, em-dash). Returns `null` for a title that carries no prefix
+ * (it lands in the Ungrouped bucket).
+ *
+ * Priority order (first match wins):
+ *   1. "Milestone N …"  and its short form "MN …"  → both key `milestone-<n>`
+ *      (so "M6 — quota UI" and "Milestone 6 — backfill" collapse into ONE
+ *      group). The NUMBER is the group anchor; the trailing text is that one
+ *      artifact's own title, not part of the key.
+ *   2. "Phase N …"      → key `phase-<n>`, label "Phase N".
+ *   3. "Feature: X"     → key `slug(X)`, label prettified X. Here the WHOLE X is
+ *      the feature name (no numeric anchor to split on).
+ *   4. "[X] …"          → key `slug(X)`, label prettified X. Bracket-tag form.
+ *
+ * The bracket and "Feature:" forms slug the SAME inner text, so "[auth]" and
+ * "Feature: auth" intentionally land in one group — one canonical key per
+ * human-named feature regardless of which syntax introduced it.
+ */
+export function normalizeFeaturePrefix(rawTitle: string): FeaturePrefix | null {
+  const title = (rawTitle ?? "").trim();
+  if (!title) return null;
+
+  // 1a. "Milestone 6 — …"  (word boundary after the number)
+  let m = title.match(/^milestone\s+(\d+)\b/i);
+  // 1b. short form "M6 — …" — require a separator/end after the number so
+  //     "m5stack", "MP3 tagger" (no digit right after M) don't false-match.
+  if (!m) m = title.match(/^m(\d+)(?=$|[\s:.\-–—])/i);
+  if (m) {
+    const n = String(parseInt(m[1]!, 10));
+    return { slug: `milestone-${n}`, label: `Milestone ${n}` };
+  }
+
+  // 2. "Phase 0: …"
+  const p = title.match(/^phase\s+(\d+)\b/i);
+  if (p) {
+    const n = String(parseInt(p[1]!, 10));
+    return { slug: `phase-${n}`, label: `Phase ${n}` };
+  }
+
+  // 3. "Feature: X" — the whole remainder is the feature name.
+  const f = title.match(/^feature\s*[:\-–—]\s*(.+)$/i);
+  if (f) {
+    const inner = f[1]!.trim();
+    const slug = slugify(inner);
+    if (slug) return { slug, label: prettifyLabel(inner) };
+  }
+
+  // 4. "[X] …" — bracket-tag; the tag is the feature name.
+  const b = title.match(/^\[([^\]]+)\]/);
+  if (b) {
+    const inner = b[1]!.trim();
+    const slug = slugify(inner);
+    if (slug) return { slug, label: prettifyLabel(inner) };
+  }
+
+  return null;
+}
+
+/** One artifact placed in a feature group — everything the timeline row + the
+ *  cross-session jump need without a second fetch. */
+export interface FeatureArtifactRef {
+  sessionId: string;
+  artifactId: string;
+  type: string;
+  title: string;
+  status: string;
+  createdAt: string;
+}
+
+/** One thing in a group still owed the human, tagged by WHAT it is + where to
+ *  click. */
+export interface FeatureOpenItem {
+  kind: "decision" | "needs_eyes" | "question";
+  /** What it is, in one line (the row label). */
+  label: string;
+  sessionId: string;
+  /** The click-through target (jump-to-artifact in its session). */
+  artifactId: string;
+  /** Secondary context (a decision's reasoning-less question, a needsYourEyes
+   *  `why`, the question text). */
+  detail?: string;
+  /** For an unanswered question: the open-question comment id. */
+  commentId?: string;
+}
+
+/** A file the group touched, plus the OTHER groups that also touched it (cheap
+ *  cross-group intersection — the "also touched by <group>" breadcrumb). */
+export interface FeatureFileTouch {
+  path: string;
+  alsoIn: string[];
+}
+
+export interface FeatureGroup {
+  /** Stable slug of the normalized prefix (`milestone-6`, `phase-0`, …) or the
+   *  reserved `__ungrouped__` bucket. */
+  id: string;
+  title: string;
+  /** True only for the catch-all bucket (rendered last, collapsed). */
+  ungrouped?: boolean;
+  artifactCount: number;
+  openItemCount: number;
+  /** Newest artifact activity in the group (max updatedAt ?? createdAt). */
+  lastActivity?: string;
+  /** createdAt ASCending — timeline-ready. */
+  artifactRefs: FeatureArtifactRef[];
+  openItems: FeatureOpenItem[];
+  /** Deduped, path-sorted. */
+  fileTouches: FeatureFileTouch[];
+}
+
+export interface FeatureGroupsResult {
+  /** Grouped features first (most-recent activity first); the Ungrouped bucket
+   *  is ALWAYS last (it is most of history — never hidden). */
+  groups: FeatureGroup[];
+  /** Sessions whose artifacts.json couldn't be read AT ALL (whole-file
+   *  unreadable) — surfaced so the view is honest about a partial scan, mirroring
+   *  listAllDecisions. Individual malformed elements are salvaged+dropped. */
+  failedSessions: Array<{ sessionId: string; reason: string }>;
+}
+
+const UNGROUPED_ID = "__ungrouped__";
+
+/** Pull every code-touch path an artifact declares: a `code_change`'s single
+ *  filePath and a `changeset`'s files[].path. Tolerant of any shape. */
+function fileTouchesOf(artifact: Artifact): string[] {
+  const out: string[] = [];
+  const content = artifact.content as Record<string, unknown> | null | undefined;
+  if (!content) return out;
+  if (artifact.type === "code_change" && typeof content.filePath === "string") {
+    out.push(content.filePath);
+  }
+  if (artifact.type === "changeset" && Array.isArray(content.files)) {
+    for (const f of content.files as Array<{ path?: unknown }>) {
+      if (f && typeof f.path === "string") out.push(f.path);
+    }
+  }
+  return out;
+}
+
+/**
+ * #203 (H2) — group every artifact across every session into features. Read-time
+ * walk of `.deeppairing/sessions/*`; zero store coupling (mirrors
+ * listAllDecisions). Grouping, in priority order:
+ *   a. title-prefix mining (normalizeFeaturePrefix),
+ *   b. parentId chains — an artifact whose parent is grouped joins the parent's
+ *      group; the chain BEATS the child's own prefix on conflict (a superseded
+ *      v2 stays with its v1's group even if retitled),
+ *   c. everything else → the Ungrouped bucket.
+ */
+export function groupByFeature(projectRoot: string): FeatureGroupsResult {
+  const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
+  const failedSessions: FeatureGroupsResult["failedSessions"] = [];
+
+  // Per-session raw material, gathered first so parentId chains resolve within
+  // the session that owns them.
+  interface SessionScan {
+    sessionId: string;
+    artifacts: Artifact[];
+    decisions: DecisionRecord[];
+    comments: Comment[];
+  }
+  const scans: SessionScan[] = [];
+
+  let entries: fs.Dirent[] = [];
+  if (fs.existsSync(sessionsDir)) {
+    try {
+      entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const sessionId = entry.name;
+    const sessionDir = path.join(sessionsDir, sessionId);
+    const artFile = path.join(sessionDir, "artifacts.json");
+    if (!fs.existsSync(artFile)) continue;
+
+    let artifacts: Artifact[];
+    try {
+      artifacts = salvageArray<Artifact>(
+        `${sessionId}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
+    } catch (err: any) {
+      // Whole-file unreadable — report it, never take the whole scan down.
+      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable artifacts.json" });
+      continue;
+    }
+    if (artifacts.length === 0) continue;
+
+    // Decisions + comments are ENRICHMENT only: a corrupt one degrades to empty
+    // (the artifacts still group), it never drops the session.
+    let decisions: DecisionRecord[] = [];
+    const decFile = path.join(sessionDir, "decisions.json");
+    if (fs.existsSync(decFile)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(decFile, "utf-8"));
+        if (Array.isArray(raw)) {
+          decisions = salvageArray<DecisionRecord>(`${sessionId}/decisions.json`, raw, "decisionId");
+        }
+      } catch { /* leave decisions empty */ }
+    }
+    let comments: Comment[] = [];
+    const cmtFile = path.join(sessionDir, "comments.json");
+    if (fs.existsSync(cmtFile)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(cmtFile, "utf-8"));
+        if (Array.isArray(raw)) {
+          comments = salvageArray<Comment>(`${sessionId}/comments.json`, raw, "id");
+        }
+      } catch { /* leave comments empty */ }
+    }
+
+    scans.push({ sessionId, artifacts, decisions, comments });
+  }
+
+  // --- Assign each artifact its effective group key -------------------------
+  // parentGroup ?? ownPrefix: a grouped parent (the chain) BEATS the child's own
+  // prefix; an ungrouped parent lets the child keep its own prefix. Memoized DFS
+  // up the parentId chain, cycle-guarded (corrupt parent loops fall back to the
+  // artifact's own prefix rather than looping forever).
+  // Track the canonical label per key (first-seen wins) so a key mined two ways
+  // ("[Auth]" vs "Feature: auth") renders one stable title.
+  const labelByKey = new Map<string, string>();
+  const registerLabel = (g: FeaturePrefix): void => {
+    if (!labelByKey.has(g.slug)) labelByKey.set(g.slug, g.label);
+  };
+
+  const scanBySession = new Map<string, SessionScan>();
+  for (const s of scans) scanBySession.set(s.sessionId, s);
+
+  // artifactId → effective group key (or null = ungrouped). Keyed by
+  // sessionId+"\0"+artifactId to keep sessions' id-spaces from colliding.
+  const groupKeyOf = new Map<string, string | null>();
+  const composite = (sessionId: string, artifactId: string) => `${sessionId} ${artifactId}`;
+
+  for (const scan of scans) {
+    const byId = new Map<string, Artifact>();
+    for (const a of scan.artifacts) byId.set(a.id, a);
+
+    const resolve = (artifact: Artifact, seen: Set<string>): string | null => {
+      const ck = composite(scan.sessionId, artifact.id);
+      const cached = groupKeyOf.get(ck);
+      if (cached !== undefined) return cached;
+      // Cycle guard — a corrupt parentId loop resolves to own-prefix.
+      if (seen.has(artifact.id)) {
+        const own = normalizeFeaturePrefix(artifact.title);
+        if (own) registerLabel(own);
+        return own?.slug ?? null;
+      }
+      seen.add(artifact.id);
+
+      const own = normalizeFeaturePrefix(artifact.title);
+      if (own) registerLabel(own);
+
+      const parent = artifact.parentId ? byId.get(artifact.parentId) : undefined;
+      const parentGroup = parent ? resolve(parent, seen) : null;
+
+      // Chain beats prefix: a grouped parent overrides the child's own prefix.
+      const effective = parentGroup ?? own?.slug ?? null;
+      groupKeyOf.set(ck, effective);
+      return effective;
+    };
+
+    for (const a of scan.artifacts) resolve(a, new Set());
+  }
+
+  // --- Build the groups -----------------------------------------------------
+  interface GroupAccum {
+    id: string;
+    title: string;
+    ungrouped: boolean;
+    refs: FeatureArtifactRef[];
+    openItems: FeatureOpenItem[];
+    files: Set<string>;
+  }
+  const groups = new Map<string, GroupAccum>();
+  const ensure = (id: string, title: string, ungrouped: boolean): GroupAccum => {
+    let g = groups.get(id);
+    if (!g) {
+      g = { id, title, ungrouped, refs: [], openItems: [], files: new Set() };
+      groups.set(id, g);
+    }
+    return g;
+  };
+
+  // Which group each artifact ended in, so decisions/comments scope correctly.
+  const groupIdForArtifact = new Map<string, string>(); // composite → groupId
+
+  for (const scan of scans) {
+    for (const artifact of scan.artifacts) {
+      const key = groupKeyOf.get(composite(scan.sessionId, artifact.id)) ?? null;
+      const groupId = key ?? UNGROUPED_ID;
+      const title = key ? (labelByKey.get(key) ?? key) : "Ungrouped";
+      const g = ensure(groupId, title, key === null);
+      groupIdForArtifact.set(composite(scan.sessionId, artifact.id), groupId);
+
+      g.refs.push({
+        sessionId: scan.sessionId,
+        artifactId: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        status: artifact.status,
+        createdAt: artifact.createdAt,
+      });
+      for (const f of fileTouchesOf(artifact)) g.files.add(f);
+
+      // un-actioned debrief needsYourEyes[] — no per-item actioned state exists
+      // in the schema, so every item on an in-group debrief is an open item.
+      if (artifact.type === "debrief") {
+        const content = artifact.content as Record<string, unknown> | null;
+        const eyes = content?.needsYourEyes;
+        if (Array.isArray(eyes)) {
+          for (const item of eyes as Array<{ what?: unknown; why?: unknown; artifactRef?: unknown }>) {
+            const what = typeof item?.what === "string" ? item.what : "";
+            if (!what) continue;
+            g.openItems.push({
+              kind: "needs_eyes",
+              label: what,
+              sessionId: scan.sessionId,
+              // Prefer the referenced artifact; fall back to the debrief itself.
+              artifactId: typeof item?.artifactRef === "string" && item.artifactRef ? item.artifactRef : artifact.id,
+              detail: typeof item?.why === "string" ? item.why : undefined,
+            });
+          }
+        }
+      }
+    }
+
+    // Unresolved decisions, scoped to the group each decision's artifact fell in.
+    const artById = new Map<string, Artifact>();
+    for (const a of scan.artifacts) artById.set(a.id, a);
+    for (const dec of scan.decisions) {
+      if (dec.response) continue; // resolved
+      const origin = artById.get(dec.artifactId);
+      // closedUnresolved (origin superseded) can never resolve — not an
+      // actionable open item; skip it (mirrors listAllDecisions' flag).
+      if (origin?.status === "superseded") continue;
+      const cid = composite(scan.sessionId, dec.artifactId);
+      const groupId = groupIdForArtifact.get(cid);
+      if (!groupId) continue; // decision references an unknown/dropped artifact
+      const g = groups.get(groupId);
+      if (!g) continue;
+      g.openItems.push({
+        kind: "decision",
+        label: dec.context?.trim() || origin?.title || "Awaiting your decision",
+        sessionId: scan.sessionId,
+        artifactId: dec.artifactId,
+      });
+    }
+
+    // Unanswered questions — run the SHARED tail-walk over the whole session's
+    // comments (thread integrity), then scope each result to the group its
+    // artifact fell in.
+    const unanswered = collectUnansweredQuestions(scan.comments);
+    for (const q of unanswered) {
+      const cid = composite(scan.sessionId, q.artifactId);
+      const groupId = groupIdForArtifact.get(cid);
+      if (!groupId) continue; // question targets an artifact not in this scan
+      const g = groups.get(groupId);
+      if (!g) continue;
+      g.openItems.push({
+        kind: "question",
+        label: q.question.content?.trim() || "Unanswered question",
+        sessionId: scan.sessionId,
+        artifactId: q.artifactId,
+        detail: undefined,
+        commentId: q.question.id,
+      });
+    }
+  }
+
+  // --- Cross-group file intersections (cheap) -------------------------------
+  const groupsByFile = new Map<string, string[]>(); // path → group titles
+  for (const g of groups.values()) {
+    for (const f of g.files) {
+      const arr = groupsByFile.get(f) ?? [];
+      arr.push(g.title);
+      groupsByFile.set(f, arr);
+    }
+  }
+
+  // --- Finalize -------------------------------------------------------------
+  const finalize = (g: GroupAccum): FeatureGroup => {
+    const artifactRefs = [...g.refs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const lastActivity = artifactRefs.length > 0 ? artifactRefs.at(-1)!.createdAt : undefined;
+    const fileTouches: FeatureFileTouch[] = [...g.files]
+      .sort((a, b) => a.localeCompare(b))
+      .map((p) => ({
+        path: p,
+        alsoIn: (groupsByFile.get(p) ?? []).filter((t) => t !== g.title),
+      }));
+    return {
+      id: g.id,
+      title: g.title,
+      ...(g.ungrouped ? { ungrouped: true } : {}),
+      artifactCount: g.refs.length,
+      openItemCount: g.openItems.length,
+      lastActivity,
+      artifactRefs,
+      openItems: g.openItems,
+      fileTouches,
+    };
+  };
+
+  const grouped: FeatureGroup[] = [];
+  let ungrouped: FeatureGroup | undefined;
+  for (const g of groups.values()) {
+    const fg = finalize(g);
+    if (fg.ungrouped) ungrouped = fg;
+    else grouped.push(fg);
+  }
+  // Most-recent feature first; the Ungrouped bucket is ALWAYS last.
+  grouped.sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
+  const orderedGroups = ungrouped ? [...grouped, ungrouped] : grouped;
+
+  failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+  return { groups: orderedGroups, failedSessions };
 }

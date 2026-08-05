@@ -10,7 +10,7 @@ import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.j
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
 import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
-import { listSessions, searchAll, listAllDecisions } from "./session-scan.js";
+import { listSessions, searchAll, listAllDecisions, groupByFeature } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
@@ -1833,6 +1833,11 @@ export class FileStore implements IStore {
   /** #138 — project-wide decisions (every session's decisions.json, flattened
    *  newest-first, with a partial-data report). See session-scan.ts. */
   static listAllDecisions = listAllDecisions;
+
+  /** #203 (H2) — the derived Features read-model: every artifact across every
+   *  session grouped into features by title-prefix + parentId chains. See
+   *  session-scan.ts. */
+  static groupByFeature = groupByFeature;
 
   // BB2 — targeted cache invalidation for the digest below.
   static invalidateLedgerDigestCache = invalidateLedgerDigestCache;

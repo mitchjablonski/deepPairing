@@ -22,6 +22,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LedgerDrawer } from "./components/LedgerDrawer";
 import { SessionBrowserModal } from "./components/SessionBrowserModal";
 import { ProjectDecisionsModal } from "./components/ProjectDecisionsModal";
+import { FeaturesModal } from "./components/FeaturesModal";
 import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
@@ -117,6 +118,14 @@ function App() {
     const open = () => setShowDecisions(true);
     window.addEventListener("dp:open-decisions", open);
     return () => window.removeEventListener("dp:open-decisions", open);
+  }, []);
+  // #203 (H2) — the Features view. Opened from the header button and the command
+  // palette (dp:open-features), same overlay pattern as decisions/sessions.
+  const [showFeatures, setShowFeatures] = useState(false);
+  useEffect(() => {
+    const open = () => setShowFeatures(true);
+    window.addEventListener("dp:open-features", open);
+    return () => window.removeEventListener("dp:open-features", open);
   }, []);
   // BB6 — when a PreflightBreadcrumb concept is clicked, open the drawer
   // straight to the ledger tab and highlight the matching row. Cleared on
@@ -234,6 +243,7 @@ function App() {
         setShowConversation(false);
         setShowSessions(false);
         setShowDecisions(false);
+        setShowFeatures(false);
         // F9 (L3) — replay is a MODE, and Escape is how modes end everywhere
         // else in the app; there was no keyboard exit at all.
         // Layered (review): overlay-registered surfaces get their own Esc
@@ -463,6 +473,23 @@ function App() {
             <span className="hidden min-[1100px]:inline">Decisions</span>
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
+          {/* #203 (H2) — the Features view: every artifact grouped into features
+              (by "Milestone N" / "Phase N" title prefixes), across all sessions. */}
+          <button
+            onClick={() => setShowFeatures(true)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            title="Features — your work grouped into features across all sessions"
+            aria-label="Open features view"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="1.5" y="1.5" width="4" height="4" rx="0.5" />
+              <rect x="6.5" y="1.5" width="4" height="4" rx="0.5" />
+              <rect x="1.5" y="6.5" width="4" height="4" rx="0.5" />
+              <rect x="6.5" y="6.5" width="4" height="4" rx="0.5" />
+            </svg>
+            <span className="hidden min-[1100px]:inline">Features</span>
+          </button>
+          <span className="text-2xs text-text-muted mx-1">·</span>
           <button
             onClick={() => setShowPalette(true)}
             className="hidden min-[1100px]:inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
@@ -667,6 +694,7 @@ function App() {
 
       {/* #138 — project-wide decisions view (read-only, all sessions). */}
       {showDecisions && <ProjectDecisionsModal onClose={() => setShowDecisions(false)} />}
+      {showFeatures && <FeaturesModal onClose={() => setShowFeatures(false)} />}
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}
