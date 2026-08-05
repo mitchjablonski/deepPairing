@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.1.24 — 2026-08-04
+
+The refinement release. v0.1.23 closed the comprehension loops; this round tightens
+their edges. Three things change. The **loop now teaches its own rules to the agent**
+— the debrief-owed nag fires only when a question is *genuinely* unanswered (a
+persisted tail-walk, not a top-level guess), cardinality errors surface above
+per-field noise, a poll that keeps coming back empty is given a sanctioned place to
+stop, and the first-call preamble is 12.3% leaner with the close-the-loop headline
+on top. **Exports tell the truth about rejected work** — rejected and retracted
+artifacts are excluded from PR-description and ADR exports and marked "Rejected (not
+built)" in the full export, and the neutral-voice transform for external formats
+stops mangling code spans. **The agent's exit is a first-class state** — a run that
+has ended reads as ended in the TurnIndicator and the sent-toast instead of looking
+like it's still your turn. And under the hood, **the test suite retired its last
+known flake class** — the `withGlobalStore` fixture now guards all 33 call sites with
+a grep-guard, proven order-independent across a double run. Every new field is
+optional and every removed field is read-tolerant of old files, so an old daemon
+degrades without a stumble (PRs #232, #233, #234).
+
+### Added
+- **The loop teaches the agent its own rules.** `check_feedback` and the stop-hook
+  now raise a **debrief-owed nag** gated on a *genuinely* unanswered question —
+  resolved via a persisted tail-walk of the reply thread, not a top-level guess — so
+  the agent is reminded to close a loop only when one is actually open. The stop-hook
+  gains **changeset awareness**, restarted agents get a **pending-artifact inventory**
+  so they pick up what's waiting, and trivial omissions earn **targeted one-line
+  hints** instead of a wall of field errors.
+- **A sanctioned poll give-up ceiling.** After ~6 empty polls the agent is given an
+  explicit, sanctioned place to stop rather than spinning — and `present_options`
+  **cardinality errors are hoisted above per-field noise** so the real problem reads
+  first. A **questions-first `suggestedAction`** points the agent at open questions
+  before anything else.
+
+### Changed
+- **Exports tell the truth about rejected work.** Rejected and retracted artifacts
+  are **excluded from the PR-description and ADR exports** and marked **"Rejected
+  (not built)"** in the full export — and a decision is gated through its owning
+  artifact, so a decision on rejected work doesn't leak in either. The
+  **neutral-voice transform** for external formats is hardened: contractions are
+  expanded but **code spans are left untouched**, and several debrief-export defects
+  are fixed.
+- **The agent's exit is a first-class state.** A run that has ended now reads as
+  ended — the **TurnIndicator** and the **sent-toast** share one liveness predicate
+  instead of leaving a dangling "your turn". **Pills are suppressed when a banner is
+  showing** (pills summarize, banners act), the **wrap-banner counts Read separately**,
+  the **demo CTA uses the real marketplace command**, and the **theme toggle flips
+  from the resolved appearance**.
+- **The preamble is leaner and better-ordered.** A **12.3% trim** with the
+  close-the-loop headline moved to the top, plus pin tests on the Mermaid and
+  annotated-code clauses so they can't silently drift. A busy-poll
+  **`structuredContent` dedup** saves ~573 tokens on the repeated poll path.
+
+### Removed
+- **The test suite retired its last known flake class.** The `withGlobalStore`
+  fixture now covers all **33 call sites** behind a **grep-guard**, retiring the #134
+  ENOENT flake class (double-run proven order-independent). Three dead paths were
+  swept out with it — the **retrospective-metrics** read path, the **`target.suggestion`**
+  field, and **`predictedOutcome`** on the write path — each **strip-on-read** so old
+  files still parse and the live suggested-edits machinery is untouched.
+
 ## v0.1.23 — 2026-08-04
 
 The close-the-loop release. v0.1.22 shipped the comprehension half — the debrief
