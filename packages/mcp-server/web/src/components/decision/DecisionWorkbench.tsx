@@ -95,10 +95,16 @@ export interface DecisionWorkbenchProps {
   /** The EXACT bundle DecisionCard threads into the inline DecisionFooter —
    *  reused verbatim so choose / reject / send-back behave identically here. */
   footerProps: DecisionFooterProps;
+  /** #207 (I2 review) — belt for the write-lock: when the parent decision is
+   *  retracted/terminal or replayed, every grain composer here is withheld and
+   *  each CommentThread renders read-only (existing threads stay readable). The
+   *  render is ALSO gated on !writeLocked at the call site, so this is the
+   *  second layer, not the only one. */
+  readOnly?: boolean;
   onClose: () => void;
 }
 
-export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onClose }: DecisionWorkbenchProps) {
+export function DecisionWorkbench({ event, artifactId, stakes, footerProps, readOnly = false, onClose }: DecisionWorkbenchProps) {
   // A real modal: focus moves in, Tab is trapped, Esc closes and focus restores
   // to the Discuss button that opened it (the useModal contract).
   const { dialogProps } = useModal({ onClose });
@@ -147,15 +153,18 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
   // get a fresh identity on every re-render (e.g. when a diagram finishes
   // rendering async), remounting the buttons and dropping keyboard focus to
   // <body> (the a11y focus-trap regression this cost a debug round to find).
-  const affordance = (anchor: GrainAnchor, className?: string): ReactNode => (
-    <WorkbenchGrainButton
-      label={anchor.label}
-      count={countFor(anchorTarget(anchor))}
-      active={isAnchorActive(anchor)}
-      onActivate={() => setActiveAnchor(anchor)}
-      className={className}
-    />
-  );
+  const affordance = (anchor: GrainAnchor, className?: string): ReactNode =>
+    // #207 (I2 review) — no NEW-thread affordance on a read-only decision; the
+    // rail still renders any EXISTING thread (read-only) below.
+    readOnly ? null : (
+      <WorkbenchGrainButton
+        label={anchor.label}
+        count={countFor(anchorTarget(anchor))}
+        active={isAnchorActive(anchor)}
+        onActivate={() => setActiveAnchor(anchor)}
+        className={className}
+      />
+    );
 
   // Per-option total (the mockup's "N comments" indicator — #173 review flagged
   // it was never implemented): every grain comment scoped to this option.
@@ -294,6 +303,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                 artifactId={artifactId}
                 lastInRow
                 focused
+                readOnly={readOnly}
                 commentCount={optionCommentCount(focusedOption.id)}
                 onChoose={() => {
                   footerProps.onSelect(focusedOption.id);
@@ -303,7 +313,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                 onExpandDiagram={(visual) =>
                   setFocusedDiagram({ optionId: focusedOption.id, optionTitle: focusedOption.title, visual })
                 }
-                onActivateAnchor={setActiveAnchor}
+                onActivateAnchor={readOnly ? undefined : setActiveAnchor}
               />
               {/* Whole-option comment/ask — a persistent composer below the
                   focused option (not hover-gated), anchored to the option
@@ -322,6 +332,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                   textareaLabel={`Comment on ${focusedOption.title}`}
                   secondarySubmitLabel="Ask"
                   secondarySubmitTitle={`Ask the agent a question about ${focusedOption.title}`}
+                  readOnly={readOnly}
                   roomy
                 />
               </div>
@@ -334,6 +345,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                   option={option}
                   artifactId={artifactId}
                   lastInRow={idx === event.options.length - 1}
+                  readOnly={readOnly}
                   commentCount={optionCommentCount(option.id)}
                   onChoose={() => {
                     // Reuse the card's exact selection handler, then collapse —
@@ -346,7 +358,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                     setFocusedDiagram({ optionId: option.id, optionTitle: option.title, visual })
                   }
                   onFocus={() => setFocusedOptionId(option.id)}
-                  onActivateAnchor={setActiveAnchor}
+                  onActivateAnchor={readOnly ? undefined : setActiveAnchor}
                 />
               ))}
             </div>
@@ -401,6 +413,7 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, onCl
                       textareaLabel={`Comment on ${anchor.label}`}
                       secondarySubmitLabel="Ask"
                       secondarySubmitTitle="Ask the agent a question anchored to this part"
+                      readOnly={readOnly}
                       roomy
                     />
                   </div>
@@ -503,6 +516,10 @@ interface WorkbenchColumnProps {
    *  inline "Comment or ask about {option}" composer is the sole whole-option
    *  surface, so the head 💬 (which opened a rail composer) would double it. */
   focused?: boolean;
+  /** #207 (I2 review) — read-only decision: disable the per-column Choose
+   *  button (selection is already inert via the guarded onSelect; this makes it
+   *  honest). */
+  readOnly?: boolean;
 }
 
 /**
@@ -522,6 +539,7 @@ function WorkbenchColumn({
   onFocus,
   onActivateAnchor,
   focused,
+  readOnly = false,
 }: WorkbenchColumnProps) {
   const title = option.title;
   return (
@@ -657,8 +675,11 @@ function WorkbenchColumn({
         <button
           type="button"
           onClick={onChoose}
+          disabled={readOnly}
           aria-label={`Choose ${title}`}
-          className={`w-full px-3 py-1.5 text-xs font-semibold rounded press-scale transition-colors border ${
+          aria-disabled={readOnly || undefined}
+          title={readOnly ? "Read-only — this artifact was retracted or is being replayed" : undefined}
+          className={`w-full px-3 py-1.5 text-xs font-semibold rounded press-scale transition-colors border disabled:opacity-50 disabled:cursor-not-allowed ${
             option.recommendation
               ? "border-accent-green/50 bg-accent-green-dim text-accent-green hover:bg-accent-green-dim/80"
               : "border-border-default bg-surface-elevated text-text-secondary hover:bg-accent-blue-strong hover:text-white hover:border-accent-blue-strong"

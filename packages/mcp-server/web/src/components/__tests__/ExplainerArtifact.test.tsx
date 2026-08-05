@@ -99,6 +99,37 @@ describe("ExplainerArtifact — renders the walk-through", () => {
   });
 });
 
+describe("ExplainerArtifact — #207 (I2 review) write-axis lock", () => {
+  const retracted = { ...explainerArtifact, status: "retracted" as const };
+  const approved = { ...explainerArtifact, status: "approved" as const };
+
+  it("RETRACTED: ask-anything + every per-block grain withheld; the walk stays readable", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(retracted);
+    render(<ExplainerArtifact artifact={retracted} />);
+
+    // Ask-anything composer gone.
+    expect(screen.queryByLabelText("Comment on this explainer")).not.toBeInTheDocument();
+    // No grain toggle anywhere (overview + walk sections).
+    expect(screen.queryByRole("button", { name: "Comment on What you're about to read" })).not.toBeInTheDocument();
+    expect(document.querySelectorAll("[data-grain-affordance]").length).toBe(0);
+    // The suggested-question chips (a write shortcut) are pulled too.
+    expect(screen.queryByTestId("explainer-suggested-questions")).not.toBeInTheDocument();
+    // …but the narrative stays readable.
+    expect(screen.getByText(/walk the request path for an authenticated route/i)).toBeInTheDocument();
+    expect(screen.getByText(/this explainer is read-only/i)).toBeInTheDocument();
+  });
+
+  it("APPROVED (acknowledged / 'Read') STAYS late-commentable — composers STILL LIVE", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(approved);
+    render(<ExplainerArtifact artifact={approved} />);
+    // A Got-it explainer keeps its ask surface (you can still ask about code you read).
+    expect(screen.getByLabelText("Comment on this explainer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Comment on What you're about to read" })).toBeInTheDocument();
+  });
+});
+
 describe("ExplainerArtifact — related drill-in", () => {
   it("clicking a related link SELECTS the referenced artifact", async () => {
     const user = userEvent.setup();

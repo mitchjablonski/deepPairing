@@ -8,6 +8,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
+import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
@@ -187,6 +188,16 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
   const replayActive = useReplayStore((st) => st.active);
   const hasUnchecked = checkedSteps.some((c) => !c);
+  // #207 (I2 review) — the WRITE AXIS, derived through the SAME reviewLifecycle
+  // helper research/spec/debrief use: a retracted (→ "closed") or replayed (→
+  // "frozen") plan withholds its composers (visuals + per-step ask/comment).
+  // Draft ("review") stays writable; approved ("follow_up") STAYS late-
+  // commentable (the #187 lane — comments on an approved/executing plan are new
+  // input, not a reopened review). Posted history stays readable.
+  const writeLocked = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
 
   // C1 — mirror ArtifactStatusActions.handleAction: a submitting guard (a
   // double-click double-POSTed) and a catch (the store re-throws after
@@ -215,8 +226,10 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   return (
     <div className="space-y-4">
       {/* Visuals frame the plan — diagrams / file maps / prototypes the human
-          can comment on directly. Self-hides when the plan has none. */}
-      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} />
+          can comment on directly. Self-hides when the plan has none.
+          #207 (I2 review) — composers withheld when the plan is retracted/
+          terminal or replayed. */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} />
 
       {steps.length > 0 && (
         <div className="space-y-3">
@@ -360,17 +373,19 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <AskTrigger
-                      artifactId={artifact.id}
-                      target={{ stepIndex: i }}
-                    />
-                    <CommentTrigger
-                      artifactId={artifact.id}
-                      target={{ stepIndex: i }}
-                      existingCount={stepComments.length}
-                    />
-                  </div>
+                  {!writeLocked && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <AskTrigger
+                        artifactId={artifact.id}
+                        target={{ stepIndex: i }}
+                      />
+                      <CommentTrigger
+                        artifactId={artifact.id}
+                        target={{ stepIndex: i }}
+                        existingCount={stepComments.length}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             );

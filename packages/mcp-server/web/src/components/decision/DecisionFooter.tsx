@@ -36,6 +36,13 @@ export interface DecisionFooterProps {
    *  reasoning) is untouched — this demotes only the SURFACE where the trigger
    *  appears. (#194 E3 cut the sibling "+ Capture prediction" action.) */
   showCalibrationActions?: boolean;
+  /** #207 (I2) — the write-axis lock. On a retracted/terminal ("closed") or
+   *  replayed ("frozen") decision every action here is inert: the send-back /
+   *  reject / reasoning composers and the tertiary trigger row are all withheld
+   *  (matching how a RESOLVED decision never renders this footer at all). The
+   *  sent-back / rejected CONFIRMATION banners are preserved — a state the human
+   *  already reached stays visible. Default false. */
+  locked?: boolean;
 }
 
 export function DecisionFooter({
@@ -62,6 +69,7 @@ export function DecisionFooter({
   setReasoning,
   onSelect,
   showCalibrationActions = false,
+  locked = false,
 }: DecisionFooterProps) {
   return (
     /* X11 — escape hatches grouped under one footer instead of two
@@ -71,7 +79,7 @@ export function DecisionFooter({
        footer; only the active composer expands above the row. They're
        mutually exclusive in practice — opening one closes the other. */
     <div className="mt-3 pt-3 border-t border-accent-violet/15">
-      {showSendBack && !sendBackSent && (
+      {!locked && showSendBack && !sendBackSent && (
         <div className="space-y-2 mb-2">
           <label className="block text-2xs text-text-muted">
             What should change about the options? (the agent will revise the set, not just answer)
@@ -115,7 +123,7 @@ export function DecisionFooter({
         </div>
       )}
 
-      {showReject && !rejectSent && (
+      {!locked && showReject && !rejectSent && (
         <div className="space-y-2 mb-2 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
           <label className="block text-2xs text-text-muted">
             Why is this the wrong question? The agent will remember not to
@@ -174,7 +182,7 @@ export function DecisionFooter({
         </div>
       )}
 
-      {showReasoning && (
+      {!locked && showReasoning && (
         <div className="flex gap-2 mb-2">
           <input
             type="text"
@@ -224,6 +232,11 @@ export function DecisionFooter({
             You can still pick from these if you change your mind.
           </span>
         </div>
+      ) : locked ? (
+        // #207 (I2) — read-only: withhold the whole tertiary trigger row (choose /
+        // send-back / reject are all writes). Nothing to show; the option grid's
+        // "Read-only" affordance already names the state.
+        null
       ) : (
         <div className="flex items-center gap-3 flex-wrap text-2xs text-text-muted">
           {/* #190 — the "+ Add reasoning" action was 0/20 on the compact card;

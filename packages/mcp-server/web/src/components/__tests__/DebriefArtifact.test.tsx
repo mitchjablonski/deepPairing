@@ -156,6 +156,69 @@ describe("DebriefArtifact — grain comments", () => {
   });
 });
 
+describe("DebriefArtifact — #207 (I2) write-axis lock", () => {
+  const retracted = { ...debriefArtifact, status: "retracted" as const };
+  const approved = { ...debriefArtifact, status: "approved" as const };
+
+  it("RETRACTED: withholds EVERY composer — ask-anything, per-block grain, per-item grain, open-questions", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(retracted);
+    render(<DebriefArtifact artifact={retracted} />);
+
+    // Ask-anything composer gone (its labelled textarea is withheld read-only).
+    expect(screen.queryByLabelText("Comment on this debrief")).not.toBeInTheDocument();
+    // The per-block grain toggle ("💬 Comment") is pulled — no grain-affordance
+    // buttons anywhere (summary, walk, decisions, deferred, needs-your-eyes).
+    expect(screen.queryByRole("button", { name: "Comment on What we built" })).not.toBeInTheDocument();
+    expect(document.querySelectorAll("[data-grain-affordance]").length).toBe(0);
+    // Open-questions composer withheld (no Answer/Ask buttons on any question).
+    expect(screen.queryByRole("button", { name: "Answer" })).not.toBeInTheDocument();
+    // …but the narrative history stays readable.
+    expect(screen.getByText(/moved the sliding-window session-TTL refresh/i)).toBeInTheDocument();
+    expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
+    // The invitation copy no longer promises an answer.
+    expect(screen.getByText(/this debrief is read-only/i)).toBeInTheDocument();
+  });
+
+  it("RETRACTED: a prior grain thread stays readable (history preserved, composer gone)", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(retracted);
+    useArtifactStore.setState({
+      comments: {
+        [retracted.id]: [
+          {
+            id: "gc1",
+            sessionId: "s",
+            author: "human",
+            content: "PRIOR-GRAIN-NOTE",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            parentCommentId: null,
+            target: { artifactId: retracted.id, sectionId: "debrief:summary" },
+          } as any,
+        ],
+      },
+    } as any);
+    render(<DebriefArtifact artifact={retracted} />);
+
+    // The posted grain comment renders (read-only thread)…
+    expect(screen.getByText("PRIOR-GRAIN-NOTE")).toBeInTheDocument();
+    // …with no composer for it (the summary block's grain toggle is gone).
+    expect(screen.queryByRole("button", { name: "Comment on What we built" })).not.toBeInTheDocument();
+  });
+
+  it("APPROVED stays LATE-COMMENTABLE (the #187 follow-up lane) — composers STILL LIVE", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(approved);
+    render(<DebriefArtifact artifact={approved} />);
+
+    // The regression that matters most: an approved debrief keeps its composers.
+    expect(screen.getByLabelText("Comment on this debrief")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Comment on What we built" })).toBeInTheDocument();
+    // Open-questions answer composer present too.
+    expect(screen.getAllByRole("button", { name: "Answer" }).length).toBeGreaterThan(0);
+  });
+});
+
 describe("DebriefArtifact — #193 E2 lifecycle", () => {
   it("renders 'Needs your eyes' ABOVE the narrative (what must I look at, first)", () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);

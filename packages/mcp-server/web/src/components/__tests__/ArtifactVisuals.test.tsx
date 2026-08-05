@@ -22,6 +22,22 @@ describe("ArtifactVisuals", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("#207 (I2) — readOnly withholds the per-visual comment/ask bar; the visual stays visible", () => {
+    const visuals: PlanVisual[] = [
+      { id: "fm", kind: "file_map", title: "What I'll touch", files: [{ path: "src/x.ts", change: "create" }] },
+    ];
+    const { rerender } = render(<ArtifactVisuals artifactId="a" visuals={visuals} />);
+    // Writable by default: the labelled comment CTA + Ask are present.
+    expect(screen.getByRole("button", { name: /Comment on this file map/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Ask the agent/i })).toBeInTheDocument();
+
+    // Read-only: the composer bar is pulled, but the diagram/file-map still renders.
+    rerender(<ArtifactVisuals artifactId="a" visuals={visuals} readOnly />);
+    expect(screen.queryByRole("button", { name: /Comment on this file map/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ask the agent/i })).not.toBeInTheDocument();
+    expect(screen.getByText("What I'll touch")).toBeInTheDocument();
+  });
+
   it("renders a file_map as a directory tree with a change summary + per-visual comment affordance", () => {
     render(
       <ArtifactVisuals

@@ -9,6 +9,8 @@ import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
 import { OpenQuestionSection } from "./OpenQuestionSection";
+import { reviewLifecycle } from "../../lib/reviewLifecycle";
+import { useReplayStore } from "../../stores/replay";
 
 /**
  * #190 — the end-of-feature DEBRIEF renderer (the comprehension surface).
@@ -82,22 +84,31 @@ function BlockGrain({
   sectionId,
   label,
   comments,
+  readOnly = false,
 }: {
   artifactId: string;
   sectionId: string;
   label: string;
   comments: Comment[];
+  /** #207 (I2) — on a retracted/terminal ("closed") or replayed ("frozen")
+   *  debrief the grain composer is withheld: the "💬 Comment" toggle is pulled
+   *  and, when a prior thread exists, its CommentThread renders read-only (posted
+   *  history stays, composer gone). A comment here would otherwise reach the agent
+   *  as actionable feedback on a debrief it already took back. */
+  readOnly?: boolean;
 }) {
   const grain = useMemo(
     () => comments.filter((c) => c.target.sectionId === sectionId),
     [comments, sectionId],
   );
   const [open, setOpen] = useState(false);
-  const show = open || grain.length > 0;
+  // When read-only the "+ Comment" toggle never appears, so only reveal an
+  // existing thread (read-only); an empty block renders nothing at all.
+  const show = readOnly ? grain.length > 0 : open || grain.length > 0;
 
   return (
     <div className="mt-2">
-      {!show && (
+      {!show && !readOnly && (
         <button
           type="button"
           data-grain-affordance
@@ -122,6 +133,7 @@ function BlockGrain({
             textareaLabel={`Comment on ${label}`}
             secondarySubmitLabel="Ask"
             secondarySubmitTitle={`Ask the agent a question about ${label}`}
+            readOnly={readOnly}
           />
         </div>
       )}
@@ -136,18 +148,20 @@ function DebriefBlock({
   title,
   comments,
   children,
+  readOnly = false,
 }: {
   artifactId: string;
   sectionId: string;
   title: string;
   comments: Comment[];
   children: ReactNode;
+  readOnly?: boolean;
 }) {
   return (
     <section className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2">
       <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">{title}</h4>
       {children}
-      <BlockGrain artifactId={artifactId} sectionId={sectionId} label={title} comments={comments} />
+      <BlockGrain artifactId={artifactId} sectionId={sectionId} label={title} comments={comments} readOnly={readOnly} />
     </section>
   );
 }
@@ -161,6 +175,18 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
     [artifact.content],
   );
   const comments = useChainComments(artifact.id);
+  // #207 (I2) — the WRITE AXIS, derived through the SAME reviewLifecycle helper
+  // ResearchArtifact uses post-H3. A retracted (→ "closed") or replayed (→
+  // "frozen") debrief withholds EVERY composer it hosts: per-item + per-block
+  // grain (BlockGrain), the walk's evidence gutters (renderEvidence), the open
+  // questions, and the ask-anything thread. Draft ("review") stays writable;
+  // approved ("follow_up") STAYS late-commentable (the #187 lane). Posted history
+  // stays readable throughout.
+  const replayActive = useReplayStore((s) => s.active);
+  const writeLocked = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
 
   const sections = content.sections ?? [];
   const decisionsMade = content.decisionsMade ?? [];
@@ -204,6 +230,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                       sectionId={`debrief:needs-your-eyes:${i}`}
                       label={item.what || `needs-your-eyes item ${i + 1}`}
                       comments={comments}
+                      readOnly={writeLocked}
                     />
                   </div>
                 </div>
@@ -219,6 +246,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
         sectionId="debrief:summary"
         title="What we built"
         comments={comments}
+        readOnly={writeLocked}
       >
         <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
       </DebriefBlock>
@@ -256,7 +284,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                     CommentableCode). The section index doubles as findingIndex:
                     a debrief has no findings, so the namespace is its own. */}
                 {section.evidence != null &&
-                  renderEvidence(section.evidence, artifact.id, i, comments)}
+                  renderEvidence(section.evidence, artifact.id, i, comments, writeLocked)}
 
                 {/* Drill-in links to the underlying artifacts. */}
                 {(section.changesetRef || (section.artifactRefs && section.artifactRefs.length > 0)) && (
@@ -274,6 +302,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                   sectionId={sectionId}
                   label={section.title || `section ${i + 1}`}
                   comments={grain}
+                  readOnly={writeLocked}
                 />
               </section>
             );
@@ -316,6 +345,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                   sectionId={`debrief:decisions:${i}`}
                   label={d.what || `decision ${i + 1}`}
                   comments={comments}
+                  readOnly={writeLocked}
                 />
               </div>
             ))}
@@ -348,6 +378,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                     sectionId={`debrief:deferred:${i}`}
                     label={d.what || `deferred item ${i + 1}`}
                     comments={comments}
+                    readOnly={writeLocked}
                   />
                 </div>
               </li>
@@ -370,7 +401,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
           </p>
           <div className="space-y-1.5">
             {openQuestions.map((q, i) => (
-              <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} />
+              <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} readOnly={writeLocked} />
             ))}
           </div>
         </div>
@@ -387,7 +418,9 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
           Ask me anything
         </h4>
         <p className="text-2xs text-text-muted">
-          Anything unclear about what I did? Ask — I'll answer on my next turn.
+          {writeLocked
+            ? "This debrief is read-only — the earlier conversation is preserved below."
+            : "Anything unclear about what I did? Ask — I'll answer on my next turn."}
         </p>
         <CommentThread
           artifactId={artifact.id}
@@ -403,6 +436,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
           textareaLabel="Comment on this debrief"
           secondarySubmitLabel="Ask"
           secondarySubmitTitle="Ask the agent a question about this debrief"
+          readOnly={writeLocked}
           roomy
         />
       </div>

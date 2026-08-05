@@ -33,7 +33,21 @@ const changeStyle: Record<string, { glyph: string; cls: string }> = {
  * `visualId`), so the human comments on the architecture itself and the agent
  * iterates via revise_artifact — reusing the whole existing review loop.
  */
-export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; visuals: PlanVisual[] }) {
+export function ArtifactVisuals({
+  artifactId,
+  visuals,
+  readOnly = false,
+}: {
+  artifactId: string;
+  visuals: PlanVisual[];
+  /** #207 (I2) — withhold the per-visual comment/ask composers + freeze
+   *  region-anchoring when the parent artifact is retracted/terminal ("closed")
+   *  or replayed ("frozen"): a comment posted here would reach the agent as
+   *  actionable feedback on a spec it already took back. Diagrams stay visible;
+   *  existing anchored comments stay readable. Defaults false (byte-unchanged for
+   *  every existing caller). */
+  readOnly?: boolean;
+}) {
   // Bug2 — aggregate the version chain so a visual-anchored (visualId) comment
   // posted on v1 still surfaces on v2 (same data-loss class as the other
   // renderers). A visualId that only exists on one version simply won't match.
@@ -63,7 +77,7 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
               )}
             </div>
 
-            <VisualBody artifactId={artifactId} visual={v} />
+            <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} />
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
 
@@ -71,18 +85,22 @@ export function ArtifactVisuals({ artifactId, visuals }: { artifactId: string; v
                 to miss on a tall diagram/prototype, so the primary call-to-action
                 is a labelled bar at the BOTTOM — where the eye lands after reading
                 the visual. Comments still anchor to this visual's id, so the
-                whole existing comment → check_feedback → revise loop is reused. */}
-            <div className="flex items-stretch gap-2 pt-2 border-t border-white/[0.05]">
-              <CommentTrigger
-                variant="pill"
-                fullWidth
-                label={`Comment on this ${noun}`}
-                artifactId={artifactId}
-                target={{ visualId: v.id }}
-                existingCount={existing}
-              />
-              <AskTrigger variant="pill" fullWidth artifactId={artifactId} target={{ visualId: v.id }} />
-            </div>
+                whole existing comment → check_feedback → revise loop is reused.
+                #207 (I2) — withheld on a read-only (retracted/terminal or replayed)
+                artifact; the diagram + its anchored history stay visible. */}
+            {!readOnly && (
+              <div className="flex items-stretch gap-2 pt-2 border-t border-white/[0.05]">
+                <CommentTrigger
+                  variant="pill"
+                  fullWidth
+                  label={`Comment on this ${noun}`}
+                  artifactId={artifactId}
+                  target={{ visualId: v.id }}
+                  existingCount={existing}
+                />
+                <AskTrigger variant="pill" fullWidth artifactId={artifactId} target={{ visualId: v.id }} />
+              </div>
+            )}
           </div>
         );
       })}
