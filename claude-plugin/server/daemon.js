@@ -24992,6 +24992,266 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   return { decisions, failedSessions };
 }
+function slugify2(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function prettifyLabel(s) {
+  const t = s.replace(/\s+/g, " ").replace(/[\s:.\-–—]+$/, "").trim();
+  return t.length > 0 ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+function numAnchor(raw2) {
+  const [intPart, fracPart] = raw2.split(".");
+  const intNorm = String(parseInt(intPart, 10));
+  return fracPart !== void 0 ? { label: `${intNorm}.${fracPart}`, slug: `${intNorm}-${fracPart}` } : { label: intNorm, slug: intNorm };
+}
+function normalizeFeaturePrefix(rawTitle) {
+  const title = (rawTitle ?? "").trim();
+  if (!title) return null;
+  let m = title.match(/^milestone\s+(\d+(?:\.\d+)?)\b/i);
+  if (!m) m = title.match(/^m(\d+(?:\.\d+)?)(?=$|[\s:.\-–—])/i);
+  if (m) {
+    const n = numAnchor(m[1]);
+    return { slug: `milestone-${n.slug}`, label: `Milestone ${n.label}` };
+  }
+  const p = title.match(/^phase\s+(\d+(?:\.\d+)?)\b/i);
+  if (p) {
+    const n = numAnchor(p[1]);
+    return { slug: `phase-${n.slug}`, label: `Phase ${n.label}` };
+  }
+  const f = title.match(/^feature\s*(?::\s*|\s+[-–—]\s+)(.+)$/i);
+  if (f) {
+    const inner = f[1].trim();
+    const slug = slugify2(inner);
+    if (slug) return { slug, label: prettifyLabel(inner) };
+  }
+  const b = title.match(/^\[([^\]]+)\]/);
+  if (b) {
+    const inner = b[1].trim();
+    const slug = slugify2(inner);
+    if (slug) return { slug, label: prettifyLabel(inner) };
+  }
+  return null;
+}
+var UNGROUPED_ID = "__ungrouped__";
+function fileTouchesOf(artifact) {
+  const out = [];
+  const content = artifact.content;
+  if (!content) return out;
+  if (artifact.type === "code_change" && typeof content.filePath === "string") {
+    out.push(content.filePath);
+  }
+  if (artifact.type === "changeset" && Array.isArray(content.files)) {
+    for (const f of content.files) {
+      if (f && typeof f.path === "string") out.push(f.path);
+    }
+  }
+  return out;
+}
+function groupByFeature(projectRoot2) {
+  const sessionsDir = path5.join(projectRoot2, ".deeppairing", "sessions");
+  const failedSessions = [];
+  const scans = [];
+  let entries = [];
+  if (fs6.existsSync(sessionsDir)) {
+    try {
+      entries = fs6.readdirSync(sessionsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const sessionId = entry.name;
+    const sessionDir = path5.join(sessionsDir, sessionId);
+    const artFile = path5.join(sessionDir, "artifacts.json");
+    if (!fs6.existsSync(artFile)) continue;
+    let artifacts;
+    try {
+      artifacts = salvageArray(
+        `${sessionId}/artifacts.json`,
+        JSON.parse(fs6.readFileSync(artFile, "utf-8")),
+        "id"
+      );
+    } catch (err) {
+      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable artifacts.json" });
+      continue;
+    }
+    if (artifacts.length === 0) continue;
+    let decisions = [];
+    const decFile = path5.join(sessionDir, "decisions.json");
+    if (fs6.existsSync(decFile)) {
+      try {
+        const raw2 = JSON.parse(fs6.readFileSync(decFile, "utf-8"));
+        if (Array.isArray(raw2)) {
+          decisions = salvageArray(`${sessionId}/decisions.json`, raw2, "decisionId");
+        }
+      } catch {
+      }
+    }
+    let comments = [];
+    const cmtFile = path5.join(sessionDir, "comments.json");
+    if (fs6.existsSync(cmtFile)) {
+      try {
+        const raw2 = JSON.parse(fs6.readFileSync(cmtFile, "utf-8"));
+        if (Array.isArray(raw2)) {
+          comments = salvageArray(`${sessionId}/comments.json`, raw2, "id");
+        }
+      } catch {
+      }
+    }
+    scans.push({ sessionId, artifacts, decisions, comments });
+  }
+  const labelByKey = /* @__PURE__ */ new Map();
+  const registerLabel = (g) => {
+    if (!labelByKey.has(g.slug)) labelByKey.set(g.slug, g.label);
+  };
+  const groupKeyOf = /* @__PURE__ */ new Map();
+  const composite = (sessionId, artifactId) => `${sessionId}\0${artifactId}`;
+  for (const scan of scans) {
+    const byId = /* @__PURE__ */ new Map();
+    for (const a of scan.artifacts) byId.set(a.id, a);
+    const resolve = (artifact, seen) => {
+      const ck = composite(scan.sessionId, artifact.id);
+      const cached2 = groupKeyOf.get(ck);
+      if (cached2 !== void 0) return cached2;
+      if (seen.has(artifact.id)) {
+        const own2 = normalizeFeaturePrefix(artifact.title);
+        if (own2) registerLabel(own2);
+        return own2?.slug ?? null;
+      }
+      seen.add(artifact.id);
+      const own = normalizeFeaturePrefix(artifact.title);
+      if (own) registerLabel(own);
+      const parent = artifact.parentId ? byId.get(artifact.parentId) : void 0;
+      const parentGroup = parent ? resolve(parent, seen) : null;
+      const effective = parentGroup ?? own?.slug ?? null;
+      groupKeyOf.set(ck, effective);
+      return effective;
+    };
+    for (const a of scan.artifacts) resolve(a, /* @__PURE__ */ new Set());
+  }
+  const groups = /* @__PURE__ */ new Map();
+  const ensure = (id, title, ungrouped2) => {
+    let g = groups.get(id);
+    if (!g) {
+      g = { id, title, ungrouped: ungrouped2, refs: [], openItems: [], files: /* @__PURE__ */ new Set() };
+      groups.set(id, g);
+    }
+    return g;
+  };
+  const groupIdForArtifact = /* @__PURE__ */ new Map();
+  for (const scan of scans) {
+    for (const artifact of scan.artifacts) {
+      const key = groupKeyOf.get(composite(scan.sessionId, artifact.id)) ?? null;
+      const groupId = key ?? UNGROUPED_ID;
+      const title = key ? labelByKey.get(key) ?? key : "Ungrouped";
+      const g = ensure(groupId, title, key === null);
+      groupIdForArtifact.set(composite(scan.sessionId, artifact.id), groupId);
+      g.refs.push({
+        sessionId: scan.sessionId,
+        artifactId: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        status: artifact.status,
+        // salvageArray only guarantees a string `id` — a salvage-passing artifact
+        // can lack createdAt. Coerce to "" so the ref's type stays honest and the
+        // downstream sort/lastActivity can't hit `undefined.localeCompare`.
+        createdAt: artifact.createdAt ?? ""
+      });
+      for (const f of fileTouchesOf(artifact)) g.files.add(f);
+      if (artifact.type === "debrief") {
+        const content = artifact.content;
+        const eyes = content?.needsYourEyes;
+        if (Array.isArray(eyes)) {
+          for (const item of eyes) {
+            const what = typeof item?.what === "string" ? item.what : "";
+            if (!what) continue;
+            g.openItems.push({
+              kind: "needs_eyes",
+              label: what,
+              sessionId: scan.sessionId,
+              // Prefer the referenced artifact; fall back to the debrief itself.
+              artifactId: typeof item?.artifactRef === "string" && item.artifactRef ? item.artifactRef : artifact.id,
+              detail: typeof item?.why === "string" ? item.why : void 0
+            });
+          }
+        }
+      }
+    }
+    const artById = /* @__PURE__ */ new Map();
+    for (const a of scan.artifacts) artById.set(a.id, a);
+    for (const dec of scan.decisions) {
+      if (dec.response) continue;
+      const origin = artById.get(dec.artifactId);
+      if (origin?.status === "superseded") continue;
+      const cid = composite(scan.sessionId, dec.artifactId);
+      const groupId = groupIdForArtifact.get(cid);
+      if (!groupId) continue;
+      const g = groups.get(groupId);
+      if (!g) continue;
+      g.openItems.push({
+        kind: "decision",
+        label: dec.context?.trim() || origin?.title || "Awaiting your decision",
+        sessionId: scan.sessionId,
+        artifactId: dec.artifactId
+      });
+    }
+    const unanswered = collectUnansweredQuestions(scan.comments);
+    for (const q of unanswered) {
+      const cid = composite(scan.sessionId, q.artifactId);
+      const groupId = groupIdForArtifact.get(cid);
+      if (!groupId) continue;
+      const g = groups.get(groupId);
+      if (!g) continue;
+      g.openItems.push({
+        kind: "question",
+        label: q.question.content?.trim() || "Unanswered question",
+        sessionId: scan.sessionId,
+        artifactId: q.artifactId,
+        detail: void 0,
+        commentId: q.question.id
+      });
+    }
+  }
+  const groupsByFile = /* @__PURE__ */ new Map();
+  for (const g of groups.values()) {
+    for (const f of g.files) {
+      const arr2 = groupsByFile.get(f) ?? [];
+      arr2.push(g.title);
+      groupsByFile.set(f, arr2);
+    }
+  }
+  const finalize2 = (g) => {
+    const artifactRefs = [...g.refs].sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+    const lastActivity = artifactRefs.at(-1)?.createdAt || void 0;
+    const fileTouches = [...g.files].sort((a, b) => a.localeCompare(b)).map((p) => ({
+      path: p,
+      alsoIn: (groupsByFile.get(p) ?? []).filter((t) => t !== g.title)
+    }));
+    return {
+      id: g.id,
+      title: g.title,
+      ...g.ungrouped ? { ungrouped: true } : {},
+      artifactCount: g.refs.length,
+      openItemCount: g.openItems.length,
+      lastActivity,
+      artifactRefs,
+      openItems: g.openItems,
+      fileTouches
+    };
+  };
+  const grouped = [];
+  let ungrouped;
+  for (const g of groups.values()) {
+    const fg = finalize2(g);
+    if (fg.ungrouped) ungrouped = fg;
+    else grouped.push(fg);
+  }
+  grouped.sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
+  const orderedGroups = ungrouped ? [...grouped, ungrouped] : grouped;
+  failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+  return { groups: orderedGroups, failedSessions };
+}
 
 // src/store/ledger-digest.ts
 import fs7 from "node:fs";
@@ -26515,6 +26775,10 @@ var FileStore = class _FileStore {
   /** #138 — project-wide decisions (every session's decisions.json, flattened
    *  newest-first, with a partial-data report). See session-scan.ts. */
   static listAllDecisions = listAllDecisions;
+  /** #203 (H2) — the derived Features read-model: every artifact across every
+   *  session grouped into features by title-prefix + parentId chains. See
+   *  session-scan.ts. */
+  static groupByFeature = groupByFeature;
   // BB2 — targeted cache invalidation for the digest below.
   static invalidateLedgerDigestCache = invalidateLedgerDigestCache;
   /** AA5 — project-wide preflight-trace digest; see ledger-digest.ts. */
@@ -28518,6 +28782,15 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     } catch (err) {
       log2(`[decisions] read failed, returning empty: ${err}`);
       return c.json({ decisions: [], failedSessions: [] });
+    }
+  });
+  app.get("/api/features", (c) => {
+    if (!projectRoot2) return c.json({ groups: [], failedSessions: [] });
+    try {
+      return c.json(FileStore.groupByFeature(projectRoot2));
+    } catch (err) {
+      log2(`[features] read failed, returning empty: ${err}`);
+      return c.json({ groups: [], failedSessions: [] });
     }
   });
   app.get("/api/search", (c) => {

@@ -73,6 +73,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       },
     });
     items.push({
+      id: "action_features",
+      label: "View features (grouped work across all sessions)",
+      type: "action",
+      action: () => {
+        window.dispatchEvent(new CustomEvent("dp:open-features"));
+        onClose(); // open the modal from under the still-mounted palette
+      },
+    });
+    items.push({
       id: "action_approve_all",
       label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : !boundSessionId && draftSessionCount > 1 ? ` across ${draftSessionCount} sessions` : ""} (except decisions)`,
       type: "action",
