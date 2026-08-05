@@ -50,6 +50,10 @@ const CreateArtifactBody = z
     type: z.string().min(1),
     title: z.string().min(1),
     content: z.record(z.string(), z.unknown()),
+    // #206 (I1) — the raw feature tag rides the wire explicitly (the store
+    // normalizes it to a slug on arrival). .passthrough() would carry it
+    // anyway, but declaring it keeps the internal contract honest.
+    feature: z.string().optional(),
   })
   .passthrough();
 const AddCommentBody = z

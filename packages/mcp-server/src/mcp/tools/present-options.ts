@@ -47,6 +47,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     title: context,
     content,
     relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   // Y1' — record the preflight trace alongside the artifact.

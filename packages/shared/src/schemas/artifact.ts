@@ -131,6 +131,20 @@ export const ArtifactSchema = z.object({
    * rule: all new fields optional).
    */
   secretWarnings: z.array(SecretWarningSchema).optional(),
+  /**
+   * #206 (I1) — the FEATURE tag. A short, STABLE slug naming the feature /
+   * milestone this artifact belongs to (e.g. "milestone-7", "auth-rework"),
+   * set from the `feature` param on the present_* tools and normalized
+   * server-side through the SAME slug family the Features view's title-prefix
+   * miner uses (see session-scan.normalizeFeatureId) — so an agent-tagged
+   * "Milestone 7" and a "Milestone 7 — x"-TITLED artifact converge on the one
+   * group key. Slug-shaped but deliberately NOT over-validated (trim + a length
+   * cap only); grouping is tolerant of anything. Optional for backward
+   * compatibility (project rule: all new fields optional) — old artifacts
+   * without it simply fall back to the derived title/parent grouping, and its
+   * ABSENCE keeps the stored JSON byte-identical to before.
+   */
+  featureId: z.string().trim().max(80).optional(),
   content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),

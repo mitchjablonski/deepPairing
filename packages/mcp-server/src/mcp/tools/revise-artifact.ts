@@ -142,6 +142,10 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // (belt-and-suspenders with the client-side resolveToLiveId in the flow
       // sidebar). Optional field; only set when the old artifact had refs.
       ...(old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {}),
+      // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
+      // successor stays in the same feature group by its OWN tag, not only via
+      // the parentId chain. The store re-normalizes (idempotent on a slug).
+      ...(old.featureId ? { feature: old.featureId } : {}),
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);

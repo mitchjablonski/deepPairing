@@ -63,6 +63,18 @@ Two rhythms, and they're different:
   batched `present_changeset` at each feature boundary, and the run ENDS with one
   `present_debrief`. Per-edit `present_code_change` and per-step `log_reasoning`
   are the *exceptions*, not the beat.
+- **Tag every artifact with its `feature`.** When your work spans more than one
+  run — a milestone, a multi-session feature — pass the same `feature` tag on
+  every `present_*` you make (findings, options, plan, spec, code changes,
+  changeset, debrief, explainer). Pick the tag ONCE: if the human already names
+  the work ("Milestone 7", "auth rework"), match that naming; otherwise choose a
+  short stable slug (`milestone-7`, `auth-rework`) and reuse it verbatim. Keep it
+  **identical** across the whole feature — don't invent a fresh tag per run, and
+  don't drift the wording. This is the stable-id discipline you already use for
+  decision-option ids: the tag is what threads a feature's artifacts together in
+  the Features view instead of scattering them into Ungrouped. The human can
+  rename a group or move an artifact after the fact, but a consistent tag means
+  they rarely have to.
 
 ## When to use which tool
 

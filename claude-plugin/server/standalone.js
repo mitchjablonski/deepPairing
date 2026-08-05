@@ -25744,6 +25744,20 @@ var ArtifactSchema = external_exports.object({
    * rule: all new fields optional).
    */
   secretWarnings: external_exports.array(SecretWarningSchema).optional(),
+  /**
+   * #206 (I1) — the FEATURE tag. A short, STABLE slug naming the feature /
+   * milestone this artifact belongs to (e.g. "milestone-7", "auth-rework"),
+   * set from the `feature` param on the present_* tools and normalized
+   * server-side through the SAME slug family the Features view's title-prefix
+   * miner uses (see session-scan.normalizeFeatureId) — so an agent-tagged
+   * "Milestone 7" and a "Milestone 7 — x"-TITLED artifact converge on the one
+   * group key. Slug-shaped but deliberately NOT over-validated (trim + a length
+   * cap only); grouping is tolerant of anything. Optional for backward
+   * compatibility (project rule: all new fields optional) — old artifacts
+   * without it simply fall back to the derived title/parent grouping, and its
+   * ABSENCE keeps the stored JSON byte-identical to before.
+   */
+  featureId: external_exports.string().trim().max(80).optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -26571,6 +26585,20 @@ var StatusUpdateBodySchema = external_exports.object({
 var RenameBodySchema = external_exports.object({
   title: external_exports.string().min(1)
 });
+var FeatureOverrideBodySchema = external_exports.discriminatedUnion("action", [
+  external_exports.object({
+    action: external_exports.literal("rename"),
+    groupKey: external_exports.string().min(1).max(120),
+    /** Empty string is allowed and CLEARS the rename (back to the derived label). */
+    title: external_exports.string().max(120)
+  }),
+  external_exports.object({
+    action: external_exports.literal("assign"),
+    artifactId: external_exports.string().min(1).max(120),
+    /** The target group slug, "__ungrouped__", or "" to clear the assignment. */
+    groupKey: external_exports.string().max(120)
+  })
+]);
 var ChangesetReviewBodySchema = external_exports.object({
   filePath: external_exports.string().min(1),
   state: external_exports.enum(["reviewed", "needs_changes"]).nullable(),
@@ -29032,18 +29060,27 @@ function validateLogReasoningInput(args) {
 }
 var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
 var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
+var FEATURE_TAG = external_exports.string().optional().describe("A short, STABLE tag for the feature/milestone this work belongs to (e.g. 'milestone-7', 'auth-rework'). Keep it IDENTICAL across every artifact of the same feature so they group together in the Features view \u2014 match the human's milestone naming if one exists; don't invent a new tag per run.");
 var TOOL_INPUT_SCHEMAS = {
+  // #206 (I1) — `feature` is advertised on EVERY artifact-creating tool (the
+  // whole point of slice 2: tag at the source so grouping recall stops leaking).
+  // Advertisement-only, like servedRequestId — the per-tool validators build
+  // their content from named fields and ignore it; the HANDLER reads args.feature
+  // and threads it to createArtifact, which normalizes + persists featureId.
   present_findings: ResearchContentSchema.extend({
-    title: ARTIFACT_TITLE.optional()
+    title: ARTIFACT_TITLE.optional(),
+    feature: FEATURE_TAG
   }),
   present_options: PresentOptionsInputSchema.extend({
-    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision")
+    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision"),
+    feature: FEATURE_TAG
   }),
-  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
   present_plan: PlanContentSchema.extend({
     title: ARTIFACT_TITLE,
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this plan"),
-    servedRequestId: SERVED_REQUEST_ID
+    servedRequestId: SERVED_REQUEST_ID,
+    feature: FEATURE_TAG
   }),
   present_code_change: CodeChangeContentSchema.extend({
     before: external_exports.string().optional().describe("Code before the change \u2014 omit for created files (server defaults to empty)"),
@@ -29051,22 +29088,23 @@ var TOOL_INPUT_SCHEMAS = {
     // D4 review — the handler consumes this (relatedArtifactIds) but the
     // derived schema stopped advertising it: finding→code-change links died
     // of undiscoverability.
-    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change")
+    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change"),
+    feature: FEATURE_TAG
   }),
   log_reasoning: ReasoningContentSchema,
   // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
   // HUMAN-driven (set via the review route), so they're omitted from the
   // advertised input — the agent never sends them.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
   // servedRequestId linkage (the validator ignores it — it builds its own
   // content object from named fields — so it stays advertisement-only).
-  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID })
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -30147,7 +30185,9 @@ async function handlePresentFindings(ctx, args) {
     id,
     type: "research",
     title: args?.title ?? "Research Findings",
-    content
+    content,
+    // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
@@ -30206,7 +30246,8 @@ async function handlePresentOptions(ctx, args) {
     type: "decision",
     title: context,
     content,
-    relatedArtifactIds: args?.relatedFindings
+    relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
@@ -31101,7 +31142,11 @@ async function handleReviseArtifact(ctx, args) {
       // reference graph doesn't dangle at the SOURCE when v1 is superseded
       // (belt-and-suspenders with the client-side resolveToLiveId in the flow
       // sidebar). Optional field; only set when the old artifact had refs.
-      ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {}
+      ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
+      // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
+      // successor stays in the same feature group by its OWN tag, not only via
+      // the parentId chain. The store re-normalizes (idempotent on a slug).
+      ...old.featureId ? { feature: old.featureId } : {}
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
@@ -31430,7 +31475,8 @@ async function handlePresentSpec(ctx, args) {
     id,
     type: "spec",
     title,
-    content
+    content,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
@@ -31492,7 +31538,8 @@ async function handlePresentPlan(ctx, args) {
     type: "plan",
     title,
     content,
-    relatedArtifactIds: args?.relatedFindings
+    relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await ctx.store.recordPlanReview(id);
@@ -31563,7 +31610,8 @@ async function handlePresentCodeChange(ctx, args) {
     title: `${effectiveChangeType} ${filePath}`,
     content,
     agentReasoning: reasoning,
-    relatedArtifactIds: args?.relatedFindings
+    relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
@@ -31621,7 +31669,8 @@ async function handlePresentChangeset(ctx, args) {
     type: "changeset",
     title,
     content,
-    relatedArtifactIds: args?.relatedFindings
+    relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
@@ -31676,7 +31725,8 @@ async function handlePresentDebrief(ctx, args) {
     type: "debrief",
     title,
     content,
-    relatedArtifactIds: args?.relatedFindings
+    relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_debrief", pre.trace);
@@ -31730,7 +31780,8 @@ async function handlePresentExplainer(ctx, args) {
     type: "explainer",
     title,
     content,
-    relatedArtifactIds
+    relatedArtifactIds,
+    feature: args?.feature
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_explainer", pre.trace);

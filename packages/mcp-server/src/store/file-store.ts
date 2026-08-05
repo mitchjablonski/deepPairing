@@ -10,7 +10,7 @@ import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.j
 import type { ProjectGuardrail } from "./project-signals.js";
 import { computeEngagementMetrics } from "./engagement-metrics.js";
 import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
-import { listSessions, searchAll, listAllDecisions, groupByFeature } from "./session-scan.js";
+import { listSessions, searchAll, listAllDecisions, groupByFeature, normalizeFeatureId } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
@@ -498,8 +498,14 @@ export class FileStore implements IStore {
     relatedArtifactIds?: string[];
     parentId?: string | null;
     version?: number;
+    feature?: string | null;
   }): Artifact {
     const now = new Date().toISOString();
+    // #206 (I1) — normalize the raw feature tag to a stable slug at the single
+    // create choke point (parity with the secret scan below). An empty/
+    // unsluggable tag yields undefined → the field is OMITTED from the stored
+    // artifact, keeping clean JSON byte-identical to pre-#206.
+    const featureId = normalizeFeatureId(params.feature)?.slug;
     // #162 — the store scans AUTHORITATIVELY, mirroring addComment. Pre-#162
     // the tool handlers pre-scanned and passed `secretWarnings` in, and this
     // method trusted the param — so a bearer-authed caller POSTing straight to
@@ -526,6 +532,8 @@ export class FileStore implements IStore {
       // V4/#158 — persist scanner matches ONLY when present so the stored
       // JSON for clean artifacts stays byte-identical to before.
       ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
+      // #206 (I1) — same omit-when-empty discipline for the feature tag.
+      ...(featureId ? { featureId } : {}),
       createdAt: now,
       updatedAt: now,
     };

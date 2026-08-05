@@ -40,6 +40,7 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     type: "spec",
     title,
     content,
+    feature: args?.feature,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb is populated on

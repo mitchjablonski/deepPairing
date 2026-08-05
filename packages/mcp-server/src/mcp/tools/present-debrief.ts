@@ -54,6 +54,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
     title,
     content,
     relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb paints populated.

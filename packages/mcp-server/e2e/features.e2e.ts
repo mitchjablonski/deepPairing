@@ -21,11 +21,14 @@ const SHOTS = process.env.DP203_SHOTS ?? path.join(os.tmpdir(), "dp-203-shots");
 
 let procFull: ChildProcess | undefined;
 let procEmpty: ChildProcess | undefined;
+let procCorr: ChildProcess | undefined;
 let fullRoot: string;
 let emptyRoot: string;
+let corrRoot: string;
 let home: string;
 let fullBase: string;
 let emptyBase: string;
+let corrBase: string;
 
 async function waitForDaemon(root: string): Promise<{ base: string; token: string }> {
   const daemonJson = path.join(root, ".deeppairing", "daemon.json");
@@ -57,69 +60,83 @@ test.beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-203-home-"));
   fullRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-203-full-"));
   emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-203-empty-"));
+  corrRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-206-corr-"));
 
   procFull = bootDaemon(fullRoot);
   procEmpty = bootDaemon(emptyRoot);
+  procCorr = bootDaemon(corrRoot);
   fullBase = (await waitForDaemon(fullRoot)).base;
-  const token = JSON.parse(fs.readFileSync(path.join(fullRoot, ".deeppairing", "daemon.json"), "utf-8")).authToken;
   emptyBase = (await waitForDaemon(emptyRoot)).base;
+  corrBase = (await waitForDaemon(corrRoot)).base;
 
-  const h = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
-  const post = (route: string, body: unknown) =>
-    fetch(`${fullBase}/api/internal/sessions/feat/${route}`, { method: "POST", headers: h, body: JSON.stringify(body) })
-      .then((r) => { if (!r.ok) throw new Error(`seed ${route} failed: ${r.status}`); });
+  const tokenOf = (root: string) =>
+    JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "daemon.json"), "utf-8")).authToken as string;
 
-  await post("register", {});
-  // --- Milestone 6 (two artifacts, shared prefix) ---
-  await post("artifacts", {
-    id: "m6_plan", type: "plan", title: "Milestone 6 — content quota backfill",
-    content: { summary: "Backfill historical quota usage.", steps: [
-      { description: "Backfill job", reasoning: "Historical rows lack usage.", files: ["src/quota.ts"] },
-    ] },
-  });
-  await post("artifacts", {
-    id: "m6_cs", type: "changeset", title: "Milestone 6 — quota backfill changeset",
-    content: { summary: "The backfill implementation.",
-      files: [
-        { path: "src/quota.ts", changeType: "modified", stats: { additions: 12, deletions: 2 },
-          hunks: [{ header: "@@ -1,2 +1,12 @@", lines: [{ kind: "add", content: "// backfill", newLine: 1 }] }] },
-        { path: "src/shared.ts", changeType: "modified", stats: { additions: 1, deletions: 0 },
-          hunks: [{ header: "@@ -5,0 +5,1 @@", lines: [{ kind: "add", content: "export const X = 1;", newLine: 5 }] }] },
+  // The shared feature seed — a Milestone 6 (2 artifacts + an unresolved
+  // decision), a Phase 0, and one plain-titled Ungrouped artifact. Seeded into
+  // BOTH the slice-1 (full) daemon and the #206 corrections daemon.
+  const seed = async (base: string, root: string): Promise<void> => {
+    const h = { "Content-Type": "application/json", Authorization: `Bearer ${tokenOf(root)}` };
+    const post = (route: string, body: unknown) =>
+      fetch(`${base}/api/internal/sessions/feat/${route}`, { method: "POST", headers: h, body: JSON.stringify(body) })
+        .then((r) => { if (!r.ok) throw new Error(`seed ${route} failed: ${r.status}`); });
+
+    await post("register", {});
+    // --- Milestone 6 (two artifacts, shared prefix) ---
+    await post("artifacts", {
+      id: "m6_plan", type: "plan", title: "Milestone 6 — content quota backfill",
+      content: { summary: "Backfill historical quota usage.", steps: [
+        { description: "Backfill job", reasoning: "Historical rows lack usage.", files: ["src/quota.ts"] },
       ] },
-  });
-  // An unresolved decision in Milestone 6 → an OPEN ITEM.
-  await post("artifacts", {
-    id: "m6_dec", type: "decision", title: "Milestone 6 — backfill batch size?",
-    content: { context: "How large a backfill batch?", decisionId: "d_m6", stakes: "medium",
+    });
+    await post("artifacts", {
+      id: "m6_cs", type: "changeset", title: "Milestone 6 — quota backfill changeset",
+      content: { summary: "The backfill implementation.",
+        files: [
+          { path: "src/quota.ts", changeType: "modified", stats: { additions: 12, deletions: 2 },
+            hunks: [{ header: "@@ -1,2 +1,12 @@", lines: [{ kind: "add", content: "// backfill", newLine: 1 }] }] },
+          { path: "src/shared.ts", changeType: "modified", stats: { additions: 1, deletions: 0 },
+            hunks: [{ header: "@@ -5,0 +5,1 @@", lines: [{ kind: "add", content: "export const X = 1;", newLine: 5 }] }] },
+        ] },
+    });
+    // An unresolved decision in Milestone 6 → an OPEN ITEM.
+    await post("artifacts", {
+      id: "m6_dec", type: "decision", title: "Milestone 6 — backfill batch size?",
+      content: { context: "How large a backfill batch?", decisionId: "d_m6", stakes: "medium",
+        options: [
+          { id: "a", title: "500 rows", description: "small", pros: ["safe"], cons: ["slow"], effort: "low", risk: "low", recommendation: true },
+          { id: "b", title: "5000 rows", description: "big", pros: ["fast"], cons: ["lock"], effort: "low", risk: "med", recommendation: false },
+        ] },
+    });
+    await post("decisions", {
+      decisionId: "d_m6", artifactId: "m6_dec", context: "How large a backfill batch?", stakes: "medium",
       options: [
         { id: "a", title: "500 rows", description: "small", pros: ["safe"], cons: ["slow"], effort: "low", risk: "low", recommendation: true },
         { id: "b", title: "5000 rows", description: "big", pros: ["fast"], cons: ["lock"], effort: "low", risk: "med", recommendation: false },
-      ] },
-  });
-  await post("decisions", {
-    decisionId: "d_m6", artifactId: "m6_dec", context: "How large a backfill batch?", stakes: "medium",
-    options: [
-      { id: "a", title: "500 rows", description: "small", pros: ["safe"], cons: ["slow"], effort: "low", risk: "low", recommendation: true },
-      { id: "b", title: "5000 rows", description: "big", pros: ["fast"], cons: ["lock"], effort: "low", risk: "med", recommendation: false },
-    ],
-  });
-  // --- Phase 0 (a second feature, also touches src/shared.ts → cross-group) ---
-  await post("artifacts", {
-    id: "p0_cc", type: "code_change", title: "Phase 0 — bootstrap the config loader",
-    content: { filePath: "src/shared.ts", changeType: "modify",
-      before: "export const X = 0;", after: "export const X = 1;", reasoning: "Bootstrap config." },
-  });
-  // --- A plain-titled artifact → the Ungrouped bucket ---
-  await post("artifacts", {
-    id: "loose", type: "plan", title: "Refactor the crawler retry loop",
-    content: { summary: "Unrelated cleanup.", steps: [{ description: "Cap retries", reasoning: "Avoid runaway.", files: ["src/crawl.ts"] }] },
-  });
+      ],
+    });
+    // --- Phase 0 (a second feature, also touches src/shared.ts → cross-group) ---
+    await post("artifacts", {
+      id: "p0_cc", type: "code_change", title: "Phase 0 — bootstrap the config loader",
+      content: { filePath: "src/shared.ts", changeType: "modify",
+        before: "export const X = 0;", after: "export const X = 1;", reasoning: "Bootstrap config." },
+    });
+    // --- A plain-titled artifact → the Ungrouped bucket ---
+    await post("artifacts", {
+      id: "loose", type: "plan", title: "Refactor the crawler retry loop",
+      content: { summary: "Unrelated cleanup.", steps: [{ description: "Cap retries", reasoning: "Avoid runaway.", files: ["src/crawl.ts"] }] },
+    });
+  };
+
+  await seed(fullBase, fullRoot);
+  await seed(corrBase, corrRoot);
 });
 
 test.afterAll(async () => {
   await teardownDaemon(procFull, portOf(fullBase));
   await teardownDaemon(procEmpty, portOf(emptyBase));
-  for (const dir of [fullRoot, emptyRoot, home]) {
+  await teardownDaemon(procCorr, portOf(corrBase));
+  for (const dir of [fullRoot, emptyRoot, corrRoot, home]) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 });
@@ -135,11 +152,12 @@ test("#203 — the Features view groups artifacts, Ungrouped last, with open ite
   await openFeatures(page, fullBase, "feat");
   const view = page.locator('[data-testid="features-view"]');
 
-  // Two named features + the Ungrouped bucket (exact — the group TITLE, not the
-  // "Milestone 6 — …" timeline rows that contain it as a substring).
-  await expect(view.getByText("Milestone 6", { exact: true })).toBeVisible();
-  await expect(view.getByText("Phase 0", { exact: true })).toBeVisible();
-  await expect(view.getByText("Ungrouped", { exact: true })).toBeVisible();
+  // Two named features + the Ungrouped bucket (exact group TITLE, scoped to its
+  // own group container — #206's per-row "move to feature…" select lists OTHER
+  // groups' titles as <option>s, so an un-scoped exact-text match is ambiguous).
+  await expect(view.locator('[data-feature-group="milestone-6"]').getByText("Milestone 6", { exact: true })).toBeVisible();
+  await expect(view.locator('[data-feature-group="phase-0"]').getByText("Phase 0", { exact: true })).toBeVisible();
+  await expect(view.locator('[data-feature-group="__ungrouped__"]').getByText("Ungrouped", { exact: true })).toBeVisible();
 
   // Milestone 6 is expanded by default → its timeline artifacts are visible.
   await expect(view.getByText("Milestone 6 — content quota backfill")).toBeVisible();
@@ -166,7 +184,9 @@ test("#203 — light theme renders the Features view legibly", async ({ page }) 
   await page.setViewportSize({ width: 1440, height: 950 });
   await openFeatures(page, fullBase, "feat");
   expect(await page.locator("html").getAttribute("data-theme")).toBe("light");
-  await expect(page.locator('[data-testid="features-view"]').getByText("Milestone 6", { exact: true })).toBeVisible();
+  await expect(
+    page.locator('[data-testid="features-view"] [data-feature-group="milestone-6"]').getByText("Milestone 6", { exact: true }),
+  ).toBeVisible();
   await page.screenshot({ path: path.join(SHOTS, "features-populated-light.png") });
 });
 
@@ -178,4 +198,60 @@ test("#203 — empty project shows the honest empty state", async ({ page }) => 
   await view.waitFor({ timeout: 15000 });
   await expect(view.getByText(/no features yet/i)).toBeVisible();
   await page.screenshot({ path: path.join(SHOTS, "features-empty.png") });
+});
+
+// #206 (I1) — the human corrections: RENAME a group + MOVE an artifact. Runs on
+// a SEPARATE seeded daemon (procCorr) so its persisted overrides can't perturb
+// the slice-1 tests above. SERIAL: the light-theme test observes the rename the
+// first test persisted, so they must not run in parallel. Exact group-TITLE
+// assertions are scoped to the group container (the per-row move-select lists
+// other groups' titles as <option>s).
+test.describe.serial("#206 — human corrections", () => {
+  test("rename a feature and move an artifact, persisted (dark theme)", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await openFeatures(page, corrBase, "feat");
+    const view = page.locator('[data-testid="features-view"]');
+    const m6 = view.locator('[data-feature-group="milestone-6"]');
+
+    // --- RENAME Milestone 6 → "Quota backfill" ---
+    await m6.locator("[data-feature-rename]").click();
+    const input = view.locator("[data-feature-rename-input]");
+    await input.fill("Quota backfill");
+    await input.press("Enter");
+    await expect(m6.getByText("Quota backfill", { exact: true })).toBeVisible();
+    // The rename is authoritative — a reload re-reads it from disk (persistence).
+    await page.reload();
+    await page.getByRole("button", { name: /open features view/i }).click();
+    await page.waitForSelector('[data-testid="features-view"]', { timeout: 15000 });
+    await expect(
+      view.locator('[data-feature-group="milestone-6"]').getByText("Quota backfill", { exact: true }),
+    ).toBeVisible();
+    await page.screenshot({ path: path.join(SHOTS, "features-renamed-dark.png") });
+
+    // --- MOVE a Milestone 6 timeline artifact into Phase 0 ---
+    const renamed = view.locator('[data-feature-group="milestone-6"]');
+    await renamed.locator("[data-feature-move]").first().selectOption({ label: "Phase 0" });
+    // It now lives under Phase 0 (expanded by default), and the corrections
+    // footnote is stated in-UI.
+    const phase0 = view.locator('[data-feature-group="phase-0"]');
+    await expect(phase0.locator("[data-feature-artifact]")).toHaveCount(2);
+    await expect(view.getByText(/feature tags the agent stamps/i)).toBeVisible();
+    await page.screenshot({ path: path.join(SHOTS, "features-moved-dark.png") });
+  });
+
+  test("corrections view renders legibly (light theme)", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await openFeatures(page, corrBase, "feat");
+    const view = page.locator('[data-testid="features-view"]');
+    expect(await page.locator("html").getAttribute("data-theme")).toBe("light");
+    // The rename persisted from the previous test is visible here too.
+    await expect(
+      view.locator('[data-feature-group="milestone-6"]').getByText("Quota backfill", { exact: true }),
+    ).toBeVisible();
+    // Exercise the rename input's light-theme styling.
+    await view.locator('[data-feature-group="milestone-6"] [data-feature-rename]').click();
+    await expect(view.locator("[data-feature-rename-input]")).toBeVisible();
+    await page.screenshot({ path: path.join(SHOTS, "features-corrections-light.png") });
+  });
 });

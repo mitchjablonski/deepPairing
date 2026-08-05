@@ -66,6 +66,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     content,
     agentReasoning: reasoning,
     relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb is populated on

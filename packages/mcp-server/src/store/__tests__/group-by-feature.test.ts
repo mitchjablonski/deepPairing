@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { normalizeFeaturePrefix, groupByFeature } from "../session-scan.js";
+import { normalizeFeaturePrefix, normalizeFeatureId, groupByFeature } from "../session-scan.js";
 
 let tmpDir: string;
 
@@ -43,6 +43,7 @@ function art(o: {
   parentId?: string | null;
   createdAt?: string;
   content?: Record<string, unknown>;
+  featureId?: string;
 }): Record<string, unknown> {
   return {
     id: o.id,
@@ -54,6 +55,7 @@ function art(o: {
     status: o.status ?? "draft",
     content: o.content ?? {},
     agentReasoning: null,
+    ...(o.featureId ? { featureId: o.featureId } : {}),
     createdAt: o.createdAt ?? "2026-01-01T00:00:00.000Z",
     updatedAt: o.createdAt ?? "2026-01-01T00:00:00.000Z",
   };
@@ -293,6 +295,125 @@ describe("groupByFeature — aggregates", () => {
     expect(m6.fileTouches.map((f) => f.path)).toEqual(["src/a.ts", "src/b.ts"]); // deduped + sorted
     expect(m6.fileTouches.find((f) => f.path === "src/a.ts")!.alsoIn).toEqual(["Phase 9"]);
     expect(m6.fileTouches.find((f) => f.path === "src/b.ts")!.alsoIn).toEqual([]);
+  });
+});
+
+describe("normalizeFeatureId — the agent-tag → group-key normalizer (#206 I1)", () => {
+  it("routes a raw milestone tag through the SAME key the title miner produces", () => {
+    // The convergence property, at the unit level: every spelling of the tag
+    // and the equivalent TITLE prefix collapse to one key + label.
+    expect(normalizeFeatureId("Milestone 7")).toEqual({ slug: "milestone-7", label: "Milestone 7" });
+    expect(normalizeFeatureId("milestone-7")).toEqual({ slug: "milestone-7", label: "Milestone 7" });
+    expect(normalizeFeatureId("M7")).toEqual({ slug: "milestone-7", label: "Milestone 7" });
+    expect(normalizeFeaturePrefix("Milestone 7 — backfill")!.slug).toBe("milestone-7");
+  });
+  it("slugifies a free-form tag and is idempotent on its own slug", () => {
+    expect(normalizeFeatureId("Auth Rework")).toEqual({ slug: "auth-rework", label: "Auth Rework" });
+    expect(normalizeFeatureId("auth-rework")!.slug).toBe("auth-rework");
+    // Idempotent: feeding the slug back yields the same slug.
+    const once = normalizeFeatureId("Auth Rework")!.slug;
+    expect(normalizeFeatureId(once)!.slug).toBe(once);
+  });
+  it("returns null for an empty / unsluggable tag", () => {
+    expect(normalizeFeatureId("")).toBeNull();
+    expect(normalizeFeatureId("   ")).toBeNull();
+    expect(normalizeFeatureId("!!!")).toBeNull();
+    expect(normalizeFeatureId(undefined)).toBeNull();
+  });
+});
+
+describe("groupByFeature — explicit featureId tag + precedence (#206 I1)", () => {
+  it("CONVERGENCE: an agent-tagged 'milestone-7' artifact groups WITH a 'Milestone 7 — x'-TITLED one", () => {
+    writeSession("s1", [
+      // Title carries no prefix, but the agent stamped the tag.
+      art({ id: "tagged", title: "backfill the quota table", featureId: "milestone-7", createdAt: "2026-01-01T01:00:00.000Z" }),
+      // Title-prefix only, no tag.
+      art({ id: "titled", title: "Milestone 7 — retry ceiling", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    const m7 = groups.find((g) => g.id === "milestone-7")!;
+    expect(m7.title).toBe("Milestone 7");
+    expect(m7.artifactRefs.map((r) => r.artifactId).sort()).toEqual(["tagged", "titled"]);
+    // No stray group split them.
+    expect(groups.filter((g) => g.id.startsWith("milestone-7")).length).toBe(1);
+  });
+
+  it("a raw 'Milestone 7' tag normalizes to the same key as the miner", () => {
+    writeSession("s1", [
+      art({ id: "raw", title: "plain title", featureId: "Milestone 7" }),
+      art({ id: "titled", title: "Milestone 7 — x" }),
+    ]);
+    const m7 = groupByFeature(tmpDir).groups.find((g) => g.id === "milestone-7")!;
+    expect(m7.artifactCount).toBe(2);
+  });
+
+  it("explicit featureId BEATS an inherited parent group (explicit beats chain)", () => {
+    writeSession("s1", [
+      art({ id: "v1", title: "Milestone 6 — root", status: "superseded", createdAt: "2026-01-01T01:00:00.000Z" }),
+      // Child chains to v1 (Milestone 6) BUT carries its own explicit tag.
+      art({ id: "v2", title: "retitled work", parentId: "v1", featureId: "milestone-8", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    // v2 keeps its OWN tag, not the parent's group.
+    expect(groups.find((g) => g.id === "milestone-8")!.artifactRefs.map((r) => r.artifactId)).toEqual(["v2"]);
+    expect(groups.find((g) => g.id === "milestone-6")!.artifactRefs.map((r) => r.artifactId)).toEqual(["v1"]);
+  });
+
+  it("an agent-only tag with no title prefix gets a de-slugged display label", () => {
+    writeSession("s1", [art({ id: "a1", title: "no prefix here", featureId: "auth-rework" })]);
+    const g = groupByFeature(tmpDir).groups.find((x) => x.id === "auth-rework")!;
+    expect(g.title).toBe("Auth Rework");
+  });
+});
+
+describe("groupByFeature — human overrides (#206 I1)", () => {
+  it("a human MOVE beats an explicit featureId (top precedence)", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "tagged work", featureId: "milestone-7", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "target", title: "Milestone 9 — home", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    // Without the override, a1 is in milestone-7.
+    const before = groupByFeature(tmpDir).groups.find((g) => g.id === "milestone-7")!;
+    expect(before.artifactRefs.map((r) => r.artifactId)).toEqual(["a1"]);
+    // The human moves a1 into milestone-9 — it beats the explicit tag.
+    const { groups } = groupByFeature(tmpDir, { artifactAssignments: { a1: "milestone-9" } });
+    expect(groups.find((g) => g.id === "milestone-9")!.artifactRefs.map((r) => r.artifactId).sort()).toEqual(["a1", "target"]);
+    expect(groups.find((g) => g.id === "milestone-7")).toBeUndefined();
+  });
+
+  it("a human move to __ungrouped__ pulls a tagged artifact OUT of its feature", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Milestone 6 — x", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "a2", title: "Milestone 6 — y", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir, { artifactAssignments: { a1: "__ungrouped__" } });
+    expect(groups.find((g) => g.id === "milestone-6")!.artifactRefs.map((r) => r.artifactId)).toEqual(["a2"]);
+    expect(groups.at(-1)!.id).toBe("__ungrouped__");
+    expect(groups.at(-1)!.artifactRefs.map((r) => r.artifactId)).toEqual(["a1"]);
+  });
+
+  it("a human RENAME overrides the derived group title", () => {
+    writeSession("s1", [art({ id: "a1", title: "Milestone 6 — x" })]);
+    const { groups } = groupByFeature(tmpDir, { groupTitles: { "milestone-6": "Quota backfill" } });
+    expect(groups.find((g) => g.id === "milestone-6")!.title).toBe("Quota backfill");
+  });
+
+  it("a move onto a brand-new key creates the group (de-slugged label)", () => {
+    writeSession("s1", [art({ id: "a1", title: "loose end" })]);
+    const { groups } = groupByFeature(tmpDir, { artifactAssignments: { a1: "hotfix-lane" } });
+    const g = groups.find((x) => x.id === "hotfix-lane")!;
+    expect(g.title).toBe("Hotfix Lane");
+    expect(g.artifactRefs.map((r) => r.artifactId)).toEqual(["a1"]);
+  });
+
+  it("a child inherits its moved parent's group through the chain", () => {
+    writeSession("s1", [
+      art({ id: "p", title: "loose parent", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "c", title: "child of loose parent", parentId: "p", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir, { artifactAssignments: { p: "milestone-3" } });
+    // p was moved; c chains to p and inherits milestone-3.
+    expect(groups.find((g) => g.id === "milestone-3")!.artifactRefs.map((r) => r.artifactId).sort()).toEqual(["c", "p"]);
   });
 });
 
