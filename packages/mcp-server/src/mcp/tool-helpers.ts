@@ -310,6 +310,29 @@ export async function getPassiveFeedback(store: IStore): Promise<string> {
 }
 
 /**
+ * G1 (#198b) — when a present_* call carries a `servedRequestId`, link the
+ * freshly-created artifact to the human's request so the composer flips it to a
+ * served state and it drops out of the pending obligations. Best-effort +
+ * fire-and-forget: a bad/absent id (or a store that predates requests) is a
+ * silent no-op — serving an artifact must never fail because the link didn't
+ * land. Returns a short confirmation suffix for the tool's text result (or "").
+ */
+export async function linkServedRequest(
+  store: IStore,
+  args: Record<string, unknown> | null | undefined,
+  artifactId: string,
+): Promise<string> {
+  const servedRequestId = (args as { servedRequestId?: unknown } | null | undefined)?.servedRequestId;
+  if (typeof servedRequestId !== "string" || servedRequestId.length === 0) return "";
+  try {
+    await store.markRequestServed?.(servedRequestId, artifactId);
+    return ` Linked to request ${servedRequestId}.`;
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Near-duplicate revision nudge. The agent tends to RE-POST a fresh present_*
  * when it's actually revising an artifact it already presented — which orphans
  * the thread and skips the revision diff (the human never sees what changed).

@@ -1,6 +1,6 @@
 ---
 name: pairing-protocol
-description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_changeset, present_code_change, present_debrief, present_explainer, log_reasoning, recall, revise_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
+description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_changeset, present_code_change, present_debrief, present_explainer, log_reasoning, recall, revise_artifact, withdraw_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
 ---
 
 # deepPairing Collaboration Protocol
@@ -186,6 +186,14 @@ Two rhythms, and they're different:
   - `mode: "obsolete"` → marks it overcome by new information — it was valid
     but the discussion moved past it. Use when you've moved on, so it leaves
     the human's review queue.
+- **`withdraw_artifact`** — retract your OWN still-`draft` artifact with a
+  one-line reason ("this shouldn't stand — I framed it wrong"). A focused
+  take-it-back verb: use it when you want the draft GONE with no replacement
+  (for a replacement, `revise_artifact` mode `"supersede"` instead; it's close
+  to `mode: "retract"` but single-purpose and guarded). It is REFUSED if the
+  draft has unanswered human questions or unread comments — **never use it to
+  dodge review**; answer the feedback first (`check_feedback` → `answer_question`),
+  then withdraw. Sets status "retracted"; nothing is written to the ledger.
 - **`recall`** — unified memory lookup:
   - `mode: "philosophy"` — the user's cross-project stances on concepts
     (avoid / prefer / mixed). Use before proposing when a concept comes up
@@ -242,6 +250,31 @@ Run this pattern:
 
 The human never needs to know the tool names. The outcome is:
 *pair on the PR → post what you both landed on*.
+
+## Debugging & incident cadence
+
+Debugging is a HIGH-TEMPO loop, and most of it is FREE — do it in the
+terminal, not on the review surface. The failure mode to avoid is a card per
+hypothesis (the reasoning-card death: agent-pushed notes nobody reads).
+
+- **Probe, hypothesize, and bisect FREELY in the terminal.** Read logs, add a
+  print, `git bisect`, form and discard theories — this is your own working
+  memory, not your pair's review queue. Do NOT `present_findings` for each
+  hunch or `log_reasoning` every step. Nothing lands on the UI here.
+- **`present_findings` at the ROOT-CAUSE-CONFIRMED moment.** Once you've
+  actually pinned WHY it breaks, write it up ONCE — one evidence-anchored
+  finding (filePath + lineStart + lineEnd + snippet + explanation) — so your
+  pair confirms the diagnosis *before* a fix rides on it. This is the single
+  card the whole investigation earns.
+- **The fix choice gates as usual.** Two-plus valid fixes → `present_options`
+  so the human picks the tradeoff. A destructive or irreversible fix (a data
+  migration, a `DROP`, a force-push, anything you can't cleanly undo) escalates
+  for approval **even in autonomous mode** — the autonomy floor already enforces
+  this; do not self-approve past it.
+- **Close with `present_debrief`.** When the incident wraps: what broke, why
+  (the root cause), what changed (the fix), and what still needs eyes
+  (follow-ups, monitoring, the risk you're accepting). One debrief, not a
+  scatter of code_change cards.
 
 ## Polling, not blocking
 

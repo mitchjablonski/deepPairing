@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentDebriefInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -75,6 +75,8 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   // Steer re-posts toward revise_artifact when a live debrief with a similar
   // title already exists (a revision that should supersede, not re-post).
   const nudge = await revisionNudge(ctx.store, "debrief", title, id);
+  // G1 (#198b) — link a served request if the agent named one.
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const sectionCount = sections?.length ?? 0;
   const eyesCount = needsYourEyes?.length ?? 0;
   return {
@@ -84,7 +86,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
         `Debrief "${artifact.title}" presented for review (${id}) — ${sectionCount} section${sectionCount === 1 ? "" : "s"}` +
         `${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. ` +
         `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. ` +
-        `Call check_feedback for their questions, comments, and verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions, comments, and verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

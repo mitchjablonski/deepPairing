@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Artifact, Comment, ArtifactStatus, CommentSuggestion } from "@deeppairing/shared";
+import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
 
@@ -302,6 +302,18 @@ export interface ArtifactState {
     title?: string,
   ) => Promise<void>;
 
+  /**
+   * G1 (#198b) — human-initiated REQUESTS (the request composer). `requests`
+   * hydrates from full state + WS; `submitRequest` posts a composed request
+   * (optimistic add); `applyRequestServed` flips a request to served on the WS
+   * `request_served` event. A Record isn't needed — requests are session-scoped
+   * and few, so a flat array (like the render-failure telemetry) is simplest.
+   */
+  requests: Request[];
+  setRequests: (requests: Request[]) => void;
+  submitRequest: (text: string, intent: RequestIntent) => Promise<Request>;
+  applyRequestServed: (requestId: string, artifactId: string) => void;
+
   /** F6 — the session that owns an artifact (merged stores carry foreign artifacts). */
   owningSession: (artifactId: string) => string | undefined;
   /** F6 — the decision artifact carrying a decisionId (or the artifact-id fallback). */
@@ -484,6 +496,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   unreadIds: [],
   acknowledgedDecisions: {},
   resolvedDecisions: {},
+  requests: [],
 
   // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
   // visibly increased its count over time while the user just sat on the
@@ -617,6 +630,51 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   // never received the POST — the agent kept polling check_feedback
   // forever. Now every silent failure surfaces as an error toast so the
   // user can react (re-try, run doctor, restart Claude Code, etc).
+
+  // G1 (#198b) — requests.
+  setRequests: (requests) => set({ requests }),
+
+  applyRequestServed: (requestId, artifactId) =>
+    set((state) => ({
+      requests: state.requests.map((r) => (r.id === requestId ? { ...r, servedByArtifactId: artifactId } : r)),
+    })),
+
+  submitRequest: async (text, intent) => {
+    assertNotReplay("Sending a request");
+    // Optimistic: show the request immediately (it also arrives over the
+    // request_added WS broadcast; reconcile swaps the provisional for the
+    // server-id'd record, and addRequest-by-id dedupe collapses the echo).
+    const provisional: Request = {
+      id: `local_req_${Date.now().toString(36)}`,
+      text,
+      intent,
+      createdAt: new Date().toISOString(),
+    };
+    set((state) => ({ requests: [...state.requests, provisional] }));
+    try {
+      const res = await safeFetch(`${apiBase()}/api/requests`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ text, intent }),
+      });
+      let serverRequest: Request | null = null;
+      try { serverRequest = (await res.json())?.request ?? null; } catch { /* keep provisional */ }
+      set((state) => {
+        const withoutProvisional = state.requests.filter((r) => r.id !== provisional.id);
+        const next =
+          serverRequest && !withoutProvisional.some((r) => r.id === serverRequest!.id)
+            ? [...withoutProvisional, serverRequest]
+            : withoutProvisional;
+        return { requests: next };
+      });
+      return serverRequest ?? provisional;
+    } catch (err) {
+      // Roll back only the provisional.
+      set((state) => ({ requests: state.requests.filter((r) => r.id !== provisional.id) }));
+      await toastApiError("Send request", err);
+      throw err;
+    }
+  },
 
   submitComment: async (artifactId, content, target, options) => {
     assertNotReplay("Commenting");
@@ -1003,7 +1061,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     }
   },
 
-  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {} }),
+  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] }),
 
   markDecisionsAcknowledged: (decisionIds) =>
     set((s) => {

@@ -16,6 +16,8 @@ import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKe
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../LineComments";
+import { partitionSuggestions } from "../CommentableCode";
+import { SuggestionCard } from "../SuggestionCard";
 
 /**
  * #171 / #175 — ChangesetArtifact: a change spanning 2+ files reviewed as ONE
@@ -42,6 +44,61 @@ import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../Li
  *  bucket. Kept in ONE place so bucketing, lookup, and the composer agree. */
 function sideLineKey(side: "old" | "new", line: number): string {
   return `${side}:${line}`;
+}
+
+/**
+ * G1 (#198a) — a changeset diff row's feedback, mirroring CodeChangeArtifact's
+ * `LineFeedback`: split the line's comments into suggested-edit CARDS (rendered
+ * by SuggestionCard, with their agent/human replies pulled in) vs plain comment
+ * chips. Before this the changeset dumped ALL of a line's comments straight into
+ * LineCommentChips, so a posted suggestion lost its state pill, mini-diff and
+ * take-counter/insist negotiation row — the #199 machinery was orphaned on the
+ * secondary surface v0.1.22 made the default. Suggestion cards render ALWAYS
+ * (even while the composer is open); only the plain chips hide when `hideChips`.
+ * `side` flows through to the chips so an old-side (removed-line) anchor keeps
+ * its own bucket; SuggestionCard reads `filePath` for its location header.
+ */
+function ChangesetLineFeedback({
+  lineComments,
+  anchorLine,
+  anchorSide,
+  artifactId,
+  filePath,
+  hideChips,
+  onOpenLine,
+}: {
+  lineComments: Comment[];
+  anchorLine: number;
+  anchorSide: "old" | "new";
+  artifactId: string;
+  filePath: string;
+  hideChips: boolean;
+  onOpenLine: () => void;
+}) {
+  const { suggestions, repliesBySuggestion, chips } = partitionSuggestions(lineComments);
+  return (
+    <>
+      {suggestions.length > 0 && (
+        <div className="ml-[5.5rem] mr-3 my-1.5 space-y-2">
+          {suggestions.map((sc) => (
+            <SuggestionCard key={sc.id} comment={sc} replies={repliesBySuggestion[sc.id] ?? []} filePath={filePath} />
+          ))}
+        </div>
+      )}
+      {chips.length > 0 && !hideChips && (
+        <div className="ml-[5.5rem] mr-3 my-1">
+          <LineCommentChips
+            lineNum={anchorLine}
+            comments={chips}
+            artifactId={artifactId}
+            filePath={filePath}
+            side={anchorSide}
+            onOpenLine={onOpenLine}
+          />
+        </div>
+      )}
+    </>
+  );
 }
 
 const changeMark: Record<ChangesetFile["changeType"], { letter: string; cls: string; label: string }> = {
@@ -496,17 +553,16 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                       </span>
                     )}
                   </div>
-                  {commentable && lineComments.length > 0 && !isActive && (
-                    <div className="ml-[5.5rem] mr-3 my-1">
-                      <LineCommentChips
-                        lineNum={anchorLine!}
-                        comments={lineComments}
-                        artifactId={artifact.id}
-                        filePath={file.path}
-                        side={anchorSide}
-                        onOpenLine={() => { setActiveAnchor({ path: file.path, line: anchorLine!, side: anchorSide }); setMode("comment"); }}
-                      />
-                    </div>
+                  {commentable && lineComments.length > 0 && (
+                    <ChangesetLineFeedback
+                      lineComments={lineComments}
+                      anchorLine={anchorLine!}
+                      anchorSide={anchorSide}
+                      artifactId={artifact.id}
+                      filePath={file.path}
+                      hideChips={!!isActive}
+                      onOpenLine={() => { setActiveAnchor({ path: file.path, line: anchorLine!, side: anchorSide }); setMode("comment"); }}
+                    />
                   )}
                   {isActive && (
                     <LineComposer

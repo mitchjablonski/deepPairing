@@ -650,6 +650,25 @@ export function createDaemonRoutes(
     return c.json({ comment: comment ?? null });
   });
 
+  // G1 (#198b) — the agent links a fulfilling artifact to a human REQUEST. The
+  // present_* tools reach here via DaemonClient.markRequestServed. No content
+  // beyond the artifact id; the request record's servedByArtifactId is set so
+  // the composer flips the request to a served state and it drops out of the
+  // pending obligations.
+  app.post("/api/internal/sessions/:sessionId/requests/:requestId/served", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { artifactId } = parsed.body as { artifactId?: string };
+    if (typeof artifactId !== "string" || artifactId.length === 0) {
+      return c.json({ error: "artifactId is required", code: "validation_error" }, 400);
+    }
+    r.store.markRequestServed?.(c.req.param("requestId"), artifactId);
+    broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
+    return c.json({ status: "served" });
+  });
+
   // F1 — sink for metric events the MCP server knows about but the daemon's
   // broadcast-tap can't see (the wrapper's broadcast is a no-op in standalone).
   // Today: real pre-flight blocks (the demo's synthetic block is daemon-side and

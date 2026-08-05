@@ -99,8 +99,10 @@ export {
   PromptBodySchema,
   SuggestionResolveBodySchema,
   SuggestionUpdateBodySchema,
+  CreateRequestBodySchema,
   formatZodIssues,
   type CommentBody,
+  type CreateRequestBody,
   type SuggestionResolveBody,
   type SuggestionUpdateBody,
   type DecisionResolveBody,
@@ -259,3 +261,11 @@ export {
   type Thread,
   type UnansweredQuestion,
 } from "./unanswered.js";
+
+export {
+  RequestIntentSchema,
+  RequestSchema,
+  describeRequestIntent,
+  type RequestIntent,
+  type Request,
+} from "./schemas/request.js";

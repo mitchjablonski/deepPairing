@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -68,16 +68,18 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   // Steer re-posts toward revise_artifact: if a live plan with a similar title
   // already exists, this is probably a revision that should supersede it.
   const nudge = await revisionNudge(ctx.store, "plan", title, id);
+  // G1 (#198b) — link a served request if the agent named one.
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   if (elicitAction === "approve") {
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     await ctx.store.resolvePlanReview(id, "approved");
     return {
-      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${ctx.port}. Call check_feedback for their verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${ctx.port}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

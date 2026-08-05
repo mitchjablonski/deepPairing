@@ -23748,7 +23748,29 @@ function coerceExplainerContent(raw2) {
   return out;
 }
 
+// ../shared/dist/schemas/request.js
+var RequestIntentSchema = external_exports.enum(["explain", "plan", "status"]);
+var RequestSchema = external_exports.object({
+  id: external_exports.string(),
+  /** The human's free text (the fill-in for the preset, e.g. "the auth middleware"). */
+  text: external_exports.string().min(1),
+  /** Which preset the human chose — drives the artifact type the agent serves with. */
+  intent: RequestIntentSchema,
+  createdAt: external_exports.string().datetime(),
+  /**
+   * Set when the agent links a fulfilling artifact (via the present_* tools'
+   * optional `servedRequestId` param). Absent = unserved (the agent still owes
+   * a response). Optional for backward compatibility (project rule: all new
+   * fields optional) — an old stored request without it loads unchanged.
+   */
+  servedByArtifactId: external_exports.string().optional()
+});
+
 // ../shared/dist/schemas/request-bodies.js
+var CreateRequestBodySchema = external_exports.object({
+  text: external_exports.string().min(1).max(2e3),
+  intent: RequestIntentSchema
+});
 var CommentBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
   content: external_exports.string().min(1),
@@ -25161,6 +25183,10 @@ var FileStore = class _FileStore {
   // (artifactId, visualId). Backed by render-failures.json (written only when
   // non-empty, like metrics.json), so a clean session's dir is byte-unchanged.
   renderFailures = [];
+  // G1 (#198b) — human-initiated REQUESTS to the agent, backed by requests.json
+  // (written only when non-empty, like render-failures.json). Session-scoped and
+  // reloaded across runs so a request survives a daemon restart.
+  requests = [];
   flushTimer = null;
   sessionId;
   /**
@@ -25296,6 +25322,11 @@ var FileStore = class _FileStore {
       keyedFailures,
       "__key"
     ).map(({ __key, ...r }) => r);
+    this.requests = _FileStore.salvageArray(
+      `${this.sessionId}:requests.json`,
+      this.loadJsonFile(path8.join(dir, "requests.json"), []),
+      "id"
+    );
     const rawMetrics = this.loadJsonFile(path8.join(dir, "metrics.json"), []);
     if (Array.isArray(rawMetrics)) {
       const kept = rawMetrics.filter(
@@ -25469,6 +25500,9 @@ var FileStore = class _FileStore {
     }
     if (this.renderFailures.length > 0) {
       this.atomicWrite(path8.join(dir, "render-failures.json"), this.renderFailures);
+    }
+    if (this.requests.length > 0) {
+      this.atomicWrite(path8.join(dir, "requests.json"), this.requests);
     }
   }
   /** Force an immediate flush — call before process exit */
@@ -25901,6 +25935,38 @@ var FileStore = class _FileStore {
         r.acknowledged = true;
       }
     }
+    this.scheduleFlush();
+  }
+  // --- G1 (#198b) — human-initiated requests ------------------------------
+  /** Persist a human-composed request. `notifyFeedbackWaiters` wakes a live
+   *  agent's check_feedback long-poll exactly like a new human comment does. */
+  addRequest(params) {
+    const request = {
+      id: `req_${nanoid3(10)}`,
+      text: params.text,
+      intent: params.intent,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    this.requests.push(request);
+    this.scheduleFlush();
+    this.notifyFeedbackWaiters();
+    return request;
+  }
+  getRequests() {
+    return this.requests;
+  }
+  /** Unserved requests — the agent still owes a response (drives the check_feedback
+   *  priority line + the first-call obligations inventory + the composer's
+   *  unserved badge). */
+  getPendingRequests() {
+    return this.requests.filter((r) => !r.servedByArtifactId);
+  }
+  /** Link a request to the artifact that fulfilled it (idempotent — a re-serve
+   *  updates the link). No-op when the id isn't found. */
+  markRequestServed(requestId, artifactId) {
+    const req = this.requests.find((r) => r.id === requestId);
+    if (!req) return;
+    req.servedByArtifactId = artifactId;
     this.scheduleFlush();
   }
   /** #176 — drop every render-failure record for a superseded artifact id. A
@@ -26409,6 +26475,11 @@ var FileStore = class _FileStore {
       comments: this.comments,
       decisions: Array.from(this.decisions.values()),
       planReviews: Array.from(this.planReviews.values()),
+      // G1 (#198b) — requests ride the full-state hydration so the web UI and
+      // the agent surfaces (check_feedback carryover, first-call obligations)
+      // read them the same way. Empty by default → byte-compatible for sessions
+      // that never used the composer.
+      requests: this.requests,
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
       sessionMemory: this.getSessionMemory(),
@@ -27462,7 +27533,10 @@ var EMPTY_STATE = {
   autonomyLevel: "supervised",
   detailDensity: "rich",
   rejectedApproaches: [],
-  approvedPatterns: []
+  approvedPatterns: [],
+  // G1 (#198b) — requests ride the empty state so a no-session UI reads a
+  // consistent shape (the composer shows nothing until a session exists).
+  requests: []
 };
 function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources) {
   const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
@@ -27550,6 +27624,26 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const store = getStore(getSessionId(c));
     if (!store) return c.json(EMPTY_STATE);
     return c.json(await store.getFullState());
+  });
+  app.get("/api/requests", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ requests: [] });
+    return c.json({ requests: await store.getRequests?.() ?? [] });
+  });
+  app.post("/api/requests", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    if (!store.addRequest) {
+      return c.json({ error: "requests unsupported by this store", code: "unsupported" }, 409);
+    }
+    const request = await store.addRequest({ text: parsed.data.text, intent: parsed.data.intent });
+    broadcast({ type: "request_added", request }, sid);
+    return c.json({ request });
   });
   app.post("/api/comments", async (c) => {
     const sid = getSessionId(c);
@@ -29065,6 +29159,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const comment = r.store.updateCommentSuggestion(commentId, parsed.data);
     if (comment) broadcast(c.req.param("sessionId"), { type: "comment_updated", comment });
     return c.json({ comment: comment ?? null });
+  });
+  app.post("/api/internal/sessions/:sessionId/requests/:requestId/served", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { artifactId } = parsed.body;
+    if (typeof artifactId !== "string" || artifactId.length === 0) {
+      return c.json({ error: "artifactId is required", code: "validation_error" }, 400);
+    }
+    r.store.markRequestServed?.(c.req.param("requestId"), artifactId);
+    broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
+    return c.json({ status: "served" });
   });
   app.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));

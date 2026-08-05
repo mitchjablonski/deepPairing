@@ -9,6 +9,7 @@ import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner, countResumeQuestions, noAgentLive } from "./components/ResumeQuestionsBanner";
+import { RequestComposerBanner } from "./components/RequestComposerBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { DiagnosticsMenu } from "./components/DiagnosticsMenu";
@@ -555,6 +556,10 @@ function App() {
       {/* #192 — questions the human asked that the agent never answered, shown
           only when no agent is live (it exited) with a one-click resume prompt. */}
       <ResumeQuestionsBanner />
+
+      {/* G1 (#198b) — the request composer: the human can initiate a request to
+          the agent (free text + intent preset). A quiet peer of the strips above. */}
+      <RequestComposerBanner />
 
       {/* Main content.
           III10 — when the WS is connected but no wrapper has registered a

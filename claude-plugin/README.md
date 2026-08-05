@@ -99,10 +99,11 @@ Both run the self-contained bundles under `server/` via
 
 **MCP server** (bundled via `.mcp.json`)
 
-- 17 tools: `present_findings`, `present_spec`, `present_options`,
+- 18 tools: `present_findings`, `present_spec`, `present_options`,
   `present_plan`, `present_code_change`, `present_changeset`, `present_debrief`,
   `present_explainer`, `update_plan_progress`, `log_reasoning`, `answer_question`,
   `revise_artifact` (mode: supersede | retract | obsolete),
+  `withdraw_artifact` (retract your own draft; refused if it has unanswered feedback),
   `recall` (mode: philosophy | sessions | ledger | any),
   `post_pr_review`, `export_session`, `check_feedback`,
   `get_companion_url`.

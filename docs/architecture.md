@@ -48,7 +48,7 @@ Three processes:
 - **Claude Code** is the LLM client. It speaks the Model Context
   Protocol over stdio.
 - **MCP server wrapper** (`src/standalone.ts`) — one per Claude Code
-  session. Implements the 17 MCP tools (see below). Talks to the
+  session. Implements the 18 MCP tools (see below). Talks to the
   daemon over HTTP for state read/write so multiple sessions share a
   single source of truth.
 - **deepPairing daemon** (`src/daemon/index.ts`) — one per project, bound to
@@ -66,7 +66,7 @@ with it and DaemonClient (`src/daemon/client.ts`) implements `IStore`
 over HTTP so the same code paths work in standalone or daemon mode. The
 companion UI can aggregate across several projects' daemons.
 
-## The MCP tool surface (17 tools)
+## The MCP tool surface (18 tools)
 
 Tools live in `packages/mcp-server/src/mcp/tools/` and are registered
 in `src/mcp/server.ts`. The split:
@@ -100,6 +100,9 @@ in `src/mcp/server.ts`. The split:
   with optional `stance` and `source` filters
 - `log_reasoning` — record agent reasoning (low-stakes journal entry)
 - `revise_artifact` — supersede, retract, or obsolete a prior artifact
+- `withdraw_artifact` — retract your OWN still-`draft` artifact with a
+  one-line reason; refused if it has unanswered human feedback (never a
+  way to dodge review)
 
 **Side-channel**:
 - `answer_question` — agent reply to a human question on an artifact

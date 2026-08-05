@@ -907,6 +907,14 @@ export function validateLogReasoningInput(args: any): ValidationResult<z.infer<t
 const ARTIFACT_TITLE = z.string().min(1)
   .describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
 
+// G1 (#198b) — optional linkage from a present_* call to a human REQUEST it
+// fulfils. When set, the handler marks that request served (its
+// servedByArtifactId ← the new artifact) so the composer flips it and it drops
+// out of the pending obligations. Advertised on the tools that fulfil the three
+// request intents (explain→explainer, plan→plan/spec, status→debrief).
+const SERVED_REQUEST_ID = z.string().optional()
+  .describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') — links it so the request clears");
+
 // `satisfies` (not a Record annotation) keeps the literal keys, so property
 // access stays exact under noUncheckedIndexedAccess.
 export const TOOL_INPUT_SCHEMAS = {
@@ -917,11 +925,12 @@ export const TOOL_INPUT_SCHEMAS = {
     relatedFindings: z.array(z.string()).optional()
       .describe("Artifact IDs of findings that motivated this decision"),
   }),
-  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID }),
   present_plan: PlanContentSchema.extend({
     title: ARTIFACT_TITLE,
     relatedFindings: z.array(z.string()).optional()
       .describe("Artifact IDs of findings that motivated this plan"),
+    servedRequestId: SERVED_REQUEST_ID,
   }),
   present_code_change: CodeChangeContentSchema.extend({
     before: z.string().optional()
@@ -940,11 +949,13 @@ export const TOOL_INPUT_SCHEMAS = {
   present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
-  // schema (it doubles as the artifact title), so no .extend() is needed.
-  present_explainer: ExplainerContentSchema,
+  // schema (it doubles as the artifact title). G1 (#198b) adds the optional
+  // servedRequestId linkage (the validator ignores it — it builds its own
+  // content object from named fields — so it stays advertisement-only).
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID }),
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's

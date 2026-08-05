@@ -453,6 +453,15 @@ export class DaemonClient implements IStore {
     return data.comment ?? undefined;
   }
 
+  // --- G1 (#198b) — requests ---
+  // The record + read paths are the browser's PUBLIC routes onto the daemon's
+  // FileStore (the human composes; the agent-facing surfaces read pending
+  // requests off getFullState().requests). Only the agent's serve-link is an
+  // MCP-side mutation, so only markRequestServed is proxied here.
+  async markRequestServed(requestId: string, artifactId: string): Promise<void> {
+    await this.post(`/requests/${requestId}/served`, { artifactId });
+  }
+
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
    *  (the wrapper's broadcast is a no-op in standalone). Never throws. */
   async recordMetric(event:
