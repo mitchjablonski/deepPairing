@@ -2,6 +2,7 @@ import type { IStore } from "../store/store-interface.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 import { PENDING_DRAFT_TYPES } from "./tools/types.js";
+import { requestSecretNote } from "./tools/check-feedback-delivery.js";
 
 /**
  * X4 — first-call hint builder, lifted out of server.ts so the CallTool
@@ -529,10 +530,13 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     // check_feedback ordering: requests rank after unanswered questions). These
     // persist across runs like questions, so a request the human composed while
     // the agent was gone surfaces on this run's FIRST call.
-    const pendingRequests = ((fullState as { requests?: Array<{ id: string; text: string; intent: string; servedByArtifactId?: string }> }).requests ?? [])
+    const pendingRequests = ((fullState as { requests?: Array<{ id: string; text: string; intent: string; servedByArtifactId?: string; secretWarnings?: Array<{ pattern: string; label: string }> }> }).requests ?? [])
       .filter((r) => !r.servedByArtifactId);
     if (pendingRequests.length > 0) {
-      const lines = pendingRequests.map((r) => `  • ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"`);
+      // #204 (code lens F1) — append the same TEXT-ONLY secret marker the
+      // check_feedback request line carries, so a credential pasted into the
+      // composer while the agent was gone is flagged on this run's FIRST call.
+      const lines = pendingRequests.map((r) => `  • ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"${requestSecretNote(r)}`);
       blockingParts.push(
         `\n📨 ${pendingRequests.length} pending human request${pendingRequests.length === 1 ? "" : "s"} — the human ASKED you to do ${pendingRequests.length === 1 ? "this" : "these"} (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}\n` +
         `Serve each with the matching present_* tool, passing servedRequestId so it links back and clears.`,

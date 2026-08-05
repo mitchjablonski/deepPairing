@@ -442,13 +442,13 @@ function App() {
           <button
             onClick={() => setShowConversation(true)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
-            title="Conversation — every comment + reply across artifacts"
-            aria-label="Open conversation rail"
+            title="Comment threads — every comment + reply across artifacts (read-only)"
+            aria-label="Open comment threads rail"
           >
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
             </svg>
-            <span className="hidden min-[1100px]:inline">Conversation</span>
+            <span className="hidden min-[1100px]:inline">Comment threads</span>
             {unansweredCount > 0 && (
               <span
                 className="ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full bg-accent-blue-strong text-white text-[9px] font-semibold leading-none"

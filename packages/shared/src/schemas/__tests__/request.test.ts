@@ -24,6 +24,27 @@ describe("G1 (#198b) Request schema", () => {
     expect(r.servedByArtifactId).toBe("art_1");
   });
 
+  it("#204 carries optional secretWarnings (back-compat: absent loads unchanged)", () => {
+    // Absent — an old stored request parses clean.
+    const clean = RequestSchema.parse({
+      id: "req_abc",
+      text: "the auth middleware",
+      intent: "explain",
+      createdAt: "2026-08-04T00:00:00.000Z",
+    });
+    expect(clean.secretWarnings).toBeUndefined();
+    // Present — labels/pattern/line only (the shape addRequest stamps).
+    const flagged = RequestSchema.parse({
+      id: "req_hot",
+      text: "x",
+      intent: "status",
+      createdAt: "2026-08-04T00:00:00.000Z",
+      secretWarnings: [{ pattern: "AKIA", label: "AWS access key id", line: 1 }],
+    });
+    expect(flagged.secretWarnings).toHaveLength(1);
+    expect(flagged.secretWarnings![0]!.label).toBe("AWS access key id");
+  });
+
   it("enforces the three intent presets", () => {
     expect(RequestIntentSchema.options).toEqual(["explain", "plan", "status"]);
     expect(RequestSchema.safeParse({ id: "r", text: "x", intent: "wat", createdAt: "2026-08-04T00:00:00.000Z" }).success).toBe(false);

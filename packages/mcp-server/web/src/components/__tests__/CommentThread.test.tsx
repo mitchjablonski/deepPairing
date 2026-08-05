@@ -45,6 +45,18 @@ describe("CommentThread — renders replies under their parent", () => {
     expect(screen.getByText("FAISS does both jobs better.")).toBeInTheDocument();
   });
 
+  it("#204 L2 — readOnly withholds the composer but keeps posted comments readable", () => {
+    const c = mk({ id: "c1", author: "human", content: "This still reads" });
+    const { rerender } = render(<CommentThread artifactId="art_1" comments={[c]} />);
+    // Default (writable): the composer textarea is present.
+    expect(screen.getByPlaceholderText(/Add a comment/i)).toBeInTheDocument();
+    // readOnly: the composer is gone, but the posted comment remains.
+    rerender(<CommentThread artifactId="art_1" comments={[c]} readOnly />);
+    expect(screen.queryByPlaceholderText(/Add a comment/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Send$/i })).not.toBeInTheDocument();
+    expect(screen.getByText("This still reads")).toBeInTheDocument();
+  });
+
   it("still shows an orphaned reply whose parent isn't in this filtered set", () => {
     const orphanReply = mk({
       id: "a1",

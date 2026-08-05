@@ -23763,7 +23763,20 @@ var RequestSchema = external_exports.object({
    * a response). Optional for backward compatibility (project rule: all new
    * fields optional) — an old stored request without it loads unchanged.
    */
-  servedByArtifactId: external_exports.string().optional()
+  servedByArtifactId: external_exports.string().optional(),
+  /**
+   * #204 (code lens F1) — secret-scanner matches found in the request's `text`
+   * at create time. A request is HUMAN-authored free text (the same risk as a
+   * comment: a key pasted into the composer then flows into agent context via
+   * check_feedback and lands on disk), so `FileStore.addRequest` scans and
+   * persists the labels-only result here — pattern prefix + label (+ line),
+   * NEVER the matched value. This closes the last human-text ingress that
+   * bypassed the store-authoritative scan already covering comments (#160),
+   * artifact content (#158), and render failures (#176). Optional for backward
+   * compatibility (project rule: all new fields optional) — an old stored
+   * request without it loads unchanged.
+   */
+  secretWarnings: external_exports.array(SecretWarningSchema).optional()
 });
 
 // ../shared/dist/schemas/request-bodies.js
@@ -26214,11 +26227,16 @@ var FileStore = class _FileStore {
   /** Persist a human-composed request. `notifyFeedbackWaiters` wakes a live
    *  agent's check_feedback long-poll exactly like a new human comment does. */
   addRequest(params) {
+    const secretWarnings = scanForSecrets(params.text);
     const request = {
       id: `req_${nanoid3(10)}`,
       text: params.text,
       intent: params.intent,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      // #204 — spread so the field is simply absent on clean requests (back-compat:
+      // stored JSON for clean requests stays byte-identical, and old persisted
+      // requests without the field load unchanged).
+      ...secretWarnings.length > 0 ? { secretWarnings } : {}
     };
     this.requests.push(request);
     this.scheduleFlush();

@@ -9,6 +9,7 @@ import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
+import { reviewLifecycle } from "../lib/reviewLifecycle";
 import { useIsNarrowViewport, useMediaQuery } from "../hooks/useMediaQuery";
 // D6 (P2) — the artifact renderers are LAZY: statically importing all seven
 // kept them (and, via their coerce*Content imports, the whole Zod runtime)
@@ -237,6 +238,15 @@ function UnsupportedArtifact({ artifact }: { artifact: Artifact }) {
 // Exported for tests (#158 — the secret-warning banner renders here).
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
+  // #204 (UX L2) — the artifact-level comment thread's WRITE AXIS, derived through
+  // the shared reviewLifecycle helper. A retracted/terminal ("closed") or replayed
+  // ("frozen") artifact is read-only: posted comments stay readable, the composer
+  // is withheld. Draft ("review") + approved ("follow_up") keep the composer.
+  const replayActive = useReplayStore((s) => s.active);
+  const commentsReadOnly = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
   // Bug2 — aggregate comments across the version chain so v1's general
   // comments render on v2 after a supersede auto-advance.
   const comments = useChainComments(artifact.id);
@@ -358,10 +368,10 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
             plain thread unchanged and the entry chunk stays Zod-free. */}
         {artifact.type === "decision" ? (
           <Suspense fallback={<div className="h-16 rounded bg-surface-elevated animate-pulse" aria-label="Loading comments" role="status" />}>
-            <DecisionGeneralComments artifact={artifact} comments={generalComments} />
+            <DecisionGeneralComments artifact={artifact} comments={generalComments} readOnly={commentsReadOnly} />
           </Suspense>
         ) : (
-          <CommentThread artifactId={artifact.id} comments={generalComments} />
+          <CommentThread artifactId={artifact.id} comments={generalComments} readOnly={commentsReadOnly} />
         )}
       </div>
       )}

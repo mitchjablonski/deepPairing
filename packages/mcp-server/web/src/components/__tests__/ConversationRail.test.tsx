@@ -314,8 +314,10 @@ describe("ConversationRail (W1)", () => {
     s.addComment(comment({ id: "c2", artifactId: "a1", author: "agent", parentCommentId: "c1", content: "y", createdAt: "2026-04-26T10:01:00.000Z" }));
     s.addComment(comment({ id: "c3", artifactId: "a2", author: "human", content: "z", createdAt: "2026-04-26T10:02:00.000Z" }));
     render(<ConversationRail onClose={() => {}} />);
-    // 3 messages across 2 artifacts.
-    expect(screen.getByText(/3 messages across 2 artifacts/i)).toBeInTheDocument();
+    // #204 M4 — the rail is "Comment threads"; the subtitle counts COMMENTS
+    // (message/ask verbs reserved for the actual write paths).
+    expect(screen.getByText(/3 comments across 2 artifacts/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Comment threads/i })).toBeInTheDocument();
   });
 });
 

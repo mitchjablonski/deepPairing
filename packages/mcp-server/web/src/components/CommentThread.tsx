@@ -63,6 +63,12 @@ interface CommentThreadProps {
   // Nonce-gated like `prefill`, so it fires only on a fresh bump. Omitted
   // everywhere else → existing threads unchanged.
   focusSignal?: number;
+  // #204 (UX L2) — a read-only thread: the posted comments stay fully readable
+  // (history), but the composer (textarea + submit buttons) is withheld. Set by
+  // ArtifactPanel for a retracted/terminal (reviewLifecycle "closed") or replayed
+  // ("frozen") artifact, so a draft the agent took back can't invite new writes.
+  // Omitted everywhere else → existing threads byte-for-byte unchanged.
+  readOnly?: boolean;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -195,6 +201,7 @@ export function CommentThread({
   carryoverFor,
   prefill,
   focusSignal,
+  readOnly = false,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -301,6 +308,13 @@ export function CommentThread({
         );
       })}
 
+      {/* #204 (UX L2) — history stays readable; the composer is withheld on a
+          read-only (retracted/terminal or replayed) artifact. */}
+      {readOnly ? (
+        threads.length === 0 ? (
+          <p className="text-2xs text-text-muted italic">No comments — this artifact is read-only.</p>
+        ) : null
+      ) : (
       <div className={roomy ? "flex flex-col gap-2" : "flex gap-1.5 items-end"}>
         <textarea
           ref={composerRef}
@@ -344,6 +358,7 @@ export function CommentThread({
         </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

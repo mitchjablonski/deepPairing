@@ -224,7 +224,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
       <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <div
         {...dialogProps}
-        aria-label="Conversation"
+        aria-label="Comment threads"
         className="fixed top-0 right-0 bottom-0 z-50 w-[480px] max-w-[92vw]
                    bg-surface-elevated border-l border-border-default shadow-2xl
                    overflow-y-auto focus:outline-none"
@@ -233,7 +233,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-bold text-text-primary">
-                Conversation
+                Comment threads
                 {totalUnread > 0 && (
                   <span
                     className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-4 px-1.5 rounded-full bg-accent-blue-strong text-white text-[10px] font-semibold"
@@ -246,8 +246,8 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
               </h2>
               <div className="text-2xs text-text-muted mt-0.5">
                 {totalComments === 0
-                  ? "No comments yet"
-                  : `${totalComments} message${totalComments === 1 ? "" : "s"} across ${grouped.length} artifact${grouped.length === 1 ? "" : "s"}`}
+                  ? "No comment threads yet"
+                  : `${totalComments} comment${totalComments === 1 ? "" : "s"} across ${grouped.length} artifact${grouped.length === 1 ? "" : "s"}`}
                 {unansweredQuestions > 0 && (
                   <span className="ml-2 text-accent-violet">
                     · {unansweredQuestions} unanswered question{unansweredQuestions === 1 ? "" : "s"}

@@ -25,10 +25,16 @@ export function OpenQuestionSection({
   artifactId,
   question,
   index,
+  readOnly = false,
 }: {
   artifactId: string;
   question: string;
   index: number;
+  /** #204 (UX L2) — withhold the answer/ask composer when the parent artifact is
+   *  retracted/terminal ("closed") or replayed ("frozen"): a question posted here
+   *  would be delivered to the agent as actionable feedback on a draft it already
+   *  took back. The prior thread + the "mark resolved" escape hatch stay usable. */
+  readOnly?: boolean;
 }) {
   const comments = useChainComments(artifactId); // Bug2 — chain aggregation
   const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
@@ -123,6 +129,7 @@ export function OpenQuestionSection({
         secondarySubmitLabel="Ask"
         secondarySubmitTitle="Ask the agent about this question — it will answer on its next turn"
         textareaLabel={`Answer question ${index + 1}`}
+        readOnly={readOnly}
       />
     </section>
   );

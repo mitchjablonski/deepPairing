@@ -87,6 +87,22 @@ export function IdleHome() {
         )}
         {tab === "sessions" && <SessionBrowser />}
       </div>
+      {/* #204 (UX M4) — a quiet initiation scent. IdleHome never hinted that the
+          pairing is bidirectional: the human can INITIATE, not just review what
+          Claude presents. One low-key line (not a redesign) points at the request
+          composer. IdleHome shows only while disconnected, so it's phrased as
+          expectation-setting — the request bar itself appears up top once Claude
+          connects. */}
+      <div
+        data-testid="idle-initiate-hint"
+        className="shrink-0 border-t border-border-subtle px-5 py-2 text-2xs text-text-muted"
+      >
+        <span aria-hidden="true">✎</span>{" "}
+        You can ask Claude for something —{" "}
+        <span className="text-text-secondary">explain</span>,{" "}
+        <span className="text-text-secondary">plan</span>, or{" "}
+        <span className="text-text-secondary">status</span>. The request bar appears up top once Claude connects.
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SecretWarningSchema } from "./artifact.js";
 
 /**
  * G1 (#198b) — the REQUEST COMPOSER's persisted unit. The human can finally
@@ -34,6 +35,19 @@ export const RequestSchema = z.object({
    * fields optional) — an old stored request without it loads unchanged.
    */
   servedByArtifactId: z.string().optional(),
+  /**
+   * #204 (code lens F1) — secret-scanner matches found in the request's `text`
+   * at create time. A request is HUMAN-authored free text (the same risk as a
+   * comment: a key pasted into the composer then flows into agent context via
+   * check_feedback and lands on disk), so `FileStore.addRequest` scans and
+   * persists the labels-only result here — pattern prefix + label (+ line),
+   * NEVER the matched value. This closes the last human-text ingress that
+   * bypassed the store-authoritative scan already covering comments (#160),
+   * artifact content (#158), and render failures (#176). Optional for backward
+   * compatibility (project rule: all new fields optional) — an old stored
+   * request without it loads unchanged.
+   */
+  secretWarnings: z.array(SecretWarningSchema).optional(),
 });
 export type Request = z.infer<typeof RequestSchema>;
 

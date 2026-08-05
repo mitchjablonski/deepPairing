@@ -88,12 +88,17 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
   await store.setRetractReason?.(artifactId, reason);
   await store.updateArtifactStatus(artifactId, "retracted", "agent_withdraw");
   await maybeUpdateTaskStatus(server, artifactId, store);
-  // An agent-authored note so the "Withdrawn by the agent — <reason>" state and
-  // the history read honestly, and so a successor can thread onto it.
+  // An agent-authored THREAD MARKER so the history reads honestly and a successor
+  // can thread onto it. #204 (UX L1) — the marker is now just "Withdrawn." (the
+  // reason is NOT repeated here): the inline "↩ Retracted by agent — <reason>"
+  // status surface already carries the reason ~150px away, so echoing the full
+  // sentence in an adjacent agent comment was the same words twice. The inline
+  // reason is the honest status surface (kept); this comment is only the thread
+  // marker that lets a successor chain onto the retraction.
   await store.addComment({
     id: `cmt_${nanoid(10)}`,
     artifactId,
-    content: `Withdrawn: ${reason}`,
+    content: `Withdrawn.`,
     author: "agent",
   });
   broadcast({ type: "artifact_updated", artifactId, status: "retracted" });

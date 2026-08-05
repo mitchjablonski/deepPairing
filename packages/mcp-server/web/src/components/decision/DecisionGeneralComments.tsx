@@ -24,9 +24,15 @@ import { makeThreadCarryover } from "./carryover";
 export function DecisionGeneralComments({
   artifact,
   comments,
+  readOnly = false,
 }: {
   artifact: Artifact;
   comments: Comment[];
+  /** #204 (UX L2) — withhold the composer on a retracted/terminal ("closed") or
+   *  replayed ("frozen") decision, so a comment/question can't be posted to (and
+   *  then delivered from) an artifact the agent already took back. History stays
+   *  readable. Threaded straight to the underlying CommentThread. */
+  readOnly?: boolean;
 }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const liveOptions = useMemo(
@@ -44,5 +50,5 @@ export function DecisionGeneralComments({
     [artifacts, comments, artifact.id, liveOptions],
   );
 
-  return <CommentThread artifactId={artifact.id} comments={comments} carryoverFor={carryoverFor} />;
+  return <CommentThread artifactId={artifact.id} comments={comments} carryoverFor={carryoverFor} readOnly={readOnly} />;
 }

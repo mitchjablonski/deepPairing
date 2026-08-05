@@ -26501,7 +26501,20 @@ var RequestSchema2 = external_exports.object({
    * a response). Optional for backward compatibility (project rule: all new
    * fields optional) — an old stored request without it loads unchanged.
    */
-  servedByArtifactId: external_exports.string().optional()
+  servedByArtifactId: external_exports.string().optional(),
+  /**
+   * #204 (code lens F1) — secret-scanner matches found in the request's `text`
+   * at create time. A request is HUMAN-authored free text (the same risk as a
+   * comment: a key pasted into the composer then flows into agent context via
+   * check_feedback and lands on disk), so `FileStore.addRequest` scans and
+   * persists the labels-only result here — pattern prefix + label (+ line),
+   * NEVER the matched value. This closes the last human-text ingress that
+   * bypassed the store-authoritative scan already covering comments (#160),
+   * artifact content (#158), and render failures (#176). Optional for backward
+   * compatibility (project rule: all new fields optional) — an old stored
+   * request without it loads unchanged.
+   */
+  secretWarnings: external_exports.array(SecretWarningSchema).optional()
 });
 function describeRequestIntent(intent) {
   switch (intent) {
@@ -27246,6 +27259,231 @@ var AUTONOMY_POLICY_LINE = {
 var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"];
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
 
+// src/mcp/tools/check-feedback-delivery.ts
+function removedLineContent(art, filePath, oldLine) {
+  if (!art || art.type !== "changeset") return void 0;
+  const files = art.content?.files;
+  if (!Array.isArray(files)) return void 0;
+  const file2 = files.find((f) => f.path === filePath);
+  if (!file2 || !Array.isArray(file2.hunks)) return void 0;
+  for (const h of file2.hunks) {
+    for (const l of h.lines ?? []) {
+      if (l.kind === "del" && l.oldLine === oldLine) return l.content;
+    }
+  }
+  return void 0;
+}
+function commentSecretNote(c) {
+  return c.secretWarnings?.length ? " \u26A0 possible secret in this comment" : "";
+}
+function requestSecretNote(r) {
+  return r.secretWarnings?.length ? " \u26A0 possible secret in this request" : "";
+}
+function describeRegionRef(region) {
+  if (!region) return "";
+  const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
+  if (labels.length > 0) return `[${labels.join(", ")}]`;
+  return "";
+}
+function describeDecisionSection(sectionId) {
+  if (sectionId === "decision:question") return "the decision question";
+  const m = /^(pro|con)s?:(\d+)$/.exec(sectionId);
+  if (m) return `${m[1]} #${Number(m[2]) + 1}`;
+  if (sectionId === "summary") return "summary";
+  return sectionId;
+}
+function debriefItemTitle(art, lane, i) {
+  if (!art) return void 0;
+  const c = art.content;
+  const arr2 = lane === "needs-your-eyes" ? c?.needsYourEyes : lane === "decisions" ? c?.decisionsMade : lane === "deferred" ? c?.deferred : void 0;
+  const what = arr2?.[i]?.what;
+  return typeof what === "string" && what.trim().length > 0 ? what.trim() : void 0;
+}
+function describeDebriefSection(sectionId, art) {
+  const key = sectionId.slice("debrief:".length);
+  const numeric = /^(?:section:)?(\d+)$/.exec(key);
+  if (numeric) return `section #${Number(numeric[1]) + 1}`;
+  const item = /^([a-z][a-z-]*):(\d+)$/.exec(key);
+  if (item) {
+    const lane = item[1];
+    const i = Number(item[2]);
+    const laneWords = lane.replace(/-/g, " ");
+    const title = debriefItemTitle(art, lane, i);
+    return title ? `${laneWords} item #${i + 1}: ${title}` : `${laneWords} item #${i + 1}`;
+  }
+  return key.replace(/-/g, " ");
+}
+function describeExplainerSection(sectionId) {
+  const key = sectionId.slice("explainer:".length);
+  const m = /^(?:section:)?(\d+)$/.exec(key);
+  if (m) return `section #${Number(m[1]) + 1}`;
+  return key.replace(/-/g, " ");
+}
+function structuredRegionFields(t) {
+  const region = t.region;
+  if (!region) return {};
+  if (t.optionId) {
+    const nearNodes = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
+    return {
+      optionId: t.optionId,
+      ...t.visualId ? { visualId: t.visualId } : {},
+      region: {
+        x: region.x,
+        y: region.y,
+        w: region.w,
+        h: region.h,
+        ...nearNodes.length ? { nearNodes } : {}
+      }
+    };
+  }
+  return region.labels?.length ? { region: { labels: region.labels } } : {};
+}
+function commonTargetFields(c, removedLine) {
+  return {
+    lineStart: c.target.lineStart,
+    findingIndex: c.target.findingIndex,
+    questionIndex: c.target.questionIndex,
+    requirementId: c.target.requirementId,
+    // #171 — file dimension for a changeset line comment, and the full anchor
+    // list for a cross-file thread. Spread only when present so the healthy/
+    // no-file payload is byte-for-byte unchanged.
+    ...c.target.filePath ? { filePath: c.target.filePath } : {},
+    // #186 — old-side (removed-line) marking + content. Spread ONLY for a
+    // del-side comment so new-side delivery is byte-for-byte unchanged.
+    ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
+    ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
+    // #140/#173 — a plan/spec region comment carries ONLY the human-meaningful
+    // labels (byte-for-byte as before); a DECISION region comment (optionId set)
+    // carries optionId + visualId + rect + nearNodes so the anchor survives a
+    // re-render (#163). See structuredRegionFields.
+    ...structuredRegionFields(c.target)
+  };
+}
+function deliverComment(c, artsForTargets) {
+  if (c.suggestion) {
+    const s = c.suggestion;
+    const range = s.lineEnd > s.lineStart ? `${s.lineStart}\u2013${s.lineEnd}` : `${s.lineStart}`;
+    const loc2 = `${c.target.filePath ?? "code"}:${range}`;
+    const summary = suggestionSummary(c.target.filePath, s.lineStart, s.lineEnd);
+    const why = c.content.trim();
+    const note = why.length > 0 && why !== summary ? why : void 0;
+    const respond = `answer_question commentId="${c.id}"`;
+    const tookCounter = s.state === "applied" && !!s.counter && s.appliedInVersion == null;
+    let prose;
+    if (s.state === "insisted" && s.appliedInVersion == null) {
+      prose = `- \u{1F527} INSISTED EDIT [${loc2}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter \u2014 apply it VERBATIM, do not re-argue:
+${s.replacementText}
+    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`;
+    } else if (tookCounter) {
+      const counterBody = s.counter?.replacementText ? `apply your counter-proposal:
+${s.counter.replacementText}` : `revise the code per your counter's reasoning${s.counter?.reason ? ` ("${s.counter.reason}")` : ""}`;
+      prose = `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 ${counterBody} and stamp the version.
+    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`;
+    } else {
+      prose = `- \u{1F527} SUGGESTED EDIT [${loc2}]${commentSecretNote(c)} The human proposes replacing:
+${s.originalText}
+  with:
+${s.replacementText}${note ? `
+  Why: ${note}` : ""}
+    \u2192 Respond via ${respond}: suggestionState:"applied" (+ appliedInVersion) to ship it verbatim or with an extension you name in \`answer\`, OR suggestionState:"countered" (+ your reason in \`answer\`) to propose a different edit.`;
+    }
+    return {
+      bucket: "suggestion",
+      prose,
+      structured: {
+        commentId: c.id,
+        artifactId: c.target.artifactId,
+        state: s.state,
+        file: c.target.filePath,
+        lineStart: s.lineStart,
+        lineEnd: s.lineEnd,
+        originalText: s.originalText,
+        replacementText: s.replacementText,
+        ...note ? { note } : {},
+        ...s.counter ? { counter: s.counter } : {},
+        // #187 — a suggested edit posted to an approved artifact is a follow-up;
+        // spread only when stamped so normal delivery stays byte-unchanged.
+        ...c.followUp ? { followUp: true } : {}
+      },
+      isFollowUp: false
+    };
+  }
+  let loc = c.target.artifactId;
+  if (c.target.filePath) loc += ` ${c.target.filePath}`;
+  if (c.target.lineStart) loc += `:${c.target.lineStart}`;
+  let removedLine;
+  if (c.target.side === "old" && c.target.filePath && c.target.lineStart != null) {
+    removedLine = removedLineContent(
+      artsForTargets.find((a) => a.id === c.target.artifactId),
+      c.target.filePath,
+      c.target.lineStart
+    );
+    loc += removedLine != null ? ` (removed line: "${removedLine}")` : ` (removed line)`;
+  }
+  const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
+  if (anchors.length >= 2) {
+    loc += ` \u2014 cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" \u2194 ")}`;
+  }
+  if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
+  if (c.target.questionIndex != null) {
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    const qs = art?.content?.openQuestions;
+    const qText = qs?.[c.target.questionIndex];
+    loc += qText ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")` : ` (answers open question #${c.target.questionIndex + 1})`;
+  }
+  if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
+  if (c.target.optionId) {
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    const opts = art?.content?.options;
+    const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
+    loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
+  }
+  if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
+    loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
+  }
+  if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    loc += ` \u2014 ${describeDebriefSection(c.target.sectionId, art)}`;
+  }
+  if (c.target.sectionId && c.target.sectionId.startsWith("explainer:")) {
+    loc += ` \u2014 ${describeExplainerSection(c.target.sectionId)}`;
+  }
+  const regionRef = describeRegionRef(c.target.region);
+  if (regionRef) loc += ` \u2014 on region ${regionRef}`;
+  const followUpPrefix = c.followUp ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] ` : "";
+  if (c.intent === "question" && !c.answeredByCommentId) {
+    return {
+      bucket: "question",
+      prose: `- \u2753 QUESTION [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
+    \u2192 Answer via answer_question with commentId="${c.id}"`,
+      structured: {
+        commentId: c.id,
+        artifactId: c.target.artifactId,
+        content: c.content,
+        // #187 — spread ONLY when the store stamped it (posted to an approved
+        // artifact via the late lane) so normal delivery is byte-unchanged.
+        ...c.followUp ? { followUp: true } : {},
+        ...commonTargetFields(c, removedLine)
+      },
+      isFollowUp: !!c.followUp
+    };
+  }
+  return {
+    bucket: "comment",
+    prose: `- [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    structured: {
+      id: c.id,
+      artifactId: c.target.artifactId,
+      kind: "comment",
+      content: c.content,
+      // #187 — see the question path: present only for a late follow-up.
+      ...c.followUp ? { followUp: true } : {},
+      ...commonTargetFields(c, removedLine)
+    },
+    isFollowUp: !!c.followUp
+  };
+}
+
 // src/mcp/first-call-hint.ts
 var HINT_BUDGET_CHARS = 1500;
 var POLICY_BUDGET_CHARS = 600;
@@ -27540,7 +27778,7 @@ Required response per request: call \`revise_artifact\` mode="supersede" on the 
     }
     const pendingRequests = (fullState.requests ?? []).filter((r) => !r.servedByArtifactId);
     if (pendingRequests.length > 0) {
-      const lines = pendingRequests.map((r) => `  \u2022 ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"`);
+      const lines = pendingRequests.map((r) => `  \u2022 ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"${requestSecretNote(r)}`);
       blockingParts.push(
         `
 \u{1F4E8} ${pendingRequests.length} pending human request${pendingRequests.length === 1 ? "" : "s"} \u2014 the human ASKED you to do ${pendingRequests.length === 1 ? "this" : "these"} (explain\u2192present_explainer, plan\u2192present_plan/present_spec, status\u2192present_debrief):
@@ -30006,228 +30244,6 @@ async function handlePresentOptions(ctx, args) {
   };
 }
 
-// src/mcp/tools/check-feedback-delivery.ts
-function removedLineContent(art, filePath, oldLine) {
-  if (!art || art.type !== "changeset") return void 0;
-  const files = art.content?.files;
-  if (!Array.isArray(files)) return void 0;
-  const file2 = files.find((f) => f.path === filePath);
-  if (!file2 || !Array.isArray(file2.hunks)) return void 0;
-  for (const h of file2.hunks) {
-    for (const l of h.lines ?? []) {
-      if (l.kind === "del" && l.oldLine === oldLine) return l.content;
-    }
-  }
-  return void 0;
-}
-function commentSecretNote(c) {
-  return c.secretWarnings?.length ? " \u26A0 possible secret in this comment" : "";
-}
-function describeRegionRef(region) {
-  if (!region) return "";
-  const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
-  if (labels.length > 0) return `[${labels.join(", ")}]`;
-  return "";
-}
-function describeDecisionSection(sectionId) {
-  if (sectionId === "decision:question") return "the decision question";
-  const m = /^(pro|con)s?:(\d+)$/.exec(sectionId);
-  if (m) return `${m[1]} #${Number(m[2]) + 1}`;
-  if (sectionId === "summary") return "summary";
-  return sectionId;
-}
-function debriefItemTitle(art, lane, i) {
-  if (!art) return void 0;
-  const c = art.content;
-  const arr2 = lane === "needs-your-eyes" ? c?.needsYourEyes : lane === "decisions" ? c?.decisionsMade : lane === "deferred" ? c?.deferred : void 0;
-  const what = arr2?.[i]?.what;
-  return typeof what === "string" && what.trim().length > 0 ? what.trim() : void 0;
-}
-function describeDebriefSection(sectionId, art) {
-  const key = sectionId.slice("debrief:".length);
-  const numeric = /^(?:section:)?(\d+)$/.exec(key);
-  if (numeric) return `section #${Number(numeric[1]) + 1}`;
-  const item = /^([a-z][a-z-]*):(\d+)$/.exec(key);
-  if (item) {
-    const lane = item[1];
-    const i = Number(item[2]);
-    const laneWords = lane.replace(/-/g, " ");
-    const title = debriefItemTitle(art, lane, i);
-    return title ? `${laneWords} item #${i + 1}: ${title}` : `${laneWords} item #${i + 1}`;
-  }
-  return key.replace(/-/g, " ");
-}
-function describeExplainerSection(sectionId) {
-  const key = sectionId.slice("explainer:".length);
-  const m = /^(?:section:)?(\d+)$/.exec(key);
-  if (m) return `section #${Number(m[1]) + 1}`;
-  return key.replace(/-/g, " ");
-}
-function structuredRegionFields(t) {
-  const region = t.region;
-  if (!region) return {};
-  if (t.optionId) {
-    const nearNodes = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
-    return {
-      optionId: t.optionId,
-      ...t.visualId ? { visualId: t.visualId } : {},
-      region: {
-        x: region.x,
-        y: region.y,
-        w: region.w,
-        h: region.h,
-        ...nearNodes.length ? { nearNodes } : {}
-      }
-    };
-  }
-  return region.labels?.length ? { region: { labels: region.labels } } : {};
-}
-function commonTargetFields(c, removedLine) {
-  return {
-    lineStart: c.target.lineStart,
-    findingIndex: c.target.findingIndex,
-    questionIndex: c.target.questionIndex,
-    requirementId: c.target.requirementId,
-    // #171 — file dimension for a changeset line comment, and the full anchor
-    // list for a cross-file thread. Spread only when present so the healthy/
-    // no-file payload is byte-for-byte unchanged.
-    ...c.target.filePath ? { filePath: c.target.filePath } : {},
-    // #186 — old-side (removed-line) marking + content. Spread ONLY for a
-    // del-side comment so new-side delivery is byte-for-byte unchanged.
-    ...c.target.side === "old" ? { side: "old", ...removedLine != null ? { removedLine } : {} } : {},
-    ...Array.isArray(c.target.anchors) && c.target.anchors.length >= 2 ? { anchors: c.target.anchors } : {},
-    // #140/#173 — a plan/spec region comment carries ONLY the human-meaningful
-    // labels (byte-for-byte as before); a DECISION region comment (optionId set)
-    // carries optionId + visualId + rect + nearNodes so the anchor survives a
-    // re-render (#163). See structuredRegionFields.
-    ...structuredRegionFields(c.target)
-  };
-}
-function deliverComment(c, artsForTargets) {
-  if (c.suggestion) {
-    const s = c.suggestion;
-    const range = s.lineEnd > s.lineStart ? `${s.lineStart}\u2013${s.lineEnd}` : `${s.lineStart}`;
-    const loc2 = `${c.target.filePath ?? "code"}:${range}`;
-    const summary = suggestionSummary(c.target.filePath, s.lineStart, s.lineEnd);
-    const why = c.content.trim();
-    const note = why.length > 0 && why !== summary ? why : void 0;
-    const respond = `answer_question commentId="${c.id}"`;
-    const tookCounter = s.state === "applied" && !!s.counter && s.appliedInVersion == null;
-    let prose;
-    if (s.state === "insisted" && s.appliedInVersion == null) {
-      prose = `- \u{1F527} INSISTED EDIT [${loc2}]${commentSecretNote(c)} The human INSISTED on their exact version after your counter \u2014 apply it VERBATIM, do not re-argue:
-${s.replacementText}
-    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`;
-    } else if (tookCounter) {
-      const counterBody = s.counter?.replacementText ? `apply your counter-proposal:
-${s.counter.replacementText}` : `revise the code per your counter's reasoning${s.counter?.reason ? ` ("${s.counter.reason}")` : ""}`;
-      prose = `- \u{1F527} COUNTER ACCEPTED [${loc2}]${commentSecretNote(c)} The human TOOK YOUR COUNTER \u2014 ${counterBody} and stamp the version.
-    \u2192 ${respond} suggestionState:"applied" appliedInVersion:<the version you just shipped it in>.`;
-    } else {
-      prose = `- \u{1F527} SUGGESTED EDIT [${loc2}]${commentSecretNote(c)} The human proposes replacing:
-${s.originalText}
-  with:
-${s.replacementText}${note ? `
-  Why: ${note}` : ""}
-    \u2192 Respond via ${respond}: suggestionState:"applied" (+ appliedInVersion) to ship it verbatim or with an extension you name in \`answer\`, OR suggestionState:"countered" (+ your reason in \`answer\`) to propose a different edit.`;
-    }
-    return {
-      bucket: "suggestion",
-      prose,
-      structured: {
-        commentId: c.id,
-        artifactId: c.target.artifactId,
-        state: s.state,
-        file: c.target.filePath,
-        lineStart: s.lineStart,
-        lineEnd: s.lineEnd,
-        originalText: s.originalText,
-        replacementText: s.replacementText,
-        ...note ? { note } : {},
-        ...s.counter ? { counter: s.counter } : {},
-        // #187 — a suggested edit posted to an approved artifact is a follow-up;
-        // spread only when stamped so normal delivery stays byte-unchanged.
-        ...c.followUp ? { followUp: true } : {}
-      },
-      isFollowUp: false
-    };
-  }
-  let loc = c.target.artifactId;
-  if (c.target.filePath) loc += ` ${c.target.filePath}`;
-  if (c.target.lineStart) loc += `:${c.target.lineStart}`;
-  let removedLine;
-  if (c.target.side === "old" && c.target.filePath && c.target.lineStart != null) {
-    removedLine = removedLineContent(
-      artsForTargets.find((a) => a.id === c.target.artifactId),
-      c.target.filePath,
-      c.target.lineStart
-    );
-    loc += removedLine != null ? ` (removed line: "${removedLine}")` : ` (removed line)`;
-  }
-  const anchors = Array.isArray(c.target.anchors) ? c.target.anchors : [];
-  if (anchors.length >= 2) {
-    loc += ` \u2014 cross-file: ${anchors.map((a) => `${a.filePath}:${a.lineStart}`).join(" \u2194 ")}`;
-  }
-  if (c.target.findingIndex != null) loc += ` (finding #${c.target.findingIndex + 1})`;
-  if (c.target.questionIndex != null) {
-    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-    const qs = art?.content?.openQuestions;
-    const qText = qs?.[c.target.questionIndex];
-    loc += qText ? ` (answers open question #${c.target.questionIndex + 1}: "${qText}")` : ` (answers open question #${c.target.questionIndex + 1})`;
-  }
-  if (c.target.requirementId) loc += ` (requirement ${c.target.requirementId})`;
-  if (c.target.optionId) {
-    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-    const opts = art?.content?.options;
-    const optTitle = opts?.find((o) => o.id === c.target.optionId)?.title;
-    loc += optTitle ? ` (option "${optTitle}")` : ` (option ${c.target.optionId})`;
-  }
-  if (c.target.sectionId && (c.target.optionId || c.target.sectionId.startsWith("decision:"))) {
-    loc += ` \u2014 ${describeDecisionSection(c.target.sectionId)}`;
-  }
-  if (c.target.sectionId && c.target.sectionId.startsWith("debrief:")) {
-    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-    loc += ` \u2014 ${describeDebriefSection(c.target.sectionId, art)}`;
-  }
-  if (c.target.sectionId && c.target.sectionId.startsWith("explainer:")) {
-    loc += ` \u2014 ${describeExplainerSection(c.target.sectionId)}`;
-  }
-  const regionRef = describeRegionRef(c.target.region);
-  if (regionRef) loc += ` \u2014 on region ${regionRef}`;
-  const followUpPrefix = c.followUp ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] ` : "";
-  if (c.intent === "question" && !c.answeredByCommentId) {
-    return {
-      bucket: "question",
-      prose: `- \u2753 QUESTION [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
-    \u2192 Answer via answer_question with commentId="${c.id}"`,
-      structured: {
-        commentId: c.id,
-        artifactId: c.target.artifactId,
-        content: c.content,
-        // #187 — spread ONLY when the store stamped it (posted to an approved
-        // artifact via the late lane) so normal delivery is byte-unchanged.
-        ...c.followUp ? { followUp: true } : {},
-        ...commonTargetFields(c, removedLine)
-      },
-      isFollowUp: !!c.followUp
-    };
-  }
-  return {
-    bucket: "comment",
-    prose: `- [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
-    structured: {
-      id: c.id,
-      artifactId: c.target.artifactId,
-      kind: "comment",
-      content: c.content,
-      // #187 — see the question path: present only for a late follow-up.
-      ...c.followUp ? { followUp: true } : {},
-      ...commonTargetFields(c, removedLine)
-    },
-    isFollowUp: !!c.followUp
-  };
-}
-
 // src/mcp/tools/check-feedback.ts
 init_version();
 
@@ -30600,7 +30616,7 @@ The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do 
   }
   if (pendingRequests.length > 0) {
     const lines = pendingRequests.map(
-      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}
+      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}
     \u2192 Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`
     );
     parts.push(
@@ -31199,7 +31215,7 @@ async function handleWithdrawArtifact(ctx, args) {
   await store.addComment({
     id: `cmt_${nanoid3(10)}`,
     artifactId,
-    content: `Withdrawn: ${reason}`,
+    content: `Withdrawn.`,
     author: "agent"
   });
   broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
