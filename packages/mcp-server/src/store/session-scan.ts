@@ -605,20 +605,107 @@ export function normalizeFeaturePrefix(rawTitle: string): FeaturePrefix | null {
   //    corpus) is NOT mis-mined as feature "extractor research: …".
   const f = title.match(/^feature\s*(?::\s*|\s+[-–—]\s+)(.+)$/i);
   if (f) {
-    const inner = f[1]!.trim();
-    const slug = slugify(inner);
-    if (slug) return { slug, label: prettifyLabel(inner) };
+    const mined = mineInner(f[1]!);
+    if (mined) return mined;
   }
 
   // 4. "[X] …" — bracket-tag; the tag is the feature name.
   const b = title.match(/^\[([^\]]+)\]/);
   if (b) {
-    const inner = b[1]!.trim();
-    const slug = slugify(inner);
-    if (slug) return { slug, label: prettifyLabel(inner) };
+    const mined = mineInner(b[1]!);
+    if (mined) return mined;
   }
 
   return null;
+}
+
+/**
+ * #206 (I1, review Fix 1) — resolve the inner text of a "Feature: X" / "[X]" tag
+ * to a canonical prefix. Run the inner text through the miner FIRST, so a tag
+ * that names a numbered milestone/phase converges with the equivalent TITLE
+ * prefix — "[M7]" and "Feature: Milestone 7" both land on `milestone-7`, exactly
+ * as "M7 …" / "Milestone 7 …" titles do. This is ALSO what makes the whole
+ * family idempotent: without it, "[M7]" → slug "m7", and re-normalizing "m7"
+ * re-fired the M-short-form miner → "milestone-7" (a Move onto the "[M7]" group
+ * then mis-filed the artifact into a NEW group). Falls back to slugging the raw
+ * inner text for a non-numeric feature name ("[auth]" → "auth").
+ */
+function mineInner(rawInner: string): FeaturePrefix | null {
+  const inner = rawInner.trim();
+  if (!inner) return null;
+  const mined = normalizeFeaturePrefix(inner);
+  if (mined) return mined;
+  const slug = slugify(inner);
+  if (!slug) return null;
+  return { slug, label: prettifyLabel(inner) };
+}
+
+/** #206 (I1) — the length cap shared by the schema, the `feature` tool param,
+ *  and the human override write path. Slugs are short by construction; this is
+ *  a floor against a pathological tag, not a meaningful limit. */
+export const FEATURE_ID_MAX = 80;
+
+/**
+ * #206 (I1) — normalize a RAW feature tag (an agent's `feature` param, a stored
+ * `featureId`, or a human override's target key) into the SAME stable group key
+ * the title-prefix miner produces. This is the convergence guarantee: an agent
+ * that tags `feature:"Milestone 7"` and a human whose title reads
+ * "Milestone 7 — backfill" MUST land in ONE group.
+ *
+ *   1. First run the tag THROUGH normalizeFeaturePrefix — so "Milestone 7",
+ *      "M7", "Phase 0.5", "Feature: auth", "[auth]" all resolve to exactly the
+ *      key (and label) the miner would give the equivalent TITLE prefix. This
+ *      is what makes agent-tag ↔ title-prefix convergence exact, not
+ *      approximate.
+ *   2. Otherwise slugify the raw tag (so an already-slug "milestone-7" or a
+ *      free-form "auth rework" become "milestone-7" / "auth-rework"), and
+ *      prettify a display label from the human's own text.
+ *
+ * Idempotent: normalizeFeatureId(normalizeFeatureId(x).slug) === the same slug
+ * (a slug fails the prefix miner, then slugifies to itself). Returns null for an
+ * empty/unsluggable tag. Length-capped both ways.
+ */
+export function normalizeFeatureId(
+  raw: string | null | undefined,
+): FeaturePrefix | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  const mined = normalizeFeaturePrefix(trimmed);
+  if (mined) return { slug: mined.slug.slice(0, FEATURE_ID_MAX), label: mined.label.slice(0, FEATURE_ID_MAX) };
+  const slug = slugify(trimmed).slice(0, FEATURE_ID_MAX);
+  if (!slug) return null;
+  // Label from the SLUG (de-slugged), not the raw text, so an already-slug tag
+  // ("milestone-7") and a spaced one ("Milestone 7") that both resolve to the
+  // same slug also render the same label — and it matches the build-phase
+  // deslugLabel fallback exactly.
+  return { slug, label: deslugLabel(slug) };
+}
+
+/** #206 (I1) — de-slug a group KEY into a readable display label when no mined
+ *  prefix label and no human title-override exists for it (e.g. an agent-only
+ *  `feature:"auth-rework"` group, or a human-created move target). "milestone-7"
+ *  → "Milestone 7", "auth-rework" → "Auth Rework". Cosmetic only — a human
+ *  rename override always wins over this. */
+function deslugLabel(slug: string): string {
+  const words = slug.replace(/-+/g, " ").trim().split(" ").filter(Boolean);
+  if (words.length === 0) return slug;
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+/**
+ * #206 (I1) — the human's project-level corrections to the derived grouping,
+ * persisted in `.deeppairing/feature-overrides.json` (see feature-overrides.ts)
+ * and applied on read by groupByFeature. Two independent lanes:
+ *   - `groupTitles`  — RENAME a group's display title (groupKey → title). The
+ *     groups are derived, so the title is the ONE thing worth persisting.
+ *   - `artifactAssignments` — MOVE an artifact into a group (artifactId →
+ *     groupKey). This is the human's word: it is TOP precedence, beating an
+ *     explicit `featureId`, the parent chain, AND the title prefix. The reserved
+ *     `__ungrouped__` target pulls an artifact OUT of every feature.
+ */
+export interface FeatureOverrides {
+  groupTitles?: Record<string, string>;
+  artifactAssignments?: Record<string, string>;
 }
 
 /** One artifact placed in a feature group — everything the timeline row + the
@@ -707,14 +794,31 @@ function fileTouchesOf(artifact: Artifact): string[] {
 /**
  * #203 (H2) — group every artifact across every session into features. Read-time
  * walk of `.deeppairing/sessions/*`; zero store coupling (mirrors
- * listAllDecisions). Grouping, in priority order:
- *   a. title-prefix mining (normalizeFeaturePrefix),
- *   b. parentId chains — an artifact whose parent is grouped joins the parent's
- *      group; the chain BEATS the child's own prefix on conflict (a superseded
- *      v2 stays with its v1's group even if retitled),
- *   c. everything else → the Ungrouped bucket.
+ * listAllDecisions).
+ *
+ * #206 (I1) — grouping precedence, HIGHEST first:
+ *   0. HUMAN override (overrides.artifactAssignments[id]) — the human moved this
+ *      artifact into a group by hand; it beats everything below,
+ *   1. the artifact's OWN explicit `featureId` (agent tag) — an explicit tag
+ *      beats an INHERITED parent group (a parent-chained child whose own tag
+ *      disagrees keeps its own),
+ *   2. parentId chains — an artifact whose parent is grouped joins the parent's
+ *      group (a superseded v2 stays with its v1's group even if retitled),
+ *   3. title-prefix mining (normalizeFeaturePrefix),
+ *   4. everything else → the Ungrouped bucket.
+ *
+ * The convergence property: an explicit `featureId` is normalized through the
+ * SAME normalizeFeatureId → slug family as the title-prefix miner, so an
+ * agent-tagged "Milestone 7" and a "Milestone 7 — x"-TITLED artifact share the
+ * one key. Group display titles honor a human RENAME override
+ * (overrides.groupTitles) above the mined/derived label.
  */
-export function groupByFeature(projectRoot: string): FeatureGroupsResult {
+export function groupByFeature(
+  projectRoot: string,
+  overrides: FeatureOverrides = {},
+): FeatureGroupsResult {
+  const artifactAssignments = overrides.artifactAssignments ?? {};
+  const groupTitles = overrides.groupTitles ?? {};
   const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
   const failedSessions: FeatureGroupsResult["failedSessions"] = [];
 
@@ -803,12 +907,38 @@ export function groupByFeature(projectRoot: string): FeatureGroupsResult {
     const byId = new Map<string, Artifact>();
     for (const a of scan.artifacts) byId.set(a.id, a);
 
+    // The artifact's OWN explicit tag: its stored featureId re-normalized
+    // through the same slug family the title miner uses (idempotent on an
+    // already-normalized slug), so agent-tag ↔ title-prefix convergence holds
+    // regardless of how the featureId was written. Registers the tag's label.
+    const explicitOf = (artifact: Artifact): string | null => {
+      const explicit = normalizeFeatureId((artifact as { featureId?: unknown }).featureId as string | undefined);
+      if (explicit) {
+        registerLabel(explicit);
+        return explicit.slug;
+      }
+      return null;
+    };
+
     const resolve = (artifact: Artifact, seen: Set<string>): string | null => {
       const ck = composite(scan.sessionId, artifact.id);
       const cached = groupKeyOf.get(ck);
       if (cached !== undefined) return cached;
-      // Cycle guard — a corrupt parentId loop resolves to own-prefix.
+
+      // 0. HUMAN override — top precedence, independent of chain/cycle. A
+      //    reserved __ungrouped__ target pulls the artifact OUT of every feature.
+      const human = artifactAssignments[artifact.id];
+      if (human !== undefined) {
+        const eff = human === UNGROUPED_ID ? null : human;
+        groupKeyOf.set(ck, eff);
+        return eff;
+      }
+
+      // Cycle guard — a corrupt parentId loop resolves to explicit-tag ?? own-prefix
+      // (no parent walk).
       if (seen.has(artifact.id)) {
+        const explicit = explicitOf(artifact);
+        if (explicit) return explicit;
         const own = normalizeFeaturePrefix(artifact.title);
         if (own) registerLabel(own);
         return own?.slug ?? null;
@@ -817,12 +947,15 @@ export function groupByFeature(projectRoot: string): FeatureGroupsResult {
 
       const own = normalizeFeaturePrefix(artifact.title);
       if (own) registerLabel(own);
+      const explicit = explicitOf(artifact);
 
       const parent = artifact.parentId ? byId.get(artifact.parentId) : undefined;
       const parentGroup = parent ? resolve(parent, seen) : null;
 
-      // Chain beats prefix: a grouped parent overrides the child's own prefix.
-      const effective = parentGroup ?? own?.slug ?? null;
+      // Precedence: explicit tag > parent chain > own prefix. An explicit tag
+      // BEATS an inherited parent group; only when there's no explicit tag does
+      // the chain win over the child's own prefix.
+      const effective = explicit ?? parentGroup ?? own?.slug ?? null;
       groupKeyOf.set(ck, effective);
       return effective;
     };
@@ -856,7 +989,10 @@ export function groupByFeature(projectRoot: string): FeatureGroupsResult {
     for (const artifact of scan.artifacts) {
       const key = groupKeyOf.get(composite(scan.sessionId, artifact.id)) ?? null;
       const groupId = key ?? UNGROUPED_ID;
-      const title = key ? (labelByKey.get(key) ?? key) : "Ungrouped";
+      // #206 (I1) — a human RENAME override wins over the mined/derived label;
+      // then the first-seen mined label; then a de-slugged fallback (agent-only
+      // or human-created keys that no title-prefix ever labelled).
+      const title = key ? (groupTitles[key] ?? labelByKey.get(key) ?? deslugLabel(key)) : "Ungrouped";
       const g = ensure(groupId, title, key === null);
       groupIdForArtifact.set(composite(scan.sessionId, artifact.id), groupId);
 

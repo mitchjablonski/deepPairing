@@ -103,6 +103,30 @@ export const RenameBodySchema = z.object({
 });
 export type RenameBody = z.infer<typeof RenameBodySchema>;
 
+// #206 (I1) — POST /api/features/overrides — the human's corrections to the
+// DERIVED Features grouping. Two mutually-exclusive actions, discriminated on
+// `action`:
+//   - "rename" — set a group's display title (empty title clears the override).
+//   - "assign" — move an artifact into a group (groupKey "__ungrouped__" pulls
+//                it out of every feature; empty groupKey clears the assignment).
+// A HUMAN correction, so it mirrors /api/comments' guard stack (hash + bearer +
+// body-cap) rather than carrying any auth of its own.
+export const FeatureOverrideBodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("rename"),
+    groupKey: z.string().min(1).max(120),
+    /** Empty string is allowed and CLEARS the rename (back to the derived label). */
+    title: z.string().max(120),
+  }),
+  z.object({
+    action: z.literal("assign"),
+    artifactId: z.string().min(1).max(120),
+    /** The target group slug, "__ungrouped__", or "" to clear the assignment. */
+    groupKey: z.string().max(120),
+  }),
+]);
+export type FeatureOverrideBody = z.infer<typeof FeatureOverrideBodySchema>;
+
 // #171/#175 — POST /api/artifacts/:artifactId/changeset-review — set ONE file's
 // DISPOSITION (or clear it with state=null). Review PROGRESS, persisted on the
 // artifact content; NOT a decision record. #175 — "needs_changes" joins

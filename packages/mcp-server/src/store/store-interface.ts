@@ -72,6 +72,17 @@ export interface CreateArtifactParams {
   parentId?: string | null;
   /** Override the default version of 1; used when superseding. */
   version?: number;
+  /**
+   * #206 (I1) — the RAW feature tag from the present_* tool's `feature` param
+   * (e.g. "Milestone 7", "auth-rework"). The store NORMALIZES it through
+   * session-scan.normalizeFeatureId → a stable slug and persists it as
+   * `artifact.featureId` (omitted when the tag is empty/unsluggable, so clean
+   * artifacts stay byte-identical). Normalizing at the store choke point — the
+   * one place every create path (present_* handlers, revise supersede, the
+   * daemon internal route, the demo) converges — guarantees an agent tag and a
+   * title-prefix of the same milestone land on the ONE group key.
+   */
+  feature?: string | null;
   // #162 — `secretWarnings` was REMOVED from this param shape: the store now
   // scans `content` authoritatively at create time (parity with addComment),
   // so callers no longer pre-compute or pass warnings — they read the result

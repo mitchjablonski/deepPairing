@@ -46,6 +46,8 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
     type: "research",
     title: args?.title ?? "Research Findings",
     content,
+    // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
+    feature: args?.feature,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — persist + broadcast the trace BEFORE artifact_created so the

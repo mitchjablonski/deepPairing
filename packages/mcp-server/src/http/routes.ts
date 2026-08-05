@@ -8,6 +8,11 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
+import {
+  readFeatureOverrides,
+  setFeatureGroupTitle,
+  assignArtifactToFeature,
+} from "../store/feature-overrides.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 import {
   getGlobalStore,
@@ -29,6 +34,7 @@ import {
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,
   RenameBodySchema,
+  FeatureOverrideBodySchema,
   ChangesetReviewBodySchema,
   PreferenceBodySchema,
   RenderFailureBodySchema,
@@ -1724,11 +1730,49 @@ export function createHttpRoutes(
   app.get("/api/features", (c) => {
     if (!projectRoot) return c.json({ groups: [], failedSessions: [] });
     try {
-      return c.json(FileStore.groupByFeature(projectRoot));
+      // #206 (I1) — apply the human's persisted corrections (renames + moves)
+      // on read. readFeatureOverrides degrades to empty on a missing/corrupt
+      // file, so a store with no overrides (every store before slice 2) groups
+      // exactly as before.
+      const overrides = readFeatureOverrides(projectRoot);
+      return c.json(FileStore.groupByFeature(projectRoot, overrides));
     } catch (err) {
       log(`[features] read failed, returning empty: ${err}`);
       return c.json({ groups: [], failedSessions: [] });
     }
+  });
+
+  // #206 (I1) — the human's corrections to the DERIVED Features grouping: RENAME
+  // a group's display title, or MOVE an artifact into a group. Persisted
+  // project-level in .deeppairing/feature-overrides.json (the ONE thing the
+  // read-model has worth persisting). A HUMAN-facing mutation, so it mirrors
+  // /api/comments' guard stack EXACTLY — no route-local auth of its own:
+  //   - X-Project-Hash (global middleware, fail-closed) — the wrong-store gate,
+  //   - Authorization: Bearer (SP1 mutation middleware) — same token the browser
+  //     already carries via window.__deepPairingToken,
+  //   - 64 KiB body cap (global middleware).
+  // Project-scoped (no session): overrides span sessions, so — like GET
+  // /api/features — no X-Session-Id / getStore lookup is involved. Returns the
+  // freshly re-grouped result so the UI updates from ONE round-trip.
+  app.post("/api/features/overrides", async (c) => {
+    if (!projectRoot) return c.json({ error: "No project root" }, 500);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = FeatureOverrideBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    try {
+      if (parsed.data.action === "rename") {
+        setFeatureGroupTitle(projectRoot, parsed.data.groupKey, parsed.data.title);
+      } else {
+        assignArtifactToFeature(projectRoot, parsed.data.artifactId, parsed.data.groupKey);
+      }
+    } catch (err) {
+      log(`[features] override write failed: ${err}`);
+      return c.json({ error: "Could not persist the correction.", code: ERROR_CODES.validation_error }, 500);
+    }
+    // Return the override-applied groups — optimistic + authoritative in one.
+    const overrides = readFeatureOverrides(projectRoot);
+    return c.json(FileStore.groupByFeature(projectRoot, overrides));
   });
 
   // Cross-session search

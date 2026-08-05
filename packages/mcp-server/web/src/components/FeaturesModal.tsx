@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet, apiBase } from "../lib/api";
+import { apiGet, apiBase, safeFetch, sessionHeaders } from "../lib/api";
 import { enterSessionReplay } from "../lib/session-replay";
 import { useModal } from "../hooks/useModal";
 import { timeAgo } from "../lib/time";
@@ -73,6 +73,13 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Which groups have their (compact) file-touch list revealed.
   const [filesOpen, setFilesOpen] = useState<Record<string, boolean>>({});
+  // #206 (I1) — the group currently being RENAMED + its in-flight draft title.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  // A correction (rename / move) is being persisted — disables the affordances
+  // so a double-submit can't race.
+  const [savingOverride, setSavingOverride] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +121,51 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // #206 (I1) — POST a correction (rename / move) to the project-level overrides
+  // and adopt the freshly re-grouped result the route returns (one round-trip:
+  // authoritative, not optimistic-then-refetch). Preserves the current expand
+  // state so a correction doesn't collapse groups the human opened; a brand-new
+  // group (a move to a not-yet-rendered key) defaults to expanded.
+  const postOverride = async (body: Record<string, unknown>): Promise<void> => {
+    setSavingOverride(true);
+    setOverrideError(null);
+    try {
+      const res = await safeFetch(`${apiBase()}/api/features/overrides`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify(body),
+      });
+      const next = (await res.json()) as FeatureGroupsResult;
+      const nextGroups = next.groups ?? [];
+      setData({ groups: nextGroups, failedSessions: next.failedSessions ?? [] });
+      setExpanded((prev) => {
+        const merged = { ...prev };
+        for (const g of nextGroups) if (!(g.id in merged)) merged[g.id] = !g.ungrouped;
+        return merged;
+      });
+    } catch (err) {
+      setOverrideError(err instanceof Error ? err.message : "Could not save your correction.");
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
+  const startRename = (g: FeatureGroup) => {
+    setOverrideError(null);
+    setRenaming(g.id);
+    setRenameValue(g.title);
+  };
+  const commitRename = async (g: FeatureGroup) => {
+    const title = renameValue.trim();
+    setRenaming(null);
+    // No-op when unchanged (avoids a pointless write + re-render churn).
+    if (title === g.title.trim()) return;
+    await postOverride({ action: "rename", groupKey: g.id, title });
+  };
+  const moveArtifact = async (artifactId: string, groupKey: string) => {
+    await postOverride({ action: "assign", artifactId, groupKey });
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start justify-center pt-16"
@@ -149,6 +201,15 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
+        {overrideError && (
+          <div
+            role="alert"
+            className="mb-3 px-3 py-2 rounded-lg bg-accent-red/10 border border-accent-red/30 text-2xs text-accent-red"
+          >
+            {overrideError}
+          </div>
+        )}
+
         {loading && (
           <div className="py-8 text-center text-text-muted text-sm" role="status">
             Loading features…
@@ -177,10 +238,43 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                     data-feature-group={g.id}
                     className="border border-white/[0.06] rounded-lg overflow-hidden bg-surface-elevated"
                   >
+                    {renaming === g.id ? (
+                      // #206 (I1) — inline RENAME row. Enter commits, Esc cancels.
+                      <div className="px-3 py-2 flex items-center gap-2">
+                        <input
+                          autoFocus
+                          data-feature-rename-input
+                          aria-label={`Rename ${g.title}`}
+                          value={renameValue}
+                          disabled={savingOverride}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); void commitRename(g); }
+                            else if (e.key === "Escape") { e.preventDefault(); setRenaming(null); }
+                          }}
+                          className="flex-1 min-w-0 bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                        />
+                        <button
+                          onClick={() => void commitRename(g)}
+                          disabled={savingOverride}
+                          className="text-2xs text-accent-blue hover:underline disabled:opacity-50 shrink-0"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setRenaming(null)}
+                          disabled={savingOverride}
+                          className="text-2xs text-text-muted hover:text-text-primary disabled:opacity-50 shrink-0"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                    <div className="flex items-stretch">
                     <button
                       onClick={() => setExpanded((e) => ({ ...e, [g.id]: !isOpen }))}
                       aria-expanded={isOpen}
-                      className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-surface-hover transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                      className="flex-1 min-w-0 text-left px-3 py-2 flex items-center gap-2 hover:bg-surface-hover transition-colors focus:outline-none focus:ring-1 focus:ring-accent-blue"
                     >
                       <span aria-hidden="true" className="text-text-muted text-2xs w-3 shrink-0">
                         {isOpen ? "▾" : "▸"}
@@ -205,6 +299,22 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                         </span>
                       )}
                     </button>
+                    {/* Rename is a HUMAN correction to the derived title — offered on
+                        named features only (the Ungrouped bucket isn't a feature). */}
+                    {!g.ungrouped && (
+                      <button
+                        data-feature-rename
+                        aria-label={`Rename ${g.title}`}
+                        title="Rename this feature"
+                        disabled={savingOverride}
+                        onClick={() => startRename(g)}
+                        className="px-2 text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent-blue shrink-0"
+                      >
+                        <span aria-hidden="true" className="text-xs">✎</span>
+                      </button>
+                    )}
+                    </div>
+                    )}
 
                     {isOpen && (
                       <div className="px-3 pb-3 pt-1 space-y-3">
@@ -216,13 +326,16 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                           <ul className="space-y-1">
                             {g.artifactRefs.map((r) => {
                               const key = `${r.sessionId}:${r.artifactId}`;
+                              // #206 (I1) — move targets = every OTHER group (incl.
+                              // Ungrouped). Only offered when a target exists.
+                              const moveTargets = groups.filter((t) => t.id !== g.id);
                               return (
-                                <li key={key}>
+                                <li key={key} className="flex items-center gap-1">
                                   <button
                                     data-feature-artifact
                                     onClick={() => openArtifact(r.sessionId, r.artifactId)}
                                     disabled={opening === key}
-                                    className="w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover
+                                    className="flex-1 min-w-0 text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-hover
                                                disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent-blue"
                                   >
                                     <span className="text-text-muted shrink-0">
@@ -233,6 +346,28 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                                       {r.status}
                                     </span>
                                   </button>
+                                  {moveTargets.length > 0 && (
+                                    <select
+                                      data-feature-move
+                                      aria-label={`Move ${r.title} to another feature`}
+                                      title="Move to feature…"
+                                      disabled={savingOverride}
+                                      value=""
+                                      onChange={(e) => {
+                                        const target = e.target.value;
+                                        if (target) void moveArtifact(r.artifactId, target);
+                                      }}
+                                      className="shrink-0 text-2xs bg-surface-secondary border border-border-default rounded px-1 py-0.5 text-text-muted
+                                                 hover:text-text-primary disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent-blue max-w-[7rem]"
+                                    >
+                                      <option value="">Move…</option>
+                                      {moveTargets.map((t) => (
+                                        <option key={t.id} value={t.id}>
+                                          {t.ungrouped ? "Ungrouped" : t.title}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
                                 </li>
                               );
                             })}
@@ -310,9 +445,11 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
 
             {/* Honest limits, stated in-UI — no overclaiming. */}
             <p className="text-2xs text-text-muted pt-3 leading-relaxed">
-              Grouping is derived from artifact titles and parent/revision threads — there's no feature
-              tag yet, so anything without a "Milestone N" / "Phase N" / "Feature:" / "[tag]" prefix lands
-              in Ungrouped. File touches come from code changes and changesets; decisions don't carry file
+              Grouping is derived from artifact titles, the feature tags the agent stamps as it works,
+              and parent/revision threads. You can rename a feature (✎) or move an artifact to another
+              feature — your corrections are saved and win over the derived grouping. Anything still
+              untagged and without a "Milestone N" / "Phase N" / "Feature:" / "[tag]" prefix lands in
+              Ungrouped. File touches come from code changes and changesets; decisions don't carry file
               attribution.
             </p>
           </>

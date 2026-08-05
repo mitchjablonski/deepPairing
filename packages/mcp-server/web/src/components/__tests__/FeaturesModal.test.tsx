@@ -134,6 +134,55 @@ describe("FeaturesModal", () => {
     await waitFor(() => expect(screen.getByText(/couldn't load features/i)).toBeInTheDocument());
   });
 
+  it("renaming a group posts a rename override and shows the new title (#206)", async () => {
+    const calls: Array<{ url: unknown; init: RequestInit | undefined }> = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: unknown, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ groups: [{ ...M6, title: "Quota backfill" }], failedSessions: [] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ groups: [M6], failedSessions: [] }) });
+    }));
+    render(<FeaturesModal onClose={() => {}} />);
+    await screen.findByText("Milestone 6");
+    await userEvent.click(screen.getByLabelText("Rename Milestone 6")); // the ✎ button
+    const input = screen.getByLabelText("Rename Milestone 6"); // now the input
+    await userEvent.clear(input);
+    await userEvent.type(input, "Quota backfill{Enter}");
+    await waitFor(() => expect(screen.getByText("Quota backfill")).toBeInTheDocument());
+    const post = calls.find((c) => c.init?.method === "POST");
+    expect(JSON.parse(String(post!.init!.body))).toEqual({ action: "rename", groupKey: "milestone-6", title: "Quota backfill" });
+  });
+
+  it("moving an artifact posts an assign override to the chosen feature (#206)", async () => {
+    const calls: Array<{ url: unknown; init: RequestInit | undefined }> = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: unknown, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ groups: [M6, UNGROUPED], failedSessions: [] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ groups: [M6, UNGROUPED], failedSessions: [] }) });
+    }));
+    render(<FeaturesModal onClose={() => {}} />);
+    await screen.findByText("quota backfill plan");
+    // M6 (expanded) rows carry a move-select whose only target is Ungrouped.
+    const selects = screen.getAllByLabelText(/to another feature/i);
+    await userEvent.selectOptions(selects[0]!, "__ungrouped__");
+    await waitFor(() => {
+      const post = calls.find((c) => c.init?.method === "POST");
+      expect(post).toBeTruthy();
+      expect(JSON.parse(String(post!.init!.body))).toEqual({ action: "assign", artifactId: "a1", groupKey: "__ungrouped__" });
+    });
+  });
+
+  it("the footnote mentions the feature tags and human corrections (#206)", async () => {
+    stubFeatures({ groups: [M6], failedSessions: [] });
+    render(<FeaturesModal onClose={() => {}} />);
+    await screen.findByText("Milestone 6");
+    expect(screen.getByText(/feature tags the agent stamps/i)).toBeInTheDocument();
+    expect(screen.getByText(/rename a feature/i)).toBeInTheDocument();
+  });
+
   it("Ungrouped is rendered last, after named features", async () => {
     stubFeatures({ groups: [M6, UNGROUPED], failedSessions: [] });
     render(<FeaturesModal onClose={() => {}} />);

@@ -39,6 +39,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
     title,
     content,
     relatedArtifactIds: args?.relatedFindings,
+    feature: args?.feature,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   await ctx.store.recordPlanReview(id);

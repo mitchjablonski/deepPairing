@@ -50,6 +50,7 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
     title,
     content,
     relatedArtifactIds,
+    feature: args?.feature as string | undefined,
   });
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb paints populated.
