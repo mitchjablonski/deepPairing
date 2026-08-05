@@ -6,6 +6,8 @@ import { OpenQuestionSection } from "./OpenQuestionSection";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useChainComments } from "../../hooks/useChainComments";
+import { reviewLifecycle } from "../../lib/reviewLifecycle";
+import { useReplayStore } from "../../stores/replay";
 
 interface Props {
   artifact: Artifact;
@@ -42,6 +44,17 @@ export function SpecArtifact({ artifact }: Props) {
   // array) so the renderer can trust the shape without per-field guards.
   const spec = coerceSpecContent(artifact.content);
   const requirements = spec.requirements;
+  // #207 (I2) — the WRITE AXIS, derived through the SAME reviewLifecycle helper
+  // ResearchArtifact uses post-H3, so a retracted (→ "closed") or replayed (→
+  // "frozen") spec withholds EVERY composer it hosts (visuals, requirement
+  // threads, open questions) uniformly. Draft ("review") stays writable; approved
+  // ("follow_up") STAYS late-commentable (the #187 lane — approved is never
+  // locked). Posted history stays readable.
+  const replayActive = useReplayStore((s) => s.active);
+  const writeLocked = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
 
   return (
     <div className="space-y-4">
@@ -65,8 +78,9 @@ export function SpecArtifact({ artifact }: Props) {
         </div>
       )}
 
-      {/* Visuals frame the spec — diagrams / file maps the human can comment on. */}
-      <ArtifactVisuals artifactId={artifact.id} visuals={spec.visuals ?? []} />
+      {/* Visuals frame the spec — diagrams / file maps the human can comment on
+          (composers withheld when the spec is retracted/terminal or replayed). */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={spec.visuals ?? []} readOnly={writeLocked} />
 
       {/* Requirements — each is individually challengeable */}
       <div>
@@ -80,7 +94,7 @@ export function SpecArtifact({ artifact }: Props) {
         </div>
         <div className="space-y-2">
           {requirements.map((req, i) => (
-            <RequirementRow key={req.id ?? i} requirement={req} index={i} artifact={artifact} />
+            <RequirementRow key={req.id ?? i} requirement={req} index={i} artifact={artifact} writeLocked={writeLocked} />
           ))}
         </div>
       </div>
@@ -118,7 +132,7 @@ export function SpecArtifact({ artifact }: Props) {
               per-question targeting lives inside the shared component so
               answers land in the agent's feedback lane. */}
           {spec.openQuestions.map((q, i) => (
-            <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} />
+            <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} readOnly={writeLocked} />
           ))}
         </div>
       )}
@@ -135,10 +149,15 @@ function RequirementRow({
   requirement,
   index,
   artifact,
+  writeLocked = false,
 }: {
   requirement: SpecRequirement;
   index: number;
   artifact: Artifact;
+  /** #207 (I2) — withhold the per-requirement ask/comment composers when the
+   *  spec is retracted/terminal or replayed. The comment COUNT + prior thread
+   *  stay readable below; only the write triggers are pulled. */
+  writeLocked?: boolean;
 }) {
   const comments = useChainComments(artifact.id); // Bug2 — chain aggregation
   // D8 (M6) — match by stable requirementId first; keep the legacy
@@ -168,17 +187,19 @@ function RequirementRow({
           )}
           <span className="text-sm font-medium text-text-primary">{requirement.statement}</span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <AskTrigger
-            artifactId={artifact.id}
-            target={{ requirementId: requirement.id, stepIndex: index, sectionId: "requirement" }}
-          />
-          <CommentTrigger
-            artifactId={artifact.id}
-            target={{ requirementId: requirement.id, stepIndex: index, sectionId: "requirement" }}
-            existingCount={reqComments.length}
-          />
-        </div>
+        {!writeLocked && (
+          <div className="flex items-center gap-1 shrink-0">
+            <AskTrigger
+              artifactId={artifact.id}
+              target={{ requirementId: requirement.id, stepIndex: index, sectionId: "requirement" }}
+            />
+            <CommentTrigger
+              artifactId={artifact.id}
+              target={{ requirementId: requirement.id, stepIndex: index, sectionId: "requirement" }}
+              existingCount={reqComments.length}
+            />
+          </div>
+        )}
       </div>
 
       <div className="text-2xs text-text-muted mb-2">

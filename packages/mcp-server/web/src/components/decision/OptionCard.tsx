@@ -17,6 +17,11 @@ interface OptionCardProps {
   /** True when the roving highlight (focusedIndex) sits on this option. */
   focused: boolean;
   submitting: boolean;
+  /** #207 (I2) — a retracted/terminal ("closed") or replayed ("frozen") decision
+   *  is READ-ONLY on the write axis: the Select button stays VISIBLE (the option
+   *  is history) but disabled + dimmed + labelled read-only, and the per-option
+   *  ask composer is withheld. Default false (draft/approved fully selectable). */
+  locked?: boolean;
   /** Artifact id — needed for AskTrigger targeting per-option questions */
   artifactId?: string;
   onSelect: (optionId: string) => void;
@@ -26,7 +31,7 @@ interface OptionCardProps {
   selectButtonRef: (el: HTMLButtonElement | null) => void;
 }
 
-export function OptionCard({ option, index, focused, submitting, artifactId, onSelect, onFocus, selectButtonRef }: OptionCardProps) {
+export function OptionCard({ option, index, focused, submitting, locked = false, artifactId, onSelect, onFocus, selectButtonRef }: OptionCardProps) {
   // #180 — the inline card is a DEFAULT decision surface: a comment you left on
   // this option carries onto the tuned version here too (useChainComments), so
   // show the SAME carryover signal the workbench does instead of leaving it
@@ -83,7 +88,7 @@ export function OptionCard({ option, index, focused, submitting, artifactId, onS
             </span>
           )}
         </div>
-        {artifactId && (
+        {artifactId && !locked && (
           <div
             // Stop click here so asking a question doesn't also select
             // the option.
@@ -168,11 +173,14 @@ export function OptionCard({ option, index, focused, submitting, artifactId, onS
         <button
           ref={selectButtonRef}
           data-select-option
-          onClick={() => !submitting && onSelect(option.id)}
-          disabled={submitting}
+          onClick={() => !submitting && !locked && onSelect(option.id)}
+          disabled={submitting || locked}
           // Accessible name carries the option title so a SR user
           // choosing from the buttons list can tell them apart.
           aria-label={`Select ${option.title}`}
+          // #207 (I2) — the H3 read-only affordance wording on a locked decision.
+          aria-disabled={locked || undefined}
+          title={locked ? "Read-only — this artifact was retracted or is being replayed" : undefined}
           // U4 — keep the roving highlight in lockstep with Tab focus
           // (this button is now the card's only focusable selector).
           onFocus={() => !submitting && onFocus(index)}

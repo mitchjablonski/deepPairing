@@ -60,6 +60,58 @@ describe("SpecArtifact — tolerates missing optional arrays", () => {
   });
 });
 
+describe("SpecArtifact — #207 (I2) write-axis lock", () => {
+  beforeEach(() => {
+    useArtifactStore.getState().reset();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  const specContent = {
+    objective: "obj",
+    requirements: [{ id: "R1", statement: "do the thing", rationale: "because", acceptanceCriteria: ["works"] }],
+    visuals: [{ id: "fm", kind: "file_map", title: "Files I'll touch", files: [{ path: "src/x.ts", change: "create" }] }],
+    openQuestions: ["Which DB?"],
+  };
+
+  it("RETRACTED: withholds every composer — requirement Ask/Comment, visuals bar, open-questions", () => {
+    const art = mk("spec", specContent, { id: "spec_r", status: "retracted" });
+    useArtifactStore.getState().addArtifact(art);
+    render(<SpecArtifact artifact={art} />);
+
+    // Requirement row triggers gone…
+    expect(screen.queryByRole("button", { name: /Ask the agent/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Add a comment$/i })).not.toBeInTheDocument();
+    // …visuals composer bar gone…
+    expect(screen.queryByRole("button", { name: /Comment on this file map/i })).not.toBeInTheDocument();
+    // …open-questions answer composer gone…
+    expect(screen.queryByRole("button", { name: "Answer" })).not.toBeInTheDocument();
+    // …but the spec content stays readable.
+    expect(screen.getByText("do the thing")).toBeInTheDocument();
+    expect(screen.getByText("Files I'll touch")).toBeInTheDocument();
+    expect(screen.getByText("Which DB?")).toBeInTheDocument();
+  });
+
+  it("APPROVED stays LATE-COMMENTABLE (the #187 lane) — composers STILL LIVE", () => {
+    const art = mk("spec", specContent, { id: "spec_a", status: "approved" });
+    useArtifactStore.getState().addArtifact(art);
+    render(<SpecArtifact artifact={art} />);
+
+    // The regression that matters most: approved keeps its composers (both the
+    // requirement AskTrigger and the visuals AskTrigger carry this label).
+    expect(screen.getAllByRole("button", { name: /Ask the agent/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Comment on this file map/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Answer" })).toBeInTheDocument();
+  });
+
+  it("DRAFT: composers present (unchanged)", () => {
+    const art = mk("spec", specContent, { id: "spec_d", status: "draft" });
+    useArtifactStore.getState().addArtifact(art);
+    render(<SpecArtifact artifact={art} />);
+    expect(screen.getAllByRole("button", { name: /Ask the agent/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Answer" })).toBeInTheDocument();
+  });
+});
+
 describe("PlanArtifact — MotivatedByBadges tolerates unresolved / odd data", () => {
   beforeEach(() => useArtifactStore.getState().reset());
 

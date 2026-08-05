@@ -11,6 +11,7 @@ import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
 import { DecisionDiagramFocus } from "./DecisionDiagramFocus";
 import { useReplayStore } from "../stores/replay";
+import { reviewLifecycle } from "../lib/reviewLifecycle";
 import { OptionCard } from "./decision/OptionCard";
 import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
 import { DecisionFooter } from "./decision/DecisionFooter";
@@ -33,6 +34,17 @@ interface DecisionCardProps {
   initialResolved?: InitialResolved;
   /** For the Re-pair modal: which session this decision was recorded in. */
   sessionId?: string;
+  /**
+   * #207 (I2) — the WRITE-AXIS lock, derived by DecisionArtifactView through the
+   * shared reviewLifecycle helper (retracted/terminal → "closed", replay →
+   * "frozen"). When true the option grid is READABLE but its write affordances
+   * are pulled: Select is disabled + labelled read-only, the per-option ask
+   * trigger + the "Discuss" workbench entry are withheld, and DecisionFooter's
+   * choose/reject/send-back actions are inert — matching the spirit of how a
+   * RESOLVED decision withholds the whole interactive surface. Chosen/sent-back
+   * confirmation states are preserved. Default false (draft/approved writable).
+   */
+  writeLocked?: boolean;
   onResolved?: () => void;
 }
 
@@ -63,7 +75,7 @@ type DecisionPhase =
   | { kind: "resolved"; optionId: string }
   | { kind: "sentBack" };
 
-export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, onResolved }: DecisionCardProps) {
+export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, onResolved }: DecisionCardProps) {
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
@@ -190,6 +202,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // F12 — no resolving decisions against a replayed frame (the write
     // would land in the historical session's store via owner routing).
     if (useReplayStore.getState().active) return;
+    // #207 (I2) — a retracted/terminal or replayed decision is read-only: never
+    // resolve it (keyboard Enter / armed-select expiry route through here too).
+    if (writeLocked) return;
     if (phase.kind !== "idle") return;
     await submitSelection(optionId);
   };
@@ -324,7 +339,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // renders DecisionCard. Map approve → select the focused option, revise →
   // open the send-back composer.
   useEffect(() => {
-    if (!artifactId || resolved) return;
+    // #207 (I2) — the global a/r (approve/revise) shortcuts do nothing on a
+    // read-only decision: no arming a select, no opening the send-back composer.
+    if (!artifactId || resolved || writeLocked) return;
     const onShortcut = (evt: Event) => {
       const detail = (evt as CustomEvent).detail as { artifactId?: string; action?: string } | undefined;
       if (!detail || detail.artifactId !== artifactId) return;
@@ -346,7 +363,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     return () => window.removeEventListener("dp:artifact-shortcut", onShortcut);
     // (The approve branch only ARMS now — no handleSelect in deps; the tick
     // effect reads it through the latest-ref.)
-  }, [artifactId, resolved, focusedIndex, event.options]);
+  }, [artifactId, resolved, writeLocked, focusedIndex, event.options]);
 
   // Send-back-with-comment: posts a tagged question comment that the
   // server's firstCallHint promotes to "REVISION REQUEST" priority. Agent
@@ -361,6 +378,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // short-circuits synchronously.
   const submitSendBack = async () => {
     const text = sendBackText.trim();
+    // #207 (I2) — inert on a read-only decision (the footer trigger is withheld,
+    // but guard the submit too so no keyboard path can post send-back feedback).
+    if (writeLocked) return;
     if (!artifactId || !text || phase.kind !== "idle" || inFlightRef.current) return;
     inFlightRef.current = true;
     try {
@@ -389,6 +409,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
   // submitSendBack.
   const submitReject = async () => {
     const text = rejectText.trim();
+    // #207 (I2) — inert on a read-only decision (defensive; the trigger is gone).
+    if (writeLocked) return;
     if (!artifactId || !text || phase.kind !== "idle" || inFlightRef.current) return;
     inFlightRef.current = true;
     try {
@@ -500,6 +522,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     reasoning,
     setReasoning,
     onSelect: handleSelect,
+    // #207 (I2) — one flag threads the write-lock to BOTH DecisionFooter
+    // instances (the inline card + the workbench's), so choose/reject/send-back
+    // go inert everywhere without duplicating the guard.
+    locked: writeLocked,
   };
 
   return (
@@ -526,8 +552,12 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         {/* #174 — the ONE affordance the clean card gains: expand into the
             focused discuss workbench (side-by-side compare + grain commenting).
             Kept out of the option grid so it's misclick-safe. Gated on
-            artifactId — grain comments need something to anchor to. */}
-        {artifactId && (
+            artifactId — grain comments need something to anchor to.
+            #207 (I2) — WITHHELD on a read-only (retracted/terminal or replayed)
+            decision: the workbench's sole purpose is grain-comment composers, so
+            hiding the entry matches how a RESOLVED decision keeps the workbench
+            unreachable (the resolved early-return never renders it). */}
+        {artifactId && !writeLocked && (
           <button
             type="button"
             onClick={() => setShowWorkbench(true)}
@@ -546,7 +576,22 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             )}
           </button>
         )}
-        <span className={`text-2xs text-text-muted ${artifactId ? "" : "ml-auto"}`}>↑↓ navigate · Enter selects highlighted</span>
+        {/* #207 (I2) — the nav hint promises keyboard SELECTION; on a read-only
+            decision that's a lie, so swap in the quiet read-only affordance (the
+            same H3 title/aria wording used on the locked research triad). The
+            Discuss button is hidden when locked, so re-add ml-auto to keep the
+            note right-aligned. */}
+        {writeLocked ? (
+          <span
+            className="ml-auto text-2xs text-text-muted italic"
+            title="Read-only — this artifact was retracted or is being replayed"
+            aria-label="Read-only — this artifact was retracted or is being replayed"
+          >
+            Read-only
+          </span>
+        ) : (
+          <span className={`text-2xs text-text-muted ${artifactId ? "" : "ml-auto"}`}>↑↓ navigate · Enter selects highlighted</span>
+        )}
       </div>
       <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
 
@@ -583,6 +628,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               index={idx}
               focused={idx === focusedIndex}
               submitting={submitting}
+              locked={writeLocked}
               artifactId={artifactId}
               onSelect={handleSelect}
               onFocus={setFocusedIndex}
@@ -714,6 +760,16 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
   const replayDecisions = useReplayStore((s) => s.decisions);
   const liveResolved = useArtifactStore((s) => s.resolvedDecisions[effectiveDecisionId]);
 
+  // #207 (I2) — the WRITE-AXIS lock, derived through the SAME reviewLifecycle
+  // helper every other renderer uses (retracted/terminal → "closed", replay →
+  // "frozen"). Threaded into DecisionCard so an UNRESOLVED retracted decision's
+  // option grid + footer + Discuss entry go read-only. (A resolved decision
+  // renders ResolvedDecisionView regardless — out of this residue's scope.)
+  const writeLocked = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
+
   // An options-less decision has nothing to render, so bail (after the hooks).
   if (dc.options.length === 0) return null;
 
@@ -753,6 +809,7 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
         sessionId={artifact.sessionId}
         stakes={dc.stakes}
         initialResolved={initialResolved}
+        writeLocked={writeLocked}
       />
     </>
   );
