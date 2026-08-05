@@ -185,9 +185,14 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
           // (this button is now the card's only focusable selector).
           onFocus={() => !submitting && onFocus(index)}
           className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
-            focused
-              ? "bg-accent-blue-strong text-white"
-              : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
+            locked
+              ? // #207 (I2 review) — a locked Select must NOT keep the focused/
+                // recommended primary blue fill (it read as clickable); flatten
+                // it to the muted, hover-less resting style like the others.
+                "bg-surface-secondary text-text-muted"
+              : focused
+                ? "bg-accent-blue-strong text-white"
+                : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
           } disabled:opacity-50 disabled:cursor-not-allowed`}
         >
           Select

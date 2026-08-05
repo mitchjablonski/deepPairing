@@ -112,6 +112,43 @@ describe("SpecArtifact — #207 (I2) write-axis lock", () => {
   });
 });
 
+describe("PlanArtifact — #207 (I2 review) write-axis lock", () => {
+  beforeEach(() => {
+    useArtifactStore.getState().reset();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  const planContent = {
+    estimatedChanges: 1,
+    steps: [{ description: "wire the middleware", reasoning: "central choke point" }],
+    visuals: [{ id: "fm", kind: "file_map", title: "Files I'll touch", files: [{ path: "src/x.ts", change: "create" }] }],
+  };
+
+  it("RETRACTED: per-step ask/comment + visuals composers withheld; steps readable", () => {
+    const art = mk("plan", planContent, { id: "plan_r", status: "retracted" });
+    render(<PlanArtifact artifact={art} />);
+    expect(screen.queryByRole("button", { name: /Ask the agent/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Add a comment$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Comment on this file map/i })).not.toBeInTheDocument();
+    expect(screen.getByText("wire the middleware")).toBeInTheDocument();
+    expect(screen.getByText("Files I'll touch")).toBeInTheDocument();
+  });
+
+  it("APPROVED stays LATE-COMMENTABLE (the #187 lane) — per-step composers STILL LIVE", () => {
+    const art = mk("plan", planContent, { id: "plan_a", status: "approved" });
+    render(<PlanArtifact artifact={art} />);
+    // Both the per-step AskTrigger and the visuals AskTrigger carry this label.
+    expect(screen.getAllByRole("button", { name: /Ask the agent/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Comment on this file map/i })).toBeInTheDocument();
+  });
+
+  it("DRAFT: composers present (unchanged)", () => {
+    const art = mk("plan", planContent, { id: "plan_d", status: "draft" });
+    render(<PlanArtifact artifact={art} />);
+    expect(screen.getAllByRole("button", { name: /Ask the agent/i }).length).toBeGreaterThan(0);
+  });
+});
+
 describe("PlanArtifact — MotivatedByBadges tolerates unresolved / odd data", () => {
   beforeEach(() => useArtifactStore.getState().reset());
 

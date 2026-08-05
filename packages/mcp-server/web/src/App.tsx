@@ -30,6 +30,7 @@ import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
 import { scrollToAnchor } from "./lib/comment-anchor";
+import { reviewLifecycle } from "./lib/reviewLifecycle";
 import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
@@ -321,6 +322,14 @@ function App() {
         if (useReplayStore.getState().active) return;
         const selected = store.artifacts.find((a) => a.id === store.selectedArtifactId);
         if (!selected) return;
+        // #207 (I2 review) — QuickAsk posts an artifact-targeted question that
+        // check_feedback delivers, so it must honor the SAME write-axis lock the
+        // artifact renderers do: a retracted/terminal ("closed") or replayed
+        // ("frozen") selection is read-only. Draft ("review") AND approved
+        // ("follow_up", the #187 late-comment lane) both stay askable — a
+        // stricter status==="draft" clamp would kill approved follow-ups.
+        const lc = reviewLifecycle(selected.status, useReplayStore.getState().active);
+        if (lc === "closed" || lc === "frozen") return;
         e.preventDefault();
         // U3 — open the themed ask composer (setter is referentially stable).
         // Was window.prompt, a no-op inside the VS Code webview that embeds this

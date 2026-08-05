@@ -83,6 +83,48 @@ describe("F9 (L3) — replay clamps + Escape exit", () => {
   });
 });
 
+describe("#207 (I2 review) — the q QuickAsk clamp honors the write-axis", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } })),
+    ));
+    useArtifactStore.getState().reset();
+    useConnectionStore.setState({ connected: true, hydrated: true } as any);
+  });
+  afterEach(() => useReplayStore.getState().exitReplay());
+
+  const openModal = () => document.querySelector('textarea[placeholder*="question" i]');
+
+  it("q on a RETRACTED selection does NOT open the ask composer (would post to a withdrawn artifact)", () => {
+    useArtifactStore.setState({ artifacts: [art("a1", "retracted")], selectedArtifactId: "a1" });
+    render(<App />);
+    fireEvent.keyDown(document, { key: "q" });
+    expect(openModal()).toBeNull();
+  });
+
+  it("q on a DRAFT selection opens the ask composer (review lane)", () => {
+    useArtifactStore.setState({ artifacts: [art("a1", "draft")], selectedArtifactId: "a1" });
+    render(<App />);
+    fireEvent.keyDown(document, { key: "q" });
+    expect(openModal()).not.toBeNull();
+  });
+
+  it("q on an APPROVED selection STILL opens the composer (the #187 late follow-up lane must keep working)", () => {
+    useArtifactStore.setState({ artifacts: [art("a1", "approved")], selectedArtifactId: "a1" });
+    render(<App />);
+    fireEvent.keyDown(document, { key: "q" });
+    expect(openModal()).not.toBeNull();
+  });
+
+  it("q during REPLAY is inert even on a draft (frozen frame)", () => {
+    useArtifactStore.setState({ artifacts: [art("a1", "draft")], selectedArtifactId: "a1" });
+    render(<App />);
+    useReplayStore.setState({ active: true } as any);
+    fireEvent.keyDown(document, { key: "q" });
+    expect(openModal()).toBeNull();
+  });
+});
+
 describe("H1 — jumps close the rail that covers their target", () => {
   it("dp:focus-artifact while the Comment threads rail is open closes it", () => {
     render(<App />);

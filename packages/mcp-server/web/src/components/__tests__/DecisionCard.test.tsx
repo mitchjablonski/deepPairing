@@ -97,6 +97,20 @@ describe("DecisionCard — #207 (I2) retracted write-axis lock", () => {
     expect(screen.getByRole("button", { name: /Expand to discuss/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Send decision back for revised options/i })).toBeInTheDocument();
   });
+
+  it("Fix 1 — a workbench opened while WRITABLE unmounts when the decision retracts mid-session", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" />);
+    // Open the workbench while writable.
+    await user.click(screen.getByRole("button", { name: /Expand to discuss/i }));
+    expect(await screen.findByTestId("decision-workbench")).toBeInTheDocument();
+    // The agent retracts — a WS status flip re-renders with writeLocked=true.
+    // `showWorkbench` is local state that persists; the RENDER gate must unmount it.
+    rerender(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" writeLocked />);
+    expect(screen.queryByTestId("decision-workbench")).not.toBeInTheDocument();
+    // And no grain composer survives to fire submitComment on the retracted decision.
+    expect(document.querySelectorAll("[data-grain-affordance]").length).toBe(0);
+  });
 });
 
 describe("DecisionCard — resolved options disclosure", () => {

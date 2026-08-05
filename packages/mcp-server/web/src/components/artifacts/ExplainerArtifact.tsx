@@ -7,6 +7,8 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
+import { reviewLifecycle } from "../../lib/reviewLifecycle";
+import { useReplayStore } from "../../stores/replay";
 
 /**
  * #190 A2 — the read-only EXPLAINER renderer (the comprehension surface for how
@@ -74,22 +76,29 @@ function BlockGrain({
   sectionId,
   label,
   comments,
+  readOnly = false,
 }: {
   artifactId: string;
   sectionId: string;
   label: string;
   comments: Comment[];
+  /** #207 (I2 review) — on a retracted/terminal ("closed") or replayed
+   *  ("frozen") explainer the grain composer is withheld: the "💬 Comment"
+   *  toggle is pulled and any prior thread renders read-only. */
+  readOnly?: boolean;
 }) {
   const grain = useMemo(
     () => comments.filter((c) => c.target.sectionId === sectionId),
     [comments, sectionId],
   );
   const [open, setOpen] = useState(false);
-  const show = open || grain.length > 0;
+  // When read-only the "+ Comment" toggle never appears, so only reveal an
+  // existing thread (read-only); an empty block renders nothing at all.
+  const show = readOnly ? grain.length > 0 : open || grain.length > 0;
 
   return (
     <div className="mt-2">
-      {!show && (
+      {!show && !readOnly && (
         <button
           type="button"
           data-grain-affordance
@@ -114,6 +123,7 @@ function BlockGrain({
             textareaLabel={`Comment on ${label}`}
             secondarySubmitLabel="Ask"
             secondarySubmitTitle={`Ask the agent a question about ${label}`}
+            readOnly={readOnly}
           />
         </div>
       )}
@@ -128,18 +138,20 @@ function ExplainerBlock({
   title,
   comments,
   children,
+  readOnly = false,
 }: {
   artifactId: string;
   sectionId: string;
   title: string;
   comments: Comment[];
   children: ReactNode;
+  readOnly?: boolean;
 }) {
   return (
     <section className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2">
       <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">{title}</h4>
       {children}
-      <BlockGrain artifactId={artifactId} sectionId={sectionId} label={title} comments={comments} />
+      <BlockGrain artifactId={artifactId} sectionId={sectionId} label={title} comments={comments} readOnly={readOnly} />
     </section>
   );
 }
@@ -153,6 +165,18 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
     [artifact.content],
   );
   const comments = useChainComments(artifact.id);
+  // #207 (I2 review) — the WRITE AXIS, derived through the SAME reviewLifecycle
+  // helper the other narrative renderers use. A retracted (→ "closed") or
+  // replayed (→ "frozen") explainer withholds every composer (overview + walk
+  // grain, evidence gutters, ask-anything). An ACKNOWLEDGED explainer is
+  // status "approved" → "follow_up": it STAYS late-commentable (you can keep
+  // asking about code you've read), so approved is NOT locked. Posted history
+  // stays readable.
+  const replayActive = useReplayStore((s) => s.active);
+  const writeLocked = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
 
   const sections = content.sections ?? [];
   const relatedArtifactIds = content.relatedArtifactIds ?? [];
@@ -174,6 +198,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
         sectionId="explainer:overview"
         title="What you're about to read"
         comments={comments}
+        readOnly={writeLocked}
       >
         {content.title && (
           <div className="text-sm font-semibold text-text-primary">{content.title}</div>
@@ -216,13 +241,14 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
                         CommentableCode). The section index doubles as findingIndex:
                         an explainer has no findings, so the namespace is its own. */}
                     {section.evidence != null &&
-                      renderEvidence(section.evidence, artifact.id, i, comments)}
+                      renderEvidence(section.evidence, artifact.id, i, comments, writeLocked)}
 
                     <BlockGrain
                       artifactId={artifact.id}
                       sectionId={sectionId}
                       label={section.heading || `section ${i + 1}`}
                       comments={grain}
+                      readOnly={writeLocked}
                     />
                   </div>
                 </div>
@@ -253,10 +279,12 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
           Ask me anything
         </h4>
         <p className="text-2xs text-text-muted">
-          Anything unclear about how this works? Ask — I'll answer on my next turn.
+          {writeLocked
+            ? "This explainer is read-only — the earlier conversation is preserved below."
+            : "Anything unclear about how this works? Ask — I'll answer on my next turn."}
         </p>
 
-        {suggestedQuestions.length > 0 && (
+        {!writeLocked && suggestedQuestions.length > 0 && (
           <div className="flex flex-wrap gap-1.5" data-testid="explainer-suggested-questions">
             {suggestedQuestions.map((q, i) => (
               <button
@@ -292,6 +320,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
           secondarySubmitTitle="Ask the agent a question about this explainer"
           prefill={prefill.nonce > 0 ? prefill : undefined}
           focusSignal={askFocus > 0 ? askFocus : undefined}
+          readOnly={writeLocked}
           roomy
         />
       </div>

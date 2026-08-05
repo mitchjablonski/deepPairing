@@ -713,13 +713,20 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       {/* #174 — the focused discuss workbench. Reuses the same footerProps
           bundle for its decision-level actions, and nests #173's diagram view
           as a zoom target. artifactId is guaranteed truthy here (the Discuss
-          affordance only renders when it's set). */}
-      {showWorkbench && artifactId && (
+          affordance only renders when it's set).
+          #207 (I2 review) — `showWorkbench` is LOCAL state that survives a WS
+          status flip: a workbench opened while writable would otherwise stay
+          mounted (grain composers live) after the agent retracts. Gate the
+          RENDER on !writeLocked too — matching the resolved-decision precedent
+          (the resolved early-return unmounts it) — and thread readOnly through
+          as a belt for any future render path. */}
+      {showWorkbench && artifactId && !writeLocked && (
         <DecisionWorkbench
           event={event}
           artifactId={artifactId}
           stakes={stakes}
           footerProps={footerProps}
+          readOnly={writeLocked}
           onClose={() => setShowWorkbench(false)}
         />
       )}
