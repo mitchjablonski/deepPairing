@@ -184,14 +184,20 @@ the collaboration, not the headline:
   [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
   ([SEP-2322 MRTR](https://modelcontextprotocol.io/seps/2322-MRTR)), and
   deepPairing speaks it, native elicitation supported (opt-in) for the
-  trivial approve-here case. But elicitation's *content* model is flat by design
-  ("flat objects with primitive properties only … nested structures, arrays
-  of objects … intentionally not supported" — [Final spec](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)),
-  so the protocol's native surface can't host the review that is
-  deepPairing's whole point: changeset review with per-line and cross-file
-  comments, the decision workbench with version carryover, region-anchored
-  diagram comments, suggested edits the agent has to answer. The review
-  surface is the product; the loop is plumbing.
+  trivial approve-here case. But elicitation, as clients render it today, is a
+  flat approve/decline form ("flat objects with primitive properties only …
+  nested structures, arrays of objects … intentionally not supported" —
+  [Final spec](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation))
+  — the right shape for a yes/no, not for the review that is deepPairing's
+  whole point. The differentiator isn't a protocol limit (rich in-client UI is
+  now spec-possible — see the [FAQ](docs/faq.md)); it's the composed review
+  *system* no one else has built: multi-file changeset review with per-line and
+  cross-file comments and suggested edits the agent has to answer, the decision
+  workbench with per-part comments and version carryover, region-anchored
+  diagram comments, and the debrief/explainer comprehension pair with an
+  answer-back question loop. It's the only tool with a structured, commentable
+  understanding artifact anchored to a live agent session with an answer-back
+  loop. The review surface is the product; the loop is plumbing.
 
 ## Install in Claude Code
 

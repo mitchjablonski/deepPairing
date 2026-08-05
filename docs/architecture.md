@@ -176,7 +176,7 @@ $XDG_RUNTIME_DIR/deeppairing/     # (POSIX hosts where .deeppairing can't hold 0
 All writes go through `writeJsonAtomic` (`.tmp.PID.TS.RAND` +
 `renameSync`) so a SIGKILL mid-write cannot corrupt the JSON store.
 
-## The Philosophy Ledger (the moat)
+## The Philosophy Ledger (the cross-project stance store the gate matches against)
 
 `~/.deeppairing/philosophy/v1.json` is the single cross-project file.
 Schema is an append-only log of `PhilosophyInstance` entries keyed by

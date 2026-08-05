@@ -79,16 +79,17 @@ Protocol-native where the protocol suffices.
 
 Two things elicitation deliberately *doesn't* do, though:
 
-1. **It's a flat form, by design.** The spec restricts elicitation
-   to "flat objects with primitive properties only … nested
-   structures, arrays of objects … intentionally not supported"
+1. **It's a flat approve/decline form.** The spec restricts
+   elicitation to "flat objects with primitive properties only …
+   nested structures, arrays of objects … intentionally not supported"
    ([client/elicitation, Final spec](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)),
-   with an accept / decline / cancel response. That can't hold a
-   multi-file changeset with per-line and cross-file comments, the
-   decision workbench with per-part commenting and version
-   carryover, a region-anchored comment on a Mermaid diagram, or a
-   suggested edit the agent has to answer. deepPairing's companion
-   UI is that surface; elicitation's flat form structurally isn't.
+   with an accept / decline / cancel response. That's the right shape
+   for a yes/no; it can't hold a multi-file changeset with per-line
+   and cross-file comments, the decision workbench with per-part
+   commenting and version carryover, a region-anchored comment on a
+   Mermaid diagram, or a suggested edit the agent has to answer.
+   deepPairing's companion UI holds all of that; elicitation's form
+   doesn't try to.
 2. **The non-blocking loop is no longer a differentiator.**
    Server-initiated MCP requests went non-blocking/stateless in the
    [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
@@ -98,9 +99,25 @@ Two things elicitation deliberately *doesn't* do, though:
    shipped Claude Code still runs the older blocking elicitation
    flow; MRTR is spec-final, not yet client-landed.)
 
+**A note on where the protocol is heading.** This is *not* a claim
+that MCP can't host rich UI. As of the
+[2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/),
+[MCP Apps (SEP-1865)](https://modelcontextprotocol.io/seps/1865-mcp-apps)
+went Final: a server can ship sandboxed HTML UI that renders inline in
+the client, and hosts are starting to adopt it (the Claude app,
+ChatGPT, VS Code Copilot, Goose). What's true *today* is narrower —
+shipped Claude Code doesn't render server-provided UI yet, so
+elicitation's flat form is what the protocol surface actually gives you
+in this client right now. deepPairing's companion UI is the
+today-working equivalent, and a natural candidate to embed via MCP Apps
+once Claude Code ships support. The point was never "the protocol
+forbids this"; it's the composed review *system* — no competitor has
+built it, on any surface.
+
 The short version: elicitation is the right tool for a yes/no; the
-rich review that makes pairing *feel* like pairing needs a surface
-the flat form can't provide.
+rich review that makes pairing *feel* like pairing needs the companion
+UI today, and the composed review system behind it regardless of which
+surface eventually renders it.
 
 ## "How is the Philosophy Ledger different from Claude Code's auto-memory?"
 
@@ -141,9 +158,15 @@ your machine. Default off, one prompt at `init`, flip later via
 `deeppairing philosophy publish on|off` (bare `philosophy publish`
 shows the current state).
 
-The narrative trade-off: the moat is real, but it's now an opt-in
-moat. We think honesty about the trust model beats a frictionless
-poisoning surface.
+The narrative trade-off: cross-project reads are a real advantage,
+but publishing is now opt-in. And to be precise about what's actually
+defensible — the cross-project ledger isn't the moat. Rich cross-session
+recall is table stakes now (Copilot/Cursor memory, CodeRabbit
+Learnings). What's hard to copy is the composed review system and the
+in-loop pre-execution gate that *acts* on a stance the moment the agent
+re-proposes it — a `PreToolUse` block that stops-and-asks before the
+edit lands, in the project where you made the call. We think honesty
+about the trust model beats a frictionless poisoning surface.
 
 ## "Does it phone home? What's stored where?"
 
