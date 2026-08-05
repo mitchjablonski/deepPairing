@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.1.26 — 2026-08-05
+
+The seams release. Round 4 found the parts strong and the seams between them
+loose — a negotiation that rendered but didn't reach the gate that approves,
+a multi-milestone project with no standing map, an initiate loop that spoke
+without listening, and a moat narrative that had quietly gone false. This round
+tightens the joints. The **negotiation is now wired into the approval gate**:
+every finalizing approve — button, keyboard, countdown, even a suggestion that
+lands mid-countdown over WS — routes through an inline confirm when suggestions
+are still open ("N still open (P pending, C countered) — approve anyway?" on the
+named files), "Take the counter" shows Claude's actual replacement as a labeled
+mini-diff, and files with live negotiations wear a distinct amber `!N` badge.
+**Multi-milestone projects get their first standing map**: a derived Features
+view groups a project's artifacts by Milestone/Phase prefix and parent-chain —
+zero schema, zero agent obligation, nothing persisted — with per-feature
+timelines, aggregated open items, and file-touch sets. **Initiating is honest
+end-to-end**: the human's request text now runs the store-authoritative secret
+scan before it reaches the agent, submit toasts branch on liveness, the
+resume-prompt bridge surfaces in the live-but-idle state, and retracted
+artifacts lock every comment composer so a withdrawn draft can never reach the
+agent. And the docs **tell the truth about the moat**: MCP Apps went Final, so
+the honest claim is the composed review system and the in-loop pre-execution
+gate, not any protocol impossibility. Every new field is optional and
+read-tolerant, so an old daemon degrades without a stumble (PRs #238, #240,
+#239, #241).
+
+### Added
+- **The Features view — a project's first standing map.** A **derived** read-model
+  (`GET /api/features`, zero schema, zero migration, zero agent obligation, nothing
+  persisted) groups every session's artifacts, decisions, and comments into
+  **features** — orthogonal to the session boundary — by mining `Milestone N` /
+  `MN` / `Phase N` / `Feature: X` / `[X]` title prefixes and `parentId` chains
+  (chains beat prefixes on conflict). Each group carries a **per-feature timeline**
+  with cross-session click-through, **aggregated open items** (unresolved decisions,
+  debrief needs-your-eyes, unanswered questions), and a collapsible **file-touch set**
+  with cross-group "also touched by" intersections. An honest in-UI footnote names
+  the derivation's limits. Read-only, `X-Project-Hash`-gated, degrades to empty
+  (never 500) — validated against the real project corpora (surfaces the crawler's
+  Milestone 1-13 spine; the 91-95% ungrouped ratio is slice 2's measured target).
+- **The approve gate honors open suggestions.** A **finalizing** approve with any
+  pending or countered suggestion open now routes through a one-line inline confirm
+  naming the states ("N still open (P pending, C countered) — approve anyway?") on the
+  affected files — covering the button, `⌘⏎`-on-empty, the `a`/`⏎` keymap, **and a
+  suggestion that arrives mid-countdown over WS**. Approve-anyway is always the human's
+  explicit call, never hard-blocked. Per-file "Looks right" on a file with an open
+  suggestion gets its own scoped confirm.
+
+### Changed
+- **"Take the counter" shows Claude's actual code.** A **countered** SuggestionCard now
+  renders the counter's replacement text as its own labeled "Claude's counter:"
+  **mini-diff**; prose-only counters render unchanged. Files with live negotiations
+  wear a distinct amber `!N` rail badge, and suggestion threads in the comment rail
+  show a read-only PENDING/COUNTERED/APPLIED/INSISTED state chip matching the card pill.
+  The near-identical per-surface LineFeedback wrappers are unified into one shared
+  `SuggestionLineFeedback` (side-parameterized).
+- **Initiating is honest end-to-end.** The human's **request free text now runs the
+  store-authoritative secret scan** (the last human-text ingress that bypassed it) —
+  scanned in `FileStore.addRequest`, with optional `secretWarnings` on the request
+  schema and a text-only warning marker on both agent delivery lines. **Submit toasts
+  branch on liveness**, the **resume-prompt bridge now surfaces in the live-but-idle
+  state** (a conservative observed-then-stale predicate), IdleHome gains a quiet
+  initiation hint, and the request row **folds into a compact trigger** (banner-soup
+  fix). The **"Conversation" rail is renamed "Comment threads."** A withdrawn artifact's
+  reason renders **once** inline (the thread marker is a bare "Withdrawn."), and
+  **retracted artifacts lock ALL comment composers** via `reviewLifecycle` — comments on
+  a withdrawn artifact no longer reach the agent.
+- **The moat narrative tells the truth.** MCP Apps (SEP-1865) went **Final** in the
+  2026-07-28 spec and is host-adopted, so rich in-client review UI is now
+  spec-possible. The docs drop every "the protocol structurally can't host the review"
+  claim; the honest, still-true position is the **composed review system** no
+  competitor has built plus the **in-loop PreToolUse pre-execution gate**. The
+  cross-project ledger is correctly demoted from "the moat" to the stance store the
+  gate matches against, and the FAQ carries one honest MCP Apps watch-note (Claude Code
+  doesn't render it yet; the companion UI is the today-working equivalent).
+
 ## v0.1.25 — 2026-08-04
 
 The initiative release. Until now the human's move was always a response — comment
