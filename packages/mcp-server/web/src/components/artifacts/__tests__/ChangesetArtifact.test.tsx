@@ -515,6 +515,87 @@ describe("ChangesetArtifact — late follow-up comment lane (#187)", () => {
   });
 });
 
+describe("ChangesetArtifact — suggested edits on the changeset surface (#198a)", () => {
+  /** A first-class suggested-edit comment on new-side line 26 of middleware.ts. */
+  function suggestionComment(over: Partial<Comment> = {}, sug: Partial<NonNullable<Comment["suggestion"]>> = {}): Comment {
+    return comment({
+      id: "cmt_sug",
+      content: "Suggested edit to auth/middleware.ts:26",
+      intent: "suggestion",
+      target: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 26, lineEnd: 26 },
+      suggestion: {
+        originalText: "const s = await store.getAndTouch(sid);",
+        replacementText: "const s = await store.getAndTouch(sid, { sliding: true });",
+        lineStart: 26,
+        lineEnd: 26,
+        state: "pending",
+        ...sug,
+      },
+      ...over,
+    });
+  }
+
+  it("HEADLINE: a posted suggestion renders as a first-class SuggestionCard (state pill + mini-diff), NOT a plain chip", () => {
+    const art = changeset();
+    seed(art, [suggestionComment()]);
+    render(<Harness id="art_cs" />);
+    const card = screen.getByTestId("suggestion-card");
+    expect(card).toHaveAttribute("data-state", "pending");
+    expect(within(card).getByTestId("suggestion-state-pill")).toHaveTextContent("PENDING");
+    // The card's location header carries the changeset file path.
+    expect(within(card).getByText(/auth\/middleware\.ts:26/)).toBeInTheDocument();
+    // The proposed replacement text renders in the mini unified diff.
+    expect(within(card).getByText(/sliding: true/)).toBeInTheDocument();
+  });
+
+  it("COUNTERED: the negotiation row (Take the counter / Insist on mine) renders on the changeset card", () => {
+    const art = changeset();
+    seed(art, [
+      suggestionComment({}, { state: "countered", counter: { reason: "keep it explicit", replacementText: "const s = await store.getAndTouch(sid, { slidingWindow: true });" } }),
+    ]);
+    render(<Harness id="art_cs" />);
+    const card = screen.getByTestId("suggestion-card");
+    expect(card).toHaveAttribute("data-state", "countered");
+    expect(within(card).getByRole("button", { name: /Take the counter/i })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: /Insist on mine/i })).toBeInTheDocument();
+  });
+
+  it("INSISTED: the human-authoritative state pill renders on the changeset card", () => {
+    const art = changeset();
+    seed(art, [suggestionComment({}, { state: "insisted" })]);
+    render(<Harness id="art_cs" />);
+    expect(within(screen.getByTestId("suggestion-card")).getByTestId("suggestion-state-pill")).toHaveTextContent("INSISTED");
+  });
+
+  it("a suggestion + a plain comment on the same line: the suggestion is a CARD, the comment stays a chip", () => {
+    const art = changeset();
+    seed(art, [
+      suggestionComment(),
+      comment({ id: "cmt_plain", content: "also rename this", target: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 26 } }),
+    ]);
+    render(<Harness id="art_cs" />);
+    // The suggestion renders once as a card (never doubled as a chip)…
+    expect(screen.getAllByTestId("suggestion-card")).toHaveLength(1);
+    // …and the plain comment renders as text alongside it.
+    expect(screen.getByText("also rename this")).toBeInTheDocument();
+  });
+
+  it("del-side (#186) suggestion RENDERING: a suggestion anchored side:'old' renders as a card on the removed row", () => {
+    const art = changeset();
+    seed(art, [
+      suggestionComment(
+        { id: "cmt_sug_old", target: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 26, lineEnd: 26, side: "old" } },
+        { originalText: "const s = await store.get(sid);", replacementText: "// removed intentionally" },
+      ),
+    ]);
+    const { container } = render(<Harness id="art_cs" />);
+    const oldRow = container.querySelector('[data-comment-anchor="line:auth/middleware.ts:old:26"]') as HTMLElement;
+    expect(oldRow).toBeTruthy();
+    expect(within(oldRow).getByTestId("suggestion-card")).toBeInTheDocument();
+    expect(within(oldRow).getByText(/removed intentionally/)).toBeInTheDocument();
+  });
+});
+
 describe("ChangesetArtifact — comments still thread (#171 regression guard)", () => {
   it("renders a per-file line comment thread + a cross-file card", () => {
     const art = changeset();

@@ -310,6 +310,40 @@ export async function getPassiveFeedback(store: IStore): Promise<string> {
 }
 
 /**
+ * G1 (#198b) — when a present_* call carries a `servedRequestId`, link the
+ * freshly-created artifact to the human's request so the composer flips it to a
+ * served state and it drops out of the pending obligations. Best-effort +
+ * fire-and-forget: serving an artifact must never FAIL because the link didn't
+ * land. But the confirmation must be HONEST — markRequestServed reports whether
+ * a request with that id actually existed, so an unknown/foreign id yields a
+ * "not found" note rather than a false "Linked" claim.
+ *
+ * DELIBERATE (review item 3): a request STAYS served once linked, even if its
+ * fulfilling artifact is later rejected. The reject posture already tells the
+ * agent to revise, and a supersede carries the thread forward — auto-reopening
+ * the request would double-nag. So there is no un-serve on reject by design.
+ * Returns a short suffix for the tool's text result (or "").
+ */
+export async function linkServedRequest(
+  store: IStore,
+  args: Record<string, unknown> | null | undefined,
+  artifactId: string,
+): Promise<string> {
+  const servedRequestId = (args as { servedRequestId?: unknown } | null | undefined)?.servedRequestId;
+  if (typeof servedRequestId !== "string" || servedRequestId.length === 0) return "";
+  try {
+    const linked = (await store.markRequestServed?.(servedRequestId, artifactId)) ?? false;
+    return linked
+      ? ` Linked to request ${servedRequestId}.`
+      : ` (request ${servedRequestId} not found — not linked.)`;
+  } catch {
+    // A transport failure is not proof either way; stay silent rather than
+    // claim or deny a link we can't confirm.
+    return "";
+  }
+}
+
+/**
  * Near-duplicate revision nudge. The agent tends to RE-POST a fresh present_*
  * when it's actually revising an artifact it already presented — which orphans
  * the thread and skips the revision diff (the human never sees what changed).

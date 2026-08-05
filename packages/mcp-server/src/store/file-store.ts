@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent } from "@deeppairing/shared";
 import { suggestionSummary, isLateCommentableStatus } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
@@ -53,6 +53,10 @@ export class FileStore implements IStore {
   // (artifactId, visualId). Backed by render-failures.json (written only when
   // non-empty, like metrics.json), so a clean session's dir is byte-unchanged.
   private renderFailures: RenderFailureRecord[] = [];
+  // G1 (#198b) — human-initiated REQUESTS to the agent, backed by requests.json
+  // (written only when non-empty, like render-failures.json). Session-scoped and
+  // reloaded across runs so a request survives a daemon restart.
+  private requests: Request[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
   /**
@@ -206,6 +210,9 @@ export class FileStore implements IStore {
       keyedFailures,
       "__key",
     ).map(({ __key, ...r }) => r);
+    // G1 (#198b) — rehydrate human-initiated requests (id-keyed, salvage-tolerant).
+    this.requests = FileStore.salvageArray<Request>(
+      `${this.sessionId}:requests.json`, this.loadJsonFile<unknown>(path.join(dir, "requests.json"), []), "id");
     // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
     // dropped on every daemon idle-shutdown — review-latency metrics
     // would silently reset to zero and the engagement view in YourTaste
@@ -448,6 +455,12 @@ export class FileStore implements IStore {
     if (this.renderFailures.length > 0) {
       this.atomicWrite(path.join(dir, "render-failures.json"), this.renderFailures);
     }
+    // G1 (#198b) — persist requests only when there are any (same tidy-dir rule
+    // as metrics.json / render-failures.json). Append-mostly, low-stakes → skips
+    // the U1 external-merge dance the artifacts/comments files need.
+    if (this.requests.length > 0) {
+      this.atomicWrite(path.join(dir, "requests.json"), this.requests);
+    }
   }
 
   /** Force an immediate flush — call before process exit */
@@ -549,6 +562,20 @@ export class FileStore implements IStore {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.title = title;
+      art.updatedAt = new Date().toISOString();
+      this.scheduleFlush();
+    }
+  }
+
+  /** G1 (#198c) — stamp the withdrawal reason onto the artifact's content so the
+   *  status panel renders "↩ Retracted by agent — <reason>" inline (the reason
+   *  also rides an agent comment for thread history). In-content patch, same
+   *  mechanism update_plan_progress / changeset review use. No-op on a missing
+   *  artifact. */
+  setRetractReason(artifactId: string, reason: string): void {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (art) {
+      (art.content as Record<string, unknown>).retractReason = reason;
       art.updatedAt = new Date().toISOString();
       this.scheduleFlush();
     }
@@ -1067,6 +1094,44 @@ export class FileStore implements IStore {
       }
     }
     this.scheduleFlush();
+  }
+
+  // --- G1 (#198b) — human-initiated requests ------------------------------
+  /** Persist a human-composed request. `notifyFeedbackWaiters` wakes a live
+   *  agent's check_feedback long-poll exactly like a new human comment does. */
+  addRequest(params: { text: string; intent: RequestIntent }): Request {
+    const request: Request = {
+      id: `req_${nanoid(10)}`,
+      text: params.text,
+      intent: params.intent,
+      createdAt: new Date().toISOString(),
+    };
+    this.requests.push(request);
+    this.scheduleFlush();
+    this.notifyFeedbackWaiters();
+    return request;
+  }
+
+  getRequests(): Request[] {
+    return this.requests;
+  }
+
+  /** Unserved requests — the agent still owes a response (drives the check_feedback
+   *  priority line + the first-call obligations inventory + the composer's
+   *  unserved badge). */
+  getPendingRequests(): Request[] {
+    return this.requests.filter((r) => !r.servedByArtifactId);
+  }
+
+  /** Link a request to the artifact that fulfilled it (idempotent — a re-serve
+   *  updates the link). Returns false (no write) when the id isn't found, so the
+   *  caller doesn't claim a link that didn't happen. */
+  markRequestServed(requestId: string, artifactId: string): boolean {
+    const req = this.requests.find((r) => r.id === requestId);
+    if (!req) return false;
+    req.servedByArtifactId = artifactId;
+    this.scheduleFlush();
+    return true;
   }
 
   /** #176 — drop every render-failure record for a superseded artifact id. A
@@ -1738,6 +1803,11 @@ export class FileStore implements IStore {
       comments: this.comments,
       decisions: Array.from(this.decisions.values()),
       planReviews: Array.from(this.planReviews.values()),
+      // G1 (#198b) — requests ride the full-state hydration so the web UI and
+      // the agent surfaces (check_feedback carryover, first-call obligations)
+      // read them the same way. Empty by default → byte-compatible for sessions
+      // that never used the composer.
+      requests: this.requests,
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
       sessionMemory: this.getSessionMemory(),

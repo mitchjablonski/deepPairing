@@ -193,6 +193,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             for (const comment of data.state.comments ?? []) {
               store.addComment(comment);
             }
+            // G1 (#198b) — hydrate human-initiated requests so the composer
+            // shows served/unserved state after a cold reload.
+            store.setRequests?.(data.state.requests ?? []);
             // C2 — receipts survive reload: the DecisionRecord's persisted
             // `acknowledged` flag re-seeds the consumed set on hydration.
             const ackedIds = (data.state.decisions ?? [])
@@ -296,12 +299,33 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           useArtifactStore.getState().replaceArtifact(data.artifact);
           break;
 
+        case "artifact_content_updated":
+          // G1 (#198c) — full-artifact patch (e.g. a withdrawn artifact's
+          // content.retractReason). Same replace-in-place shape as above.
+          useArtifactStore.getState().replaceArtifact(data.artifact);
+          break;
+
         case "comment_added":
           store.addComment(data.comment);
           break;
 
         case "comment_updated":
           store.updateComment(data.comment);
+          break;
+
+        // G1 (#198b) — the request composer's live updates.
+        case "request_added":
+          if (data.request) {
+            useArtifactStore.setState((s) => ({
+              requests: s.requests.some((r) => r.id === data.request.id)
+                ? s.requests.map((r) => (r.id === data.request.id ? data.request : r))
+                : [...s.requests, data.request],
+            }));
+          }
+          break;
+
+        case "request_served":
+          store.applyRequestServed?.(data.requestId, data.artifactId);
           break;
 
         case "artifact_renamed":

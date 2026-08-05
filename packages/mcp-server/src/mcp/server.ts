@@ -24,6 +24,7 @@ import { handleCheckFeedback } from "./tools/check-feedback.js";
 import { handleAnswerQuestion } from "./tools/answer-question.js";
 import { handleUpdatePlanProgress } from "./tools/update-plan-progress.js";
 import { handleReviseArtifact } from "./tools/revise-artifact.js";
+import { handleWithdrawArtifact } from "./tools/withdraw-artifact.js";
 import { handlePostPrReview } from "./tools/post-pr-review.js";
 import { handlePresentSpec } from "./tools/present-spec.js";
 import { handlePresentPlan } from "./tools/present-plan.js";
@@ -532,6 +533,24 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
           required: ["artifactId", "mode", "reason"],
         },
       },
+      {
+        // G1 (#198c) — the agent retracts its OWN draft. Distinct from
+        // revise_artifact: a single-purpose "take it back" verb, valid only on a
+        // still-`draft` artifact, guarded so it can NEVER dodge unanswered
+        // human feedback.
+        name: "withdraw_artifact",
+        annotations: { title: "Withdraw artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description:
+          "Retract your OWN draft artifact (status 'draft' only) with a one-line reason — 'I presented this, but it shouldn't stand.' REFUSED if the draft has unanswered human questions or unread comments (answer those first; withdrawal must never dodge review). Sets status 'retracted'; never writes the ledger.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            artifactId: { type: "string", description: "Id of your draft to withdraw (art_...)." },
+            reason: { type: "string", description: "One line: why you're taking it back. Shown in the withdrawn state + history." },
+          },
+          required: ["artifactId", "reason"],
+        },
+      },
     ],
   }));
 
@@ -915,6 +934,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     "present_explainer",
     "log_reasoning",
     "revise_artifact",
+    "withdraw_artifact",
     "post_pr_review",
     "answer_question",
     "update_plan_progress",
@@ -1056,6 +1076,11 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // B3 — extracted to mcp/tools/revise-artifact.ts (incl. the F3
         // SUPERSEDE_VALIDATORS table).
         return handleReviseArtifact(ctx, args);
+
+      case "withdraw_artifact":
+        // G1 (#198c) — the agent retracts its own draft; guarded against
+        // dodging unanswered feedback. See tools/withdraw-artifact.ts.
+        return handleWithdrawArtifact(ctx, args);
 
       case "recall":
         // CC10 — handler extracted to mcp/tools/recall.ts (~190 LOC out

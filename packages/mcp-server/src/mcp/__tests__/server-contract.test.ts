@@ -33,11 +33,12 @@ describe("MCP Tool Handlers — protocol contract", () => {
   });
 
   describe("C1 — ToolAnnotations on every tool", () => {
-    it("all 17 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
+    it("all 18 tools carry honest annotations; only post_pr_review is open-world; only pure reads claim readOnlyHint", async () => {
       const list = await client.listTools();
       // #163 — get_companion_url added → 13 → 14. #171 — present_changeset → 15.
       // #190 — present_debrief → 16. #190 A2 — present_explainer → 17.
-      expect(list.tools).toHaveLength(17);
+      // #198 G1 — withdraw_artifact → 18.
+      expect(list.tools).toHaveLength(18);
       for (const t of list.tools) {
         expect(t.annotations, `${t.name} missing annotations`).toBeDefined();
         expect(typeof (t.annotations as any).openWorldHint).toBe("boolean");

@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentExplainerInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -66,6 +66,8 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
+  // G1 (#198b) — if this explainer serves a human request, link it.
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
 
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   // Steer re-posts toward revise_artifact when a live explainer with a similar
@@ -87,7 +89,7 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
       text:
         `Explainer "${artifact.title}" presented for review (${id}) — a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. ` +
         `The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. ` +
-        `Call check_feedback for their questions and comments.${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

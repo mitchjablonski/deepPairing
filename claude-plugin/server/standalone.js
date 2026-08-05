@@ -26486,7 +26486,39 @@ function coerceExplainerContent(raw) {
   return out;
 }
 
+// ../shared/dist/schemas/request.js
+var RequestIntentSchema = external_exports.enum(["explain", "plan", "status"]);
+var RequestSchema2 = external_exports.object({
+  id: external_exports.string(),
+  /** The human's free text (the fill-in for the preset, e.g. "the auth middleware"). */
+  text: external_exports.string().min(1),
+  /** Which preset the human chose — drives the artifact type the agent serves with. */
+  intent: RequestIntentSchema,
+  createdAt: external_exports.string().datetime(),
+  /**
+   * Set when the agent links a fulfilling artifact (via the present_* tools'
+   * optional `servedRequestId` param). Absent = unserved (the agent still owes
+   * a response). Optional for backward compatibility (project rule: all new
+   * fields optional) — an old stored request without it loads unchanged.
+   */
+  servedByArtifactId: external_exports.string().optional()
+});
+function describeRequestIntent(intent) {
+  switch (intent) {
+    case "explain":
+      return "explain how it works (present_explainer)";
+    case "plan":
+      return "plan it before building (present_plan / present_spec)";
+    case "status":
+      return "a status summary (present_debrief-style)";
+  }
+}
+
 // ../shared/dist/schemas/request-bodies.js
+var CreateRequestBodySchema = external_exports.object({
+  text: external_exports.string().min(1).max(2e3),
+  intent: RequestIntentSchema
+});
 var CommentBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
   content: external_exports.string().min(1),
@@ -27506,6 +27538,16 @@ Required response per request: call \`revise_artifact\` mode="supersede" on the 
 \u2753 ${plainUnanswered.length} unanswered human question${plainUnanswered.length === 1 ? "" : "s"} await${plainUnanswered.length === 1 ? "s" : ""} \u2014 some may be from earlier runs. Call check_feedback to see and answer them, then reply with answer_question (not a plain comment) so the UI links the answer to the question. Drain these before new work.`
       );
     }
+    const pendingRequests = (fullState.requests ?? []).filter((r) => !r.servedByArtifactId);
+    if (pendingRequests.length > 0) {
+      const lines = pendingRequests.map((r) => `  \u2022 ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"`);
+      blockingParts.push(
+        `
+\u{1F4E8} ${pendingRequests.length} pending human request${pendingRequests.length === 1 ? "" : "s"} \u2014 the human ASKED you to do ${pendingRequests.length === 1 ? "this" : "these"} (explain\u2192present_explainer, plan\u2192present_plan/present_spec, status\u2192present_debrief):
+${lines.join("\n")}
+Serve each with the matching present_* tool, passing servedRequestId so it links back and clears.`
+      );
+    }
     const agentCommentIds = new Set(
       allComments.filter((c) => c.author === "agent").map((c) => c.id)
     );
@@ -28126,6 +28168,16 @@ async function getPassiveFeedback(store) {
 
 [Human feedback]: ${formatted}`;
 }
+async function linkServedRequest(store, args, artifactId) {
+  const servedRequestId = args?.servedRequestId;
+  if (typeof servedRequestId !== "string" || servedRequestId.length === 0) return "";
+  try {
+    const linked = await store.markRequestServed?.(servedRequestId, artifactId) ?? false;
+    return linked ? ` Linked to request ${servedRequestId}.` : ` (request ${servedRequestId} not found \u2014 not linked.)`;
+  } catch {
+    return "";
+  }
+}
 var LIVE_STATUSES = /* @__PURE__ */ new Set(["draft", "approved", "revised"]);
 function normalizeTitle(t) {
   return t.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean).join(" ");
@@ -28741,6 +28793,7 @@ function validateLogReasoningInput(args) {
   return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING) };
 }
 var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
+var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
 var TOOL_INPUT_SCHEMAS = {
   present_findings: ResearchContentSchema.extend({
     title: ARTIFACT_TITLE.optional()
@@ -28748,10 +28801,11 @@ var TOOL_INPUT_SCHEMAS = {
   present_options: PresentOptionsInputSchema.extend({
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision")
   }),
-  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID }),
   present_plan: PlanContentSchema.extend({
     title: ARTIFACT_TITLE,
-    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this plan")
+    relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this plan"),
+    servedRequestId: SERVED_REQUEST_ID
   }),
   present_code_change: CodeChangeContentSchema.extend({
     before: external_exports.string().optional().describe("Code before the change \u2014 omit for created files (server defaults to empty)"),
@@ -28768,11 +28822,13 @@ var TOOL_INPUT_SCHEMAS = {
   present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
-  // schema (it doubles as the artifact title), so no .extend() is needed.
-  present_explainer: ExplainerContentSchema
+  // schema (it doubles as the artifact title). G1 (#198b) adds the optional
+  // servedRequestId linkage (the validator ignores it — it builds its own
+  // content object from named fields — so it stays advertisement-only).
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -30370,6 +30426,12 @@ async function handleCheckFeedback(ctx, args) {
     ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
+  let pendingRequests = [];
+  try {
+    const full = await store.getFullState();
+    pendingRequests = (full.requests ?? []).filter((r) => !r.servedByArtifactId);
+  } catch {
+  }
   let oldestPendingAge = "";
   const pendingArts = allArtifacts.filter((a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type));
   const [oldestPending] = pendingArts;
@@ -30413,6 +30475,9 @@ async function handleCheckFeedback(ctx, args) {
   const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && hasCodeWork && !hasDebrief;
   if (owesDebrief) {
     suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
+  }
+  if (pendingRequests.length > 0) {
+    suggestedAction = `${suggestedAction} The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} \u2014 serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`;
   }
   if (openQuestionCount > 0) {
     suggestedAction = `Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question). ${suggestedAction}`;
@@ -30531,6 +30596,16 @@ ${lines.join("\n")}`
     parts.push(
       `\u274C REJECTED (${freshlyRejected.length}): ${list}
 The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do NOT apply. Revise the approach or propose a different one (see their comment above for why).`
+    );
+  }
+  if (pendingRequests.length > 0) {
+    const lines = pendingRequests.map(
+      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}
+    \u2192 Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`
+    );
+    parts.push(
+      `\u{1F4E8} Human requests (${pendingRequests.length}) \u2014 the human ASKED for ${pendingRequests.length === 1 ? "this" : "these"}. Serve with the matching present_* tool (explain\u2192present_explainer, plan\u2192present_plan/present_spec, status\u2192present_debrief):
+${lines.join("\n")}`
     );
   }
   const resolved = await store.getResolvedDecisions();
@@ -30667,7 +30742,8 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   }
   const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
   // should fix + re-present, not sit in 'waiting'.
-  renderFailures.length > 0;
+  renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
+  pendingRequests.length > 0;
   const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
   const structuredContent = {
     status,
@@ -30721,6 +30797,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {},
+    // G1 (#198b) — spread `requests` ONLY when the human has an unserved request,
+    // so the healthy poll payload's top-level key set stays byte-for-byte (same
+    // contract lock as renderFailures/unansweredCarryover above).
+    ...pendingRequests.length > 0 ? { requests: pendingRequests.map((r) => ({ id: r.id, text: r.text, intent: r.intent })) } : {},
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField()
@@ -31065,6 +31145,72 @@ async function handleReviseArtifact(ctx, args) {
   };
 }
 
+// src/mcp/tools/withdraw-artifact.ts
+async function handleWithdrawArtifact(ctx, args) {
+  const { store, server, broadcast } = ctx;
+  const artifactId = typeof args?.artifactId === "string" ? args.artifactId : "";
+  const reason = typeof args?.reason === "string" ? args.reason.trim() : "";
+  if (!artifactId) {
+    return {
+      content: [{ type: "text", text: `withdraw_artifact: an \`artifactId\` is required (the id of your own draft to retract).` }],
+      isError: true
+    };
+  }
+  if (!reason) {
+    return {
+      content: [{ type: "text", text: `withdraw_artifact: a one-line \`reason\` is required \u2014 say WHY you're taking ${artifactId} back so the history and any successor read honestly.` }],
+      isError: true
+    };
+  }
+  const artifacts = await store.getArtifacts();
+  const artifact = artifacts.find((a) => a.id === artifactId);
+  if (!artifact) {
+    return {
+      content: [{ type: "text", text: `withdraw_artifact: no artifact with id ${artifactId} in this session. You can only withdraw your OWN draft.` }],
+      isError: true
+    };
+  }
+  if (artifact.status !== "draft") {
+    return {
+      content: [{ type: "text", text: `withdraw_artifact: ${artifactId} is ${artifact.status}, not a draft \u2014 withdrawal only applies to a draft you haven't heard back on. Use revise_artifact (supersede) to version it, or check_feedback to read its verdict.` }],
+      isError: true
+    };
+  }
+  const comments = await store.getCommentsForArtifact(artifactId);
+  const unanswered = collectUnansweredQuestions(comments).filter(
+    (q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId
+  );
+  const undrainedComments = comments.filter((c) => c.author === "human" && !c.acknowledged);
+  if (unanswered.length > 0 || undrainedComments.length > 0) {
+    const bits = [];
+    if (unanswered.length > 0) bits.push(`${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"}`);
+    if (undrainedComments.length > 0) bits.push(`${undrainedComments.length} unread comment${undrainedComments.length === 1 ? "" : "s"}`);
+    return {
+      content: [{
+        type: "text",
+        text: `withdraw_artifact: REFUSED \u2014 ${artifactId} has ${bits.join(" and ")} from the human. Withdrawing must never dodge review. Call check_feedback and answer_question to address the feedback first; then withdraw (or revise) with a clear conscience.`
+      }],
+      isError: true
+    };
+  }
+  await store.setRetractReason?.(artifactId, reason);
+  await store.updateArtifactStatus(artifactId, "retracted", "agent_withdraw");
+  await maybeUpdateTaskStatus(server, artifactId, store);
+  await store.addComment({
+    id: `cmt_${nanoid3(10)}`,
+    artifactId,
+    content: `Withdrawn: ${reason}`,
+    author: "agent"
+  });
+  broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+  return {
+    content: [{
+      type: "text",
+      text: `Withdrew ${artifactId} \u2014 "${reason}". It's off the human's review queue and recorded as retracted (not built). Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${await ctx.helpers.getPassiveFeedback()}`
+    }]
+  };
+}
+
 // src/github/post-review.ts
 import { spawn } from "node:child_process";
 var GhMissingError = class extends Error {
@@ -31292,15 +31438,16 @@ Decline to review requirements and acceptance criteria in the companion UI at ht
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "spec", title, id);
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   if (elicitAction === "approve") {
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${ctx.port}. Call check_feedback for their response.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${ctx.port}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -31354,16 +31501,17 @@ Decline to review steps in detail at http://localhost:${ctx.port}`
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "plan", title, id);
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   if (elicitAction === "approve") {
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     await ctx.store.resolvePlanReview(id, "approved");
     return {
-      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${ctx.port}. Call check_feedback for their verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${ctx.port}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -31530,12 +31678,13 @@ async function handlePresentDebrief(ctx, args) {
   await ctx.helpers.autoNameSession(artifact.title);
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "debrief", title, id);
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const sectionCount = sections?.length ?? 0;
   const eyesCount = needsYourEyes?.length ?? 0;
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions, comments, and verdict.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions, comments, and verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -31581,6 +31730,7 @@ async function handlePresentExplainer(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
+  const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "explainer", title, id);
   const sectionCount = sections?.length ?? 0;
@@ -31588,7 +31738,7 @@ async function handlePresentExplainer(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions and comments.${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -32292,6 +32442,23 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           },
           required: ["artifactId", "mode", "reason"]
         }
+      },
+      {
+        // G1 (#198c) — the agent retracts its OWN draft. Distinct from
+        // revise_artifact: a single-purpose "take it back" verb, valid only on a
+        // still-`draft` artifact, guarded so it can NEVER dodge unanswered
+        // human feedback.
+        name: "withdraw_artifact",
+        annotations: { title: "Withdraw artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description: "Retract your OWN draft artifact (status 'draft' only) with a one-line reason \u2014 'I presented this, but it shouldn't stand.' REFUSED if the draft has unanswered human questions or unread comments (answer those first; withdrawal must never dodge review). Sets status 'retracted'; never writes the ledger.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            artifactId: { type: "string", description: "Id of your draft to withdraw (art_...)." },
+            reason: { type: "string", description: "One line: why you're taking it back. Shown in the withdrawn state + history." }
+          },
+          required: ["artifactId", "reason"]
+        }
       }
     ]
   }));
@@ -32532,6 +32699,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     "present_explainer",
     "log_reasoning",
     "revise_artifact",
+    "withdraw_artifact",
     "post_pr_review",
     "answer_question",
     "update_plan_progress"
@@ -32609,6 +32777,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             return handleAnswerQuestion(ctx, args);
           case "revise_artifact":
             return handleReviseArtifact(ctx, args);
+          case "withdraw_artifact":
+            return handleWithdrawArtifact(ctx, args);
           case "recall":
             return handleRecall(ctx, args);
           case "post_pr_review":
@@ -32889,6 +33059,10 @@ var DaemonClient = class {
   async renameArtifact(artifactId, title) {
     await this.post(`/artifacts/${artifactId}/rename`, { title });
   }
+  // G1 (#198c) — proxy the withdraw reason stamp to the daemon's FileStore.
+  async setRetractReason(artifactId, reason) {
+    await this.post(`/artifacts/${artifactId}/retract-reason`, { reason });
+  }
   async updateArtifactStatus(artifactId, status, reason) {
     await this.post(`/artifacts/${artifactId}/status`, { status, reason });
   }
@@ -32947,6 +33121,15 @@ var DaemonClient = class {
   async updateCommentSuggestion(commentId, update) {
     const data = await this.post(`/comments/${commentId}/suggestion`, update);
     return data.comment ?? void 0;
+  }
+  // --- G1 (#198b) — requests ---
+  // The record + read paths are the browser's PUBLIC routes onto the daemon's
+  // FileStore (the human composes; the agent-facing surfaces read pending
+  // requests off getFullState().requests). Only the agent's serve-link is an
+  // MCP-side mutation, so only markRequestServed is proxied here.
+  async markRequestServed(requestId, artifactId) {
+    const data = await this.post(`/requests/${requestId}/served`, { artifactId });
+    return data?.linked ?? false;
   }
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
    *  (the wrapper's broadcast is a no-op in standalone). Never throws. */

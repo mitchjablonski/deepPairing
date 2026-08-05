@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent } from "@deeppairing/shared";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -25,6 +25,7 @@ export type StatusTransitionReason =
   | "elicit_accept"
   | "agent_revise"
   | "agent_retract"
+  | "agent_withdraw"
   | "agent_supersede"
   | "agent_obsolete"
   | "ui_dismiss_obsolete"
@@ -271,6 +272,10 @@ export interface IStore {
     planReviews: PlanReviewRecord[];
     autonomyLevel: string;
     detailDensity: string;
+    // G1 (#198b) — human-initiated requests. Optional in the return type so a
+    // read-only replay store that omits it still satisfies the interface; the
+    // real stores (FileStore + DaemonClient's /api/state) always include it.
+    requests?: Request[];
     sessionMemory: { rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] };
     engagementMetrics: {
       avgReviewLatencyMs: number;
@@ -284,6 +289,13 @@ export interface IStore {
   // Artifacts
   createArtifact(params: CreateArtifactParams): MaybePromise<Artifact>;
   renameArtifact(artifactId: string, title: string): MaybePromise<void>;
+  /**
+   * G1 (#198c) — stamp `content.retractReason` so the withdrawn (retracted)
+   * artifact's status panel renders the reason inline. Optional on the interface
+   * so a read-only replay store can skip it; FileStore backs it, DaemonClient
+   * proxies it. Called by withdraw_artifact alongside the status flip.
+   */
+  setRetractReason?(artifactId: string, reason: string): MaybePromise<void>;
   /**
    * U7 — `reason` tag is OPTIONAL but recommended. It explains WHO/WHAT
    * caused the transition so the daemon log can attribute every status
@@ -535,6 +547,24 @@ export interface IStore {
   acknowledgeRenderFailures?(
     keys: Array<{ artifactId: string; visualId: string }>,
   ): MaybePromise<void>;
+
+  /**
+   * G1 (#198b) — human-initiated REQUESTS (the request composer). `addRequest`
+   * persists a composed request and wakes any live check_feedback long-poll;
+   * `getRequests`/`getPendingRequests` read them (pending = unserved); and
+   * `markRequestServed` links the fulfilling artifact (the present_* tools'
+   * `servedRequestId` param). All optional on the interface so a read-only
+   * replay store can skip them. FileStore backs the record + read; DaemonClient
+   * proxies `markRequestServed` (the record + read paths are the browser's
+   * public routes straight onto the daemon's FileStore, and the agent surfaces
+   * read pending requests off `getFullState().requests`).
+   */
+  addRequest?(params: { text: string; intent: RequestIntent }): MaybePromise<Request>;
+  getRequests?(): MaybePromise<Request[]>;
+  getPendingRequests?(): MaybePromise<Request[]>;
+  /** Returns whether a request with that id existed and was linked — the caller
+   *  uses it to avoid confirming a link that silently no-op'd on a bad id. */
+  markRequestServed?(requestId: string, artifactId: string): MaybePromise<boolean>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;

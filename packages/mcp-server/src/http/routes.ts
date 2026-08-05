@@ -32,6 +32,7 @@ import {
   ChangesetReviewBodySchema,
   PreferenceBodySchema,
   RenderFailureBodySchema,
+  CreateRequestBodySchema,
   formatZodIssues,
   normalizeConceptKey,
 } from "@deeppairing/shared";
@@ -176,6 +177,9 @@ const EMPTY_STATE = {
   detailDensity: "rich",
   rejectedApproaches: [],
   approvedPatterns: [],
+  // G1 (#198b) — requests ride the empty state so a no-session UI reads a
+  // consistent shape (the composer shows nothing until a session exists).
+  requests: [],
 } as const;
 
 export function createHttpRoutes(
@@ -394,6 +398,32 @@ export function createHttpRoutes(
     const store = getStore(getSessionId(c));
     if (!store) return c.json(EMPTY_STATE);
     return c.json(await store.getFullState());
+  });
+
+  // G1 (#198b) — the request composer. The human INITIATES a request to the
+  // agent (free text + one of three intent presets). Persisted session-scoped so
+  // it survives a daemon restart; the agent reads it via check_feedback (a
+  // priority line) or, when no agent is live, via the composer's resume-prompt.
+  app.get("/api/requests", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json({ requests: [] });
+    return c.json({ requests: (await store.getRequests?.()) ?? [] });
+  });
+
+  app.post("/api/requests", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    if (!store.addRequest) {
+      return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
+    }
+    const request = await store.addRequest({ text: parsed.data.text, intent: parsed.data.intent });
+    broadcast({ type: "request_added", request }, sid);
+    return c.json({ request });
   });
 
   // Submit a comment from the web UI

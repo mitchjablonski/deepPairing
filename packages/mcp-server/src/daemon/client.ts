@@ -369,6 +369,11 @@ export class DaemonClient implements IStore {
     await this.post(`/artifacts/${artifactId}/rename`, { title });
   }
 
+  // G1 (#198c) — proxy the withdraw reason stamp to the daemon's FileStore.
+  async setRetractReason(artifactId: string, reason: string): Promise<void> {
+    await this.post(`/artifacts/${artifactId}/retract-reason`, { reason });
+  }
+
   async updateArtifactStatus(
     artifactId: string,
     status: ArtifactStatus,
@@ -451,6 +456,16 @@ export class DaemonClient implements IStore {
   ): Promise<Comment | undefined> {
     const data = await this.post<{ comment: Comment | null }>(`/comments/${commentId}/suggestion`, update);
     return data.comment ?? undefined;
+  }
+
+  // --- G1 (#198b) — requests ---
+  // The record + read paths are the browser's PUBLIC routes onto the daemon's
+  // FileStore (the human composes; the agent-facing surfaces read pending
+  // requests off getFullState().requests). Only the agent's serve-link is an
+  // MCP-side mutation, so only markRequestServed is proxied here.
+  async markRequestServed(requestId: string, artifactId: string): Promise<boolean> {
+    const data = await this.post<{ linked?: boolean }>(`/requests/${requestId}/served`, { artifactId });
+    return data?.linked ?? false;
   }
 
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast

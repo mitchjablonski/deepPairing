@@ -17,6 +17,17 @@
  */
 import { z } from "zod";
 import { CommentSuggestionSchema, SuggestionCounterSchema } from "./comment.js";
+import { RequestIntentSchema } from "./request.js";
+
+// G1 (#198b) — POST /api/requests. The human INITIATES a request to the agent
+// from the composer. `text` is the free-text fill-in; `intent` is one of the
+// three presets that tells the agent which artifact type fulfils it. Optional
+// fields stay optional per the back-compat convention.
+export const CreateRequestBodySchema = z.object({
+  text: z.string().min(1).max(2000),
+  intent: RequestIntentSchema,
+});
+export type CreateRequestBody = z.infer<typeof CreateRequestBodySchema>;
 
 // POST /api/comments — submit a comment from the web UI.
 export const CommentBodySchema = z.object({

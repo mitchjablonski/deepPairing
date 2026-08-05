@@ -1,9 +1,9 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -359,6 +359,17 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
 
+  // G1 (#198b) — pending (unserved) human-initiated requests. Best-effort read
+  // off full state so it works for BOTH FileStore (direct) and DaemonClient
+  // (its /state includes `requests`); an old store without the key yields [].
+  let pendingRequests: Request[] = [];
+  try {
+    const full = await store.getFullState();
+    pendingRequests = (full.requests ?? []).filter((r) => !r.servedByArtifactId);
+  } catch {
+    // Non-fatal — requests are best-effort; the rest of the poll proceeds.
+  }
+
   // Find oldest pending artifact age
   let oldestPendingAge = "";
   const pendingArts = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type));
@@ -439,6 +450,16 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     !hasDebrief;
   if (owesDebrief) {
     suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet — when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
+  }
+
+  // G1 (#198b) — pending human requests. Ordering (documented + pinned by
+  // check-feedback-request.test.ts): a request ranks AFTER unanswered questions
+  // AND AFTER freshlyRejected's safety-critical "Do NOT apply" posture. Append
+  // here (the openQuestionCount prepend below still leads, and the freshlyRejected
+  // base is already in `suggestedAction`), so the final order is
+  // questions → rejected/pending-review → requests.
+  if (pendingRequests.length > 0) {
+    suggestedAction = `${suggestedAction} The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} — serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`;
   }
 
   // M2 — questions LEAD the suggestedAction: when the human left open questions,
@@ -601,6 +622,21 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
     parts.push(
       `❌ REJECTED (${freshlyRejected.length}): ${list}\nThe human rejected ${freshlyRejected.length === 1 ? "this" : "these"} — do NOT apply. Revise the approach or propose a different one (see their comment above for why).`,
+    );
+  }
+
+  // G1 (#198b) — pending human REQUESTS prose block. Placed AFTER the carryover
+  // + REJECTED blocks (so it ranks after unanswered questions and after the
+  // rejection posture, matching the suggestedAction ordering). Requests do NOT
+  // drain like comments — they persist until the agent serves them (passes
+  // servedRequestId on the fulfilling present_* call), so they re-surface each
+  // poll like a WAITING line until served.
+  if (pendingRequests.length > 0) {
+    const lines = pendingRequests.map(
+      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
+    );
+    parts.push(
+      `📨 Human requests (${pendingRequests.length}) — the human ASKED for ${pendingRequests.length === 1 ? "this" : "these"}. Serve with the matching present_* tool (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}`,
     );
   }
 
@@ -830,7 +866,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 ||
     // #176 — a broken diagram the human is staring at is actionable: the agent
     // should fix + re-present, not sit in 'waiting'.
-    renderFailures.length > 0;
+    renderFailures.length > 0 ||
+    // G1 (#198b) — a pending human request is something to act on (serve it).
+    pendingRequests.length > 0;
   const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
   const structuredContent = {
     status,
@@ -886,6 +924,12 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
+    // G1 (#198b) — spread `requests` ONLY when the human has an unserved request,
+    // so the healthy poll payload's top-level key set stays byte-for-byte (same
+    // contract lock as renderFailures/unansweredCarryover above).
+    ...(pendingRequests.length > 0
+      ? { requests: pendingRequests.map((r) => ({ id: r.id, text: r.text, intent: r.intent })) }
+      : {}),
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField(),

@@ -524,6 +524,21 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       );
     }
 
+    // G1 (#198b) — pending (unserved) human REQUESTS join the obligations
+    // inventory, placed AFTER the plain-unanswered questions push (mirroring the
+    // check_feedback ordering: requests rank after unanswered questions). These
+    // persist across runs like questions, so a request the human composed while
+    // the agent was gone surfaces on this run's FIRST call.
+    const pendingRequests = ((fullState as { requests?: Array<{ id: string; text: string; intent: string; servedByArtifactId?: string }> }).requests ?? [])
+      .filter((r) => !r.servedByArtifactId);
+    if (pendingRequests.length > 0) {
+      const lines = pendingRequests.map((r) => `  • ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"`);
+      blockingParts.push(
+        `\n📨 ${pendingRequests.length} pending human request${pendingRequests.length === 1 ? "" : "s"} — the human ASKED you to do ${pendingRequests.length === 1 ? "this" : "these"} (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}\n` +
+        `Serve each with the matching present_* tool, passing servedRequestId so it links back and clears.`,
+      );
+    }
+
     const agentCommentIds = new Set(
       allComments.filter((c: any) => c.author === "agent").map((c: any) => c.id),
     );
