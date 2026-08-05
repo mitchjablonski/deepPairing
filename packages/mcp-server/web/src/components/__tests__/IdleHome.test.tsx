@@ -159,6 +159,16 @@ describe("IdleHome (BB7)", () => {
     });
   });
 
+  it("#204 M4 — shows a quiet initiation hint pointing at the request composer", async () => {
+    vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerEmpty }));
+    render(<IdleHome />);
+    const hint = await screen.findByTestId("idle-initiate-hint");
+    expect(hint).toHaveTextContent(/ask Claude for something/i);
+    expect(hint).toHaveTextContent(/explain/i);
+    expect(hint).toHaveTextContent(/plan/i);
+    expect(hint).toHaveTextContent(/status/i);
+  });
+
   it("renders the ledger empty-state copy when no proposals have been shaped yet", async () => {
     vi.stubGlobal("fetch", fetchHandler({ "/api/ledger/digest": ledgerEmpty }));
     render(<IdleHome />);

@@ -1,7 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Request } from "@deeppairing/shared";
-import { deliverComment, commentSecretNote } from "./check-feedback-delivery.js";
+import { deliverComment, commentSecretNote, requestSecretNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
@@ -633,7 +633,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // poll like a WAITING line until served.
   if (pendingRequests.length > 0) {
     const lines = pendingRequests.map(
-      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
+      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
     );
     parts.push(
       `📨 Human requests (${pendingRequests.length}) — the human ASKED for ${pendingRequests.length === 1 ? "this" : "these"}. Serve with the matching present_* tool (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}`,

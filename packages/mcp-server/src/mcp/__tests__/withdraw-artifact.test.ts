@@ -53,11 +53,17 @@ describe("#198c withdraw_artifact", () => {
     expect((res.content[0]!.text as string)).toMatch(/Withdrew art_1/);
     const art = (await store.getArtifacts()).find((a) => a.id === "art_1")!;
     expect(art.status).toBe("retracted");
-    // The reason is stamped on content so the status panel renders it inline…
+    // The reason is stamped on content so the status panel renders it inline
+    // (the honest status surface) — this is the ONE place the reason lives.
     expect((art.content as { retractReason?: string }).retractReason).toBe("framed it wrong");
-    // …AND rides an agent comment for thread history.
+    // #204 (UX L1) — the agent comment is now a bare "Withdrawn." THREAD MARKER,
+    // NOT a second copy of the reason: the inline status surface already carries
+    // it ~150px away, so repeating the full sentence in an adjacent comment was
+    // the same words rendered twice. The marker still exists (a successor threads
+    // onto it) but no longer echoes the reason.
     const comments = await store.getCommentsForArtifact("art_1");
-    expect(comments.some((c) => c.author === "agent" && c.content.includes("Withdrawn: framed it wrong"))).toBe(true);
+    expect(comments.some((c) => c.author === "agent" && c.content === "Withdrawn.")).toBe(true);
+    expect(comments.some((c) => c.author === "agent" && c.content.includes("framed it wrong"))).toBe(false);
   });
 
   it("NEVER writes the ledger", async () => {

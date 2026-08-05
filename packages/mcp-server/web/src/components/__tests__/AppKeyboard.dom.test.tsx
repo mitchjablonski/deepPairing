@@ -84,15 +84,15 @@ describe("F9 (L3) — replay clamps + Escape exit", () => {
 });
 
 describe("H1 — jumps close the rail that covers their target", () => {
-  it("dp:focus-artifact while the Conversation rail is open closes it", () => {
+  it("dp:focus-artifact while the Comment threads rail is open closes it", () => {
     render(<App />);
-    // open the rail via its header button
-    fireEvent.click(screen.getByRole("button", { name: /conversation/i }));
+    // open the rail via its header button (#204 M4 — renamed "Comment threads")
+    fireEvent.click(screen.getByRole("button", { name: /comment threads/i }));
     act(() => {
       window.dispatchEvent(new CustomEvent("dp:focus-artifact", { detail: { artifactId: "a1" } }));
     });
     // the rail's dialog is gone — the selection is visible, not behind a backdrop
-    expect(screen.queryByRole("dialog", { name: /conversation/i })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /comment threads/i })).toBeNull();
     expect(useArtifactStore.getState().selectedArtifactId).toBe("a1");
   });
 });

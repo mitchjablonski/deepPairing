@@ -1100,11 +1100,23 @@ export class FileStore implements IStore {
   /** Persist a human-composed request. `notifyFeedbackWaiters` wakes a live
    *  agent's check_feedback long-poll exactly like a new human comment does. */
   addRequest(params: { text: string; intent: RequestIntent }): Request {
+    // #204 (code lens F1) — scan the request's free text at the single choke-point
+    // every request creator converges on (mirroring the #160 comment scan). A
+    // request is HUMAN-authored text that flows into agent context via
+    // check_feedback and lands on disk — the SAME risk the comment/artifact/
+    // render-failure scans already cover — yet it was the last human-text ingress
+    // that bypassed the store-authoritative scan. Labels/pattern/line only, NEVER
+    // the matched value.
+    const secretWarnings = scanForSecrets(params.text);
     const request: Request = {
       id: `req_${nanoid(10)}`,
       text: params.text,
       intent: params.intent,
       createdAt: new Date().toISOString(),
+      // #204 — spread so the field is simply absent on clean requests (back-compat:
+      // stored JSON for clean requests stays byte-identical, and old persisted
+      // requests without the field load unchanged).
+      ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
     };
     this.requests.push(request);
     this.scheduleFlush();

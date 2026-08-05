@@ -91,13 +91,20 @@ test.beforeAll(async () => {
     },
   });
 
-  // (c) A withdrawn (retracted) artifact + the agent's "Withdrawn: …" note.
+  // (c) A withdrawn (retracted) artifact. #204 (UX L1) — the reason now lives in
+  // ONE place: the inline "↩ Retracted by agent" surface (retractReason on the
+  // content). The agent's thread comment is just the bare "Withdrawn." marker (no
+  // second copy of the sentence), matching what withdraw_artifact posts.
   await post("artifacts", {
     id: "res_ret", type: "research", title: "Cache-invalidation sweep",
-    content: { summary: "Draft I took back.", findings: [{ category: "Architecture", title: "Stale keys", detail: "Some keys never expire.", significance: "medium" }] },
+    content: {
+      summary: "Draft I took back.",
+      findings: [{ category: "Architecture", title: "Stale keys", detail: "Some keys never expire.", significance: "medium" }],
+      retractReason: "I conflated two unrelated cache layers — re-scoping before re-presenting.",
+    },
   });
   await post("artifacts/res_ret/status", { status: "retracted" });
-  await post("comments", { id: "wd_1", artifactId: "res_ret", author: "agent", content: "Withdrawn: I conflated two unrelated cache layers — re-scoping before re-presenting." });
+  await post("comments", { id: "wd_1", artifactId: "res_ret", author: "agent", content: "Withdrawn." });
 });
 
 test.afterAll(async () => {
@@ -125,10 +132,14 @@ test("(b) request composer + (a) changeset suggestion card + (c) withdrawn state
   for (const theme of ["dark", "light"] as const) {
     await load(page, theme);
 
-    // (b) Request composer: expand a preset so the input shows.
+    // (b) Request composer: #204 (M3) — the row is COLLAPSED to a trigger; click
+    // it to expand the composer (opens on the Explain preset), then confirm the
+    // preset chips + input show and the example helper text persists (L3).
     await expect(page.getByTestId("request-composer")).toBeVisible();
-    await page.getByRole("button", { name: /Explain how…/ }).click();
+    await page.getByTestId("request-composer-trigger").click();
+    await expect(page.getByRole("button", { name: /Explain how…/ })).toBeVisible();
     await expect(page.getByLabel(/Your request to Claude/i)).toBeVisible();
+    await expect(page.getByTestId("request-example-hint")).toContainText("the auth middleware works");
     await page.screenshot({ path: path.join(SHOTS, `request-composer-${theme}.png`), clip: { x: 0, y: 0, width: 1200, height: 240 } });
 
     // (a) Changeset suggestion card.
@@ -138,9 +149,16 @@ test("(b) request composer + (a) changeset suggestion card + (c) withdrawn state
     await expect(card.getByTestId("suggestion-state-pill")).toHaveText(/PENDING/);
     await page.screenshot({ path: path.join(SHOTS, `changeset-suggestion-${theme}.png`), fullPage: false });
 
-    // (c) Withdrawn state.
+    // (c) Withdrawn state. #204 — the reason renders ONCE (inline "Retracted by
+    // agent" surface); the thread marker is the bare "Withdrawn." (no duplicate
+    // sentence). The per-finding verdict triad is dimmed + disabled (UX L2).
     await selectArtifact(page, "Cache-invalidation sweep");
-    await expect(page.getByText(/Withdrawn: I conflated/i)).toBeVisible();
+    // "Retracted by agent" appears in both the sidebar chip and the panel footer;
+    // the reason string is unique to the inline (single) reason surface.
+    await expect(page.getByText(/Retracted by agent/i).first()).toBeVisible();
+    await expect(page.getByText(/I conflated two unrelated cache layers/i)).toBeVisible();
+    // The verdict triad is disabled on a retracted artifact (read-only write axis).
+    await expect(page.getByRole("button", { name: /Approve finding 1/i })).toBeDisabled();
     await page.screenshot({ path: path.join(SHOTS, `withdrawn-${theme}.png`), fullPage: false });
   }
 });

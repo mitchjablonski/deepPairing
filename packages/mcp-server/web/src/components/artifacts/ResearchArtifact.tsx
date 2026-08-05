@@ -7,6 +7,8 @@ import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
+import { reviewLifecycle } from "../../lib/reviewLifecycle";
+import { useReplayStore } from "../../stores/replay";
 import { OpenQuestionSection } from "./OpenQuestionSection";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { SimpleMarkdown } from "../SimpleMarkdown";
@@ -164,11 +166,17 @@ function FindingTriage({
   findingIndex,
   findingTitle,
   comments,
+  locked = false,
 }: {
   artifactId: string;
   findingIndex: number;
   findingTitle: string;
   comments: Comment[];
+  /** #204 (UX L2) — a retracted/terminal (reviewLifecycle "closed") or replayed
+   *  ("frozen") artifact is READ-ONLY on the write axis: the verdict triad stays
+   *  VISIBLE (the prior verdict is history) but dimmed + non-interactive, never a
+   *  live-looking glyph you can click on a draft the agent already took back. */
+  locked?: boolean;
 }) {
   const [promptVerdict, setPromptVerdict] = useState<Verdict | null>(null);
   const [reason, setReason] = useState("");
@@ -185,7 +193,7 @@ function FindingTriage({
   );
 
   const submit = async (verdict: Verdict, reasonText = "") => {
-    if (submitting) return;
+    if (submitting || locked) return; // #204 — a locked (closed/frozen) triad never writes.
     setSubmitting(true);
     try {
       const label =
@@ -226,12 +234,18 @@ function FindingTriage({
   };
 
   return (
-    <div className="relative flex items-center gap-0.5">
+    <div
+      className={`relative flex items-center gap-0.5 ${locked ? "opacity-40" : ""}`}
+      // #204 (UX L2) — dim + inert on a closed/frozen artifact. aria-disabled +
+      // per-button disabled keeps keyboard users out too (opacity alone wouldn't).
+      aria-disabled={locked || undefined}
+      title={locked ? "Read-only — this artifact was retracted or is being replayed" : undefined}
+    >
       <button
         onClick={() => submit("approved")}
-        disabled={submitting}
+        disabled={submitting || locked}
         aria-label={`Approve finding ${findingIndex + 1}`}
-        title={`Approve — "${findingTitle.slice(0, 60)}"`}
+        title={locked ? undefined : `Approve — "${findingTitle.slice(0, 60)}"`}
         className={chipClass(latestVerdict === "approved", "green")}
       >
         ✓
@@ -241,9 +255,9 @@ function FindingTriage({
           setPromptVerdict("revised");
           setReason("");
         }}
-        disabled={submitting}
+        disabled={submitting || locked}
         aria-label={`Request changes on finding ${findingIndex + 1}`}
-        title="Request changes — needs a reason"
+        title={locked ? undefined : "Request changes — needs a reason"}
         className={chipClass(latestVerdict === "revised", "amber")}
       >
         ↻
@@ -253,15 +267,15 @@ function FindingTriage({
           setPromptVerdict("rejected");
           setReason("");
         }}
-        disabled={submitting}
+        disabled={submitting || locked}
         aria-label={`Reject finding ${findingIndex + 1}`}
-        title="Reject — needs a reason"
+        title={locked ? undefined : "Reject — needs a reason"}
         className={chipClass(latestVerdict === "rejected", "red")}
       >
         ✗
       </button>
 
-      {promptVerdict && (
+      {!locked && promptVerdict && (
         <div className="absolute top-full right-0 mt-1 p-2 bg-surface-elevated border border-border-default rounded-lg shadow-lg z-10 w-72">
           <div className="text-2xs text-text-muted mb-1.5">
             {promptVerdict === "revised" ? "Why should the agent revise?" : "Why reject?"}
@@ -352,12 +366,16 @@ export function EvidenceItem({
   findingIndex,
   evidenceIndex,
   allComments,
+  readOnly = false,
 }: {
   evidence: Evidence;
   artifactId: string;
   findingIndex: number;
   evidenceIndex: number;
   allComments: Comment[];
+  /** #204 (UX L2) — suppress the evidence AskTrigger + make the code gutters
+   *  read-only when the parent artifact is retracted/terminal or replayed. */
+  readOnly?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showFullFile, setShowFullFile] = useState(false);
@@ -423,10 +441,12 @@ export function EvidenceItem({
             <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
           </span>
           <div className="flex items-center gap-2">
-            <AskTrigger
-              artifactId={artifactId}
-              target={{ findingIndex, evidenceIndex }}
-            />
+            {!readOnly && (
+              <AskTrigger
+                artifactId={artifactId}
+                target={{ findingIndex, evidenceIndex }}
+              />
+            )}
             <button
               onClick={() => setShowFullFile(true)}
               className="text-text-muted hover:text-accent-blue transition-colors"
@@ -456,6 +476,7 @@ export function EvidenceItem({
             artifactId={artifactId}
             commentsByLine={commentsByLine}
             targetContext={{ findingIndex, evidenceIndex }}
+            readOnly={readOnly}
           />
         )}
 
@@ -478,6 +499,7 @@ export function EvidenceItem({
                   filePath={evidence.filePath}
                   artifactId={artifactId}
                   targetContext={{ findingIndex, evidenceIndex }}
+                  readOnly={readOnly}
                 />
               </div>
             )}
@@ -505,6 +527,10 @@ export function renderEvidence(
   artifactId: string,
   findingIndex: number,
   allComments: Comment[],
+  // #204 (UX L2) — read-only threads the write-lock down to the evidence gutter +
+  // its AskTrigger. Defaults false so the debrief's reuse of this helper (and any
+  // other caller) is byte-unchanged.
+  readOnly = false,
 ) {
   // Guard: missing or null evidence
   if (!evidence) return null;
@@ -546,6 +572,7 @@ export function renderEvidence(
             findingIndex={findingIndex}
             evidenceIndex={evIdx}
             allComments={allComments}
+            readOnly={readOnly}
           />
         );
       })}
@@ -572,6 +599,16 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
     [artifact.content],
   );
   const comments = useChainComments(artifact.id); // Bug2 — chain aggregation
+  // #204 (UX L2) — the WRITE AXIS, derived through the SAME reviewLifecycle
+  // helper ChangesetArtifact uses (not an ad-hoc `status === "retracted"`), so a
+  // retracted (→ "closed") or replayed (→ "frozen") artifact locks the per-finding
+  // verdict triad + the comment/ask composers uniformly. Draft ("review") and
+  // approved ("follow_up") stay fully writable — follow-up commenting is intact.
+  const replayActive = useReplayStore((s) => s.active);
+  const writeLocked = (() => {
+    const lc = reviewLifecycle(artifact.status, replayActive);
+    return lc === "closed" || lc === "frozen";
+  })();
   const [focusMode, setFocusMode] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("significance");
@@ -653,24 +690,33 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
               findingIndex={i}
               findingTitle={finding.title ?? finding.detail}
               comments={findingComments}
+              locked={writeLocked}
             />
-            <AskTrigger
-              artifactId={artifact.id}
-              target={{ findingIndex: i }}
-            />
-            <CommentTrigger
-              artifactId={artifact.id}
-              target={{ findingIndex: i }}
-              existingCount={findingComments.length}
-            />
+            {/* #204 (UX L2) — the ask/comment COMPOSERS are pure write affordances;
+                on a closed/frozen artifact they're withheld (a disabled "Ask" has
+                no value). Posted comment history still renders below — read-only. */}
+            {!writeLocked && (
+              <>
+                <AskTrigger
+                  artifactId={artifact.id}
+                  target={{ findingIndex: i }}
+                />
+                <CommentTrigger
+                  artifactId={artifact.id}
+                  target={{ findingIndex: i }}
+                  existingCount={findingComments.length}
+                />
+              </>
+            )}
           </div>
         </div>
 
         {/* Detail */}
         <SimpleMarkdown text={finding.detail} className={`text-text-secondary mt-2 space-y-2 ${focusMode ? "text-sm leading-relaxed" : "text-xs"}`} />
 
-        {/* Evidence — now with inline commenting on code lines */}
-        {renderEvidence(finding.evidence, artifact.id, i, comments)}
+        {/* Evidence — now with inline commenting on code lines (read-only when the
+            artifact is retracted/terminal or being replayed). */}
+        {renderEvidence(finding.evidence, artifact.id, i, comments, writeLocked)}
 
         {/* Impact */}
         {finding.impact && (
@@ -830,7 +876,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
               (H1) targeting per question (questionIndex) is preserved inside
               the shared component. */}
           {content.openQuestions.map((q, i) => (
-            <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} />
+            <OpenQuestionSection key={i} artifactId={artifact.id} question={q} index={i} readOnly={writeLocked} />
           ))}
         </div>
       )}

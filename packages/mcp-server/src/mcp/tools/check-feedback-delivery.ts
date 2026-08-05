@@ -1,4 +1,4 @@
-import type { Artifact, Comment } from "@deeppairing/shared";
+import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { suggestionSummary } from "@deeppairing/shared";
 
 /**
@@ -45,6 +45,21 @@ function removedLineContent(art: Artifact | undefined, filePath: string, oldLine
  */
 export function commentSecretNote(c: Comment): string {
   return c.secretWarnings?.length ? " ⚠ possible secret in this comment" : "";
+}
+
+/**
+ * #204 (code lens F1) — the request analogue of `commentSecretNote`: a human
+ * request whose free text tripped the create-time scanner carries a short
+ * TEXT-ONLY marker on its delivered line (both the check_feedback request block
+ * and the first-call obligations inventory), so the agent knows the human may
+ * have pasted a credential into the composer (which is now in its context and on
+ * disk). Never includes the matched value; the persisted warning itself is
+ * labels/pattern/line only. Deliberately NOT a new structuredContent key — the
+ * requests mirror spreads only-when-present, keeping the healthy-payload contract
+ * lock (check-feedback-ledger-health.test.ts) unchanged.
+ */
+export function requestSecretNote(r: Pick<Request, "secretWarnings">): string {
+  return r.secretWarnings?.length ? " ⚠ possible secret in this request" : "";
 }
 
 type CommentRegion =

@@ -268,6 +268,35 @@ describe("#164 — open questions render as bounded sections with an always-visi
     expect(within(section).getByRole("button", { name: /mark resolved/i })).toBeInTheDocument();
   });
 
+  it("#204 L2 — a RETRACTED research artifact withholds the answer composer; the prior thread stays readable", () => {
+    const artifact = mk(
+      "research",
+      { summary: "s", findings: [], openQuestions: ["Which DB?"] },
+      { status: "retracted" },
+    );
+    useArtifactStore.setState({
+      artifacts: [artifact],
+      comments: {
+        [artifact.id]: [
+          comment({
+            artifactId: artifact.id,
+            content: "PRIOR-ANSWER-BODY",
+            target: { artifactId: artifact.id, questionIndex: 0, sectionId: "open-question" },
+          }),
+        ],
+      },
+    });
+    render(<ResearchArtifact artifact={artifact} />);
+
+    const section = sectionFor("Which DB?");
+    // The write axis is locked: NO composer (textarea + Answer/Ask buttons gone)…
+    expect(within(section).queryByLabelText("Answer question 1")).not.toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "Answer" })).not.toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "Ask" })).not.toBeInTheDocument();
+    // …but the prior conversation (history) still renders.
+    expect(within(section).getByText("PRIOR-ANSWER-BODY")).toBeInTheDocument();
+  });
+
   it("keyboard: type + Ctrl/Cmd+Enter submits as Answer (plain — no intent)", async () => {
     const user = userEvent.setup();
     const artifact = mk("research", { summary: "s", findings: [], openQuestions: ["Which DB?"] });
