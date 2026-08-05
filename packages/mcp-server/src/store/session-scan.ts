@@ -541,6 +541,18 @@ function prettifyLabel(s: string): string {
   return t.length > 0 ? t.charAt(0).toUpperCase() + t.slice(1) : t;
 }
 
+/** Split a mined numeric anchor ("6", "06", "6.5") into a normalized label +
+ *  slug fragment. Leading zeros on the integer part are stripped ("06" → "6");
+ *  a decimal sub-phase is preserved as a DISTINCT anchor — "6.5" → label "6.5",
+ *  slug "6-5" — so "Phase 0.5" never false-merges into "Phase 0". */
+function numAnchor(raw: string): { label: string; slug: string } {
+  const [intPart, fracPart] = raw.split(".");
+  const intNorm = String(parseInt(intPart!, 10)); // regex guarantees digits
+  return fracPart !== undefined
+    ? { label: `${intNorm}.${fracPart}`, slug: `${intNorm}-${fracPart}` }
+    : { label: intNorm, slug: intNorm };
+}
+
 /**
  * #203 — the ONE grouping heuristic, exported pure so its behavior is
  * table-pinned in tests. Mines a leading FEATURE prefix from an artifact title,
@@ -552,10 +564,13 @@ function prettifyLabel(s: string): string {
  *   1. "Milestone N …"  and its short form "MN …"  → both key `milestone-<n>`
  *      (so "M6 — quota UI" and "Milestone 6 — backfill" collapse into ONE
  *      group). The NUMBER is the group anchor; the trailing text is that one
- *      artifact's own title, not part of the key.
- *   2. "Phase N …"      → key `phase-<n>`, label "Phase N".
+ *      artifact's own title, not part of the key. A decimal sub-phase ("6.5")
+ *      is a DISTINCT anchor (slug `milestone-6-5`), never merged into `6`.
+ *   2. "Phase N …"      → key `phase-<n>`, label "Phase N" (decimals distinct).
  *   3. "Feature: X"     → key `slug(X)`, label prettified X. Here the WHOLE X is
- *      the feature name (no numeric anchor to split on).
+ *      the feature name (no numeric anchor to split on). Separator is a colon or
+ *      a SPACE-surrounded dash — never a bare hyphen (so "Feature-extractor …"
+ *      is not mis-mined).
  *   4. "[X] …"          → key `slug(X)`, label prettified X. Bracket-tag form.
  *
  * The bracket and "Feature:" forms slug the SAME inner text, so "[auth]" and
@@ -566,25 +581,29 @@ export function normalizeFeaturePrefix(rawTitle: string): FeaturePrefix | null {
   const title = (rawTitle ?? "").trim();
   if (!title) return null;
 
-  // 1a. "Milestone 6 — …"  (word boundary after the number)
-  let m = title.match(/^milestone\s+(\d+)\b/i);
+  // 1a. "Milestone 6 — …" / "Milestone 6.5 — …" (boundary after the number)
+  let m = title.match(/^milestone\s+(\d+(?:\.\d+)?)\b/i);
   // 1b. short form "M6 — …" — require a separator/end after the number so
   //     "m5stack", "MP3 tagger" (no digit right after M) don't false-match.
-  if (!m) m = title.match(/^m(\d+)(?=$|[\s:.\-–—])/i);
+  if (!m) m = title.match(/^m(\d+(?:\.\d+)?)(?=$|[\s:.\-–—])/i);
   if (m) {
-    const n = String(parseInt(m[1]!, 10));
-    return { slug: `milestone-${n}`, label: `Milestone ${n}` };
+    const n = numAnchor(m[1]!);
+    return { slug: `milestone-${n.slug}`, label: `Milestone ${n.label}` };
   }
 
-  // 2. "Phase 0: …"
-  const p = title.match(/^phase\s+(\d+)\b/i);
+  // 2. "Phase 0: …" / "Phase 0.5: …"
+  const p = title.match(/^phase\s+(\d+(?:\.\d+)?)\b/i);
   if (p) {
-    const n = String(parseInt(p[1]!, 10));
-    return { slug: `phase-${n}`, label: `Phase ${n}` };
+    const n = numAnchor(p[1]!);
+    return { slug: `phase-${n.slug}`, label: `Phase ${n.label}` };
   }
 
-  // 3. "Feature: X" — the whole remainder is the feature name.
-  const f = title.match(/^feature\s*[:\-–—]\s*(.+)$/i);
+  // 3. "Feature: X" — the whole remainder is the feature name. The separator is
+  //    a COLON (optional trailing space) or a dash with REQUIRED surrounding
+  //    whitespace ("Feature — X"). A BARE hyphen is deliberately NOT accepted, so
+  //    a compound word like "Feature-extractor research: …" (observed in the
+  //    corpus) is NOT mis-mined as feature "extractor research: …".
+  const f = title.match(/^feature\s*(?::\s*|\s+[-–—]\s+)(.+)$/i);
   if (f) {
     const inner = f[1]!.trim();
     const slug = slugify(inner);
@@ -645,7 +664,9 @@ export interface FeatureGroup {
   ungrouped?: boolean;
   artifactCount: number;
   openItemCount: number;
-  /** Newest artifact activity in the group (max updatedAt ?? createdAt). */
+  /** Newest artifact activity in the group — the max `createdAt` across the
+   *  group's artifacts (slice 1 does not plumb `updatedAt`). Undefined only when
+   *  every ref lacks a createdAt (salvaged partial). */
   lastActivity?: string;
   /** createdAt ASCending — timeline-ready. */
   artifactRefs: FeatureArtifactRef[];
@@ -772,13 +793,11 @@ export function groupByFeature(projectRoot: string): FeatureGroupsResult {
     if (!labelByKey.has(g.slug)) labelByKey.set(g.slug, g.label);
   };
 
-  const scanBySession = new Map<string, SessionScan>();
-  for (const s of scans) scanBySession.set(s.sessionId, s);
-
   // artifactId → effective group key (or null = ungrouped). Keyed by
-  // sessionId+"\0"+artifactId to keep sessions' id-spaces from colliding.
+  // sessionId + "\u0000" + artifactId so the two id-spaces can't collide (a
+  // NUL never appears in a session or artifact id, so the join is unambiguous).
   const groupKeyOf = new Map<string, string | null>();
-  const composite = (sessionId: string, artifactId: string) => `${sessionId} ${artifactId}`;
+  const composite = (sessionId: string, artifactId: string) => `${sessionId}\u0000${artifactId}`;
 
   for (const scan of scans) {
     const byId = new Map<string, Artifact>();
@@ -847,7 +866,10 @@ export function groupByFeature(projectRoot: string): FeatureGroupsResult {
         type: artifact.type,
         title: artifact.title,
         status: artifact.status,
-        createdAt: artifact.createdAt,
+        // salvageArray only guarantees a string `id` — a salvage-passing artifact
+        // can lack createdAt. Coerce to "" so the ref's type stays honest and the
+        // downstream sort/lastActivity can't hit `undefined.localeCompare`.
+        createdAt: artifact.createdAt ?? "",
       });
       for (const f of fileTouchesOf(artifact)) g.files.add(f);
 
@@ -928,8 +950,14 @@ export function groupByFeature(projectRoot: string): FeatureGroupsResult {
 
   // --- Finalize -------------------------------------------------------------
   const finalize = (g: GroupAccum): FeatureGroup => {
-    const artifactRefs = [...g.refs].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const lastActivity = artifactRefs.length > 0 ? artifactRefs.at(-1)!.createdAt : undefined;
+    // Guarded compare — a salvaged ref can carry createdAt "" (coerced above);
+    // "" sorts to the FRONT (an undated artifact isn't "newest"), so the max real
+    // date lands last. `?? ""` is belt-and-suspenders against a future unguarded
+    // ref source.
+    const artifactRefs = [...g.refs].sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+    // The max createdAt is the last ref after the ascending sort. An all-undated
+    // group yields "" → normalize to undefined (no fabricated activity time).
+    const lastActivity = (artifactRefs.at(-1)?.createdAt || undefined) as string | undefined;
     const fileTouches: FeatureFileTouch[] = [...g.files]
       .sort((a, b) => a.localeCompare(b))
       .map((p) => ({

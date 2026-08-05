@@ -69,6 +69,12 @@ describe("normalizeFeaturePrefix — table-pinned corpus shapes", () => {
     // Short milestone form collapses into the SAME group as the long form.
     ["M6 — quota UI", { slug: "milestone-6", label: "Milestone 6" }],
     ["m6: quota persistence", { slug: "milestone-6", label: "Milestone 6" }],
+    // Decimal sub-phases are DISTINCT anchors (never merged into the integer).
+    ["Phase 0.5 — interim shim", { slug: "phase-0-5", label: "Phase 0.5" }],
+    ["Milestone 6.5 — hotfix", { slug: "milestone-6-5", label: "Milestone 6.5" }],
+    ["M6.5 — quota patch", { slug: "milestone-6-5", label: "Milestone 6.5" }],
+    // Leading zeros on the integer part normalize ("06" → "6").
+    ["Milestone 06 — padded", { slug: "milestone-6", label: "Milestone 6" }],
     // Feature: X and [X] name the feature directly.
     ["Feature: auth revamp", { slug: "auth-revamp", label: "Auth revamp" }],
     ["Feature - billing export", { slug: "billing-export", label: "Billing export" }],
@@ -92,6 +98,10 @@ describe("normalizeFeaturePrefix — table-pinned corpus shapes", () => {
     // Hostile: empty bracket / bracket with no sluggable content.
     ["[] nothing", null],
     ["[!!] punctuation only", null],
+    // Hostile: a COMPOUND word beginning with "Feature-" (bare hyphen, no
+    // surrounding space) is NOT a "Feature: X" tag — real corpus title.
+    ["Feature-extractor research: PiD is a dead end", null],
+    ["Feature-flag rollout plan", null],
   ];
 
   it.each(CASES)("normalizes %j", (title, expected) => {
@@ -181,6 +191,41 @@ describe("groupByFeature — grouping", () => {
     ]);
     const { groups } = groupByFeature(tmpDir);
     expect(groups.find((g) => g.id === "milestone-4")!.artifactCount).toBe(2);
+  });
+
+  it("keeps a decimal sub-phase in its OWN group (Phase 0 and Phase 0.5 are distinct)", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Phase 0 — bootstrap", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "a2", title: "Phase 0.5 — interim shim", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const { groups } = groupByFeature(tmpDir);
+    expect(groups.find((g) => g.id === "phase-0")!.artifactRefs.map((r) => r.artifactId)).toEqual(["a1"]);
+    expect(groups.find((g) => g.id === "phase-0-5")!.artifactRefs.map((r) => r.artifactId)).toEqual(["a2"]);
+  });
+
+  it("does NOT throw when two artifacts in one group both lack createdAt (salvage contract: skip+report, never crash)", () => {
+    // The art() helper always defaults createdAt — this is why the unguarded
+    // sort slipped past the suite. Write raw refs with NO createdAt to repro the
+    // TypeError the guarded compare now prevents.
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", "s1");
+    fs.mkdirSync(dir, { recursive: true });
+    const noDate = (id: string, title: string) => ({
+      id, sessionId: "s1", type: "plan", version: 1, parentId: null,
+      title, status: "draft", content: {}, agentReasoning: null,
+      // deliberately NO createdAt / updatedAt
+    });
+    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify([
+      noDate("a1", "Milestone 6 — one"),
+      noDate("a2", "Milestone 6 — two"),
+    ]));
+    let result!: ReturnType<typeof groupByFeature>;
+    expect(() => { result = groupByFeature(tmpDir); }).not.toThrow();
+    const m6 = result.groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.artifactCount).toBe(2);
+    // An all-undated group has no fabricated activity time.
+    expect(m6.lastActivity).toBeUndefined();
+    // The read succeeded — this is NOT a failedSessions case.
+    expect(result.failedSessions).toEqual([]);
   });
 });
 
