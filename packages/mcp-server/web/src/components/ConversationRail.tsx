@@ -7,6 +7,7 @@ import { useArtifactStore } from "../stores/artifact";
 import { useModal } from "../hooks/useModal";
 import { commentAnchorKey } from "../lib/comment-anchor";
 import { isUnansweredQuestion } from "../lib/unanswered";
+import { suggestionPill } from "../lib/suggestionPill";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
@@ -570,6 +571,11 @@ function CommentRow({
   const isAgent = comment.author === "agent";
   const isQuestion = (comment as any).intent === "question";
   const authorLabel = isAgent ? "Agent" : "You";
+  // L4 (#202) — a suggested-edit thread carries a negotiation state; the rail
+  // otherwise renders a countered suggestion as a plain resolved-looking thread.
+  // Show a read-only state chip (same label + palette as SuggestionCard's pill)
+  // so PENDING/COUNTERED/APPLIED/INSISTED reads consistently across surfaces.
+  const pill = comment.suggestion ? suggestionPill(comment.suggestion) : null;
   return (
     <div>
       <div className="flex items-center gap-1.5 text-[10px] text-text-muted">
@@ -588,6 +594,14 @@ function CommentRow({
         <span>{timeAgo(comment.createdAt)}</span>
         <span>·</span>
         <span className="font-mono">{location}</span>
+        {pill && (
+          <span
+            data-testid="rail-suggestion-state"
+            className={`ml-1 px-1 py-px rounded font-bold tracking-wide text-[9px] ${pill.cls}`}
+          >
+            {pill.label}
+          </span>
+        )}
         {isQuestion && (
           <span className="ml-1 px-1 py-px rounded bg-accent-violet-dim text-accent-violet text-[9px]">
             ❓ question

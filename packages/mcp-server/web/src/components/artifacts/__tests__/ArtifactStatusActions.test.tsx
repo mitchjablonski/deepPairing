@@ -282,6 +282,110 @@ describe("#193 E2 — suppressRejectConcept (the debrief de-fanged reject)", () 
   });
 });
 
+describe("ArtifactStatusActions — H1 (#202) open-suggestion approve gate", () => {
+  function seedWithOpenSuggestion(state: "pending" | "countered" = "pending") {
+    const art = artifact({ id: "art_g", type: "code_change", content: { filePath: "a.ts" } });
+    useArtifactStore.getState().addArtifact(art);
+    useArtifactStore.getState().addComment({
+      id: "cmt_s",
+      sessionId: "s1",
+      target: { artifactId: "art_g", lineStart: 3, lineEnd: 3, filePath: "a.ts" },
+      parentCommentId: null,
+      author: "human",
+      content: "prefer this",
+      intent: "suggestion",
+      suggestion: { originalText: "old", replacementText: "new", lineStart: 3, lineEnd: 3, state },
+      acknowledged: false,
+      createdAt: new Date().toISOString(),
+    } as any);
+    return art;
+  }
+
+  it("clicking Approve with an OPEN suggestion shows the confirm instead of approving", async () => {
+    const art = seedWithOpenSuggestion("pending");
+    render(<ArtifactStatusActions artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    // Gated: the confirm shows and NO status POST fired.
+    expect(screen.getByTestId("approve-open-suggestions-confirm")).toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/status"), expect.anything());
+  });
+
+  it("the confirm NAMES the count + open states", async () => {
+    const art = artifact({ id: "art_g", type: "code_change", content: { filePath: "a.ts" } });
+    useArtifactStore.getState().addArtifact(art);
+    for (const [id, state] of [["cmt_p", "pending"], ["cmt_c", "countered"]] as const) {
+      useArtifactStore.getState().addComment({
+        id, sessionId: "s1",
+        target: { artifactId: "art_g", lineStart: 3, lineEnd: 3, filePath: "a.ts" },
+        parentCommentId: null, author: "human", content: "x", intent: "suggestion",
+        suggestion: { originalText: "o", replacementText: "n", lineStart: 3, lineEnd: 3, state },
+        acknowledged: false, createdAt: new Date().toISOString(),
+      } as any);
+    }
+    render(<ArtifactStatusActions artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    const confirm = screen.getByTestId("approve-open-suggestions-confirm");
+    expect(confirm).toHaveTextContent(/2 of your suggestions are still open/);
+    expect(confirm).toHaveTextContent(/1 pending, 1 countered/);
+  });
+
+  it("'Approve anyway' proceeds with the approve", async () => {
+    const art = seedWithOpenSuggestion("countered");
+    render(<ArtifactStatusActions artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    await userEvent.click(screen.getByTestId("approve-anyway"));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/artifacts/art_g/status"),
+        expect.objectContaining({ body: expect.stringContaining('"status":"approved"') }),
+      ),
+    );
+  });
+
+  it("with NO open suggestion, Approve commits directly (no confirm)", async () => {
+    const art = artifact({ id: "art_g", type: "code_change", content: { filePath: "a.ts" } });
+    useArtifactStore.getState().addArtifact(art);
+    render(<ArtifactStatusActions artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    expect(screen.queryByTestId("approve-open-suggestions-confirm")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/artifacts/art_g/status"), expect.anything()),
+    );
+  });
+
+  it("the confirm auto-hides when the last open suggestion resolves while it's showing (no empty-parens copy)", async () => {
+    const art = seedWithOpenSuggestion("pending");
+    render(<ArtifactStatusActions artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    expect(screen.getByTestId("approve-open-suggestions-confirm")).toBeInTheDocument();
+    // The agent resolves the suggestion (e.g. applied via WS) while the confirm
+    // is open → openSug.total drops to 0. The banner must vanish, never render
+    // "0 of your suggestions are still open ()".
+    act(() => {
+      useArtifactStore.setState((s) => ({
+        comments: {
+          ...s.comments,
+          art_g: (s.comments.art_g ?? []).map((c) =>
+            c.id === "cmt_s" ? ({ ...c, suggestion: { ...(c as any).suggestion, state: "applied", appliedInVersion: 2 } } as any) : c,
+          ),
+        },
+      }));
+    });
+    expect(screen.queryByTestId("approve-open-suggestions-confirm")).not.toBeInTheDocument();
+  });
+
+  it("the keyboard approve shortcut ALSO hits the gate (no silent countdown-to-commit)", () => {
+    const art = seedWithOpenSuggestion("pending");
+    render(<ArtifactStatusActions artifact={art} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_g", action: "approve" } }));
+    });
+    // Gated immediately: the confirm shows, and NO auto-approve countdown armed.
+    expect(screen.getByTestId("approve-open-suggestions-confirm")).toBeInTheDocument();
+    expect(screen.queryByText(/auto-approve in/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("ArtifactStatusActions — keyboard shortcut event", () => {
   it("dp:artifact-shortcut(approve) arms the 3s countdown", async () => {
     vi.useFakeTimers();

@@ -1,8 +1,10 @@
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
+import { useChainComments } from "../../hooks/useChainComments";
+import { summarizeOpenSuggestions, openSuggestionsConfirmLabel } from "../../lib/openSuggestions";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
@@ -190,6 +192,20 @@ export function ArtifactStatusActions({
     atEnd, forceExpanded, userCollapsed,
   } = state;
 
+  // H1 (#202) — the approve gate. Approving while the human's own suggested
+  // edits sit pending/countered silently abandons their proposal (the asymmetry
+  // with withdraw_artifact the round-4 UX lens flagged). Every FINALIZING
+  // approve path — the button, ⌘⏎-on-empty, and the `a`/⏎ keymap's countdown —
+  // routes through the gate: it shows a one-line inline confirm naming the open
+  // states instead of committing. Confirming ("Approve anyway") proceeds — the
+  // human's explicit call, never a hard-block. A ref keeps the countdown-tick
+  // effect reading the freshest summary without re-subscribing.
+  const chainComments = useChainComments(artifact.id);
+  const openSug = useMemo(() => summarizeOpenSuggestions(chainComments), [chainComments]);
+  const openSugRef = useRef(openSug);
+  openSugRef.current = openSug;
+  const [approveConfirm, setApproveConfirm] = useState(false);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // B6 — end-of-artifact sentinel drives compact-while-floating (see the
@@ -283,7 +299,15 @@ export function ArtifactStatusActions({
       // The !hideApprove guard is belt-and-suspenders: the effect above already
       // cancels on hideApprove, but never auto-approve while approval is suppressed.
       if (countdown !== null && countdown <= 0 && !countdownPaused && !hideApprove) {
-        updateArtifactStatus(artifact.id, "approved");
+        // H1 (#202) — the countdown is how the `a`/⏎ keymap AND confidence
+        // auto-approve commit. Route BOTH through the open-suggestion gate: with
+        // an open suggestion the window elapsing surfaces the confirm instead of
+        // silently approving.
+        if (openSugRef.current.total > 0) {
+          setApproveConfirm(true);
+        } else {
+          updateArtifactStatus(artifact.id, "approved");
+        }
       }
       return;
     }
@@ -308,6 +332,13 @@ export function ArtifactStatusActions({
       // thought and clicks the action that carries it. (The confidence
       // auto-arm already gates on !comment for the same reason.)
       if (detail.action === "approve" && !hideApprove && !hasCommentRef.current) {
+        // H1 (#202) — the `a`/⏎ keymap must hit the same open-suggestion gate.
+        // With a suggestion open, surface the confirm immediately rather than
+        // arming a countdown that would only reveal it at zero.
+        if (openSugRef.current.total > 0) {
+          setApproveConfirm(true);
+          return;
+        }
         // Arm the same countdown UI used for confidence-auto-approve, but
         // shorter. User can press Esc (via Cancel) to bail.
         dispatch({ type: "armCountdown", seconds: KEYBOARD_CONFIRM_SECONDS });
@@ -442,7 +473,18 @@ export function ArtifactStatusActions({
     );
   }
 
-  const handleAction = async (action: "approved" | "revised" | "rejected") => {
+  const handleAction = async (
+    action: "approved" | "revised" | "rejected",
+    opts?: { bypassSuggestionGate?: boolean },
+  ) => {
+    // H1 (#202) — gate a FINALIZING approve behind the inline confirm when the
+    // human's own suggestions are still open. Reject/Request-changes are never
+    // gated (they don't abandon a proposal). "Approve anyway" passes the bypass.
+    if (action === "approved" && !opts?.bypassSuggestionGate && openSugRef.current.total > 0) {
+      setApproveConfirm(true);
+      return;
+    }
+    setApproveConfirm(false);
     dispatch({ type: "submitStart" });
     try {
       // Submit comment alongside the action if the user typed one
@@ -587,6 +629,45 @@ export function ArtifactStatusActions({
           compact form. */}
       <div ref={sentinelRef} aria-hidden className="h-px" />
       <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2" /* solid bg: content ghosted readably through the old /95+blur edge */>
+      {/* H1 (#202) — the open-suggestion approve gate. Shown in place of a silent
+          commit; naming the open states so the human knows what approving
+          abandons. "Approve anyway" is their explicit call (bypasses the gate);
+          "Keep reviewing" dismisses. */}
+      {approveConfirm && openSug.total > 0 && (
+        <div
+          data-testid="approve-open-suggestions-confirm"
+          className="space-y-1.5 p-2.5 rounded border border-accent-amber/40 bg-accent-amber-dim/15"
+        >
+          <div className="text-2xs text-text-secondary">
+            <span className="text-accent-amber font-semibold">⚠ {openSuggestionsConfirmLabel(openSug)}</span>
+            {openSug.files.length > 0 && (
+              <span className="text-text-muted">
+                {" "}
+                on <span className="font-mono text-text-secondary">{openSug.files.join(", ")}</span>
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleAction("approved", { bypassSuggestionGate: true })}
+              disabled={submitting}
+              data-testid="approve-anyway"
+              className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-amber rounded
+                         hover:bg-accent-amber/85 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
+              title="Approve even though your suggestions are still open"
+            >
+              Approve anyway
+            </button>
+            <button
+              onClick={() => setApproveConfirm(false)}
+              disabled={submitting}
+              className="text-2xs text-text-muted hover:text-text-secondary"
+            >
+              Keep reviewing
+            </button>
+          </div>
+        </div>
+      )}
       {!expanded ? (
         // B6 — slim floating bar: Approve stays one click (the bound approve),
         // everything needing a reason expands + focuses the textarea.

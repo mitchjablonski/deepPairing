@@ -86,3 +86,33 @@ describe("#172 SuggestionCard", () => {
     expect(JSON.parse(call[1].body)).toEqual({ action: "insist" });
   });
 });
+
+describe("H2 (#202) — the counter's code renders as a mini-diff", () => {
+  it("a countered suggestion with a counter.replacementText shows 'Claude's counter:' + the counter code", () => {
+    render(
+      <SuggestionCard
+        comment={mkSuggestion({
+          state: "countered",
+          counter: { reason: "attach the cause instead", replacementText: "  throw new UploadFailedError({ cause: err });" },
+        })}
+        replies={[]}
+      />,
+    );
+    expect(screen.getByTestId("counter-diff")).toBeInTheDocument();
+    expect(screen.getByText(/Claude's counter:/)).toBeInTheDocument();
+    // The counter's proposed code is on screen — no longer accepted sight-unseen.
+    expect(screen.getByText(/cause: err/)).toBeInTheDocument();
+  });
+
+  it("a PROSE-ONLY counter (no replacementText) renders no counter-diff — current rendering stays", () => {
+    render(
+      <SuggestionCard
+        comment={mkSuggestion({ state: "countered", counter: { reason: "returning null drops the upload" } })}
+        replies={[]}
+      />,
+    );
+    expect(screen.queryByTestId("counter-diff")).not.toBeInTheDocument();
+    // The negotiation row still renders.
+    expect(screen.getByRole("button", { name: /take the counter/i })).toBeInTheDocument();
+  });
+});
