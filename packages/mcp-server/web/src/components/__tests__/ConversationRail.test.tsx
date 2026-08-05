@@ -88,6 +88,28 @@ describe("ConversationRail (W1)", () => {
     expect(screen.getByText("rename step 2?")).toBeInTheDocument();
   });
 
+  it("L4 (#202): a suggestion-bearing thread shows its state chip (COUNTERED)", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings v1", type: "code_change" }));
+    const sug = {
+      ...comment({ id: "c_sug", artifactId: "a1", author: "human", content: "prefer this", createdAt: "2026-04-26T10:01:00.000Z", intent: "suggestion", target: { lineStart: 5, lineEnd: 5, filePath: "a.ts" } }),
+      suggestion: { originalText: "o", replacementText: "n", lineStart: 5, lineEnd: 5, state: "countered" as const },
+    };
+    s.addComment(sug as Comment);
+    render(<ConversationRail onClose={() => {}} />);
+    const chip = screen.getByTestId("rail-suggestion-state");
+    expect(chip).toHaveTextContent("COUNTERED");
+    expect(chip.className).toMatch(/accent-violet/);
+  });
+
+  it("L4 (#202): a plain (non-suggestion) comment shows NO state chip", () => {
+    const s = useArtifactStore.getState();
+    s.addArtifact(artifact("a1", { title: "Findings v1" }));
+    s.addComment(comment({ id: "c_plain", artifactId: "a1", author: "human", content: "just a note", createdAt: "2026-04-26T10:01:00.000Z" }));
+    render(<ConversationRail onClose={() => {}} />);
+    expect(screen.queryByTestId("rail-suggestion-state")).not.toBeInTheDocument();
+  });
+
   it("orders artifact groups by their most recent comment activity (newest first)", () => {
     const s = useArtifactStore.getState();
     s.addArtifact(artifact("a_old", { title: "Stale artifact" }));

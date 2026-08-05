@@ -596,6 +596,105 @@ describe("ChangesetArtifact — suggested edits on the changeset surface (#198a)
   });
 });
 
+describe("ChangesetArtifact — H1/M1 (#202) open-suggestion approve gate", () => {
+  /** An open suggestion on new-side line 26 of the given file. */
+  function openSug(filePath: string, state: "pending" | "countered" = "pending", id = "cmt_open"): Comment {
+    return comment({
+      id,
+      content: "prefer this",
+      intent: "suggestion",
+      target: { artifactId: "art_cs", filePath, lineStart: 26, lineEnd: 26 },
+      suggestion: { originalText: "old", replacementText: "new", lineStart: 26, lineEnd: 26, state },
+    });
+  }
+
+  const allReviewed = {
+    reviewState: {
+      "auth/middleware.ts": "reviewed",
+      "auth/session.ts": "reviewed",
+      "auth/session.test.ts": "reviewed",
+    },
+  };
+
+  it("Approve changeset with an open suggestion shows the confirm (no silent commit)", () => {
+    const art = changeset(allReviewed);
+    seed(art, [openSug("auth/middleware.ts", "pending")]);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
+    expect(screen.getByTestId("approve-open-suggestions-confirm")).toBeInTheDocument();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("the confirm NAMES the count + states AND lists the files", () => {
+    const art = changeset(allReviewed);
+    seed(art, [openSug("auth/middleware.ts", "pending", "cmt_a"), openSug("auth/session.ts", "countered", "cmt_b")]);
+    render(<Harness id="art_cs" />);
+    act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
+    const confirm = screen.getByTestId("approve-open-suggestions-confirm");
+    expect(confirm).toHaveTextContent(/2 of your suggestions are still open/);
+    expect(confirm).toHaveTextContent(/1 pending, 1 countered/);
+    const files = screen.getByTestId("approve-confirm-files");
+    expect(files).toHaveTextContent("auth/middleware.ts");
+    expect(files).toHaveTextContent("auth/session.ts");
+  });
+
+  it("'Approve anyway' commits the approve", async () => {
+    const art = changeset(allReviewed);
+    seed(art, [openSug("auth/middleware.ts", "countered")]);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
+    await act(async () => { fireEvent.click(screen.getByTestId("approve-anyway")); await Promise.resolve(); });
+    expect(updateStatus).toHaveBeenCalledWith("art_cs", "approved", undefined, undefined);
+  });
+
+  it("the keyboard ⏎ approve path ALSO hits the gate", () => {
+    const art = changeset(allReviewed);
+    seed(art, [openSug("auth/middleware.ts", "pending")]);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    act(() => { fireEvent.keyDown(document.body, { key: "Enter" }); });
+    expect(screen.getByTestId("approve-open-suggestions-confirm")).toBeInTheDocument();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("with NO open suggestion, Approve changeset arms the countdown as before", () => {
+    const art = changeset(allReviewed);
+    seed(art);
+    render(<Harness id="art_cs" />);
+    act(() => { fireEvent.click(screen.getByTestId("approve-changeset")); });
+    expect(screen.queryByTestId("approve-open-suggestions-confirm")).not.toBeInTheDocument();
+    expect(screen.getByTestId("approve-countdown")).toBeInTheDocument();
+  });
+
+  it("per-file 'Looks right' on a file with an open suggestion arms a scoped confirm (no review POST)", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [openSug("auth/middleware.ts", "pending")]);
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview });
+    render(<Harness id="art_cs" />);
+    await userEvent.click(screen.getByTestId("looks-right"));
+    expect(screen.getByTestId("looks-right-confirm")).toBeInTheDocument();
+    expect(setReview).not.toHaveBeenCalled();
+    // Confirming marks it.
+    await userEvent.click(screen.getByTestId("looks-right-anyway"));
+    expect(setReview).toHaveBeenCalledWith("art_cs", "auth/middleware.ts", "reviewed");
+  });
+
+  it("the changed-files rail shows a DISTINCT amber badge on a file with an open suggestion", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [openSug("auth/middleware.ts", "pending")]);
+    render(<Harness id="art_cs" />);
+    const badge = screen.getByTestId("open-suggestion-badge");
+    expect(badge).toHaveTextContent("!1");
+    expect(badge.className).toMatch(/accent-amber/);
+  });
+});
+
 describe("ChangesetArtifact — comments still thread (#171 regression guard)", () => {
   it("renders a per-file line comment thread + a cross-file card", () => {
     const art = changeset();

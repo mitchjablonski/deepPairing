@@ -1,7 +1,7 @@
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { coerceCodeChangeContent } from "@deeppairing/shared";
-import { CommentableCode, partitionSuggestions } from "../CommentableCode";
-import { SuggestionCard } from "../SuggestionCard";
+import { CommentableCode } from "../CommentableCode";
+import { SuggestionLineFeedback } from "../SuggestionLineFeedback";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { ConceptBadge } from "../ConceptBadge";
@@ -9,7 +9,7 @@ import { useState, useMemo, type ReactNode } from "react";
 import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { computeLineDiff, collapseDiff, type DiffLine, type DiffRow } from "../../lib/diff";
-import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../LineComments";
+import { LineGutter, LineComposer, type LineMode } from "../LineComments";
 
 /**
  * Shared props that make the diff views comment-capable. Comments anchor to
@@ -25,43 +25,9 @@ interface DiffCommentProps {
   commentsByLine: Map<number, Comment[]>;
 }
 
-/**
- * #172 — a diff row's feedback: suggested-edit cards (always shown) + plain
- * comment chips (hidden while its composer is open). Shared by both diff views.
- */
-function LineFeedback({
-  lineComments,
-  lineNum,
-  artifactId,
-  filePath,
-  onOpenLine,
-  hideChips,
-}: {
-  lineComments: Comment[];
-  lineNum: number;
-  artifactId: string;
-  filePath?: string;
-  onOpenLine: () => void;
-  hideChips: boolean;
-}) {
-  const { suggestions, repliesBySuggestion, chips } = partitionSuggestions(lineComments);
-  return (
-    <>
-      {suggestions.length > 0 && (
-        <div className="ml-[5.5rem] mr-3 my-1.5 space-y-2">
-          {suggestions.map((sc) => (
-            <SuggestionCard key={sc.id} comment={sc} replies={repliesBySuggestion[sc.id] ?? []} filePath={filePath} />
-          ))}
-        </div>
-      )}
-      {chips.length > 0 && !hideChips && (
-        <div className="ml-[5.5rem] mr-3 my-1">
-          <LineCommentChips lineNum={lineNum} comments={chips} artifactId={artifactId} filePath={filePath} onOpenLine={onOpenLine} />
-        </div>
-      )}
-    </>
-  );
-}
+// F2 (#202) — the former local `LineFeedback` (suggested-edit cards + plain
+// chips) now lives in the shared `SuggestionLineFeedback` component, used by
+// both this surface and the changeset. Render is byte-identical.
 
 function UnifiedDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: DiffLine[] } & DiffCommentProps) {
   // Collapse long unchanged runs into gap markers so an incremental edit to an
@@ -166,7 +132,7 @@ function UnifiedDiffView({ diff, artifactId, filePath, commentsByLine }: { diff:
 
                 {/* Existing comments/suggestions + threaded replies on the new-side line. */}
                 {commentable && lineComments.length > 0 && (
-                  <LineFeedback
+                  <SuggestionLineFeedback
                     lineComments={lineComments}
                     lineNum={newLine}
                     artifactId={artifactId}
@@ -382,7 +348,7 @@ function SplitDiffView({ diff, artifactId, filePath, commentsByLine }: { diff: D
 
                 {/* Existing comments/suggestions + threaded replies, full width below the row. */}
                 {commentable && lineComments.length > 0 && (
-                  <LineFeedback
+                  <SuggestionLineFeedback
                     lineComments={lineComments}
                     lineNum={newLine!}
                     artifactId={artifactId}

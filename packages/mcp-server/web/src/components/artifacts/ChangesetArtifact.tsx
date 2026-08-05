@@ -14,10 +14,14 @@ import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
 import { computePending } from "../../lib/pending";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
+import {
+  summarizeOpenSuggestions,
+  describeOpenStates,
+  openSuggestionsConfirmLabel,
+} from "../../lib/openSuggestions";
 import { OpenInEditorLink } from "../OpenInEditor";
-import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "../LineComments";
-import { partitionSuggestions } from "../CommentableCode";
-import { SuggestionCard } from "../SuggestionCard";
+import { LineGutter, LineComposer, type LineMode } from "../LineComments";
+import { SuggestionLineFeedback } from "../SuggestionLineFeedback";
 
 /**
  * #171 / #175 — ChangesetArtifact: a change spanning 2+ files reviewed as ONE
@@ -46,60 +50,10 @@ function sideLineKey(side: "old" | "new", line: number): string {
   return `${side}:${line}`;
 }
 
-/**
- * G1 (#198a) — a changeset diff row's feedback, mirroring CodeChangeArtifact's
- * `LineFeedback`: split the line's comments into suggested-edit CARDS (rendered
- * by SuggestionCard, with their agent/human replies pulled in) vs plain comment
- * chips. Before this the changeset dumped ALL of a line's comments straight into
- * LineCommentChips, so a posted suggestion lost its state pill, mini-diff and
- * take-counter/insist negotiation row — the #199 machinery was orphaned on the
- * secondary surface v0.1.22 made the default. Suggestion cards render ALWAYS
- * (even while the composer is open); only the plain chips hide when `hideChips`.
- * `side` flows through to the chips so an old-side (removed-line) anchor keeps
- * its own bucket; SuggestionCard reads `filePath` for its location header.
- */
-function ChangesetLineFeedback({
-  lineComments,
-  anchorLine,
-  anchorSide,
-  artifactId,
-  filePath,
-  hideChips,
-  onOpenLine,
-}: {
-  lineComments: Comment[];
-  anchorLine: number;
-  anchorSide: "old" | "new";
-  artifactId: string;
-  filePath: string;
-  hideChips: boolean;
-  onOpenLine: () => void;
-}) {
-  const { suggestions, repliesBySuggestion, chips } = partitionSuggestions(lineComments);
-  return (
-    <>
-      {suggestions.length > 0 && (
-        <div className="ml-[5.5rem] mr-3 my-1.5 space-y-2">
-          {suggestions.map((sc) => (
-            <SuggestionCard key={sc.id} comment={sc} replies={repliesBySuggestion[sc.id] ?? []} filePath={filePath} />
-          ))}
-        </div>
-      )}
-      {chips.length > 0 && !hideChips && (
-        <div className="ml-[5.5rem] mr-3 my-1">
-          <LineCommentChips
-            lineNum={anchorLine}
-            comments={chips}
-            artifactId={artifactId}
-            filePath={filePath}
-            side={anchorSide}
-            onOpenLine={onOpenLine}
-          />
-        </div>
-      )}
-    </>
-  );
-}
+// F2 (#202) — the changeset's former local `ChangesetLineFeedback` now shares
+// the extracted `SuggestionLineFeedback` with CodeChangeArtifact; the only
+// changeset-specific input, the del-side (#186) `side`, is a prop there. Render
+// is byte-identical.
 
 const changeMark: Record<ChangesetFile["changeType"], { letter: string; cls: string; label: string }> = {
   modified: { letter: "M", cls: "text-accent-amber", label: "modified" },
@@ -215,6 +169,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   // Comments across the version chain (v1 comments render on v2).
   const allComments = useChainComments(artifact.id);
 
+  // H1/M1 (#202) — open (pending/countered) suggestions on this changeset, and
+  // per-file counts. Drives the approve gate (the FINALIZING approve refuses to
+  // silently abandon the human's own proposal), the per-file "Looks right"
+  // confirm, and the amber file-rail badges.
+  const openSug = useMemo(() => summarizeOpenSuggestions(allComments), [allComments]);
+  const openSugRef = useRef(openSug);
+  openSugRef.current = openSug;
+
   // Cross-file threads: a comment carrying 2+ anchors binds locations across files.
   const crossFileComments = useMemo(
     () => allComments.filter((c) => Array.isArray(c.target.anchors) && c.target.anchors.length >= 2),
@@ -316,6 +278,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   const [rejectConcept, setRejectConcept] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // H1 (#202) — the open-suggestion approve gates.
+  //   approveConfirm       — the whole-changeset "N suggestions still open …
+  //                          approve anyway?" inline confirm (lists the files).
+  //   lookRightConfirmPath — the per-file "Looks right" confirm, scoped to that
+  //                          file's open-suggestion count (one file at a time).
+  const [approveConfirm, setApproveConfirm] = useState(false);
+  const [lookRightConfirmPath, setLookRightConfirmPath] = useState<string | null>(null);
+
   const reasonBoxRef = useRef<HTMLTextAreaElement>(null);
 
   // --- Auto-advance to the next pending artifact after a terminal action ----
@@ -328,14 +298,27 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
 
   // --- The confirm-countdown that guards approve (never a silent commit) ----
   const runWhole = useCallback(
-    async (status: "approved" | "revised" | "rejected", overrideFeedback?: string) => {
+    async (
+      status: "approved" | "revised" | "rejected",
+      overrideFeedback?: string,
+      opts?: { bypassSuggestionGate?: boolean },
+    ) => {
       if (submitting) return;
+      // H1 (#202) — the single choke point for EVERY approve path (button,
+      // approve-all, the rising-edge countdown, the keyboard ⏎). With the
+      // human's own suggestions still open, surface the confirm instead of
+      // committing — never a silent abandon. "Approve anyway" passes the bypass.
+      if (status === "approved" && !opts?.bypassSuggestionGate && openSugRef.current.total > 0) {
+        setApproveConfirm(true);
+        return;
+      }
       setSubmitting(true);
       try {
         const trimmed = (overrideFeedback ?? feedback).trim();
         const concept = status === "rejected" ? rejectConcept.trim() || undefined : undefined;
         await updateArtifactStatus(artifact.id, status, trimmed || undefined, concept);
         setShowReject(false);
+        setApproveConfirm(false);
         setFeedback("");
         setRejectConcept("");
         // After the verdict (and, for send-back, its feedback comment) posts,
@@ -363,18 +346,38 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     prevAllLookRightRef.current = allLookRight;
     if (!reviewActive) return;
     if (allLookRight && !prev && countdown === null && !approveCountdown.held) {
-      arm(3);
+      // H1 (#202) — reaching all-look-right normally arms the approve countdown.
+      // With a suggestion still open, surface the confirm instead so the human
+      // can't sail past their own unresolved proposal on the auto-window.
+      if (openSugRef.current.total > 0) setApproveConfirm(true);
+      else arm(3);
     }
     // Leaving all-look-right (e.g. a file gets flagged) cancels a pending approve.
     if (!allLookRight && countdown !== null) cancel();
   }, [allLookRight, reviewActive, countdown, approveCountdown.held, arm, cancel]);
 
   // --- Disposition + action handlers ---------------------------------------
+  // H1 (#202) — marking a file "Looks right" while a suggestion on THAT file is
+  // still open is a mini-approval: the first press arms the per-file confirm,
+  // the confirm (or a second press) marks it. Pure so the keyboard handler can
+  // decide whether to advance BEFORE the async mark runs.
+  const lookRightGated = useCallback(
+    (path: string) => {
+      const fo = openSugRef.current.byFile[path];
+      return !!fo && fo.total > 0 && lookRightConfirmPath !== path;
+    },
+    [lookRightConfirmPath],
+  );
   const markLookRight = useCallback(
-    async (path: string) => {
+    async (path: string, opts?: { bypassSuggestionGate?: boolean }) => {
+      if (!opts?.bypassSuggestionGate && lookRightGated(path)) {
+        setLookRightConfirmPath(path);
+        return;
+      }
+      setLookRightConfirmPath(null);
       try { await setChangesetFileReview(artifact.id, path, "reviewed"); } catch { /* toasted */ }
     },
-    [setChangesetFileReview, artifact.id],
+    [setChangesetFileReview, artifact.id, lookRightGated],
   );
 
   const markNeedsChanges = useCallback(
@@ -423,11 +426,19 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     await runWhole("revised", composed);
   }, [flaggedFiles, reasonDrafts, reviewReasons, setChangesetFileReview, artifact.id, runWhole]);
 
+  const beginApprove = useCallback(() => {
+    // H1 (#202) — the whole-changeset approve entry point (the ⏎ keymap and the
+    // Approve-changeset button). Gate straight to the confirm when a suggestion
+    // is open; otherwise arm the normal visible countdown.
+    if (openSugRef.current.total > 0) { setApproveConfirm(true); return; }
+    arm(3);
+  }, [arm]);
+
   const fireDerivedAction = useCallback(() => {
     if (anyFlagged) { void sendBack(); return; }
-    if (allLookRight) { arm(3); return; }
+    if (allLookRight) { beginApprove(); return; }
     void approveAll();
-  }, [anyFlagged, allLookRight, sendBack, arm, approveAll]);
+  }, [anyFlagged, allLookRight, sendBack, beginApprove, approveAll]);
 
   // --- Keyboard: routed through the ONE central keymap, scoped to focus -----
   // A ref-held handler keeps every closure fresh without re-subscribing per
@@ -460,7 +471,12 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     const act: Record<ChangesetIntent, () => void> = {
       lookRight: () => {
         const f = files[clampedIdx];
-        if (f) { void markLookRight(f.path); goto(clampedIdx + 1); }
+        if (!f) return;
+        // H1 (#202) — when the per-file confirm arms, stay on the file so the
+        // human sees (and can confirm) it; only advance on an actual mark.
+        const gated = lookRightGated(f.path);
+        void markLookRight(f.path);
+        if (!gated) goto(clampedIdx + 1);
       },
       needsChanges: () => {
         const f = files[clampedIdx];
@@ -554,10 +570,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                     )}
                   </div>
                   {commentable && lineComments.length > 0 && (
-                    <ChangesetLineFeedback
+                    <SuggestionLineFeedback
                       lineComments={lineComments}
-                      anchorLine={anchorLine!}
-                      anchorSide={anchorSide}
+                      lineNum={anchorLine!}
+                      side={anchorSide}
                       artifactId={artifact.id}
                       filePath={file.path}
                       hideChips={!!isActive}
@@ -656,6 +672,46 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     );
   };
 
+  /** H1 (#202) — the per-file "Looks right" confirm, scoped to THAT file's open
+   *  suggestions. Naming the open states so marking it settled is a considered
+   *  call, not an accident. "Looks right anyway" bypasses the gate. */
+  const renderLookRightConfirm = (file: ChangesetFile) => {
+    if (!reviewActive || lookRightConfirmPath !== file.path) return null;
+    const fo = openSug.byFile[file.path];
+    if (!fo || fo.total === 0) return null;
+    return (
+      <div
+        className="m-3 border border-accent-amber border-l-[3px] rounded-r-lg bg-accent-amber-dim/15 overflow-hidden"
+        data-testid="looks-right-confirm"
+      >
+        <div className="px-3 py-2 text-2xs text-text-secondary">
+          <span className="text-accent-amber font-semibold">
+            ⚠ {fo.total} of your suggestions {fo.total === 1 ? "is" : "are"} still open ({describeOpenStates(fo)})
+          </span>{" "}
+          on <span className="font-mono text-text-secondary">{file.path}</span> — mark it look-right anyway?
+        </div>
+        <div className="flex items-center gap-2 px-3 pb-2.5">
+          <button
+            type="button"
+            onClick={() => void markLookRight(file.path, { bypassSuggestionGate: true })}
+            data-testid="looks-right-anyway"
+            className="px-2.5 py-1 text-2xs font-semibold text-text-inverse bg-accent-amber rounded hover:bg-accent-amber/85 transition-colors"
+            title="Mark this file look-right even though your suggestion is still open"
+          >
+            ✓ Looks right anyway
+          </button>
+          <button
+            type="button"
+            onClick={() => setLookRightConfirmPath(null)}
+            className="text-2xs text-text-muted hover:text-text-secondary"
+          >
+            Keep reviewing
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-3" data-changeset-focused={isFocused ? "true" : undefined}>
       {/* Summary strip */}
@@ -719,6 +775,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 {renderDispositionControls(f)}
               </div>
               {renderNeedsBox(f, false)}
+              {renderLookRightConfirm(f)}
               {renderFileDiff(f)}
             </div>
           ))}
@@ -735,6 +792,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 const s = fileStats(f);
                 const disp: ChangesetDisposition = dispositions[i] ?? "pending";
                 const openComments = commentCountByFile[f.path] ?? 0;
+                // M1 (#202) — an open (pending/countered) suggestion on this file
+                // is a live negotiation, not an old comment: give it a DISTINCT
+                // amber badge so it can't hide behind an undifferentiated count.
+                const fileOpenSug = openSug.byFile[f.path];
                 const isActive = i === clampedIdx;
                 return (
                   <li key={`${f.path}-${i}`}>
@@ -750,6 +811,15 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                       <span className={`w-3 text-center font-bold text-2xs shrink-0 ${mark.cls}`} aria-label={mark.label}>{mark.letter}</span>
                       <span className="flex-1 min-w-0 truncate">{f.path}</span>
                       <StatBar additions={s.additions} deletions={s.deletions} />
+                      {fileOpenSug && fileOpenSug.total > 0 && (
+                        <span
+                          data-testid="open-suggestion-badge"
+                          className="shrink-0 text-2xs text-accent-amber bg-accent-amber-dim font-sans font-bold rounded-full px-1.5 py-0.5"
+                          title={`${fileOpenSug.total} open suggestion${fileOpenSug.total === 1 ? "" : "s"} (${describeOpenStates(fileOpenSug)})`}
+                        >
+                          !{fileOpenSug.total}
+                        </span>
+                      )}
                       {disp === "pending" && openComments > 0 ? (
                         <span className="shrink-0 text-2xs text-accent-blue font-sans font-bold" title={`${openComments} comment${openComments === 1 ? "" : "s"}`}>●{openComments}</span>
                       ) : (
@@ -805,6 +875,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   </div>
                 )}
                 {renderNeedsBox(activeFile, true)}
+                {renderLookRightConfirm(activeFile)}
                 {renderFileDiff(activeFile)}
               </>
             ) : (
@@ -819,6 +890,42 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           actions (no Approve/Send-back/Reject, no countdown). */}
       {reviewActive && (
         <div className="space-y-2 pt-2 border-t border-border-default">
+          {/* H1/M1 (#202) — the open-suggestion approve gate. Names the count +
+              states AND lists the files carrying them, so file-by-file mode
+              can't hide an unresolved negotiation. "Approve anyway" is the
+              human's explicit call (bypasses the gate). */}
+          {approveConfirm && openSug.total > 0 && (
+            <div
+              data-testid="approve-open-suggestions-confirm"
+              className="space-y-1.5 p-2.5 rounded border border-accent-amber/40 bg-accent-amber-dim/15"
+            >
+              <div className="text-2xs text-text-secondary">
+                <span className="text-accent-amber font-semibold">⚠ {openSuggestionsConfirmLabel(openSug)}</span>{" "}
+                on <span className="font-mono text-text-secondary" data-testid="approve-confirm-files">{openSug.files.join(", ")}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void runWhole("approved", undefined, { bypassSuggestionGate: true })}
+                  disabled={submitting}
+                  data-testid="approve-anyway"
+                  className="px-2.5 py-1 text-2xs font-semibold text-text-inverse bg-accent-amber rounded hover:bg-accent-amber/85 disabled:opacity-50 transition-colors"
+                  title="Approve the changeset even though your suggestions are still open"
+                >
+                  Approve anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setApproveConfirm(false)}
+                  disabled={submitting}
+                  className="text-2xs text-text-muted hover:text-text-secondary"
+                >
+                  Keep reviewing
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Confirm-countdown (armed when all files look right) */}
           {armed && countdown !== null && countdown > 0 && (
             <div className="space-y-1.5" data-testid="approve-countdown">
@@ -872,7 +979,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
             ) : derived === "approve" ? (
               <button
                 type="button"
-                onClick={() => (armed ? cancel() : arm(3))}
+                onClick={() => (armed ? cancel() : beginApprove())}
                 disabled={submitting}
                 className="px-3 py-1.5 text-xs font-semibold text-text-inverse bg-accent-green rounded hover:bg-accent-green/85 disabled:opacity-50 transition-colors"
                 data-testid="approve-changeset"

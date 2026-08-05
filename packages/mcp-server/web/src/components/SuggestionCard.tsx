@@ -1,13 +1,15 @@
 import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
+import { suggestionPill } from "../lib/suggestionPill";
 
 /**
  * #172 — a posted suggested edit, rendered as a first-class card on the
  * artifact (not lost in a comment thread). Header + state pill, a mini unified
  * diff of the human's proposed change, Claude's reply, and — for a COUNTERED
- * suggestion — the negotiation action row (take the counter / insist on mine /
- * reply). Copy follows the batch-2 mockup verbatim.
+ * suggestion — the counter's own mini-diff (H2 #202) + the negotiation action
+ * row (take the counter / insist on mine / reply). Copy follows the batch-2
+ * mockup verbatim.
  */
 
 function relativeTime(iso: string): string {
@@ -22,29 +24,27 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-interface StatePill {
-  label: string;
-  cls: string;
-}
-function statePill(comment: Comment): StatePill {
-  const s = comment.suggestion!;
-  switch (s.state) {
-    case "applied":
-      return {
-        label: s.appliedInVersion ? `APPLIED IN v${s.appliedInVersion} ✓` : "APPLIED ✓",
-        cls: "text-accent-green bg-accent-green-dim",
-      };
-    case "countered":
-      return { label: "COUNTERED", cls: "text-accent-violet bg-accent-violet-dim" };
-    case "insisted":
-      return {
-        label: s.appliedInVersion ? `INSISTED · APPLIED IN v${s.appliedInVersion}` : "INSISTED",
-        cls: "text-accent-violet bg-accent-violet-dim",
-      };
-    case "pending":
-    default:
-      return { label: "PENDING", cls: "text-accent-amber bg-accent-amber-dim" };
-  }
+/** A mini unified diff (original − / replacement +), shared by the human's
+ *  suggestion and — H2 (#202) — Claude's counter, so both read identically. */
+function MiniDiff({ originalText, replacementText }: { originalText: string; replacementText: string }) {
+  const originalLines = originalText.split("\n");
+  const replacementLines = replacementText.split("\n");
+  return (
+    <div className="font-mono text-[11.5px] leading-[19px] bg-surface-code py-1.5">
+      {originalLines.map((ln, i) => (
+        <div key={`d-${i}`} className="px-3 whitespace-pre bg-diff-del-bg text-text-secondary">
+          <span className="text-accent-red select-none">− </span>
+          {ln || " "}
+        </div>
+      ))}
+      {replacementLines.map((ln, i) => (
+        <div key={`a-${i}`} className="px-3 whitespace-pre bg-diff-add-bg text-text-primary">
+          <span className="text-accent-green select-none">+ </span>
+          {ln || " "}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function SuggestionCard({
@@ -68,9 +68,11 @@ export function SuggestionCard({
 
   const range = s.lineEnd > s.lineStart ? `${s.lineStart}–${s.lineEnd}` : `${s.lineStart}`;
   const loc = `${filePath ?? comment.target.filePath ?? "code"}:${range}`;
-  const pill = statePill(comment);
-  const originalLines = s.originalText.split("\n");
-  const replacementLines = s.replacementText.split("\n");
+  const pill = suggestionPill(s);
+  // H2 (#202) — the counter's own code, if the agent proposed one. A counter
+  // can be reason-only (prose already shows as an agent reply below) or carry a
+  // replacementText we must render so "Take the counter" isn't sight-unseen.
+  const counterReplacement = s.counter?.replacementText;
   const agentReplies = replies
     .filter((r) => r.author === "agent")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -125,21 +127,8 @@ export function SuggestionCard({
         </span>
       </div>
 
-      {/* Mini unified diff */}
-      <div className="font-mono text-[11.5px] leading-[19px] bg-surface-code py-1.5">
-        {originalLines.map((ln, i) => (
-          <div key={`d-${i}`} className="px-3 whitespace-pre bg-diff-del-bg text-text-secondary">
-            <span className="text-accent-red select-none">− </span>
-            {ln || " "}
-          </div>
-        ))}
-        {replacementLines.map((ln, i) => (
-          <div key={`a-${i}`} className="px-3 whitespace-pre bg-diff-add-bg text-text-primary">
-            <span className="text-accent-green select-none">+ </span>
-            {ln || " "}
-          </div>
-        ))}
-      </div>
+      {/* Mini unified diff of the human's proposed change */}
+      <MiniDiff originalText={s.originalText} replacementText={s.replacementText} />
 
       {/* Claude's reply / counter reasoning */}
       {agentReplies.map((r) => (
@@ -150,6 +139,18 @@ export function SuggestionCard({
           <div className="whitespace-pre-wrap">{r.content}</div>
         </div>
       ))}
+
+      {/* H2 (#202) — Claude's counter, as its own labeled mini-diff so "Take the
+          counter" is never accepting code sight-unseen. Original → the agent's
+          alternative, mirroring the human's block above. A prose-only counter
+          (no replacementText) renders nothing here — the reason already shows as
+          the agent reply above. */}
+      {s.state === "countered" && counterReplacement != null && (
+        <div className="border-t border-border-subtle" data-testid="counter-diff">
+          <div className="px-3 pt-2 pb-1 text-2xs font-bold text-accent-violet">Claude&apos;s counter:</div>
+          <MiniDiff originalText={s.originalText} replacementText={counterReplacement} />
+        </div>
+      )}
 
       {/* Countered: the negotiation action row. */}
       {s.state === "countered" && (
