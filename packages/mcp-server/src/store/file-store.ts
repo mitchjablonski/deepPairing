@@ -567,6 +567,20 @@ export class FileStore implements IStore {
     }
   }
 
+  /** G1 (#198c) — stamp the withdrawal reason onto the artifact's content so the
+   *  status panel renders "↩ Retracted by agent — <reason>" inline (the reason
+   *  also rides an agent comment for thread history). In-content patch, same
+   *  mechanism update_plan_progress / changeset review use. No-op on a missing
+   *  artifact. */
+  setRetractReason(artifactId: string, reason: string): void {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (art) {
+      (art.content as Record<string, unknown>).retractReason = reason;
+      art.updatedAt = new Date().toISOString();
+      this.scheduleFlush();
+    }
+  }
+
   updateArtifactStatus(
     artifactId: string,
     status: ArtifactStatus,
@@ -1110,12 +1124,14 @@ export class FileStore implements IStore {
   }
 
   /** Link a request to the artifact that fulfilled it (idempotent — a re-serve
-   *  updates the link). No-op when the id isn't found. */
-  markRequestServed(requestId: string, artifactId: string): void {
+   *  updates the link). Returns false (no write) when the id isn't found, so the
+   *  caller doesn't claim a link that didn't happen. */
+  markRequestServed(requestId: string, artifactId: string): boolean {
     const req = this.requests.find((r) => r.id === requestId);
-    if (!req) return;
+    if (!req) return false;
     req.servedByArtifactId = artifactId;
     this.scheduleFlush();
+    return true;
   }
 
   /** #176 — drop every render-failure record for a superseded artifact id. A

@@ -53,6 +53,9 @@ describe("#198c withdraw_artifact", () => {
     expect((res.content[0]!.text as string)).toMatch(/Withdrew art_1/);
     const art = (await store.getArtifacts()).find((a) => a.id === "art_1")!;
     expect(art.status).toBe("retracted");
+    // The reason is stamped on content so the status panel renders it inline…
+    expect((art.content as { retractReason?: string }).retractReason).toBe("framed it wrong");
+    // …AND rides an agent comment for thread history.
     const comments = await store.getCommentsForArtifact("art_1");
     expect(comments.some((c) => c.author === "agent" && c.content.includes("Withdrawn: framed it wrong"))).toBe(true);
   });

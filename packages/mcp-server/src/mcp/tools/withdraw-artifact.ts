@@ -82,6 +82,10 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
     };
   }
 
+  // Stamp the reason onto content FIRST so it's present when the status flip
+  // broadcasts the retracted state (the panel renders "↩ Retracted by agent —
+  // <reason>" inline). It ALSO rides an agent comment below for thread history.
+  await store.setRetractReason?.(artifactId, reason);
   await store.updateArtifactStatus(artifactId, "retracted", "agent_withdraw");
   await maybeUpdateTaskStatus(server, artifactId, store);
   // An agent-authored note so the "Withdrawn by the agent — <reason>" state and

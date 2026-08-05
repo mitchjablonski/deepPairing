@@ -28172,8 +28172,8 @@ async function linkServedRequest(store, args, artifactId) {
   const servedRequestId = args?.servedRequestId;
   if (typeof servedRequestId !== "string" || servedRequestId.length === 0) return "";
   try {
-    await store.markRequestServed?.(servedRequestId, artifactId);
-    return ` Linked to request ${servedRequestId}.`;
+    const linked = await store.markRequestServed?.(servedRequestId, artifactId) ?? false;
+    return linked ? ` Linked to request ${servedRequestId}.` : ` (request ${servedRequestId} not found \u2014 not linked.)`;
   } catch {
     return "";
   }
@@ -31193,6 +31193,7 @@ async function handleWithdrawArtifact(ctx, args) {
       isError: true
     };
   }
+  await store.setRetractReason?.(artifactId, reason);
   await store.updateArtifactStatus(artifactId, "retracted", "agent_withdraw");
   await maybeUpdateTaskStatus(server, artifactId, store);
   await store.addComment({
@@ -33058,6 +33059,10 @@ var DaemonClient = class {
   async renameArtifact(artifactId, title) {
     await this.post(`/artifacts/${artifactId}/rename`, { title });
   }
+  // G1 (#198c) — proxy the withdraw reason stamp to the daemon's FileStore.
+  async setRetractReason(artifactId, reason) {
+    await this.post(`/artifacts/${artifactId}/retract-reason`, { reason });
+  }
   async updateArtifactStatus(artifactId, status, reason) {
     await this.post(`/artifacts/${artifactId}/status`, { status, reason });
   }
@@ -33123,7 +33128,8 @@ var DaemonClient = class {
   // requests off getFullState().requests). Only the agent's serve-link is an
   // MCP-side mutation, so only markRequestServed is proxied here.
   async markRequestServed(requestId, artifactId) {
-    await this.post(`/requests/${requestId}/served`, { artifactId });
+    const data = await this.post(`/requests/${requestId}/served`, { artifactId });
+    return data?.linked ?? false;
   }
   /** F1 — fire-and-forget metric the daemon can't tap from its own broadcast
    *  (the wrapper's broadcast is a no-op in standalone). Never throws. */

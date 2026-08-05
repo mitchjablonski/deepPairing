@@ -555,6 +555,27 @@ export function createDaemonRoutes(
     return c.json({ status: "renamed" });
   });
 
+  // G1 (#198c) — stamp a withdrawn artifact's reason onto its content so the
+  // status panel renders it inline. The withdraw_artifact tool reaches here via
+  // DaemonClient after the status flip.
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retract-reason", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { reason } = parsed.body as { reason?: string };
+    if (typeof reason !== "string" || reason.length === 0) {
+      return c.json({ error: "reason is required", code: ERROR_CODES.validation_error }, 400);
+    }
+    r.store.setRetractReason?.(c.req.param("artifactId"), reason);
+    // Full-artifact patch (the reason lives in content) — same shape as plan
+    // progress / changeset review, so the panel repaints live.
+    const art = r.store.getArtifacts().find((a) => a.id === c.req.param("artifactId"));
+    if (art) broadcast(sessionId, { type: "artifact_content_updated", artifact: art });
+    return c.json({ status: "stamped" });
+  });
+
   // --- Comments ---
 
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
@@ -664,9 +685,10 @@ export function createDaemonRoutes(
     if (typeof artifactId !== "string" || artifactId.length === 0) {
       return c.json({ error: "artifactId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.markRequestServed?.(c.req.param("requestId"), artifactId);
-    broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
-    return c.json({ status: "served" });
+    const linked = r.store.markRequestServed?.(c.req.param("requestId"), artifactId) ?? false;
+    // Broadcast only a real link, so a bad id doesn't fabricate a served pip.
+    if (linked) broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
+    return c.json({ status: linked ? "served" : "not_found", linked });
   });
 
   // F1 — sink for metric events the MCP server knows about but the daemon's

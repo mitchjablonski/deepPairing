@@ -25575,6 +25575,19 @@ var FileStore = class _FileStore {
       this.scheduleFlush();
     }
   }
+  /** G1 (#198c) — stamp the withdrawal reason onto the artifact's content so the
+   *  status panel renders "↩ Retracted by agent — <reason>" inline (the reason
+   *  also rides an agent comment for thread history). In-content patch, same
+   *  mechanism update_plan_progress / changeset review use. No-op on a missing
+   *  artifact. */
+  setRetractReason(artifactId, reason) {
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (art) {
+      art.content.retractReason = reason;
+      art.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.scheduleFlush();
+    }
+  }
   updateArtifactStatus(artifactId, status, reason = "unspecified") {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
@@ -25962,12 +25975,14 @@ var FileStore = class _FileStore {
     return this.requests.filter((r) => !r.servedByArtifactId);
   }
   /** Link a request to the artifact that fulfilled it (idempotent — a re-serve
-   *  updates the link). No-op when the id isn't found. */
+   *  updates the link). Returns false (no write) when the id isn't found, so the
+   *  caller doesn't claim a link that didn't happen. */
   markRequestServed(requestId, artifactId) {
     const req = this.requests.find((r) => r.id === requestId);
-    if (!req) return;
+    if (!req) return false;
     req.servedByArtifactId = artifactId;
     this.scheduleFlush();
+    return true;
   }
   /** #176 — drop every render-failure record for a superseded artifact id. A
    *  revise (present a new version) mints a fresh artifact, so the OLD one's
@@ -29089,6 +29104,21 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     broadcast(sessionId, { type: "artifact_renamed", artifactId: c.req.param("artifactId"), title });
     return c.json({ status: "renamed" });
   });
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retract-reason", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await readJsonObject(c);
+    if (!parsed.ok) return parsed.res;
+    const { reason } = parsed.body;
+    if (typeof reason !== "string" || reason.length === 0) {
+      return c.json({ error: "reason is required", code: ERROR_CODES.validation_error }, 400);
+    }
+    r.store.setRetractReason?.(c.req.param("artifactId"), reason);
+    const art = r.store.getArtifacts().find((a) => a.id === c.req.param("artifactId"));
+    if (art) broadcast(sessionId, { type: "artifact_content_updated", artifact: art });
+    return c.json({ status: "stamped" });
+  });
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
@@ -29169,9 +29199,9 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (typeof artifactId !== "string" || artifactId.length === 0) {
       return c.json({ error: "artifactId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    r.store.markRequestServed?.(c.req.param("requestId"), artifactId);
-    broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
-    return c.json({ status: "served" });
+    const linked = r.store.markRequestServed?.(c.req.param("requestId"), artifactId) ?? false;
+    if (linked) broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
+    return c.json({ status: linked ? "served" : "not_found", linked });
   });
   app.post("/api/internal/sessions/:sessionId/metrics", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));

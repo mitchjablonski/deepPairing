@@ -299,6 +299,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           useArtifactStore.getState().replaceArtifact(data.artifact);
           break;
 
+        case "artifact_content_updated":
+          // G1 (#198c) — full-artifact patch (e.g. a withdrawn artifact's
+          // content.retractReason). Same replace-in-place shape as above.
+          useArtifactStore.getState().replaceArtifact(data.artifact);
+          break;
+
         case "comment_added":
           store.addComment(data.comment);
           break;

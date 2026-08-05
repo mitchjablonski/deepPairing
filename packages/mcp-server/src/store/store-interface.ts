@@ -290,6 +290,13 @@ export interface IStore {
   createArtifact(params: CreateArtifactParams): MaybePromise<Artifact>;
   renameArtifact(artifactId: string, title: string): MaybePromise<void>;
   /**
+   * G1 (#198c) — stamp `content.retractReason` so the withdrawn (retracted)
+   * artifact's status panel renders the reason inline. Optional on the interface
+   * so a read-only replay store can skip it; FileStore backs it, DaemonClient
+   * proxies it. Called by withdraw_artifact alongside the status flip.
+   */
+  setRetractReason?(artifactId: string, reason: string): MaybePromise<void>;
+  /**
    * U7 — `reason` tag is OPTIONAL but recommended. It explains WHO/WHAT
    * caused the transition so the daemon log can attribute every status
    * change. If a transition would EVER carry the sentinel
@@ -555,7 +562,9 @@ export interface IStore {
   addRequest?(params: { text: string; intent: RequestIntent }): MaybePromise<Request>;
   getRequests?(): MaybePromise<Request[]>;
   getPendingRequests?(): MaybePromise<Request[]>;
-  markRequestServed?(requestId: string, artifactId: string): MaybePromise<void>;
+  /** Returns whether a request with that id existed and was linked — the caller
+   *  uses it to avoid confirming a link that silently no-op'd on a bad id. */
+  markRequestServed?(requestId: string, artifactId: string): MaybePromise<boolean>;
 
   // Autonomy
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): MaybePromise<void>;
