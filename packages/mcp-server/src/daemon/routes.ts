@@ -662,7 +662,7 @@ export function createDaemonRoutes(
     if (!parsed.ok) return parsed.res;
     const { artifactId } = parsed.body as { artifactId?: string };
     if (typeof artifactId !== "string" || artifactId.length === 0) {
-      return c.json({ error: "artifactId is required", code: "validation_error" }, 400);
+      return c.json({ error: "artifactId is required", code: ERROR_CODES.validation_error }, 400);
     }
     r.store.markRequestServed?.(c.req.param("requestId"), artifactId);
     broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });

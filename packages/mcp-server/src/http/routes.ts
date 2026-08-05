@@ -419,7 +419,7 @@ export function createHttpRoutes(
     const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     if (!store.addRequest) {
-      return c.json({ error: "requests unsupported by this store", code: "unsupported" }, 409);
+      return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
     }
     const request = await store.addRequest({ text: parsed.data.text, intent: parsed.data.intent });
     broadcast({ type: "request_added", request }, sid);

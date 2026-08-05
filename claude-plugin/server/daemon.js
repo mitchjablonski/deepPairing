@@ -27639,7 +27639,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = CreateRequestBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     if (!store.addRequest) {
-      return c.json({ error: "requests unsupported by this store", code: "unsupported" }, 409);
+      return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
     }
     const request = await store.addRequest({ text: parsed.data.text, intent: parsed.data.intent });
     broadcast({ type: "request_added", request }, sid);
@@ -29167,7 +29167,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!parsed.ok) return parsed.res;
     const { artifactId } = parsed.body;
     if (typeof artifactId !== "string" || artifactId.length === 0) {
-      return c.json({ error: "artifactId is required", code: "validation_error" }, 400);
+      return c.json({ error: "artifactId is required", code: ERROR_CODES.validation_error }, 400);
     }
     r.store.markRequestServed?.(c.req.param("requestId"), artifactId);
     broadcast(c.req.param("sessionId"), { type: "request_served", requestId: c.req.param("requestId"), artifactId });
