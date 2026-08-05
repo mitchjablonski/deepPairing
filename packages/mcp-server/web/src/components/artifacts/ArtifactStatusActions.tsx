@@ -633,7 +633,7 @@ export function ArtifactStatusActions({
           commit; naming the open states so the human knows what approving
           abandons. "Approve anyway" is their explicit call (bypasses the gate);
           "Keep reviewing" dismisses. */}
-      {approveConfirm && (
+      {approveConfirm && openSug.total > 0 && (
         <div
           data-testid="approve-open-suggestions-confirm"
           className="space-y-1.5 p-2.5 rounded border border-accent-amber/40 bg-accent-amber-dim/15"

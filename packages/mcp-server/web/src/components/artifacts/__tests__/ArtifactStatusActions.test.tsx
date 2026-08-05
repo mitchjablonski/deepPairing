@@ -353,6 +353,27 @@ describe("ArtifactStatusActions — H1 (#202) open-suggestion approve gate", () 
     );
   });
 
+  it("the confirm auto-hides when the last open suggestion resolves while it's showing (no empty-parens copy)", async () => {
+    const art = seedWithOpenSuggestion("pending");
+    render(<ArtifactStatusActions artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Approve$/ }));
+    expect(screen.getByTestId("approve-open-suggestions-confirm")).toBeInTheDocument();
+    // The agent resolves the suggestion (e.g. applied via WS) while the confirm
+    // is open → openSug.total drops to 0. The banner must vanish, never render
+    // "0 of your suggestions are still open ()".
+    act(() => {
+      useArtifactStore.setState((s) => ({
+        comments: {
+          ...s.comments,
+          art_g: (s.comments.art_g ?? []).map((c) =>
+            c.id === "cmt_s" ? ({ ...c, suggestion: { ...(c as any).suggestion, state: "applied", appliedInVersion: 2 } } as any) : c,
+          ),
+        },
+      }));
+    });
+    expect(screen.queryByTestId("approve-open-suggestions-confirm")).not.toBeInTheDocument();
+  });
+
   it("the keyboard approve shortcut ALSO hits the gate (no silent countdown-to-commit)", () => {
     const art = seedWithOpenSuggestion("pending");
     render(<ArtifactStatusActions artifact={art} />);
