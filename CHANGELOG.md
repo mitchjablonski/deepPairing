@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.1.25 — 2026-08-04
+
+The initiative release. Until now the human's move was always a response — comment
+on what the agent drew, pick from what it offered, approve or reject what it built.
+This round hands the human the first move too. The **human can start the
+conversation**: a banner-row request composer takes free text or a preset ("Explain
+how ___ works", "Plan ___ before building", "Status?") and delivers it to the agent —
+as a priority line if it's live, as a first-call obligation if it restarted, as a
+copyable resume-prompt if there's no agent at all. The **human can steer the default
+surface line-by-line**: the suggested-edits machinery from #199 now renders on the
+changeset's per-file diffs — SuggestionCards with state pills and mini-diffs on
+new-side, del-side, and cross-file lines, under the same must-respond guard. And the
+**agent can honestly change its mind**: the new `withdraw_artifact` tool retracts its
+own draft with a required reason — but refuses while unanswered questions or undrained
+comments exist, so a withdrawal never dodges review. Plus a **debugging cadence** the
+agent can follow: probe free in the terminal, present findings at root-cause-confirmed,
+gate the fix, close with a debrief. Every new field is optional and read-tolerant, so
+an old daemon degrades without a stumble (PR #236).
+
+### Added
+- **The request composer — the human initiates.** A banner-row composer takes free
+  text or one of three presets ("Explain how ___ works", "Plan ___ before building",
+  "Status?") and persists a session-scoped request. It reaches a **live agent** as a
+  `check_feedback` priority line (ordering pinned: questions → do-not-apply →
+  requests), a **restarted agent** via the first-call obligations inventory, and
+  **no agent** via a copyable resume-prompt. The serving artifact links back through
+  `servedRequestId` (with an honest not-found note when the id doesn't resolve), and a
+  served request deliberately stays served even if its artifact is later rejected.
+- **`withdraw_artifact` — the agent's 18th tool.** The agent can retract its own draft
+  with a **required reason** (stamped on `content.retractReason` and a thread comment).
+  Withdrawal is **refused while unanswered questions or undrained human comments
+  exist** — it can never be used to dodge review. A retracted artifact takes a
+  `retracted` status, never writes to the ledger, drops from pending counts, and stays
+  readable in history.
+
+### Changed
+- **Suggested edits reach the default surface.** The human-proposes / agent-must-respond
+  machinery (#199) now renders on the **changeset deliverable's per-file diffs** —
+  **SuggestionCards** with state pills and mini-diffs anchored to new-side, del-side,
+  and cross-file changeset lines, under the **same must-respond guard**, with a delivery
+  readback that carries file context.
+- **A debugging-and-incident cadence for the agent.** Guidance only, zero schema: probe
+  freely in the terminal, `present_findings` at root-cause-confirmed, **gate the fix
+  choice**, and **close with a debrief**.
+
 ## v0.1.24 — 2026-08-04
 
 The refinement release. v0.1.23 closed the comprehension loops; this round tightens
