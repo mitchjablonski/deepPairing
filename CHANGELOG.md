@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.1.27 — 2026-08-05
+
+The follow-through release. Slice 1 gave multi-milestone projects a standing map
+but the map was read-only and lossy — it derived groups from title prefixes and
+parent chains and then had nothing to say when the agent tagged inconsistently or
+the human disagreed. And v0.1.25's write-lock stopped a withdrawn draft's comment
+composers but left its richer surfaces — the option grid, the Discuss workbench,
+the global QuickAsk — still live and still able to reach the agent. This round
+follows both through. The **Features view learns your tags and takes your
+corrections**: every `present_*` tool gains an optional stable `feature` tag,
+artifacts carry an optional `featureId`, and ONE idempotent normalizer converges
+the ways the same milestone gets written — `[M7]`, `M7`, `Milestone 7`,
+`milestone-7` all fold into one group — with a **human override layer** on top
+(rename a group, move an artifact) whose precedence is explicit: human override
+beats explicit tag beats parent chain beats title prefix. And **a withdrawn
+artifact is finally quiet everywhere**: retracting a decision tears down its live
+option grid and unmounts an open Discuss workbench (including the mid-session
+WS-retraction race), a retracted spec, debrief, plan, or explainer locks every
+composer, and the global `q` QuickAsk clamps shut on a closed or frozen artifact.
+Approved artifacts stay late-commentable throughout via the pinned follow-up lane.
+Every new field is optional and read-tolerant, so an old daemon degrades without a
+stumble (PRs #244, #243).
+
+### Added
+- **The `feature` tag — the Features view learns your tags.** Every `present_*` tool
+  gains an **optional `feature` param** (stable-tag guidance in the SKILL: pick one
+  tag per milestone and keep it), and artifacts carry an **optional `featureId`**. ONE
+  **idempotent normalizer** converges the ways the same milestone gets written —
+  `[M7]`, `M7`, `Milestone 7`, `milestone-7` all fold into a single group — replacing
+  slice 1's lossy prefix mining. Grouping precedence is explicit and layered: **human
+  override beats explicit tag beats parent chain beats title prefix.** (Review caught a
+  non-idempotent bracket path that made a second normalize pass spawn phantom groups on
+  Move — fixed and pinned by a **property test over the whole normalization table**.)
+- **Human corrections in the Features view.** The human can **rename a feature group**
+  and **move an artifact** between groups from the Features view — corrections persist
+  to a **version-gated overrides file** and win over every derived signal. The
+  overrides endpoints carry the same `X-Project-Hash` guard parity as `/api/comments`.
+
+### Changed
+- **The write-lock reaches every surface.** v0.1.25 locked a withdrawn artifact's
+  comment composers; this round extends `reviewLifecycle` to the surfaces it missed. A
+  **retracted decision loses its live option grid and its Discuss workbench** — an open
+  workbench **unmounts**, including the mid-session **WS-retraction race** where the
+  retraction lands while the human is mid-thought. A **retracted spec, debrief, plan, or
+  explainer locks every composer** on the surface. The global `q` **QuickAsk clamps** on
+  a closed or frozen artifact. And **approved artifacts everywhere stay
+  late-commentable** through the pinned per-surface **follow-up lane**, so accepting a
+  draft never silences the conversation about it.
+
 ## v0.1.26 — 2026-08-05
 
 The seams release. Round 4 found the parts strong and the seams between them
