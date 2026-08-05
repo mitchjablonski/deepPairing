@@ -22,23 +22,22 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createDaemon, type Daemon } from "../daemon/create-daemon.js";
 import { projectHashOf } from "../project-root.js";
-import { setGlobalStoreForTests } from "../store/global-store.js";
-import { __resetMetricsCacheForTests } from "../store/metrics-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "./global-store-fixture.js";
 import { DEFAULT_REJECTION_CONCEPT } from "../demo-script.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let ledgerPath: string;
 let prefsPath: string;
 let daemon: Daemon;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-demo-iso-"));
-  ledgerPath = path.join(tmpDir, "scratch-home-philosophy.json");
-  setGlobalStoreForTests(ledgerPath);
+  fx = withGlobalStore("dp-demo-iso-");
+  tmpDir = fx.dir;
+  ledgerPath = fx.ledgerPath;
   // The field configuration under which the pollution happened: this project
   // has opted IN to publishing rejections into the cross-project ledger.
   prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
@@ -58,9 +57,7 @@ afterEach(() => {
   vi.useRealTimers();
   for (const store of daemon.sessions.values()) store.dispose();
   daemon.dispose();
-  __resetMetricsCacheForTests();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 /** POST /api/demo/run and play the whole scripted timeline out (fake time). */

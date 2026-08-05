@@ -10,26 +10,22 @@
  *      in present_* tools don't need to change shape when Tasks lights up.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { MCP_TASKS_ENABLED, maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let store: FileStore;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-tasks-probe-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "tasks_probe_session");
+  fx = withGlobalStore("dp-tasks-probe-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "tasks_probe_session"));
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 describe("MCP Tasks capability probe", () => {

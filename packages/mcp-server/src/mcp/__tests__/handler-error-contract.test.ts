@@ -3,12 +3,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { formatHandlerError } from "../validate-tool-input.js";
 import { TOOL_ERROR_CODES } from "../../error-codes.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 /**
  * H1-6 — the CallToolRequestSchema dispatch wrapped the tool switch in a bare
@@ -182,13 +179,14 @@ describe("#147 — TOOL_EXECUTION_FAILED retryability split", () => {
 });
 
 describe("H1-6 — the dispatch wrapper returns isError, not a protocol error", () => {
+  let fx: GlobalStoreFixture;
   let tmpDir: string;
   let client: Client;
 
   beforeEach(async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-h16-"));
-    setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-    const store = new Body413Store(tmpDir, "test_session");
+    fx = withGlobalStore("dp-h16-");
+    tmpDir = fx.dir;
+    const store = fx.track(new Body413Store(tmpDir, "test_session"));
     const { server } = createMcpServer(store, () => {}, 4000);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
@@ -197,8 +195,7 @@ describe("H1-6 — the dispatch wrapper returns isError, not a protocol error", 
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    setGlobalStoreForTests(null);
+    fx.dispose();
   });
 
   it("an oversized-but-valid present_findings returns a clean isError result with _meta.code (call does NOT reject)", async () => {

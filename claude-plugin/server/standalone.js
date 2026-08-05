@@ -25810,13 +25810,13 @@ var CommentTargetSchema = external_exports.object({
   // D8 (H1) — open questions are now answerable; index into openQuestions[].
   questionIndex: external_exports.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: external_exports.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
-  // TOLERATED-LEGACY (#188) — the deprecated one-line `target.suggestion` STRING.
-  // No producer has emitted it since #199 (the web composer emits only the
-  // first-class `comment.suggestion` OBJECT), and #188 deleted its check_feedback
-  // consumer branch. Kept optional here ONLY so old stored comments that carry it
-  // still PARSE on read — never written, never delivered. Do not re-consume it;
-  // the canonical surface is `CommentSuggestionSchema` (see `suggestion` below).
-  suggestion: external_exports.string().optional().describe("Deprecated (tolerated-legacy, #188): old one-line suggested replacement; parse-only, not delivered"),
+  // #197 (F3) — the deprecated one-line `target.suggestion` STRING is GONE from
+  // the schema. It had no producer since #199 (the web composer emits only the
+  // first-class `comment.suggestion` OBJECT) and no consumer since #188 deleted
+  // its check_feedback branch. Zod strips unknown keys on parse, so an old stored
+  // comment that still carries `target.suggestion` loads unchanged — the key is
+  // dropped, never crashes. The canonical surface is `CommentSuggestionSchema`
+  // (see the comment-level `suggestion` object below).
   // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
   // screenshot: the agent gets the hit-tested node ids + labels (which it can
   // locate in the Mermaid source it authored) plus the normalized rect. Every
@@ -26510,9 +26510,7 @@ var SuggestionUpdateBodySchema = external_exports.object({
 }).strict();
 var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
-  reasoning: external_exports.string().optional(),
-  confidence: external_exports.enum(["low", "medium", "high"]).optional(),
-  predictedOutcome: external_exports.string().optional()
+  reasoning: external_exports.string().optional()
 });
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),

@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
 /**
@@ -18,16 +15,16 @@ import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers
  *
  * Fake, not mock: a real FileStore over a tmp dir.
  */
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cf-secret-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-cf-secret-");
+  tmpDir = fx.dir;
 });
 
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 function makeCtx(store: FileStore): ToolContext {
@@ -49,7 +46,7 @@ function makeCtx(store: FileStore): ToolContext {
 
 describe("#158 — check_feedback surfaces persisted secret warnings on pending artifacts", () => {
   it("marks the flagged entry (labels only) and leaves the clean entry byte-identical", async () => {
-    const store = new FileStore(tmpDir, "s1");
+    const store = fx.track(new FileStore(tmpDir, "s1"));
     // #162 — createArtifact now scans content itself (a passed-in
     // secretWarnings param no longer exists and would be ignored anyway), so
     // the flagged fixture carries a REAL secret shape in its content.
@@ -88,7 +85,7 @@ describe("#158 — check_feedback surfaces persisted secret warnings on pending 
   });
 
   it("healthy payload stays clean: no secret text anywhere when nothing is flagged", async () => {
-    const store = new FileStore(tmpDir, "s2");
+    const store = fx.track(new FileStore(tmpDir, "s2"));
     store.createArtifact({
       id: "art_clean_only",
       type: "code_change",
@@ -115,7 +112,7 @@ describe("#160 — check_feedback marks scanner-flagged comments (text only)", (
   const FAKE_AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
 
   it("appends the ⚠ note to a flagged comment's line — and adds NO structured key", async () => {
-    const store = new FileStore(tmpDir, "s3");
+    const store = fx.track(new FileStore(tmpDir, "s3"));
     store.createArtifact({
       id: "art_1",
       type: "code_change",
@@ -154,7 +151,7 @@ describe("#160 — check_feedback marks scanner-flagged comments (text only)", (
   });
 
   it("marks a flagged QUESTION line too, and never echoes the value anywhere", async () => {
-    const store = new FileStore(tmpDir, "s4");
+    const store = fx.track(new FileStore(tmpDir, "s4"));
     store.createArtifact({
       id: "art_q",
       type: "research",

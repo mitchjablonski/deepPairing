@@ -18,19 +18,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let store: FileStore;
 let client: Client;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-validate-input-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "validate_input_session");
+  fx = withGlobalStore("dp-validate-input-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "validate_input_session"));
   const { server } = createMcpServer(store, () => {}, 4000);
   const [c, s] = InMemoryTransport.createLinkedPair();
   await server.connect(s);
@@ -39,9 +37,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 async function call(name: string, args: any) {

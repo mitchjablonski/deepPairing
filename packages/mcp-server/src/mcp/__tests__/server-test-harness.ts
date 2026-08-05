@@ -15,26 +15,25 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 export interface ServerTestCtx {
   tmpDir: string;
   store: FileStore;
   client: Client;
   broadcasts: any[];
+  fx: GlobalStoreFixture;
 }
 
 export function setupServerTest(): ServerTestCtx {
   const ctx = { broadcasts: [] } as unknown as ServerTestCtx;
 
   beforeEach(async () => {
-    ctx.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-mcp-test-"));
-    // Redirect the global philosophy ledger to tmpDir so tests don't leak.
-    setGlobalStoreForTests(path.join(ctx.tmpDir, "philosophy.json"));
-    ctx.store = new FileStore(ctx.tmpDir, "test_session");
+    // #197 (F3) — withGlobalStore OWNS the ledger tmpdir + FileStore disposal, so
+    // no debounced flush fires against a gone tmpdir on teardown (flake #134).
+    ctx.fx = withGlobalStore("dp-mcp-test-");
+    ctx.tmpDir = ctx.fx.dir;
+    ctx.store = ctx.fx.track(new FileStore(ctx.tmpDir, "test_session"));
     ctx.broadcasts.length = 0;
 
     const { server } = createMcpServer(ctx.store, (e) => ctx.broadcasts.push(e), 4000);
@@ -47,10 +46,7 @@ export function setupServerTest(): ServerTestCtx {
   });
 
   afterEach(() => {
-    // Force flush to prevent pending timer writes after dir is deleted
-    ctx.store.forceFlush();
-    fs.rmSync(ctx.tmpDir, { recursive: true, force: true });
-    setGlobalStoreForTests(null);
+    ctx.fx.dispose();
   });
 
   return ctx;

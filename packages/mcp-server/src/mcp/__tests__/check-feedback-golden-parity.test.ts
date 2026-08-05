@@ -1,12 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { createHash } from "node:crypto";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { SERVER_VERSION } from "../../version.js";
 
 /**
@@ -44,19 +41,19 @@ import { SERVER_VERSION } from "../../version.js";
 
 const FIXED_NOW = new Date("2026-07-25T12:00:00.000Z");
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(FIXED_NOW);
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cf-golden-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-cf-golden-");
+  tmpDir = fx.dir;
 });
 
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.useRealTimers();
+  fx.dispose();
 });
 
 function makeCtx(store: FileStore, args?: Record<string, unknown>): ToolContext {
@@ -636,7 +633,7 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
   let idx = 0;
   for (const scenario of scenarios) {
     it(`${scenario.name} — prose + structuredContent byte-identical`, async () => {
-      const store = new FileStore(tmpDir, `s_golden_${idx++}`);
+      const store = fx.track(new FileStore(tmpDir, `s_golden_${idx++}`));
       scenario.seed(store);
       const res = await handleCheckFeedback(makeCtx(store, scenario.args), scenario.args ?? {});
       // VERSION-NORMALIZED — strip SERVER_VERSION from BOTH surfaces (see the

@@ -59,11 +59,15 @@ export const SuggestionUpdateBodySchema = z
 export type SuggestionUpdateBody = z.infer<typeof SuggestionUpdateBodySchema>;
 
 // POST /api/decisions/:decisionId — resolve a decision from the web UI.
+// #197 (F3) — the write-only prediction fields (`confidence`, `predictedOutcome`)
+// were dropped from this request body. The calibration loop was cut in E3 (#194)
+// and no surface ever rendered them, so accepting them on write was a standing
+// confusion. Old persisted decision records that carry them still parse (the
+// stored DecisionResponseSchema keeps both optional — read-tolerant); they are
+// simply no longer accepted from the UI. Zod strips any stray fields on read.
 export const DecisionResolveBodySchema = z.object({
   optionId: z.string().min(1),
   reasoning: z.string().optional(),
-  confidence: z.enum(["low", "medium", "high"]).optional(),
-  predictedOutcome: z.string().optional(),
 });
 export type DecisionResolveBody = z.infer<typeof DecisionResolveBodySchema>;
 

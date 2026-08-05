@@ -101,6 +101,32 @@ describe("#172 suggested-edit schema", () => {
     expect((parsed as { suggestion?: unknown }).suggestion).toBeUndefined();
   });
 
+  it("#197 (F3) — an old comment carrying the removed `target.suggestion` STRING still parses (strip-on-read, no crash)", () => {
+    // Pre-#197 `target.suggestion` was a tolerated-legacy one-line string (#188).
+    // The field is gone from the schema; an old stored comment that still carries
+    // it must load unchanged — Zod strips the unknown key, never throws.
+    const legacy = {
+      id: "cmt_legacy_target_suggestion",
+      sessionId: "s1",
+      target: {
+        artifactId: "art_1",
+        lineNumber: 12,
+        // The removed tolerated-legacy field — hostile/old on-disk data.
+        suggestion: "use argon2id here",
+      },
+      parentCommentId: null,
+      author: "human" as const,
+      content: "why not argon2id?",
+      acknowledged: false,
+      createdAt: new Date().toISOString(),
+    };
+    const parsed = CommentSchema.parse(legacy);
+    expect(parsed.content).toBe("why not argon2id?");
+    expect(parsed.target.lineNumber).toBe(12);
+    // The vestigial string was dropped, not surfaced.
+    expect((parsed.target as { suggestion?: unknown }).suggestion).toBeUndefined();
+  });
+
   it("CommentBody + SuggestionResolveBody accept the wire shapes", () => {
     const body = CommentBodySchema.parse({
       artifactId: "art_1",

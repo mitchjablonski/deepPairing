@@ -1231,7 +1231,6 @@ export class FileStore implements IStore {
     commentDensity: number;
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
-    decisionsWithPredictions: number;
     highStakesDecisions: number;
   } {
     // G10 — the FN4/K2 computation is a pure function of session state;

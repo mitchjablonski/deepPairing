@@ -6,7 +6,6 @@ export interface EngagementMetrics {
   commentDensity: number;
   approvalRate: number;
   reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
-  decisionsWithPredictions: number;
   highStakesDecisions: number;
 }
 
@@ -53,13 +52,12 @@ export function computeEngagementMetrics(state: {
     typeSummary[type] = { avgLatencyMs: Math.round(data.totalMs / data.count), count: data.count };
   }
 
-  // K2: craft-development signals — how often the user captures predictions
-  // and how often the agent flags decisions as high-stakes.
-  let decisionsWithPredictions = 0;
+  // K2: craft-development signal — how often the agent flags decisions as
+  // high-stakes. (#197/F3 — the sibling `decisionsWithPredictions` counter was
+  // removed with the calibration-loop cut; nothing rendered it and the
+  // prediction write path is gone.)
   let highStakesDecisions = 0;
   for (const d of state.decisions) {
-    const r = d.response as any;
-    if (r && (r.confidence || r.predictedOutcome)) decisionsWithPredictions++;
     if ((d as any).stakes === "high") highStakesDecisions++;
   }
 
@@ -68,7 +66,6 @@ export function computeEngagementMetrics(state: {
     commentDensity,
     approvalRate,
     reviewsByType: typeSummary,
-    decisionsWithPredictions,
     highStakesDecisions,
   };
 }

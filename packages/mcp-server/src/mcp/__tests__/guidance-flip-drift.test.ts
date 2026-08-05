@@ -18,25 +18,23 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { buildFirstCallHint } from "../first-call-hint.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let store: FileStore;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-flip-drift-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "flip_drift_session");
+  fx = withGlobalStore("dp-flip-drift-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "flip_drift_session"));
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 /** Assemble the hint across EVERY dial + density so the per-dial FLOOR lines

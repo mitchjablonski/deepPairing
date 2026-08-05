@@ -392,7 +392,6 @@ export interface IStore {
     commentDensity: number;
     approvalRate: number;
     reviewsByType: Record<string, { avgLatencyMs: number; count: number }>;
-    decisionsWithPredictions?: number;
     highStakesDecisions?: number;
   }>;
   /**

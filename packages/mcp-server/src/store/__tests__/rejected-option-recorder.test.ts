@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests, getGlobalStore } from "../global-store.js";
+import { getGlobalStore } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { composeOptionRejectReason, recordRejectedOption, recordRejectedOptionConcept, optionConceptKey } from "../rejected-option-recorder.js";
 import type { DecisionOption } from "@deeppairing/shared";
 
@@ -22,18 +20,17 @@ function opt(over: Partial<DecisionOption> = {}): DecisionOption {
 }
 
 describe("#169 rejected-option-recorder (shared logic)", () => {
+  let fx: GlobalStoreFixture;
   let tmpDir: string;
   let store: FileStore;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-ror-test-"));
-    setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-    store = new FileStore(tmpDir, "test_session");
+    fx = withGlobalStore("dp-ror-test-");
+    tmpDir = fx.dir;
+    store = fx.track(new FileStore(tmpDir, "test_session"));
   });
   afterEach(() => {
-    store.forceFlush();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    setGlobalStoreForTests(null);
+    fx.dispose();
   });
 
   describe("composeOptionRejectReason", () => {
@@ -130,7 +127,7 @@ describe("#169 rejected-option-recorder (shared logic)", () => {
       // recordRejectedOption delegates to recordRejectedApproach, it inherits
       // that isolation for free — this pins it. Force publish ON so the ONLY
       // thing blocking the global mirror is #193's !isDemoSession belt.
-      const demoStore = new FileStore(tmpDir, "demo_test");
+      const demoStore = fx.track(new FileStore(tmpDir, "demo_test"));
       demoStore.setGlobalLedgerPublish(true);
       await recordRejectedOption(demoStore, () => {}, {
         context: "Which cache?",

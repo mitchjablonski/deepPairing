@@ -4,33 +4,29 @@
  * tests pin that sequence so it doesn't drift.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { FileStore } from "../store/file-store.js";
-import { setGlobalStoreForTests } from "../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "./global-store-fixture.js";
 import { runDemoScript, DEFAULT_REJECTION_CONCEPT, DEFAULT_REPROPOSAL } from "../demo-script.js";
 import { conceptMatchesProposal } from "../mcp/preflight-validator.js";
 
 type BroadcastEvent = { sessionId: string; event: any };
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let store: FileStore;
 let broadcasts: BroadcastEvent[];
 let scheduled: Array<{ ms: number; fn: () => void | Promise<void> }>;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-demo-script-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "demo_test");
+  fx = withGlobalStore("dp-demo-script-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "demo_test"));
   broadcasts = [];
   scheduled = [];
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 /** Run the timeline up to the given ms cutoff (fake time). */

@@ -360,7 +360,7 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       expect(resolved.response?.predictedOutcome).toBe("sub-50ms p95");
     });
 
-    it("counts decisions-with-predictions and high-stakes in engagement metrics (K2)", async () => {
+    it("counts high-stakes decisions in engagement metrics (K2; #197 dropped the decisions-with-predictions counter)", async () => {
       await callTool("present_options", {
         context: "High one",
         stakes: "high",
@@ -381,7 +381,6 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       store.resolveDecision(decisions[1].decisionId, "a"); // no prediction
 
       const metrics = store.getEngagementMetrics();
-      expect(metrics.decisionsWithPredictions).toBe(1);
       expect(metrics.highStakesDecisions).toBe(1);
     });
   });

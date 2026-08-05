@@ -16,16 +16,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { serve } from "@hono/node-server";
 import WebSocket from "ws";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { projectHashOf } from "../../project-root.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 interface Harness {
   tmpDir: string;
+  fx: GlobalStoreFixture;
   daemon: Daemon;
   exits: number[];
 }
@@ -33,8 +31,8 @@ interface Harness {
 let harnesses: Harness[] = [];
 
 function makeDaemon(overrides: Partial<CreateDaemonDeps> = {}): Harness {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-demo-lifetime-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  const fx = withGlobalStore("dp-demo-lifetime-");
+  const tmpDir = fx.dir;
   const exits: number[] = [];
   const daemon = createDaemon({
     projectRoot: tmpDir,
@@ -45,7 +43,7 @@ function makeDaemon(overrides: Partial<CreateDaemonDeps> = {}): Harness {
     env: {},
     ...overrides,
   });
-  const h: Harness = { tmpDir, daemon, exits };
+  const h: Harness = { tmpDir, fx, daemon, exits };
   harnesses.push(h);
   return h;
 }
@@ -53,10 +51,9 @@ function makeDaemon(overrides: Partial<CreateDaemonDeps> = {}): Harness {
 afterEach(() => {
   for (const h of harnesses) {
     try { h.daemon.dispose(); } catch { /* ignore */ }
-    try { fs.rmSync(h.tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { h.fx.dispose(); } catch { /* ignore */ }
   }
   harnesses = [];
-  setGlobalStoreForTests(null);
   vi.useRealTimers();
 });
 

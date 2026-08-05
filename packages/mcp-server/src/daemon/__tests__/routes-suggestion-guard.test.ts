@@ -1,10 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { createDaemonRoutes, type SessionMeta } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 /**
  * #172 (review F2 + F1-defense) — the AGENT-driven internal suggestion route
@@ -13,6 +10,7 @@ import { setGlobalStoreForTests } from "../../store/global-store.js";
  * not mock: real FileStore + a real Hono app via app.request().
  */
 let tmpDir: string;
+let fx: GlobalStoreFixture;
 let sessions: Map<string, FileStore>;
 let app: ReturnType<typeof createDaemonRoutes>;
 const TOKEN = "test-secret-token";
@@ -25,11 +23,11 @@ const suggestion = {
 };
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-sugg-guard-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-sugg-guard-");
+  tmpDir = fx.dir;
   sessions = new Map();
   app = createDaemonRoutes(sessions, new Map<string, SessionMeta>(), (id) => {
-    const s = new FileStore(tmpDir, id);
+    const s = fx.track(new FileStore(tmpDir, id));
     sessions.set(id, s);
     return s;
   }, () => {}, undefined, tmpDir, TOKEN);
@@ -41,8 +39,7 @@ beforeEach(async () => {
   });
 });
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 const suggestionUrl = "/api/internal/sessions/real/comments/cmt_s/suggestion";

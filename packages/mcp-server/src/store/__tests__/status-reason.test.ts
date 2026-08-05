@@ -11,26 +11,23 @@
  * its presence is a smoking gun in code review.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-status-reason-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-status-reason-");
+  tmpDir = fx.dir;
 });
 
 afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 function withArtifact(): { store: FileStore; id: string } {
-  const store = new FileStore(tmpDir, "status_reason_session");
+  const store = fx.track(new FileStore(tmpDir, "status_reason_session"));
   const a = store.createArtifact({ id: "art_1", type: "plan", title: "T", content: { steps: [] } });
   return { store, id: a.id };
 }
@@ -89,7 +86,7 @@ describe("FileStore.updateArtifactStatus carries a reason tag (U7)", () => {
     const { store, id } = withArtifact();
     store.updateArtifactStatus(id, "approved", "elicit_accept");
     store.forceFlush();
-    const reloaded = new FileStore(tmpDir, "status_reason_session");
+    const reloaded = fx.track(new FileStore(tmpDir, "status_reason_session"));
     const arts = reloaded.getArtifacts();
     const last = (arts[0] as any).statusHistory.slice(-1)[0];
     expect(last.reason).toBe("elicit_accept");

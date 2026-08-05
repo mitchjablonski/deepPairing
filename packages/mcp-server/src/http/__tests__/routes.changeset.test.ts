@@ -8,21 +8,20 @@
  *    cross-project ledger (inherited via recordRejectedApproach).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests, getGlobalStore } from "../../store/global-store.js";
+import { getGlobalStore } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { projectHashOf } from "../../project-root.js";
 
 let tmpDir: string;
+let fx: GlobalStoreFixture;
 let store: FileStore;
 let app: ReturnType<typeof createHttpRoutes>;
 let broadcasts: any[];
 
 function buildApp(sessionId: string): void {
-  store = new FileStore(tmpDir, sessionId);
+  store = fx.track(new FileStore(tmpDir, sessionId));
   broadcasts = [];
   const bare = createHttpRoutes(store, tmpDir, (e) => broadcasts.push(e));
   const projectHash = projectHashOf(tmpDir);
@@ -63,15 +62,13 @@ const reject = (artifactId: string, feedback: string, concept?: string) =>
   });
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cs-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-cs-");
+  tmpDir = fx.dir;
   buildApp("test_session");
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 describe("#171 per-file review-state persistence", () => {

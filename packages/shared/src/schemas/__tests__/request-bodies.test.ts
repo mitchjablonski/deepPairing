@@ -58,7 +58,10 @@ describe("DecisionResolveBodySchema", () => {
     expect(DecisionResolveBodySchema.safeParse({ optionId: "a" }).success).toBe(true);
   });
 
-  it("accepts the prediction-capture fields when present", () => {
+  it("#197 (F3) — drops the removed prediction-capture fields on parse (write-path acceptance gone)", () => {
+    // `confidence`/`predictedOutcome` were removed from the request body when the
+    // calibration loop was cut. An old client that still sends them isn't
+    // rejected (Zod strips unknown keys) — the fields simply never reach the store.
     const r = DecisionResolveBodySchema.safeParse({
       optionId: "opt_x",
       reasoning: "best fit",
@@ -66,10 +69,8 @@ describe("DecisionResolveBodySchema", () => {
       predictedOutcome: "Will hold for 3+ months",
     });
     expect(r.success).toBe(true);
-  });
-
-  it("rejects an unknown confidence value", () => {
-    expect(DecisionResolveBodySchema.safeParse({ optionId: "a", confidence: "absolute" }).success).toBe(false);
+    expect(r.success && (r.data as Record<string, unknown>).confidence).toBeUndefined();
+    expect(r.success && (r.data as Record<string, unknown>).predictedOutcome).toBeUndefined();
   });
 });
 

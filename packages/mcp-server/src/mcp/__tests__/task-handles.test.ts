@@ -3,26 +3,22 @@
  * future MCP Tasks renderer (when SDK ships) sees the right shape.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { taskHandleForArtifact, taskKindForArtifactType } from "../task-handles.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let store: FileStore;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-task-handle-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "task_handle_session");
+  fx = withGlobalStore("dp-task-handle-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "task_handle_session"));
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 describe("taskKindForArtifactType", () => {

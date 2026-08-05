@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 /**
  * #172 — check_feedback delivers pending suggested edits prominently, with the
@@ -14,14 +11,14 @@ import { setGlobalStoreForTests } from "../../store/global-store.js";
  * FileStore over a tmp dir — no mocks.
  */
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cf-sugg-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-cf-sugg-");
+  tmpDir = fx.dir;
 });
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 function makeCtx(store: FileStore): ToolContext {
@@ -62,7 +59,7 @@ function seedSuggestion(store: FileStore, over: Partial<typeof suggestion> = {},
 
 describe("#172 check_feedback surfaces suggested edits", () => {
   it("delivers a PENDING suggestion prominently + structuredContent with original/replacement/note", async () => {
-    const store = new FileStore(tmpDir, "s1");
+    const store = fx.track(new FileStore(tmpDir, "s1"));
     seedSuggestion(store);
     const res = await handleCheckFeedback(makeCtx(store), {});
     const text = res.content[0]!.text as string;
@@ -85,7 +82,7 @@ describe("#172 check_feedback surfaces suggested edits", () => {
   });
 
   it("omits `note` from structuredContent when the why is just the auto summary", async () => {
-    const store = new FileStore(tmpDir, "s_nonote");
+    const store = fx.track(new FileStore(tmpDir, "s_nonote"));
     seedSuggestion(store, {}, "Suggested edit to lib/upload.ts:15–17");
     const res = await handleCheckFeedback(makeCtx(store), {});
     const sc = res.structuredContent as { suggestions?: any[] };
@@ -93,7 +90,7 @@ describe("#172 check_feedback surfaces suggested edits", () => {
   });
 
   it("post-INSIST — instructs the agent to apply VERBATIM and not re-argue", async () => {
-    const store = new FileStore(tmpDir, "s_insist");
+    const store = fx.track(new FileStore(tmpDir, "s_insist"));
     seedSuggestion(store);
     // Agent countered; human insisted (resetAcknowledged re-queues it).
     store.updateCommentSuggestion("cmt_s", { state: "countered", counter: { reason: "no", replacementText: "x" } });
@@ -109,7 +106,7 @@ describe("#172 check_feedback surfaces suggested edits", () => {
   });
 
   it("post-TAKE-COUNTER — instructs the agent to apply its counter", async () => {
-    const store = new FileStore(tmpDir, "s_take");
+    const store = fx.track(new FileStore(tmpDir, "s_take"));
     seedSuggestion(store);
     store.updateCommentSuggestion("cmt_s", { state: "countered", counter: { reason: "no", replacementText: "attach cause" } });
     store.acknowledgeComments(["cmt_s"]);
@@ -121,7 +118,7 @@ describe("#172 check_feedback surfaces suggested edits", () => {
   });
 
   it("an APPLIED-and-stamped suggestion is history — not re-surfaced once acknowledged", async () => {
-    const store = new FileStore(tmpDir, "s_done");
+    const store = fx.track(new FileStore(tmpDir, "s_done"));
     seedSuggestion(store);
     store.updateCommentSuggestion("cmt_s", { state: "applied", appliedInVersion: 2 });
     store.acknowledgeComments(["cmt_s"]);

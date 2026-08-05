@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 /**
@@ -11,22 +10,21 @@ import path from "node:path";
  * drive, the ledger side-effects, and #193 demo isolation.
  */
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 const stores: FileStore[] = [];
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-sugg-"));
+  fx = withGlobalStore("dp-sugg-");
+  tmpDir = fx.dir;
   stores.length = 0;
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
 });
 afterEach(() => {
-  for (const s of stores) s.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 function createStore(sessionId: string): FileStore {
-  const s = new FileStore(tmpDir, sessionId);
+  const s = fx.track(new FileStore(tmpDir, sessionId));
   stores.push(s);
   return s;
 }

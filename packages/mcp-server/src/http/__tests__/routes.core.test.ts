@@ -201,14 +201,19 @@ describe("HTTP Routes", () => {
       expect(body.error).toMatch(/intent/);
     });
 
-    it("POST /api/decisions/:id rejects unknown confidence value", async () => {
+    it("#197 (F3) — POST /api/decisions/:id ignores the removed prediction fields (no longer a validation error)", async () => {
+      // `confidence`/`predictedOutcome` were dropped from the request body when
+      // the calibration loop was cut. An old client that still sends them isn't
+      // rejected — Zod strips the unknown keys — so the request flows through as
+      // a bare optionId (here to an unknown decision → 404 decision_not_in_session,
+      // NOT a 400 validation_error for the stripped field).
       const res = await app.request("/api/decisions/d", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ optionId: "o", confidence: "absolute" }),
+        body: JSON.stringify({ optionId: "o", confidence: "absolute", predictedOutcome: "x" }),
       });
-      expect(res.status).toBe(400);
-      expect((await bodyOf(res)).code).toBe("validation_error");
+      expect(res.status).not.toBe(400);
+      expect((await bodyOf(res)).code).not.toBe("validation_error");
     });
 
     it("POST /api/artifacts/:id/status rejects unknown status with structured payload", async () => {

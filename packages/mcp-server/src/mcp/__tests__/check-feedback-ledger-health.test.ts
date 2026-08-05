@@ -1,11 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import {
   expectHealthyCheckFeedbackPayload,
   normalizedHealthyStructSha,
@@ -25,24 +23,24 @@ import {
  * Fake, not mock: a real FileStore over a tmp dir (empty → the plain "proceed"
  * path) and a real GlobalStore redirected at a tmp ledger we corrupt on disk.
  */
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let ledgerPath: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cf-ledger-"));
-  ledgerPath = path.join(tmpDir, "philosophy.json");
   // Wins over the global-store-guard's redirect (setupFiles beforeEach runs
   // first; this test-file beforeEach runs last → last-wins).
-  setGlobalStoreForTests(ledgerPath);
+  fx = withGlobalStore("dp-cf-ledger-");
+  tmpDir = fx.dir;
+  ledgerPath = fx.ledgerPath;
 });
 
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 function makeCtx(): ToolContext {
-  const store = new FileStore(tmpDir, "s1");
+  const store = fx.track(new FileStore(tmpDir, "s1"));
   const server = { notification: () => {} };
   return {
     server,
@@ -91,7 +89,7 @@ describe("H2-1 — check_feedback surfaces a frozen philosophy ledger", () => {
  */
 describe("#139 — check_feedback healthy payload is unchanged (no detailDensity leak)", () => {
   it("carries the exact pre-feature key set, with detailDensity terse in the store", async () => {
-    const store = new FileStore(tmpDir, "s_density");
+    const store = fx.track(new FileStore(tmpDir, "s_density"));
     // A terse preference must NOT change the poll payload — it belongs in the
     // first-call hint, not this hot path.
     store.setDetailDensity("terse");
