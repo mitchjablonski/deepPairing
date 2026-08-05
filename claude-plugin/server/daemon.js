@@ -5614,7 +5614,6 @@ function emptyCounts() {
     preflightNearMisses: 0,
     gateEscapes: 0,
     ledgerWrites: { total: 0, rejected: 0, approved: 0 },
-    retrospectives: { total: 0, right: 0, wrong: 0, mixed: 0 },
     horizonChecksRequested: 0,
     questions: { asked: 0, answered: 0 },
     artifacts: { total: 0, byType: {} },
@@ -5647,7 +5646,10 @@ function readMetricsFromDisk(projectRoot2) {
         ...parsed.counts,
         preflightBlocks: { ...emptyCounts().preflightBlocks, ...parsed.counts?.preflightBlocks ?? {} },
         ledgerWrites: { ...emptyCounts().ledgerWrites, ...parsed.counts?.ledgerWrites ?? {} },
-        retrospectives: { ...emptyCounts().retrospectives, ...parsed.counts?.retrospectives ?? {} },
+        // #197 (F3) — `retrospectives` is gone from MetricsCounts (the calibration
+        // loop was cut). An old metrics.json that still carries the key flows
+        // through the `...parsed.counts` spread above untouched — read-tolerant,
+        // never crashes; the vestigial count is simply never read or rendered.
         questions: { ...emptyCounts().questions, ...parsed.counts?.questions ?? {} },
         artifacts: { ...emptyCounts().artifacts, ...parsed.counts?.artifacts ?? {} },
         visuals: { ...emptyCounts().visuals, ...parsed.counts?.visuals ?? {} }
@@ -5720,10 +5722,6 @@ function recordMetricEvent(projectRoot2, event) {
     case "ledger_write":
       data.counts.ledgerWrites.total += 1;
       data.counts.ledgerWrites[event.verdict] += 1;
-      break;
-    case "retrospective":
-      data.counts.retrospectives.total += 1;
-      data.counts.retrospectives[event.verdict] += 1;
       break;
     case "horizon_check_requested":
       data.counts.horizonChecksRequested += 1;
@@ -23074,13 +23072,13 @@ var CommentTargetSchema = external_exports.object({
   // D8 (H1) — open questions are now answerable; index into openQuestions[].
   questionIndex: external_exports.number().int().optional().describe("Index into the artifact's openQuestions[]"),
   visualId: external_exports.string().optional().describe("The plan/spec visual (diagram, file_map, prototype) this comment targets"),
-  // TOLERATED-LEGACY (#188) — the deprecated one-line `target.suggestion` STRING.
-  // No producer has emitted it since #199 (the web composer emits only the
-  // first-class `comment.suggestion` OBJECT), and #188 deleted its check_feedback
-  // consumer branch. Kept optional here ONLY so old stored comments that carry it
-  // still PARSE on read — never written, never delivered. Do not re-consume it;
-  // the canonical surface is `CommentSuggestionSchema` (see `suggestion` below).
-  suggestion: external_exports.string().optional().describe("Deprecated (tolerated-legacy, #188): old one-line suggested replacement; parse-only, not delivered"),
+  // #197 (F3) — the deprecated one-line `target.suggestion` STRING is GONE from
+  // the schema. It had no producer since #199 (the web composer emits only the
+  // first-class `comment.suggestion` OBJECT) and no consumer since #188 deleted
+  // its check_feedback branch. Zod strips unknown keys on parse, so an old stored
+  // comment that still carries `target.suggestion` loads unchanged — the key is
+  // dropped, never crashes. The canonical surface is `CommentSuggestionSchema`
+  // (see the comment-level `suggestion` object below).
   // #140 — a region selected on a rendered Mermaid diagram. TEXTUAL, not a
   // screenshot: the agent gets the hit-tested node ids + labels (which it can
   // locate in the Mermaid source it authored) plus the normalized rect. Every
@@ -23774,9 +23772,7 @@ var SuggestionUpdateBodySchema = external_exports.object({
 }).strict();
 var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
-  reasoning: external_exports.string().optional(),
-  confidence: external_exports.enum(["low", "medium", "high"]).optional(),
-  predictedOutcome: external_exports.string().optional()
+  reasoning: external_exports.string().optional()
 });
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),
@@ -24631,11 +24627,8 @@ function computeEngagementMetrics(state) {
   for (const [type, data] of Object.entries(reviewsByType)) {
     typeSummary[type] = { avgLatencyMs: Math.round(data.totalMs / data.count), count: data.count };
   }
-  let decisionsWithPredictions = 0;
   let highStakesDecisions = 0;
   for (const d of state.decisions) {
-    const r = d.response;
-    if (r && (r.confidence || r.predictedOutcome)) decisionsWithPredictions++;
     if (d.stakes === "high") highStakesDecisions++;
   }
   return {
@@ -24643,7 +24636,6 @@ function computeEngagementMetrics(state) {
     commentDensity,
     approvalRate,
     reviewsByType: typeSummary,
-    decisionsWithPredictions,
     highStakesDecisions
   };
 }
@@ -27737,7 +27729,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = DecisionResolveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
+    const { optionId, reasoning } = parsed.data;
     const knownRecord = await store.getDecision(decisionId);
     const knownArtifact = (await store.getArtifacts()).some(
       (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
@@ -27752,8 +27744,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
-    const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
-    await store.resolveDecision(decisionId, optionId, reasoning, prediction);
+    await store.resolveDecision(decisionId, optionId, reasoning);
     const decision = await store.getDecision(decisionId);
     if (decision && (await store.getDecisionResponse(decisionId))?.optionId !== optionId) {
       return c.json(
@@ -29516,11 +29507,10 @@ function recordBroadcastMetric(projectRoot2, sessionId, event) {
         verdict: event.kind === "approved" ? "approved" : "rejected"
       });
       break;
-    case "retrospective_recorded":
-      if (event.verdict === "right" || event.verdict === "wrong" || event.verdict === "mixed") {
-        recordMetricEvent(projectRoot2, { kind: "retrospective", verdict: event.verdict });
-      }
-      break;
+    // #197 (F3) — the `retrospective_recorded` tap was removed with the E3
+    // calibration-loop cut: nothing broadcasts that event (the ritual was cut
+    // after 0/36 real high-stakes decisions ever recorded one), so this case
+    // never fired and its `retrospectives` counter was permanently zero.
     case "feedback_received":
       if (event.intent === "question") {
         recordMetricEvent(projectRoot2, { kind: "question_asked" });

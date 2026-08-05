@@ -10,7 +10,6 @@ interface MetricsSnapshot {
   counts: {
     preflightBlocks: { total: number; bySource: { session: number; team: number } };
     ledgerWrites: { total: number; rejected: number; approved: number };
-    retrospectives: { total: number; right: number; wrong: number; mixed: number };
     horizonChecksRequested: number;
     questions: { asked: number; answered: number };
     artifacts?: { total: number; byType: Record<string, number> };

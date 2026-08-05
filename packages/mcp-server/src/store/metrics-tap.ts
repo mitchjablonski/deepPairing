@@ -29,11 +29,10 @@ export function recordBroadcastMetric(projectRoot: string, sessionId: string, ev
         verdict: event.kind === "approved" ? "approved" : "rejected",
       });
       break;
-    case "retrospective_recorded":
-      if (event.verdict === "right" || event.verdict === "wrong" || event.verdict === "mixed") {
-        recordMetricEvent(projectRoot, { kind: "retrospective", verdict: event.verdict });
-      }
-      break;
+    // #197 (F3) — the `retrospective_recorded` tap was removed with the E3
+    // calibration-loop cut: nothing broadcasts that event (the ritual was cut
+    // after 0/36 real high-stakes decisions ever recorded one), so this case
+    // never fired and its `retrospectives` counter was permanently zero.
     case "feedback_received":
       if (event.intent === "question") {
         recordMetricEvent(projectRoot, { kind: "question_asked" });

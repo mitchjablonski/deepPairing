@@ -6,25 +6,22 @@
  * check-feedback-ledger-health.test.ts). Fake, not mock: a real FileStore.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { expectHealthyCheckFeedbackPayload } from "./check-feedback-test-helpers.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-cf-rf-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-cf-rf-");
+  tmpDir = fx.dir;
 });
 
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 function makeCtx(store: FileStore): ToolContext {
@@ -46,7 +43,7 @@ function makeCtx(store: FileStore): ToolContext {
 
 describe("check_feedback surfaces render failures (#176)", () => {
   it("delivers the failure once with visualId + error + title, then drains", async () => {
-    const store = new FileStore(tmpDir, "s1");
+    const store = fx.track(new FileStore(tmpDir, "s1"));
     store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });
     store.recordRenderFailure({
       artifactId: "plan_1",
@@ -76,7 +73,7 @@ describe("check_feedback surfaces render failures (#176)", () => {
   });
 
   it("does NOT re-deliver an already-reported, UNCHANGED failure after a remount re-report", async () => {
-    const store = new FileStore(tmpDir, "s_remount");
+    const store = fx.track(new FileStore(tmpDir, "s_remount"));
     store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });
     store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "boom" });
 
@@ -104,7 +101,7 @@ describe("check_feedback surfaces render failures (#176)", () => {
   });
 
   it("never leaks a secret through the error/title path", async () => {
-    const store = new FileStore(tmpDir, "s2");
+    const store = fx.track(new FileStore(tmpDir, "s2"));
     store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });
     store.recordRenderFailure({
       artifactId: "plan_1",
@@ -121,7 +118,7 @@ describe("check_feedback surfaces render failures (#176)", () => {
   });
 
   it("healthy payload has no renderFailures key (contract lock)", async () => {
-    const store = new FileStore(tmpDir, "s3");
+    const store = fx.track(new FileStore(tmpDir, "s3"));
     store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });
     store.addComment({ id: "cmt_1", artifactId: "__session__", content: "ok", author: "human" });
 

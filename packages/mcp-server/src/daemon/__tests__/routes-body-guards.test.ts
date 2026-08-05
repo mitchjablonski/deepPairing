@@ -1,10 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { createDaemonRoutes, type SessionMeta } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 /**
  * H2-2 (#145) — internal routes that destructured a bare `await c.req.json()`
@@ -19,6 +16,7 @@ import { setGlobalStoreForTests } from "../../store/global-store.js";
  * app.request().
  */
 let tmpDir: string;
+let fx: GlobalStoreFixture;
 let sessions: Map<string, FileStore>;
 let sessionMeta: Map<string, SessionMeta>;
 let app: ReturnType<typeof createDaemonRoutes>;
@@ -26,14 +24,14 @@ let app: ReturnType<typeof createDaemonRoutes>;
 const TOKEN = "test-secret-token";
 
 function createSession(sessionId: string): FileStore {
-  const store = new FileStore(tmpDir, sessionId);
+  const store = fx.track(new FileStore(tmpDir, sessionId));
   sessions.set(sessionId, store);
   return store;
 }
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-body-guard-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-body-guard-");
+  tmpDir = fx.dir;
   sessions = new Map();
   sessionMeta = new Map();
   app = createDaemonRoutes(
@@ -54,8 +52,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 const authed = { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` } as const;
@@ -147,7 +144,7 @@ describe("#139 — preference setters reject a poison enum value (autonomy fails
     // In-memory unchanged…
     expect(store.getAutonomyLevel()).toBe("supervised");
     // …and nothing persisted: a fresh store over the same dir still reads supervised.
-    expect(new FileStore(tmpDir, "real").getAutonomyLevel()).toBe("supervised");
+    expect(fx.track(new FileStore(tmpDir, "real")).getAutonomyLevel()).toBe("supervised");
   });
 
   it("autonomy: a valid level still round-trips (200 + persisted)", async () => {
@@ -158,7 +155,7 @@ describe("#139 — preference setters reject a poison enum value (autonomy fails
     });
     expect(res.status).toBe(200);
     expect(sessions.get("real")!.getAutonomyLevel()).toBe("balanced");
-    expect(new FileStore(tmpDir, "real").getAutonomyLevel()).toBe("balanced");
+    expect(fx.track(new FileStore(tmpDir, "real")).getAutonomyLevel()).toBe("balanced");
   });
 
   it("detail-density: invalid density 'banana' → 400 and nothing written (stays rich)", async () => {
@@ -171,7 +168,7 @@ describe("#139 — preference setters reject a poison enum value (autonomy fails
     });
     expect(res.status).toBe(400);
     expect(store.getDetailDensity()).toBe("rich");
-    expect(new FileStore(tmpDir, "real").getDetailDensity()).toBe("rich");
+    expect(fx.track(new FileStore(tmpDir, "real")).getDetailDensity()).toBe("rich");
   });
 
   it("detail-density: a valid density still round-trips (200 + persisted)", async () => {
@@ -182,7 +179,7 @@ describe("#139 — preference setters reject a poison enum value (autonomy fails
     });
     expect(res.status).toBe(200);
     expect(sessions.get("real")!.getDetailDensity()).toBe("terse");
-    expect(new FileStore(tmpDir, "real").getDetailDensity()).toBe("terse");
+    expect(fx.track(new FileStore(tmpDir, "real")).getDetailDensity()).toBe("terse");
   });
 });
 

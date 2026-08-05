@@ -16,11 +16,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { projectHashOf } from "../../project-root.js";
 import { runPreflight } from "../../mcp/preflight-validator.js";
 import type { DecisionOption } from "@deeppairing/shared";
@@ -32,6 +31,7 @@ const preflightBundle = path.join(repoRoot, "claude-plugin", "server", "prefligh
 const bundleBuilt = fs.existsSync(preflightBundle);
 
 let tmpDir: string;
+let fx: GlobalStoreFixture;
 let store: FileStore;
 let app: ReturnType<typeof createHttpRoutes>;
 let broadcasts: any[];
@@ -50,9 +50,9 @@ const OPTIONS: DecisionOption[] = [
 ];
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-dec-reject-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "test_session");
+  fx = withGlobalStore("dp-dec-reject-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "test_session"));
   broadcasts = [];
   const bare = createHttpRoutes(store, tmpDir, (e) => broadcasts.push(e));
   const projectHash = projectHashOf(tmpDir);
@@ -66,9 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 async function createDecisionArtifact(): Promise<string> {

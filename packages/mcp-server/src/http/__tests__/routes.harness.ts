@@ -4,12 +4,8 @@
 // the run while staying importable next to the split files.
 import { createHttpRoutes } from "../routes.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { projectHashOf } from "../../project-root.js";
-import { __resetMetricsCacheForTests } from "../../store/metrics-store.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 // II2 — fail-closed X-Project-Hash. Wrap any test-constructed Hono app so
 // the gate doesn't trip on every existing test. Tests that exercise the gate
@@ -32,25 +28,33 @@ export interface RoutesTestContext {
   tmpDir: string;
   store: FileStore;
   app: RoutesApp;
+  fx: GlobalStoreFixture;
 }
+
+// #197 (F3) — the fixture is tracked at module scope so destroyRoutesTestContext
+// works whether a split file passes the full ctx or a hand-built `{ tmpDir,
+// store }` (both call styles exist across the routes.*.test.ts suite).
+// create/destroy are always paired per test (beforeEach/afterEach), so a single
+// "current fixture" is unambiguous.
+let currentFx: GlobalStoreFixture | null = null;
 
 /** The original file's beforeEach body — each split file registers this. */
 export function createRoutesTestContext(): RoutesTestContext {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-route-test-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  const store = new FileStore(tmpDir, "test_session");
+  // withGlobalStore OWNS the ledger tmpdir, FileStore disposal, and the
+  // metrics-cache timer reset, so no debounced flush fires against a gone
+  // tmpdir on teardown (flake #134).
+  const fx = withGlobalStore("dp-route-test-");
+  currentFx = fx;
+  const store = fx.track(new FileStore(fx.dir, "test_session"));
   // #157 — broadcastFn is required now (the silent defaultBroadcast fallback
   // is gone); harness tests don't assert on broadcasts, so pass a no-op.
-  const app = withHash(createHttpRoutes(store, tmpDir, () => {}), tmpDir);
-  return { tmpDir, store, app };
+  const app = withHash(createHttpRoutes(store, fx.dir, () => {}), fx.dir);
+  return { tmpDir: fx.dir, store, app, fx };
 }
 
-/** The original file's afterEach body. */
-export function destroyRoutesTestContext(ctx: { tmpDir: string; store: FileStore }): void {
-  // Force flush so the FileStore's debounced writer doesn't fire after rmSync
-  // removes tmpDir (that race surfaces as an unhandled ENOENT in the runner).
-  ctx.store.forceFlush();
-  __resetMetricsCacheForTests(); // SP3 — clear debounced metrics timers before rmSync
-  fs.rmSync(ctx.tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+/** The original file's afterEach body. Arg is ignored (back-compat with the
+ *  `{ tmpDir, store }` call sites); the module-tracked fixture is disposed. */
+export function destroyRoutesTestContext(_ctx?: unknown): void {
+  currentFx?.dispose();
+  currentFx = null;
 }

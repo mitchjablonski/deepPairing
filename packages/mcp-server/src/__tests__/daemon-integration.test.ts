@@ -30,6 +30,13 @@ function createTestSession(sessionId: string): FileStore {
   return store;
 }
 
+// #197 (F3) — EXEMPT from the withGlobalStore() fixture (see
+// global-store-fixture.guard.test.ts's EXEMPT set). Odd lifecycle: this
+// top-level beforeEach has no matching afterEach (it relies on the
+// global-store-guard setupFile to reset the singleton to null), and the file's
+// several nested describe blocks own their own beforeAll/afterAll + tmpdirs.
+// Stores are disposed manually (forceFlush in the nested afterAll blocks), so
+// the #134 debounced-flush-after-rm race is already closed here.
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-daemon-test-"));
   setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));

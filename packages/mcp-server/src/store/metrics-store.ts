@@ -39,7 +39,6 @@ export interface MetricsCounts {
   preflightNearMisses: number;
   gateEscapes: number;
   ledgerWrites: { total: number; rejected: number; approved: number };
-  retrospectives: { total: number; right: number; wrong: number; mixed: number };
   horizonChecksRequested: number;
   questions: { asked: number; answered: number };
   // Production telemetry — does the agent actually USE the structured surface,
@@ -62,7 +61,6 @@ export type MetricsEvent =
   | { kind: "preflight_near_miss"; source: "session" | "team" }
   | { kind: "gate_escape" }
   | { kind: "ledger_write"; verdict: "rejected" | "approved" }
-  | { kind: "retrospective"; verdict: "right" | "wrong" | "mixed" }
   | { kind: "horizon_check_requested" }
   | { kind: "question_asked" }
   | { kind: "question_answered" }
@@ -79,7 +77,6 @@ function emptyCounts(): MetricsCounts {
     preflightNearMisses: 0,
     gateEscapes: 0,
     ledgerWrites: { total: 0, rejected: 0, approved: 0 },
-    retrospectives: { total: 0, right: 0, wrong: 0, mixed: 0 },
     horizonChecksRequested: 0,
     questions: { asked: 0, answered: 0 },
     artifacts: { total: 0, byType: {} },
@@ -116,7 +113,10 @@ function readMetricsFromDisk(projectRoot: string): MetricsFile {
         ...parsed.counts,
         preflightBlocks: { ...emptyCounts().preflightBlocks, ...(parsed.counts?.preflightBlocks ?? {}) },
         ledgerWrites: { ...emptyCounts().ledgerWrites, ...(parsed.counts?.ledgerWrites ?? {}) },
-        retrospectives: { ...emptyCounts().retrospectives, ...(parsed.counts?.retrospectives ?? {}) },
+        // #197 (F3) — `retrospectives` is gone from MetricsCounts (the calibration
+        // loop was cut). An old metrics.json that still carries the key flows
+        // through the `...parsed.counts` spread above untouched — read-tolerant,
+        // never crashes; the vestigial count is simply never read or rendered.
         questions: { ...emptyCounts().questions, ...(parsed.counts?.questions ?? {}) },
         artifacts: { ...emptyCounts().artifacts, ...(parsed.counts?.artifacts ?? {}) },
         visuals: { ...emptyCounts().visuals, ...(parsed.counts?.visuals ?? {}) },
@@ -234,10 +234,6 @@ export function recordMetricEvent(projectRoot: string, event: MetricsEvent): voi
     case "ledger_write":
       data.counts.ledgerWrites.total += 1;
       data.counts.ledgerWrites[event.verdict] += 1;
-      break;
-    case "retrospective":
-      data.counts.retrospectives.total += 1;
-      data.counts.retrospectives[event.verdict] += 1;
       break;
     case "horizon_check_requested":
       data.counts.horizonChecksRequested += 1;

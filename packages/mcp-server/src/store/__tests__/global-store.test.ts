@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { GlobalStore, deriveStance, type PhilosophyEntry } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let tmpDir: string;
 let ledgerPath: string;
@@ -117,24 +118,21 @@ describe("GlobalStore — append-only instance log", () => {
 // poison its own project's local preferences.json — the global ledger
 // stays clean.
 describe("III8 — per-project ledger publish opt-in (gate at FileStore boundary)", () => {
+  let fx: GlobalStoreFixture;
   let fileStoreTmp: string;
   let fileStore: import("../file-store.js").FileStore;
   let globalLedgerPath: string;
 
   beforeEach(async () => {
-    fileStoreTmp = fs.mkdtempSync(path.join(os.tmpdir(), "dp-iii8-"));
-    globalLedgerPath = path.join(fileStoreTmp, "philosophy.json");
-    const { setGlobalStoreForTests } = await import("../global-store.js");
-    setGlobalStoreForTests(globalLedgerPath);
+    fx = withGlobalStore("dp-iii8-");
+    fileStoreTmp = fx.dir;
+    globalLedgerPath = fx.ledgerPath;
     const { FileStore } = await import("../file-store.js");
-    fileStore = new FileStore(fileStoreTmp, "iii8_session");
+    fileStore = fx.track(new FileStore(fileStoreTmp, "iii8_session"));
   });
 
-  afterEach(async () => {
-    const { setGlobalStoreForTests } = await import("../global-store.js");
-    setGlobalStoreForTests(null);
-    fileStore.forceFlush();
-    fs.rmSync(fileStoreTmp, { recursive: true, force: true });
+  afterEach(() => {
+    fx.dispose();
   });
 
   it("default is off — recordRejectedApproach does NOT mirror to the global ledger", () => {

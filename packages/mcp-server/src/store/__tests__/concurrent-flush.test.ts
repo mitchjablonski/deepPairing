@@ -26,30 +26,26 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 const stores: FileStore[] = [];
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-concurrent-flush-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-concurrent-flush-");
+  tmpDir = fx.dir;
   stores.length = 0;
 });
 
 afterEach(() => {
-  for (const s of stores) {
-    try { s.forceFlush(); } catch {}
-  }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 function newStore(sessionId: string): FileStore {
-  const s = new FileStore(tmpDir, sessionId);
+  const s = fx.track(new FileStore(tmpDir, sessionId));
   stores.push(s);
   return s;
 }

@@ -19,11 +19,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer, matchesGlob } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let broadcasts: any[] = [];
 
@@ -35,11 +35,8 @@ function writeTeamJson(prefs: any[]): void {
   );
 }
 
-const openStores: FileStore[] = [];
-
 async function makeServer(): Promise<{ store: FileStore; client: Client }> {
-  const store = new FileStore(tmpDir, `session_${Date.now()}`);
-  openStores.push(store);
+  const store = fx.track(new FileStore(tmpDir, `session_${Date.now()}`));
   const { server } = createMcpServer(store, (e) => broadcasts.push(e), 4000);
   const [ct, st] = InMemoryTransport.createLinkedPair();
   await server.connect(st);
@@ -57,18 +54,15 @@ async function callTool(client: Client, name: string, args: Record<string, any>)
 }
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-team-preflight-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  // #197 (F3) — withGlobalStore OWNS the ledger tmpdir + FileStore disposal, so
+  // no debounced flush fires against a gone dir on teardown (flake #134).
+  fx = withGlobalStore("dp-team-preflight-");
+  tmpDir = fx.dir;
   broadcasts = [];
-  openStores.length = 0;
 });
 
 afterEach(() => {
-  // Cancel any pending debounced flush before rm'ing the dir, so no timer
-  // fires against a gone tmpdir during teardown (flake #134).
-  for (const s of openStores) s.dispose();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 describe("team-preferences pre-flight — avoid", () => {

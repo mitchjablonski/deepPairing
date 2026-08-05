@@ -16,23 +16,21 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { serve } from "@hono/node-server";
 import WebSocket from "ws";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { createDaemon, type Daemon } from "../create-daemon.js";
 import { projectHashOf } from "../../project-root.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let tmpDir: string;
+let fx: GlobalStoreFixture;
 let daemon: Daemon;
 let server: ReturnType<typeof serve>;
 let port = 0;
 let hash = "";
 
 beforeAll(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-ws-upgrade-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-ws-upgrade-");
+  tmpDir = fx.dir;
   hash = projectHashOf(tmpDir);
   daemon = createDaemon({
     projectRoot: tmpDir,
@@ -57,8 +55,7 @@ beforeAll(async () => {
 afterAll(() => {
   daemon.dispose();
   try { server.close(); } catch { /* already closed */ }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 type Attempt =

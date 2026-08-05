@@ -11,25 +11,24 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-render-fail-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-render-fail-");
+  tmpDir = fx.dir;
 });
 
 afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 function seededStore(sessionId = "rf_session"): FileStore {
-  const store = new FileStore(tmpDir, sessionId);
+  const store = fx.track(new FileStore(tmpDir, sessionId));
   store.createArtifact({ id: "plan_1", type: "plan", title: "Plan", content: { steps: [] } });
   return store;
 }
@@ -131,14 +130,14 @@ describe("FileStore render failures (#176)", () => {
   });
 
   it("round-trips through disk (rehydrates on reload) and writes nothing when clean", () => {
-    const clean = new FileStore(tmpDir, "rf_clean");
+    const clean = fx.track(new FileStore(tmpDir, "rf_clean"));
     clean.forceFlush();
     expect(fs.existsSync(path.join(tmpDir, "sessions", "rf_clean", "render-failures.json"))).toBe(false);
 
     const store = seededStore("rf_persist");
     store.recordRenderFailure({ artifactId: "plan_1", visualId: "vis_a", error: "e", title: "T" });
     store.forceFlush();
-    const reloaded = new FileStore(tmpDir, "rf_persist");
+    const reloaded = fx.track(new FileStore(tmpDir, "rf_persist"));
     const pending = reloaded.getUnacknowledgedRenderFailures();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ artifactId: "plan_1", visualId: "vis_a", error: "e", title: "T" });

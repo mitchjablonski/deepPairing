@@ -33,7 +33,6 @@ describe("readMetrics", () => {
     expect(m.version).toBe(1);
     expect(m.counts.preflightBlocks.total).toBe(0);
     expect(m.counts.ledgerWrites.total).toBe(0);
-    expect(m.counts.retrospectives.total).toBe(0);
     expect(m.counts.questions.asked).toBe(0);
     expect(m.sessions).toBe(0);
   });
@@ -77,15 +76,26 @@ describe("recordMetricEvent", () => {
     expect(m.counts.ledgerWrites.approved).toBe(1);
   });
 
-  it("tallies retrospectives by verdict", () => {
-    recordMetricEvent(tmpDir, { kind: "retrospective", verdict: "right" });
-    recordMetricEvent(tmpDir, { kind: "retrospective", verdict: "wrong" });
-    recordMetricEvent(tmpDir, { kind: "retrospective", verdict: "mixed" });
+  it("#197 (F3) — reads an old metrics.json carrying a retrospectives key without crashing", () => {
+    // The `retrospectives` counter was removed with the calibration-loop cut.
+    // A metrics.json written before the cut still carries the key on disk; the
+    // read must tolerate it (never throw) and preserve the live counts.
+    fs.mkdirSync(path.join(tmpDir, ".deeppairing"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".deeppairing", "metrics.json"),
+      JSON.stringify({
+        version: 1,
+        counts: {
+          preflightBlocks: { total: 4, bySource: { session: 3, team: 1 } },
+          retrospectives: { total: 9, right: 5, wrong: 3, mixed: 1 },
+        },
+      }),
+    );
     const m = readMetrics(tmpDir);
-    expect(m.counts.retrospectives.total).toBe(3);
-    expect(m.counts.retrospectives.right).toBe(1);
-    expect(m.counts.retrospectives.wrong).toBe(1);
-    expect(m.counts.retrospectives.mixed).toBe(1);
+    // The live counts survive; recording still works over the legacy file.
+    expect(m.counts.preflightBlocks.total).toBe(4);
+    recordMetricEvent(tmpDir, { kind: "ledger_write", verdict: "rejected" });
+    expect(readMetrics(tmpDir).counts.ledgerWrites.total).toBe(1);
   });
 
   it("tracks questions asked and answered independently", () => {

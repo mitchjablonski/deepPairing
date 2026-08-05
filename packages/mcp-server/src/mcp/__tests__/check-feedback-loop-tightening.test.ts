@@ -12,24 +12,21 @@
  * rest of the handler runs for real.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-loop-tighten-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-loop-tighten-");
+  tmpDir = fx.dir;
 });
 
 afterEach(() => {
-  setGlobalStoreForTests(null);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fx.dispose();
 });
 
 function makeCtx(store: FileStore, pollCount: number): ToolContext {
@@ -50,7 +47,7 @@ function makeCtx(store: FileStore, pollCount: number): ToolContext {
 
 describe("#195 M1 — poll give-up ceiling", () => {
   it("offers a sanctioned exit after ~6 empty polls with a pending draft", async () => {
-    const store = new FileStore(tmpDir, "s_ceiling");
+    const store = fx.track(new FileStore(tmpDir, "s_ceiling"));
     store.createArtifact({ id: "art_spec", type: "spec", title: "Session spec", content: { summary: "s", requirements: [] } });
     // Stub the long-poll so the empty poll returns immediately.
     (store as unknown as { waitForFeedback: () => Promise<void> }).waitForFeedback = async () => {};
@@ -66,7 +63,7 @@ describe("#195 M1 — poll give-up ceiling", () => {
   });
 
   it("does NOT show the ceiling before the 6th empty poll (earlier escalation only)", async () => {
-    const store = new FileStore(tmpDir, "s_noceiling");
+    const store = fx.track(new FileStore(tmpDir, "s_noceiling"));
     store.createArtifact({ id: "art_spec2", type: "spec", title: "Session spec", content: { summary: "s", requirements: [] } });
     (store as unknown as { waitForFeedback: () => Promise<void> }).waitForFeedback = async () => {};
     const ctx = makeCtx(store, 2); // → 3
@@ -80,7 +77,7 @@ describe("#195 M1 — poll give-up ceiling", () => {
 
 describe("#195 M2 — questions LEAD the suggestedAction", () => {
   it("leads with 'Answer the N open question(s) first' ahead of the pending-review guidance", async () => {
-    const store = new FileStore(tmpDir, "s_q");
+    const store = fx.track(new FileStore(tmpDir, "s_q"));
     store.createArtifact({ id: "art_spec3", type: "spec", title: "Session spec", content: { summary: "s", requirements: [] } });
     // An unanswered human question makes the poll return immediately.
     store.addComment({
@@ -100,7 +97,7 @@ describe("#195 M2 — questions LEAD the suggestedAction", () => {
   });
 
   it("questions lead, then the rejection 'Do NOT apply' posture follows (not replaced)", async () => {
-    const store = new FileStore(tmpDir, "s_qrej");
+    const store = fx.track(new FileStore(tmpDir, "s_qrej"));
     store.createArtifact({ id: "art_rej", type: "spec", title: "Risky spec", content: { summary: "s", requirements: [] } });
     store.updateArtifactStatus("art_rej", "rejected", "ui_reject_button" as never);
     store.addComment({

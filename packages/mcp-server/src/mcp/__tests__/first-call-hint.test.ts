@@ -15,25 +15,23 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { buildFirstCallHint, autonomyHintFor } from "../first-call-hint.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { FileStore } from "../../store/file-store.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 let store: FileStore;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-first-call-hint-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
-  store = new FileStore(tmpDir, "hint_session");
+  fx = withGlobalStore("dp-first-call-hint-");
+  tmpDir = fx.dir;
+  store = fx.track(new FileStore(tmpDir, "hint_session"));
 });
 
 afterEach(() => {
-  store.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 describe("first-call hint — always-on protocol preamble", () => {
@@ -301,7 +299,7 @@ describe("first-call hint — S1: guardrails survive all 24 dial variants", () =
               fs.mkdirSync(path.join(variantRoot, "migrations"), { recursive: true });
               fs.mkdirSync(path.join(variantRoot, ".github", "workflows"), { recursive: true });
             }
-            const variantStore = new FileStore(variantRoot, "matrix_session");
+            const variantStore = fx.track(new FileStore(variantRoot, "matrix_session"));
             if (autonomy !== "supervised") variantStore.setAutonomyLevel(autonomy);
             if (density !== "rich") variantStore.setDetailDensity(density);
             if (withRejected) {

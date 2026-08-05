@@ -1,30 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { FileStore } from "../file-store.js";
-import { setGlobalStoreForTests, getGlobalStore } from "../global-store.js";
+import { getGlobalStore } from "../global-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
+let fx: GlobalStoreFixture;
 let tmpDir: string;
 const stores: FileStore[] = [];
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-test-"));
+  fx = withGlobalStore("dp-test-");
+  tmpDir = fx.dir;
   stores.length = 0;
-  // Redirect the global philosophy ledger into tmpDir so test writes don't
-  // leak into the real ~/.deeppairing/.
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
 });
 
 afterEach(() => {
-  for (const s of stores) s.forceFlush();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 /** Create a FileStore and track it for cleanup */
 function createStore(sessionId: string): FileStore {
-  const s = new FileStore(tmpDir, sessionId);
+  const s = fx.track(new FileStore(tmpDir, sessionId));
   stores.push(s);
   return s;
 }

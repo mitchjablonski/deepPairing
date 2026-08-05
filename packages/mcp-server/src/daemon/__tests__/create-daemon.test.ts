@@ -19,13 +19,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { projectHashOf } from "../../project-root.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
-import { __resetMetricsCacheForTests } from "../../store/metrics-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
 import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
 // The web "waiting on you" set — imported here (a server-project test, so no web
@@ -39,6 +37,7 @@ const OPTS: DecisionOption[] = [
 
 interface Harness {
   tmpDir: string;
+  fx: GlobalStoreFixture;
   daemon: Daemon;
   logs: string[];
   exits: number[];
@@ -48,8 +47,8 @@ interface Harness {
 let harnesses: Harness[] = [];
 
 function makeDaemon(overrides: Partial<CreateDaemonDeps> = {}): Harness {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-factory-test-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  const fx = withGlobalStore("dp-factory-test-");
+  const tmpDir = fx.dir;
   const logs: string[] = [];
   const exits: number[] = [];
   const releases: Array<{ closeWs?: boolean } | undefined> = [];
@@ -64,7 +63,7 @@ function makeDaemon(overrides: Partial<CreateDaemonDeps> = {}): Harness {
     env: {},
     ...overrides,
   });
-  const h: Harness = { tmpDir, daemon, logs, exits, releases };
+  const h: Harness = { tmpDir, fx, daemon, logs, exits, releases };
   harnesses.push(h);
   return h;
 }
@@ -82,10 +81,8 @@ afterEach(() => {
       store.dispose();
     }
     h.daemon.dispose();
-    fs.rmSync(h.tmpDir, { recursive: true, force: true });
+    h.fx.dispose();
   }
-  __resetMetricsCacheForTests();
-  setGlobalStoreForTests(null);
   vi.useRealTimers();
 });
 

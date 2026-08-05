@@ -642,7 +642,7 @@ export function createHttpRoutes(
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = DecisionResolveBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { optionId, reasoning, confidence, predictedOutcome } = parsed.data;
+    const { optionId, reasoning } = parsed.data;
 
     // F6 — a decision this store doesn't know (no record AND no artifact
     // carrying the decisionId) means the tab is bound to a different session
@@ -663,10 +663,10 @@ export function createHttpRoutes(
       );
     }
 
-    const prediction = confidence || predictedOutcome
-      ? { confidence, predictedOutcome }
-      : undefined;
-    await store.resolveDecision(decisionId, optionId, reasoning, prediction);
+    // #197 (F3) — prediction capture was cut (E3); the UI no longer sends it and
+    // this write path no longer accepts it. The store method keeps its optional
+    // `prediction` param for backward-compatible reads of old records.
+    await store.resolveDecision(decisionId, optionId, reasoning);
 
     // Prefer the decision RECORD's artifactId, but fall back to the decision
     // artifact carrying this decisionId when no record is found. The daemon

@@ -20,12 +20,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { serve } from "@hono/node-server";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createDaemon, type Daemon } from "../create-daemon.js";
 import { evictDaemon } from "../lifecycle.js";
-import { setGlobalStoreForTests } from "../../store/global-store.js";
-import { __resetMetricsCacheForTests } from "../../store/metrics-store.js";
+import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
 
 // port 0 — OS-assigned per test (was a hardcoded 24880; hardcoded slots raced
@@ -34,14 +32,15 @@ let TEST_PORT = 0;
 const AUTH_TOKEN = "evict-e2e-token";
 
 let tmpDir: string;
+let fx: GlobalStoreFixture;
 let daemon: Daemon;
 let exits: number[];
 let releases: Array<{ closeWs?: boolean } | undefined>;
 let server: { close?: (cb?: () => void) => void } | null = null;
 
 beforeEach(async () => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-evict-e2e-"));
-  setGlobalStoreForTests(path.join(tmpDir, "philosophy.json"));
+  fx = withGlobalStore("dp-evict-e2e-");
+  tmpDir = fx.dir;
   exits = [];
   releases = [];
   daemon = createDaemon({
@@ -74,9 +73,7 @@ afterEach(async () => {
     });
     server = null;
   }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-  __resetMetricsCacheForTests();
-  setGlobalStoreForTests(null);
+  fx.dispose();
 });
 
 describe("#161 — cooperative evict against the real gated daemon", () => {
