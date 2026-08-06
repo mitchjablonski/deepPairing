@@ -1,6 +1,6 @@
 {
   "name": "@deeppairing/shared",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "Shared schemas and types for deepPairing",
   "type": "module",
   "license": "MIT",

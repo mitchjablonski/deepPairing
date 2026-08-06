@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.1.28 — 2026-08-06
+
+The right-sized release. Round 5 didn't find the parts broken — it asked whether
+the **defaults fit the work**. They didn't, in four places. A single-file,
+no-ceremony surgical fix still owed the full arc — spec, plan, debrief — as if it
+were a milestone. A resolved decision could strand its artifact in `draft` and go
+on nagging "Awaiting your decision" long after you'd answered. A session with one
+pending card in view fired four redundant "look here" signals and wore a header
+with two ways to search and two doors to the Ledger. And the plugin still described
+itself in our language, not our customers'. This round makes the ceremony scale
+with the task, makes terminal states tell the truth, steps the frame down for small
+work, and teaches the repo to speak the words people actually search. **Ceremony
+scales with the task, the floor doesn't**: a lone `code_change` that self-summarizes
+closes its own loop with no debrief owed, while any spec, plan, decision, changeset,
+or 2+ code_changes escalates to the full arc — and code stays visible before it
+lands at every size. **Terminal states tell the truth**: resolving a decision now
+atomically advances the artifact to `approved` on *every* path (the daemon-internal
+one used to strand it), retracted decisions badge **Withdrawn** and rejected ones
+**Rejected** instead of nagging, retract reasons render on the card, and every
+aggregate — modal, Features, `pendingCount`, TurnIndicator — tells one story.
+**The frame steps down for small work**: one pending card in view stops firing four
+overlapping signals, the duplicate Search button folds into a single `⌘K`
+affordance, and the Ledger gets one door (Diagnostics) plus a palette command.
+**And the repo speaks its customers' language**: "Catch the wrong approach before
+Claude Code writes it — not in a 500-line diff after" leads every surface, a
+"Beyond Plan Mode" README section and FAQ entry meet people where they're searching,
+and the plugin keywords are now the terms they type — `human-in-the-loop`,
+`review-gate`, `plan-mode`, `approval-workflow`. Legacy resolved-but-draft records
+read correctly via a read-side belt, so an old store degrades without a stumble
+(PRs #246, #248, #247, #250, #249).
+
+### Added
+- **Ceremony scales with the task.** A single-file, no-ceremony **surgical fix** now
+  closes its own loop: a lone self-summarizing `code_change` owes **no separate
+  debrief**. Any spec, plan, decision, changeset, or **2+ code_changes** escalates to
+  the full arc. Only **LIVE** artifacts count toward the carve-out — a *revised* trivial
+  fix keeps it, a *retracted or rejected* debrief **re-opens** the obligation — and the
+  two stop-hook copies are **parity-locked over a 12-case matrix**. Code stays visible
+  before it lands at **every** size; the floor never moves (PR #247).
+- **The customers' language, in the words they search.** "Catch the wrong approach
+  before Claude Code writes it — not in a 500-line diff after" now **leads every
+  surface**, a **"Beyond Plan Mode"** README section and a matching **FAQ entry** meet
+  people where they're already searching, and the plugin **keywords are the terms they
+  type** — `human-in-the-loop`, `review-gate`, `plan-mode`, `approval-workflow` (PR #246).
+- **Undo on a Features correction.** A Features **move** now raises an **exact
+  round-trip Undo toast**, move targets are **bigger**, and a **type-shaped skeleton**
+  replaces the lazy-load blank flash (PR #249).
+
+### Changed
+- **Terminal states tell the truth.** Resolving a decision now **atomically advances
+  the artifact to `approved` on every resolution path** — the daemon-internal path used
+  to strand it in `draft`. A **retracted** decision badges **"Withdrawn"** instead of
+  nagging "Awaiting your decision" and a **rejected** one badges **"Rejected"**; the
+  **retract reason renders on the card**. Every aggregate — the modal, the Features view,
+  `pendingCount`, the TurnIndicator — now tells **one story**, and legacy
+  resolved-but-draft records read correctly through a **read-side belt** (PRs #248, #249).
+- **The frame steps down for small work.** A session with **one pending card in view**
+  stops firing **four redundant signals** — a shared suppression predicate, with
+  dismiss-arm state that can't survive the cycle. The **duplicate Search button folds
+  into one `⌘K`** affordance, and the **Ledger has one door** (Diagnostics) plus a
+  palette command (PR #250).
+- **Header and rail polish.** The 900px rail **regained its tooltip scent** (the scent
+  had hung on a non-interactive div), `useWriteLock` is **extracted across six
+  components**, and the `__ungrouped__` sentinel is **single-sourced** (PR #249).
+
 ## v0.1.27 — 2026-08-05
 
 The follow-through release. Slice 1 gave multi-milestone projects a standing map
