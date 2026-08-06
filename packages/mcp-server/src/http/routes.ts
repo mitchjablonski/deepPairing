@@ -726,6 +726,13 @@ export function createHttpRoutes(
     }
 
     // Flip the decision ARTIFACT to approved so it leaves the "waiting" set.
+    // #209 (J1) — when a decision RECORD exists, store.resolveDecision ALREADY
+    // advanced its backing artifact to `approved` atomically (single flush, no
+    // resolved-but-draft window). Re-flipping here would append a SPURIOUS
+    // duplicate statusHistory entry, so the explicit flip is now scoped to the
+    // no-record FALLBACK only: the daemon's decisions map can lag/miss a record
+    // the artifact already carries (X6), and in that case the store had nothing
+    // to advance — so the route is the belt that still leaves the artifact honest.
     let targetArtifactId = decision?.artifactId;
     if (!targetArtifactId) {
       const artifacts = await store.getArtifacts();
@@ -737,7 +744,11 @@ export function createHttpRoutes(
       targetArtifactId = art?.id;
     }
     if (targetArtifactId) {
-      await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve" as any);
+      if (!decision) {
+        // No-record fallback only — store.resolveDecision couldn't advance the
+        // artifact (it had no record to key off), so the route does it.
+        await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+      }
       // X6 — emission seam: HTTP-side mutations pass null for `server`
       // (the MCP server lives in the daemon's separate process). Today
       // a no-op; future Tasks impl can route via the daemon broadcast.

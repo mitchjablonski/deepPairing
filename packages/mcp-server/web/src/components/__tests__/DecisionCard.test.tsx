@@ -91,6 +91,32 @@ describe("DecisionCard — #207 (I2) retracted write-axis lock", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("#209 (J1): a RETRACTED decision surfaces the agent's withdrawal reason in its read-only footer", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" writeLocked retractReason="chose the wrong file" />);
+    expect(screen.getByText("Retracted by agent")).toBeInTheDocument();
+    expect(screen.getByText("chose the wrong file")).toBeInTheDocument();
+  });
+
+  it("#209 (J1): no reason → the footer stays quiet (no empty 'Retracted by agent' block)", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" writeLocked />);
+    expect(screen.queryByText("Retracted by agent")).not.toBeInTheDocument();
+  });
+
+  it("#209 (J1, L-6): the 'Recommended' pill is DIMMED (muted, not bright violet) when write-locked", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" writeLocked />);
+    const pill = screen.getByText("Recommended");
+    // Muted treatment so a locked recommended option stops reading as armed.
+    expect(pill.className).toContain("text-text-muted");
+    expect(pill.className).not.toContain("bg-accent-violet-strong");
+  });
+
+  it("#209 (J1, L-6): the 'Recommended' pill keeps its bright violet on a WRITABLE (draft) decision", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" />);
+    const pill = screen.getByText("Recommended");
+    expect(pill.className).toContain("bg-accent-violet-strong");
+    expect(pill.className).not.toContain("text-text-muted");
+  });
+
   it("CONTROL (draft, default writeLocked=false): Select enabled, Discuss + footer actions present", () => {
     render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" />);
     expect(screen.getByRole("button", { name: "Select Redis" })).toBeEnabled();

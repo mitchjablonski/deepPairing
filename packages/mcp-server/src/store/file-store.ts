@@ -1217,6 +1217,23 @@ export class FileStore implements IStore {
       predictedOutcome: prediction?.predictedOutcome,
     };
     dec.resolvedAt = new Date().toISOString();
+    // #209 (J1) — the resolution and the status advance land in ONE store call
+    // so there is no observable window where the decision is resolved-but-draft.
+    // The human actively PICKED an option — that IS the approval — so the backing
+    // decision artifact advances to the terminal `approved` state, and every
+    // status-derived surface (header pill, sidebar dot, Features chip,
+    // pendingCount/TurnIndicator, getPendingDecisions) follows automatically off
+    // an honest status. This is the SINGLE unification point for the two
+    // resolution paths: the public /api/decisions route AND the daemon-internal
+    // /resolve route both funnel through here, so neither can leave the artifact
+    // stranded in draft. Only advance a still-open (draft/reviewing) artifact:
+    // never clobber one already closed (retracted/superseded/…) or already
+    // approved. updateArtifactStatus schedules the SAME debounced flush, so the
+    // response and the status persist together (atomic to any on-disk reader).
+    const backing = this.artifacts.find((a) => a.id === dec.artifactId);
+    if (backing && (backing.status === "draft" || backing.status === "reviewing")) {
+      this.updateArtifactStatus(dec.artifactId, "approved", "ui_decision_resolve");
+    }
     this.scheduleFlush();
     this.notifyFeedbackWaiters();
   }

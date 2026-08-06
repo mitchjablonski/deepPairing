@@ -146,6 +146,33 @@ describe("HTTP Routes", () => {
     expect(artifacts.find((a) => a.id === "art_dec")?.status).toBe("approved");
   });
 
+  it("#209 (J1) — POST /api/decisions/:id with a RECORD flips to approved store-side, with exactly ONE approved history entry (no route double-flip)", async () => {
+    store.createArtifact({
+      id: "art_rec",
+      type: "decision",
+      title: "pick a cache layer",
+      content: { decisionId: "dec_rec", context: "which?", options: [{ id: "o1", title: "Redis" }] },
+    });
+    store.recordDecisionRequest({
+      decisionId: "dec_rec", artifactId: "art_rec", context: "which?",
+      options: [{ id: "o1", title: "Redis" }],
+    });
+    const res = await app.request("/api/decisions/dec_rec", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "o1", reasoning: "go" }),
+    });
+    expect(res.status).toBe(200);
+    const art = (await store.getArtifacts()).find((a) => a.id === "art_rec")!;
+    expect(art.status).toBe("approved");
+    // The store advanced it; the route no longer re-flips a record-backed
+    // decision, so statusHistory carries exactly one `approved` entry (a
+    // duplicate would prove the route double-flipped).
+    const approvals = ((art as { statusHistory?: Array<{ status: string }> }).statusHistory ?? [])
+      .filter((h) => h.status === "approved");
+    expect(approvals).toHaveLength(1);
+  });
+
   it("GET /api/sessions/:sessionId rejects path traversal", async () => {
     // Hono normalizes `../` in URLs, so test with encoded dots and slashes
     const res = await app.request("/api/sessions/..%2F..%2Fetc");

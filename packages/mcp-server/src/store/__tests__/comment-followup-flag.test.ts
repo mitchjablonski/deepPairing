@@ -59,6 +59,21 @@ describe("#187 — addComment stamps followUp from the target artifact's status"
     expect(c.followUp).toBe(true);
   });
 
+  it("#209 (J1): the REAL resolve flow lands `approved` and keeps the late-comment lane open", () => {
+    // Go through the store's actual resolution path (not a hand-set status): the
+    // decision advances draft→approved, and because it landed on `approved`
+    // (not a trap status), a subsequent human comment is still a late follow-up.
+    store.createArtifact({ id: "art_flow", type: "decision", title: "cache?", content: {} });
+    store.recordDecisionRequest({
+      decisionId: "d_flow", artifactId: "art_flow", context: "cache?",
+      options: [{ id: "o1", title: "Redis" }],
+    });
+    store.resolveDecision("d_flow", "o1", "fastest");
+    expect(store.getArtifacts().find((a) => a.id === "art_flow")!.status).toBe("approved");
+    const c = store.addComment({ id: "cmt_flow", artifactId: "art_flow", content: "revisit next quarter?", author: "human" });
+    expect(c.followUp).toBe(true);
+  });
+
   it("DRAFT (under review): a normal review comment has NO followUp key (byte-identical on disk)", () => {
     seedArtifact("art_draft", "changeset", "draft");
     const c = store.addComment({ id: "cmt_4", artifactId: "art_draft", content: "needs work", author: "human" });

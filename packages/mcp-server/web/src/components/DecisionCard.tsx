@@ -45,6 +45,13 @@ interface DecisionCardProps {
    * confirmation states are preserved. Default false (draft/approved writable).
    */
   writeLocked?: boolean;
+  /**
+   * #209 (J1) — the agent's withdrawal reason (content.retractReason, stamped in
+   * G1). When the card is write-locked because the artifact was RETRACTED, the
+   * read-only footer renders "↩ Retracted by agent — <reason>", parity with the
+   * plan/status-panel renderer. Absent on non-retracted locks (replay/other).
+   */
+  retractReason?: string;
   onResolved?: () => void;
 }
 
@@ -75,7 +82,7 @@ type DecisionPhase =
   | { kind: "resolved"; optionId: string }
   | { kind: "sentBack" };
 
-export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, onResolved }: DecisionCardProps) {
+export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, retractReason, onResolved }: DecisionCardProps) {
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
@@ -706,6 +713,21 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         </div>
       )}
 
+      {/* #209 (J1) — a RETRACTED (write-locked) decision surfaces the agent's
+          withdrawal reason in its read-only footer, parity with the plan /
+          status-panel renderer ("↩ Retracted by agent — <reason>"). Gated on
+          writeLocked so it only shows on a closed decision, and on a non-empty
+          reason so an unexplained retract stays quiet. */}
+      {writeLocked && retractReason && (
+        <div className="mt-3 pt-2 border-t border-border-default flex items-start gap-2">
+          <span className="text-text-muted text-sm shrink-0" aria-hidden="true">↩</span>
+          <div className="space-y-0.5">
+            <div className="text-xs text-text-muted font-medium">Retracted by agent</div>
+            <div className="text-2xs text-text-muted italic">{retractReason}</div>
+          </div>
+        </div>
+      )}
+
       {/* X11 — escape-hatch footer (send-back + reasoning composers, tertiary
           affordance row). */}
       <DecisionFooter {...footerProps} />
@@ -817,6 +839,13 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
         stakes={dc.stakes}
         initialResolved={initialResolved}
         writeLocked={writeLocked}
+        retractReason={
+          artifact.status === "retracted"
+            ? (typeof (artifact.content as { retractReason?: unknown })?.retractReason === "string"
+                ? ((artifact.content as { retractReason?: string }).retractReason)
+                : undefined)
+            : undefined
+        }
       />
     </>
   );
