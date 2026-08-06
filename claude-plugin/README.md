@@ -1,9 +1,10 @@
 # deepPairing — Claude Code plugin
 
-Pair with Claude Code instead of reviewing its output after the fact. Structured
-artifacts (findings, specs, decisions, plans), a rejection gate that stops a
-concept you've turned down before the edit lands (hard in the project where you
-rejected it; an advisory flag cross-project), and a companion web UI (on a
+Catch the wrong approach before Claude Code writes it — not in a 500-line diff
+after. Structured artifacts (findings, specs, decisions, plans), a rejection gate
+that stops a concept you've turned down before the edit lands (hard in the
+project where you rejected it; an advisory flag cross-project), and a companion
+web UI (on a
 deterministic per-project port in `3847-3974`, derived from the project path —
 check `.deeppairing/daemon.json` for the actual one) for inline review and
 commenting.
