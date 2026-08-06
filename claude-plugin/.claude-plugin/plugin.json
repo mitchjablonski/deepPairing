@@ -1,7 +1,7 @@
 {
   "name": "deeppairing",
   "version": "0.1.27",
-  "description": "Pair with Claude Code instead of reviewing its output after the fact. Structured artifacts (findings, specs, decisions, plans) you approve before code lands, a rejection gate that stops a concept you've turned down before the edit lands in the project where you rejected it — and flags it cross-project (advisory) — and a companion web UI on a deterministic per-project port for inline review and commenting.",
+  "description": "Catch the wrong approach before Claude Code writes it — not in a 500-line diff after. Structured artifacts (findings, options, decisions, plans) you approve before code lands, a rejection gate that stops a concept you've turned down before the edit lands in the project where you rejected it — and flags it cross-project (advisory) — and a companion web UI on a deterministic per-project port for inline review and commenting.",
   "author": {
     "name": "deepPairing"
   },
@@ -9,13 +9,14 @@
   "repository": "https://github.com/mitchjablonski/deepPairing",
   "license": "MIT",
   "keywords": [
-    "pairing",
-    "pair-programming",
-    "collaboration",
-    "learning",
+    "human-in-the-loop",
+    "review-gate",
     "code-review",
-    "concept-naming",
-    "philosophy-ledger",
+    "plan-mode",
+    "approval-workflow",
+    "before-edit",
+    "claude-code",
+    "pair-programming",
     "mcp"
   ],
   "mcpServers": "./.mcp.json"

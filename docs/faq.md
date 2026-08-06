@@ -119,6 +119,28 @@ rich review that makes pairing *feel* like pairing needs the companion
 UI today, and the composed review system behind it regardless of which
 surface eventually renders it.
 
+## "How is this different from Claude Code's Plan Mode?"
+
+Plan Mode is good at what it does: draft a plan, wait for your
+go-ahead before touching code. The limit is that the plan is terminal
+text — you approve it or retype it, and once the session moves on it's
+gone. deepPairing makes the plan a **commentable artifact**: it lands
+in the companion UI as a checklist you comment on line by line, pick
+between options on, and reject approaches in — and the same review
+surface extends past the plan to the findings, the decisions, and the
+diffs. Two things Plan Mode doesn't do:
+
+- **It remembers your calls.** Reject an approach with a reason and
+  the stance is kept per-repo (and flagged, advisory, cross-project) —
+  so you don't re-litigate it next session.
+- **An enforced gate acts on the rejection.** Re-propose a concept you
+  turned down and a `PreToolUse` block stops it *before the edit
+  lands*, in the project where you made the call — not a plan you hope
+  the agent still honors.
+
+Plan Mode gets you one gate at the start; deepPairing keeps you in the
+loop at every decision that matters and remembers where you stood.
+
 ## "How is the Philosophy Ledger different from Claude Code's auto-memory?"
 
 Auto-memory is a **recall** the model is encouraged to consult.

@@ -1,13 +1,15 @@
 # deepPairing
 
-**Pair with Claude Code instead of reviewing its output after the fact.**
+**Catch the wrong approach before Claude Code writes it — not in a 500-line diff
+after.**
 
-Before Claude Code writes code, deepPairing shows you what it found, the options
-it weighed, and the plan it'll follow — as structured artifacts you approve or
-redirect in a local UI, not a wall of terminal text. Reject an approach once,
-with your reason, and a gate stops the agent from re-proposing that concept —
-before the edit lands, in the project where you rejected it — and flags it,
-advisory, on every other project.
+You pair with Claude Code instead of reviewing its output after the fact: before
+it writes code, deepPairing shows you what it found, the options it weighed, and
+the plan it'll follow — as structured artifacts you approve or redirect in a
+local UI, not a wall of terminal text. Reject an approach once, with your reason,
+and a gate stops the agent from re-proposing that concept — before the edit
+lands, in the project where you rejected it — and flags it, advisory, on every
+other project.
 
 *MIT · no account · no telemetry · 1,500+ tests · everything stays on your disk.*
 
@@ -198,6 +200,28 @@ the collaboration, not the headline:
   answer-back question loop. It's the only tool with a structured, commentable
   understanding artifact anchored to a live agent session with an answer-back
   loop. The review surface is the product; the loop is plumbing.
+
+## Beyond Plan Mode
+
+Claude Code's Plan Mode is good at what it does: it drafts a plan and waits for
+your go-ahead before touching code. But the plan is terminal text — you read it,
+approve it or retype it, and once the session moves on it's gone. deepPairing
+makes the plan a *thing you work*: it lands in the companion UI as a checklist
+you comment on line by line, pick between options on, and reject approaches in —
+and the same review surface extends past the plan to the findings, the
+decisions, and the diffs. Your calls don't evaporate when the session ends:
+reject an approach with a reason and it's remembered per-repo, and an enforced
+in-loop gate stops the agent from re-attempting what you already turned down —
+before the edit lands, not in the diff after. Plan Mode gets you one gate at the
+start; deepPairing keeps you in the loop at every decision that matters and
+remembers where you stood.
+
+|                                | Plan Mode          | deepPairing                          |
+| ------------------------------ | ------------------ | ------------------------------------ |
+| Where the plan lives           | Terminal text      | Commentable artifact in a local UI   |
+| You respond by                 | Approving/retyping | Inline comments, option picks, "why" |
+| Covers                         | The initial plan   | Findings, options, plans, diffs      |
+| Remembers your calls next time | No                 | Yes — per-repo, with a rejection gate |
 
 ## Install in Claude Code
 
