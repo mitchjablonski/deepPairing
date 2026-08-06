@@ -31645,6 +31645,14 @@ async function handlePresentCodeChange(ctx, args) {
   }
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
+  const allArtifacts = await ctx.store.getArtifacts();
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
+  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+  const hasOtherLiveFile = allArtifacts.some(
+    (a) => a.type === "code_change" && a.id !== id && !CODE_CLOSED.includes(a.status ?? "") && a.content?.filePath !== filePath
+  );
+  const changesetNudge = hasOtherLiveFile ? " 2nd file touched this run \u2014 the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief." : "";
   const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
   const isSmallEdit = changedLines <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
@@ -31659,14 +31667,12 @@ Decline to review the diff at http://localhost:${ctx.port}`
       await ctx.store.updateArtifactStatus(id, "approved");
       await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
       return {
-        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
       };
     }
   }
-  const closesTask = !sessionOwesDebrief(await ctx.store.getArtifacts());
-  const closeNote = closesTask ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -32338,7 +32344,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_debrief",
         annotations: { title: "Present debrief", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: 'At the end of a feature or autonomous run, present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: only `summary` is required; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes). SINGLE REVIEW SURFACE \u2014 don\'t re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.',
+        description: 'At the end of a feature or autonomous run (with one size carve-out \u2014 see Workflow), present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: only `summary` is required; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes) \u2014 exception: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change (no separate debrief). SINGLE REVIEW SURFACE \u2014 don\'t re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.',
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief)
