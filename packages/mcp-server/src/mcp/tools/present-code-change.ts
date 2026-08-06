@@ -97,10 +97,6 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // Computed ONCE here (before the terminal-approve branch) so both the
   // quick-approve and review return paths carry the same close-note (#215 K1).
   const allArtifacts = await ctx.store.getArtifacts();
-  const closesTask = !sessionOwesDebrief(allArtifacts);
-  const closeNote = closesTask
-    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
-    : "";
 
   // #215 K1 — the changeset nudge. When the session ALREADY carries a LIVE
   // code_change for a DIFFERENT filePath this run, the default fix (another
@@ -118,6 +114,17 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   );
   const changesetNudge = hasOtherLiveFile
     ? " 2nd file touched this run — the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief."
+    : "";
+
+  // AR-fix (#252 review) — closeNote and changesetNudge must never CO-FIRE. In
+  // the post-debrief follow-up lane a LIVE debrief short-circuits
+  // sessionOwesDebrief to false (closesTask=true), so a 2nd-file code_change
+  // presented AFTER a debrief would otherwise emit BOTH "no separate
+  // present_debrief owed" AND "close with a present_debrief". A distinct live
+  // file always means multi-file work → the nudge wins, closeNote is silent.
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile
+    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
     : "";
 
   // S7 — quick-approve via elicitation for small, confident edits.

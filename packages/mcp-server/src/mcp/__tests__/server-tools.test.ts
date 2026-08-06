@@ -323,6 +323,18 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
         const { text } = await callTool("present_code_change", change("/src/a.ts"));
         expect(text).not.toContain(NUDGE);
       });
+
+      // AR-fix (#252 review) — the co-fire hole: a LIVE debrief short-circuits
+      // sessionOwesDebrief to false, so a 2nd-file present AFTER a debrief used to
+      // emit BOTH the trivial close-note AND the nudge. The nudge must win alone.
+      it("post-debrief 2nd file: nudges WITHOUT the trivial close-note (no co-fire)", async () => {
+        await callTool("present_code_change", change("/src/a.ts"));
+        await callTool("present_debrief", { summary: "Shipped the /src/a.ts tweak." });
+        const { text } = await callTool("present_code_change", change("/src/b.ts"));
+        expect(text).toContain(NUDGE);
+        expect(text).not.toContain("no separate present_debrief owed");
+        expect(text).not.toContain("If this single-file change is the whole task");
+      });
     });
   });
 

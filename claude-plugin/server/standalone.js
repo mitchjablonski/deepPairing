@@ -31646,13 +31646,13 @@ async function handlePresentCodeChange(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   const allArtifacts = await ctx.store.getArtifacts();
-  const closesTask = !sessionOwesDebrief(allArtifacts);
-  const closeNote = closesTask ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
   const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
   const hasOtherLiveFile = allArtifacts.some(
     (a) => a.type === "code_change" && a.id !== id && !CODE_CLOSED.includes(a.status ?? "") && a.content?.filePath !== filePath
   );
   const changesetNudge = hasOtherLiveFile ? " 2nd file touched this run \u2014 the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief." : "";
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
   const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
   const isSmallEdit = changedLines <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
