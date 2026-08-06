@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DecisionOption } from "@deeppairing/shared";
 import { FileStore } from "../file-store.js";
+import type { DecisionRecord } from "../store-interface.js";
 
 let tmpDir: string;
 
@@ -416,6 +417,97 @@ describe("FileStore.listAllDecisions", () => {
       const { decisions } = FileStore.listAllDecisions(tmpDir);
       expect(decisions.find((x) => x.decisionId === "d_open")!.closedUnresolved).toBeUndefined();
       expect(decisions.find((x) => x.decisionId === "d_done")!.closedUnresolved).toBeUndefined();
+    });
+  });
+
+  // #209 (J1) — the status track and the resolution track must tell the same
+  // story. Resolving advances the artifact to `approved` store-side; a RETRACTED
+  // decision drops out of the "awaiting" bucket; and an OLD resolved-but-draft
+  // record still reads resolved (the read-side belt).
+  describe("decision-status honesty (J1, #209)", () => {
+    it("resolving a decision advances its backing artifact draft→approved store-side", () => {
+      const store = seedDecision("s_res", {
+        decisionId: "d_res", artifactId: "a1", context: "Which cache?",
+        resolveWith: { optionId: "o1", reasoning: "fastest" },
+      });
+      // The SINGLE store call did both: the response is recorded AND the artifact
+      // left draft — no observable resolved-but-draft window.
+      const art = store.getArtifacts().find((a) => a.id === "a1")!;
+      expect(art.status).toBe("approved");
+      // And the aggregate agrees it is resolved (not awaiting).
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      const d = decisions.find((x) => x.decisionId === "d_res")!;
+      expect(d.resolved).toBe(true);
+      expect(d.closedUnresolved).toBeUndefined();
+    });
+
+    it("does NOT clobber a decision artifact that is already CLOSED before resolve", () => {
+      const store = new FileStore(tmpDir, "s_closed");
+      store.createArtifact({ id: "a1", type: "decision", title: "Cache", content: {} });
+      store.recordDecisionRequest({ decisionId: "d_x", artifactId: "a1", context: "Which cache?", options: OPTS });
+      store.updateArtifactStatus("a1", "retracted", "agent_retract");
+      // A late/racing resolve must not resurrect a retracted artifact to approved.
+      store.resolveDecision("d_x", "o1");
+      store.forceFlush();
+      expect(store.getArtifacts().find((a) => a.id === "a1")!.status).toBe("retracted");
+    });
+
+    it("flags an UNRESOLVED decision whose origin artifact was RETRACTED, badged Withdrawn via closedStatus", () => {
+      const store = seedDecision("s_ret", {
+        decisionId: "d_wd", artifactId: "a1", context: "Which store?", title: "Store choice",
+      });
+      store.updateArtifactStatus("a1", "retracted", "agent_retract");
+      store.forceFlush();
+
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      const d = decisions.find((x) => x.decisionId === "d_wd")!;
+      // Excluded from the awaiting bucket…
+      expect(d.resolved).toBe(false);
+      expect(d.closedUnresolved).toBe(true);
+      // …and carries the terminal status so the view can badge it "Withdrawn".
+      expect(d.closedStatus).toBe("retracted");
+    });
+
+    it("flags rejected + obsolete origins too (every closed status leaves the awaiting bucket)", () => {
+      const store = seedDecision("s_multi", { decisionId: "d_rej", artifactId: "a1", context: "A" });
+      store.recordDecisionRequest({ decisionId: "d_obs", artifactId: "a2", context: "B", options: OPTS });
+      store.createArtifact({ id: "a2", type: "decision", title: "B", content: {} });
+      store.updateArtifactStatus("a1", "rejected", "agent_retract");
+      store.updateArtifactStatus("a2", "obsolete", "agent_retract");
+      store.forceFlush();
+
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      expect(decisions.find((x) => x.decisionId === "d_rej")!.closedUnresolved).toBe(true);
+      expect(decisions.find((x) => x.decisionId === "d_obs")!.closedUnresolved).toBe(true);
+    });
+
+    it("read-side belt: an OLD resolved-but-DRAFT record still reads resolved (no migration)", () => {
+      // Pre-J1 the store left a resolved decision's artifact in draft. Simulate
+      // that persisted shape via a live source (a hand-built record with a
+      // response over a still-draft artifact) — resolution-record-present must
+      // win over the stale draft status, so history renders right without a
+      // migration. resolveDecision can no longer PRODUCE this shape (it flips),
+      // so the belt is what keeps legacy data honest.
+      const legacy: DecisionRecord = {
+        decisionId: "d_legacy",
+        artifactId: "a1",
+        context: "legacy choice",
+        options: OPTS,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        resolvedAt: "2026-01-02T00:00:00.000Z",
+        response: { optionId: "o1", reasoning: "picked long ago" },
+      } as DecisionRecord;
+      const draftArtifact = {
+        id: "a1", type: "decision" as const, title: "Legacy", status: "draft" as const,
+        version: 1, content: {}, createdAt: "2026-01-01T00:00:00.000Z", sessionId: "s_legacy",
+      };
+      const { decisions } = FileStore.listAllDecisions(tmpDir, [
+        { sessionId: "s_legacy", decisions: [legacy], artifacts: [draftArtifact as never] },
+      ]);
+      const d = decisions.find((x) => x.decisionId === "d_legacy")!;
+      expect(d.resolved).toBe(true);
+      expect(d.closedUnresolved).toBeUndefined();
+      expect(d.chosenOptionTitle).toBe("Redis");
     });
   });
 });

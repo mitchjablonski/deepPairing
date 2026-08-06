@@ -620,7 +620,14 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
     decision_region_optionId: { prose: "162a7e68d53e4e7e2e7f1ba22827cec76f4dc9679447b2914cdf42dd3a0c2bbd", struct: "76cd0c12cdd435c9c222617bcb371b44e36d3fc5a5ce441d44dbb7d7dfbb9754" },
     suggestion_state_machine: { prose: "39ebef78697961ab901ba3dea151657bbf7b6dfd9fafdc0df92d570ba06af62f", struct: "d20ab0f846f419450309357d1b30844e32a40b3f03e1e105ccdac5aabd10db08" },
     followup_on_approved: { prose: "72317598460bd6f400d61671a7d293b641920fadbd4b2661483464de838a0089", struct: "6a2e15c5b446c698ce5d7c65b501615ce3b9e003da405b96e965fe7e18b2ec66" },
-    resolved_decision_verdict: { prose: "35b87b2f5e5249c83f92a667d105809398b39a701780e3cf2ec7404d70dc7f80", struct: "afe94a95e669369dcf79bd4ad42395ac57391708fff7faaa4e9f84cb68c587ea" },
+    // #209 (J1) — DELIBERATE re-pin. Resolving a decision now advances its
+    // backing artifact draft→approved store-side (the human PICKED an option =
+    // approval), so check_feedback honestly reports the status change alongside
+    // the selection. This matches what the PRODUCTION /api/decisions route
+    // already did (it flipped the artifact to approved after resolveDecision);
+    // the old golden under-modeled that end-to-end path by seeding via the
+    // store's resolve alone, which pre-J1 left the artifact stranded in draft.
+    resolved_decision_verdict: { prose: "922d5c8e1ca6cce2c0b9c5d984b6e4be72fbc8c7fc6901824c5e5d630151ebfe", struct: "1435cfa7ecaf585b68c45f060180611b71d5665132449945dfee01e2c0790b0a" },
     plan_verdict_and_status_change: { prose: "1168802c54dedd2053a9540b75c0e0781130a5613a6c0fa3a5bbd5fcee811659", struct: "821c6892c1ed5494141fcc6a261883448788f82134ff17851cba66b2f98eaa8f" },
     rejected_artifacts: { prose: "2c6c6c46465869df2603d0a58f09cc6c406809743dd8022ebf4db1557c0c3214", struct: "5b7f19c3cd653f6b7f2a130f56f7bc360f11b435dc5ab709e80d036fa51bb2d5" },
     render_failures: { prose: "2af7667132a1640f6544a8af05ce2d17268cb943bf6aeec20394ff51ccc5388b", struct: "741a170e295d6aad143c82a15af79f9663b6e0b96d8f2070dbbca58393d26e14" },

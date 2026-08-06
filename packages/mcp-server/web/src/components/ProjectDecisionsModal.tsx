@@ -35,10 +35,34 @@ interface ProjectDecision {
   // unknown" rather than a fabricated one.
   createdAt?: string;
   resolvedAt?: string;
-  // #153 (S5) — unresolved AND its origin artifact was superseded: it can
-  // never resolve, so render "Superseded (never resolved)" instead of a
-  // permanent "Awaiting your decision" pill.
+  // #153 (S5) / #209 (J1) — unresolved AND its origin artifact is CLOSED
+  // (superseded, retracted, rejected, obsolete): it can never resolve, so render
+  // a non-nagging history state instead of a permanent "Awaiting your decision"
+  // pill. `closedStatus` names WHICH terminal state so the badge words itself
+  // honestly (retracted → "Withdrawn", superseded → "Superseded (never
+  // resolved)"). Both optional for back-compat.
   closedUnresolved?: boolean;
+  closedStatus?: "superseded" | "retracted" | "rejected" | "obsolete" | string;
+}
+
+// #209 (J1) — the closed-decision badge label, keyed on the terminal status.
+// A retracted decision reads "Withdrawn" (parity with the write-lock wording),
+// superseded keeps its established "Superseded (never resolved)" phrasing.
+// BACK-COMPAT: before J1, `closedUnresolved` ONLY ever meant superseded (S5), so
+// a record carrying the flag WITHOUT `closedStatus` (older payload) must keep the
+// historical superseded wording — never fall through to "Withdrawn".
+function closedBadgeLabel(status?: string): string {
+  switch (status) {
+    case "retracted":
+      return "Withdrawn";
+    case "rejected":
+      return "Withdrawn";
+    case "obsolete":
+      return "Obsolete";
+    case "superseded":
+    default:
+      return "Superseded (never resolved)";
+  }
 }
 
 interface ProjectDecisionsResult {
@@ -246,11 +270,13 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
                             </span>
                           </span>
                         ) : d.closedUnresolved ? (
-                          // #153 (S5) — the origin artifact was superseded while
-                          // this was unresolved: it can never resolve, so don't
-                          // show a permanently-lit "awaiting" pill.
+                          // #153 (S5) / #209 (J1) — the origin artifact reached a
+                          // terminal closed state (superseded/retracted/…) while
+                          // this was unresolved: it can never resolve, so show a
+                          // muted history badge, NOT a permanently-lit "awaiting"
+                          // pill. The label is keyed on the terminal status.
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-semibold bg-surface-secondary text-text-muted">
-                            Superseded (never resolved)
+                            {closedBadgeLabel(d.closedStatus)}
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-semibold bg-accent-amber-dim text-accent-amber">

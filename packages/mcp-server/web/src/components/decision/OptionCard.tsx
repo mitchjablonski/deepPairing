@@ -57,14 +57,24 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
       // X11 — affordance hierarchy. Recommended option gets a
       // visible "Recommended" pill + a violet border that matches
       // the card frame, so it reads as the primary path at a glance.
+      // #209 (J1, round-5 L-6) — a WRITE-LOCKED (retracted/replayed) option must
+      // not wear the armed highlight: the bright focused-blue ring reads as
+      // "click me", and the full-strength "Recommended" violet reads as the live
+      // primary path. When locked, drop BOTH — no focused blue, no hover
+      // brighten, and dim the recommended border/tint to a quiet residue so the
+      // card still shows WHICH option was recommended without inviting a click.
       className={`text-left p-3 border-2 rounded-lg transition-all duration-[180ms] ease-out relative ${
         submitting ? "opacity-50" : ""
       } ${
-        focused
-          ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
-          : option.recommendation
-            ? "border-accent-violet/50 bg-accent-violet-dim/15 hover:border-accent-violet/70 shadow-[0_0_0_1px_rgba(124,92,252,0.08)]"
-            : "border-white/[0.06] bg-surface-elevated hover:border-white/[0.1]"
+        locked
+          ? option.recommendation
+            ? "border-accent-violet/20 bg-accent-violet-dim/[0.06]"
+            : "border-white/[0.06] bg-surface-elevated"
+          : focused
+            ? "border-accent-blue bg-accent-blue-dim/40 ring-1 ring-accent-blue/50"
+            : option.recommendation
+              ? "border-accent-violet/50 bg-accent-violet-dim/15 hover:border-accent-violet/70 shadow-[0_0_0_1px_rgba(124,92,252,0.08)]"
+              : "border-white/[0.06] bg-surface-elevated hover:border-white/[0.1]"
       }`}
       onMouseEnter={() => onFocus(index)}
       // U4 — keep the visual highlight (focusedIndex) in lockstep with
@@ -80,7 +90,11 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
           <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
           {option.recommendation && (
             <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-violet-strong text-white rounded"
+              // #209 (J1, L-6) — a locked card dims the pill too (muted, not the
+              // bright violet fill) so the whole option stops reading as armed.
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold rounded ${
+                locked ? "bg-surface-secondary text-text-muted" : "bg-accent-violet-strong text-white"
+              }`}
               title="Agent recommends this option"
             >
               <span aria-hidden>★</span>

@@ -317,6 +317,19 @@ describe("groupByFeature — aggregates", () => {
     expect(m6.openItemCount).toBe(0);
   });
 
+  // #209 (J1) — broadened from superseded-only: a RETRACTED (or otherwise
+  // closed) decision can never resolve, so it must NOT keep inflating the
+  // feature's open-item count either.
+  it("a decision whose origin artifact was RETRACTED is NOT an open item", () => {
+    writeSession(
+      "s1",
+      [art({ id: "dec1", title: "Milestone 6 — choice", type: "decision", status: "retracted" })],
+      [{ decisionId: "d1", artifactId: "dec1", context: "?", options: [], createdAt: "2026-01-01T00:00:00.000Z" }],
+    );
+    const m6 = groupByFeature(tmpDir).groups.find((g) => g.id === "milestone-6")!;
+    expect(m6.openItemCount).toBe(0);
+  });
+
   it("unions code_change.filePath + changeset.files[].path, deduped + sorted, with cross-group 'alsoIn'", () => {
     writeSession("s1", [
       art({ id: "a1", title: "Milestone 6 — edit", type: "code_change", content: { filePath: "src/b.ts" } }),

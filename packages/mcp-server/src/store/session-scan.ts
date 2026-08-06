@@ -245,11 +245,37 @@ export interface ProjectDecision {
   resolvedAt?: string;
   /**
    * #153 (S5) — true when the decision is UNRESOLVED but its origin artifact
-   * was superseded: the artifact is closed, so the decision can never resolve.
-   * The view renders "Superseded (never resolved)" instead of a permanent
-   * "Awaiting your decision" pill. Optional for back-compat (absent = open).
+   * is CLOSED (superseded, retracted, rejected, or obsolete): the artifact can
+   * never resolve, so the view renders a non-nagging history state instead of a
+   * permanent "Awaiting your decision" pill. Optional for back-compat (absent =
+   * open). #209 (J1) broadened this from superseded-only to every closed status
+   * so a RETRACTED decision stops counting as awaiting.
    */
   closedUnresolved?: boolean;
+  /**
+   * #209 (J1) — the CLOSED artifact's terminal status (only set alongside
+   * `closedUnresolved`), so the view can word the badge honestly:
+   * retracted → "Withdrawn", superseded → "Superseded (never resolved)", etc.
+   * Optional for back-compat (absent → the generic closed wording).
+   */
+  closedStatus?: Artifact["status"];
+}
+
+/**
+ * #209 (J1) — the terminal, non-reopenable artifact statuses. A pending decision
+ * whose backing artifact reached one of these can never resolve, so it is NOT an
+ * "awaiting your decision" item. Mirrors FileStore.isArtifactClosed (the two must
+ * agree, but session-scan is store-less so it can't reuse the private method).
+ */
+const CLOSED_ARTIFACT_STATUSES: ReadonlySet<Artifact["status"]> = new Set([
+  "superseded",
+  "retracted",
+  "rejected",
+  "obsolete",
+]);
+
+function isClosedArtifactStatus(status: Artifact["status"] | undefined): boolean {
+  return status !== undefined && CLOSED_ARTIFACT_STATUSES.has(status);
 }
 
 export interface ProjectDecisionsResult {
@@ -346,11 +372,13 @@ export function listAllDecisions(
       const chosen = dec.response
         ? options.find((o) => o?.id === dec.response!.optionId)
         : undefined;
-      // #153 (S5) — an UNRESOLVED decision whose origin artifact was
-      // superseded can never resolve (the artifact is closed); flag it so the
-      // view doesn't render a permanent "Awaiting your decision" pill.
+      // #153 (S5) / #209 (J1) — an UNRESOLVED decision whose origin artifact is
+      // CLOSED (superseded, retracted, rejected, obsolete) can never resolve, so
+      // flag it out of the "awaiting" bucket. Broadened from superseded-only so a
+      // retracted decision stops reading as "Awaiting your decision"; carry the
+      // terminal status so the view can badge it ("Withdrawn" for retracted).
       const origin = artifacts.find((a) => a.id === dec.artifactId);
-      const closedUnresolved = !dec.response && origin?.status === "superseded";
+      const closedUnresolved = !dec.response && isClosedArtifactStatus(origin?.status);
       decisions.push({
         decisionId: dec.decisionId,
         sessionId,
@@ -372,7 +400,7 @@ export function listAllDecisions(
         confidence: dec.response?.confidence,
         createdAt: dec.createdAt,
         resolvedAt: dec.resolvedAt,
-        ...(closedUnresolved ? { closedUnresolved: true } : {}),
+        ...(closedUnresolved ? { closedUnresolved: true, closedStatus: origin?.status } : {}),
       });
     }
   };
@@ -1037,9 +1065,11 @@ export function groupByFeature(
     for (const dec of scan.decisions) {
       if (dec.response) continue; // resolved
       const origin = artById.get(dec.artifactId);
-      // closedUnresolved (origin superseded) can never resolve — not an
-      // actionable open item; skip it (mirrors listAllDecisions' flag).
-      if (origin?.status === "superseded") continue;
+      // closedUnresolved (origin superseded/retracted/rejected/obsolete) can
+      // never resolve — not an actionable open item; skip it (mirrors
+      // listAllDecisions' flag). #209 (J1) broadened from superseded-only so a
+      // retracted decision drops out of the Features open-items count too.
+      if (isClosedArtifactStatus(origin?.status)) continue;
       const cid = composite(scan.sessionId, dec.artifactId);
       const groupId = groupIdForArtifact.get(cid);
       if (!groupId) continue; // decision references an unknown/dropped artifact

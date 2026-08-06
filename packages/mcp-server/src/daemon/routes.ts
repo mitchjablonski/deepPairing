@@ -780,7 +780,12 @@ export function createDaemonRoutes(
     if (r.store.getDecision(decisionId) && r.store.getDecisionResponse(decisionId)?.optionId !== optionId) {
       return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
     }
-    broadcast(sessionId, { type: "decision_resolved", decisionId, optionId, reasoning, confidence, predictedOutcome });
+    // #209 (J1) — carry the backing artifactId so the web's decision_resolved
+    // handler can flip the status pill to `approved` in an open tab (the store
+    // already advanced it on disk; this closes the live-update gap that left
+    // this path — unlike the public route — broadcasting no artifactId at all).
+    const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
 

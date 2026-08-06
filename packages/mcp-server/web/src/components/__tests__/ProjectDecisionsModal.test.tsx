@@ -138,6 +138,21 @@ describe("ProjectDecisionsModal", () => {
     expect(screen.queryByText(/awaiting your decision/i)).not.toBeInTheDocument();
   });
 
+  // #209 (J1) — a RETRACTED decision is out of the awaiting bucket and badged
+  // "Withdrawn" (keyed on closedStatus), never a permanent "Awaiting" pill.
+  it("renders 'Withdrawn' instead of the awaiting pill for a retracted (closedStatus) decision", async () => {
+    const withdrawn = {
+      ...UNRESOLVED, decisionId: "d5", context: "Withdrawn before anyone chose",
+      closedUnresolved: true, closedStatus: "retracted",
+    };
+    stubDecisions({ decisions: [withdrawn], failedSessions: [] });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Withdrawn before anyone chose")).toBeInTheDocument());
+    expect(screen.getByText(/^Withdrawn$/)).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting your decision/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/superseded/i)).not.toBeInTheDocument();
+  });
+
   // #153 — the recovered-corruption case keeps the honest-partial banner
   // truthful after a session re-open rewrote a fresh valid decisions.json.
   it("words the partial banner for a recovered-from-corruption session and points at the sidecar", async () => {

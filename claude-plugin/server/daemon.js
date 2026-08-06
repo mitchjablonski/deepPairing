@@ -24898,6 +24898,15 @@ function searchAll(projectRoot2, query, limit = 50) {
   }
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
 }
+var CLOSED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
+  "superseded",
+  "retracted",
+  "rejected",
+  "obsolete"
+]);
+function isClosedArtifactStatus(status) {
+  return status !== void 0 && CLOSED_ARTIFACT_STATUSES.has(status);
+}
 function resolveLiveArtifact(artifacts, id) {
   let current = artifacts.find((a) => a.id === id);
   const seen = /* @__PURE__ */ new Set();
@@ -24921,7 +24930,7 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       const options = Array.isArray(dec.options) ? dec.options : [];
       const chosen = dec.response ? options.find((o) => o?.id === dec.response.optionId) : void 0;
       const origin = artifacts.find((a) => a.id === dec.artifactId);
-      const closedUnresolved = !dec.response && origin?.status === "superseded";
+      const closedUnresolved = !dec.response && isClosedArtifactStatus(origin?.status);
       decisions.push({
         decisionId: dec.decisionId,
         sessionId,
@@ -24941,7 +24950,7 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
         confidence: dec.response?.confidence,
         createdAt: dec.createdAt,
         resolvedAt: dec.resolvedAt,
-        ...closedUnresolved ? { closedUnresolved: true } : {}
+        ...closedUnresolved ? { closedUnresolved: true, closedStatus: origin?.status } : {}
       });
     }
   };
@@ -25265,7 +25274,7 @@ function groupByFeature(projectRoot2, overrides = {}) {
     for (const dec of scan.decisions) {
       if (dec.response) continue;
       const origin = artById.get(dec.artifactId);
-      if (origin?.status === "superseded") continue;
+      if (isClosedArtifactStatus(origin?.status)) continue;
       const cid = composite(scan.sessionId, dec.artifactId);
       const groupId = groupIdForArtifact.get(cid);
       if (!groupId) continue;
@@ -26381,6 +26390,10 @@ var FileStore = class _FileStore {
       predictedOutcome: prediction?.predictedOutcome
     };
     dec.resolvedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const backing = this.artifacts.find((a) => a.id === dec.artifactId);
+    if (backing && (backing.status === "draft" || backing.status === "reviewing")) {
+      this.updateArtifactStatus(dec.artifactId, "approved", "ui_decision_resolve");
+    }
     this.scheduleFlush();
     this.notifyFeedbackWaiters();
   }
@@ -28308,7 +28321,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       targetArtifactId = art?.id;
     }
     if (targetArtifactId) {
-      await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+      if (!decision) {
+        await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+      }
       await maybeUpdateTaskStatus(null, targetArtifactId, store);
     }
     broadcast({
@@ -29731,7 +29746,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (r.store.getDecision(decisionId) && r.store.getDecisionResponse(decisionId)?.optionId !== optionId) {
       return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
     }
-    broadcast(sessionId, { type: "decision_resolved", decisionId, optionId, reasoning, confidence, predictedOutcome });
+    const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
   app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {
