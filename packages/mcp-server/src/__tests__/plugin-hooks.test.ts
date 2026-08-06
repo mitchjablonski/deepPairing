@@ -159,4 +159,42 @@ describe("plugin hook bundles (smoke)", () => {
     // A debrief exists → the debrief-owed condition is satisfied, so no nag.
     expect(state.fires.at(-1).reason).not.toMatch(/owes debrief/);
   });
+
+  it.skipIf(!bundlesBuilt)("#210 J2a — a single approved code_change does NOT nag (trivial single-file close)", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([{ id: "c1", type: "code_change", status: "approved", createdAt: new Date().toISOString() }]),
+    );
+    runHook(stopBundle, "");
+    const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
+    // The trivial case self-summarizes — it owes no separate debrief.
+    expect(state.fires.at(-1).reason).not.toMatch(/owes debrief/);
+    expect(state.fires.at(-1).reason).toMatch(/no blocking drafts/);
+  });
+
+  it.skipIf(!bundlesBuilt)("#210 J2a — TWO approved code_changes DO nag debrief-owed (escalated)", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([
+        { id: "c1", type: "code_change", status: "approved", createdAt: new Date().toISOString() },
+        { id: "c2", type: "code_change", status: "approved", createdAt: new Date().toISOString() },
+      ]),
+    );
+    runHook(stopBundle, "");
+    const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
+    expect(state.fires.at(-1).reason).toMatch(/owes debrief/);
+  });
+
+  it.skipIf(!bundlesBuilt)("#210 J2a — a single code_change + a decision DOES nag (a decision escalates)", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([
+        { id: "c1", type: "code_change", status: "approved", createdAt: new Date().toISOString() },
+        { id: "d1", type: "decision", status: "approved", createdAt: new Date().toISOString() },
+      ]),
+    );
+    runHook(stopBundle, "");
+    const state = JSON.parse(fs.readFileSync(path.join(scratch, ".deeppairing", "hooks-state.json"), "utf-8"));
+    expect(state.fires.at(-1).reason).toMatch(/owes debrief/);
+  });
 });

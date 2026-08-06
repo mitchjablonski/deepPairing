@@ -90,6 +90,23 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     expect(hint).toMatch(/present_changeset at feature boundaries by default/);
   });
 
+  it("#210 J2a — SKILL.md AND the assembled hint carry the size carve-out (trivial single-file close)", async () => {
+    const skill = readSkill();
+    const hint = await assembleAllHints();
+    // The floor sentence stays absolute (also pinned above/below); the carve-out
+    // drops ONLY the separate closing debrief for a single-file, no-decision,
+    // surgical fix. Pin the carve-out present in BOTH guidance surfaces so a
+    // future edit can't silently re-absolutize the debrief obligation.
+    expect(skill).toMatch(/single-file, no-decision,? surgical fix/);
+    expect(skill).toMatch(/self-summarizing `present_code_change`/);
+    expect(hint).toMatch(/single-file, no-decision surgical fix closes with its own self-summarizing present_code_change/);
+    // …and the carve-out is present in EVERY dial's FLOOR restatement (balanced +
+    // autonomous each restate "end the feature with present_debrief").
+    const carveOuts = hint.match(/single-file, no-decision surgical fix closes with its own self-summarizing present_code_change/g) ?? [];
+    // preamble headline + step 7 + balanced FLOOR + autonomous FLOOR = at least 4.
+    expect(carveOuts.length).toBeGreaterThanOrEqual(4);
+  });
+
   it("NEITHER SKILL.md NOR the assembled hint contains a stale per-edit mandate", async () => {
     const skill = readSkill();
     const hint = await assembleAllHints();

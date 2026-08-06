@@ -27520,15 +27520,15 @@ var PROTOCOL_PREAMBLE = [
   'Voice: write TO your pair in second person ("which fits?"), not ABOUT them ("User asked X") \u2014 a conversation, not an audit log.',
   // L2 — close-the-loop headline: the two highest-value rules, up top where they
   // won't lose the reading lottery to the visuals paragraph below.
-  "Close the loop \u2014 two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief.",
+  "Close the loop \u2014 two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead \u2014 no separate debrief).",
   "Happy path, in order:",
   "  1. recall (mode='any') \u2014 check prior stances/decisions before proposing.",
   "  2. present_findings \u2014 after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
   "  3. check_feedback \u2014 poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options \u2014 each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
   "  5. present_spec, then present_plan \u2014 non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first. Don't stream a log_reasoning card per step \u2014 name concepts in the debrief.",
-  "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE: what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
+  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning \u2014 no separate debrief). Don't stream a log_reasoning card per step \u2014 name concepts in the debrief.",
+  "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again \u2014 let your pair review in the UI.",
   "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer \u2014 a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made).",
   "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content \u2014 don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
@@ -27555,13 +27555,13 @@ var AUTONOMY_HINT_BALANCED = [
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs \u2014 not routine implementation choices with one reasonable answer.",
   "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings \u2192 options \u2192 spec/plan.",
-  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; this dial trims findings/options, never the review record."
+  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief (a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead); this dial trims findings/options, never the review record."
 ].join("\n");
 var AUTONOMY_HINT_AUTONOMOUS = [
   `
 \u{1F39A} Autonomy: AUTONOMOUS \u2014 the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
   "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
-  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; the human reviews the artifact, not raw edits on disk.",
+  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief (a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead); the human reviews the artifact, not raw edits on disk.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths."
 ].join("\n");
 function autonomyHintFor(level) {
@@ -30303,6 +30303,20 @@ async function recordRejectedOption(store, broadcast, params) {
   broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
 }
 
+// src/debrief-gate.ts
+function sessionOwesDebrief(artifacts, isRecent = () => true) {
+  if (artifacts.some((a) => a?.type === "debrief")) return false;
+  const recentCode = artifacts.filter(
+    (a) => (a?.type === "code_change" || a?.type === "changeset") && isRecent(a)
+  );
+  if (recentCode.length === 0) return false;
+  const changesets = recentCode.filter((a) => a?.type === "changeset").length;
+  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;
+  const hasDecision = artifacts.some((a) => a?.type === "decision");
+  const trivial = changesets === 0 && codeChanges === 1 && !hasDecision;
+  return !trivial;
+}
+
 // src/mcp/tools/check-feedback.ts
 function ledgerHealthField() {
   try {
@@ -30521,15 +30535,14 @@ async function handleCheckFeedback(ctx, args) {
   if (newComments.length > 0 && pendingArts.length > 0) {
     suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
   }
-  const hasCodeWork = allArtifacts.some((a) => a.type === "changeset" || a.type === "code_change");
-  const hasDebrief = allArtifacts.some((a) => a.type === "debrief");
+  const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
   let hasUnansweredQuestions = openQuestionCount > 0;
   try {
     const full = await store.getFullState();
     hasUnansweredQuestions = collectUnansweredQuestions(full.comments ?? []).length > 0;
   } catch {
   }
-  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && hasCodeWork && !hasDebrief;
+  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && shapeOwesDebrief;
   if (owesDebrief) {
     suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
   }
@@ -31644,8 +31657,10 @@ Decline to review the diff at http://localhost:${ctx.port}`
       };
     }
   }
+  const closesTask = !sessionOwesDebrief(await ctx.store.getArtifacts());
+  const closeNote = closesTask ? " This single-file surgical change self-summarizes and closes the task \u2014 fold the what-changed-and-why into `reasoning`; no separate present_debrief is owed." : "";
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 

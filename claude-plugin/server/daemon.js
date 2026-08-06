@@ -5150,15 +5150,24 @@ try {
       // exit 2 showed Claude only an empty-stderr "Stop hook error".
       exit(0, "pending artifacts in " + id);
     }
-    // #195 F1 \u2014 debrief-owed: RECENT code work presented, no debrief yet.
+    // #195 F1 + J2a (#210) \u2014 debrief-owed: RECENT code work presented, no
+    // debrief yet \u2014 BUT ceremony scales with task size. INLINE TWIN of
+    // sessionOwesDebrief (debrief-gate.ts): a trivial single-file surgical fix
+    // (exactly one code_change, no changeset, no decision) owes NO separate
+    // debrief; a changeset, 2+ code_changes, or a decision escalates. Kept in
+    // lock-step with the bundled copy by stop-hook-debrief-parity.test.ts.
     if (owesDebriefSession === null) {
-      const hasRecentCode = arr.some((x) => {
+      const hasDebrief = arr.some((x) => x.type === "debrief");
+      const recentCode = arr.filter((x) => {
         if (!["code_change", "changeset"].includes(x.type)) return false;
         const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
       });
-      const hasDebrief = arr.some((x) => x.type === "debrief");
-      if (hasRecentCode && !hasDebrief) owesDebriefSession = id;
+      const changesets = recentCode.filter((x) => x.type === "changeset").length;
+      const codeChanges = recentCode.filter((x) => x.type === "code_change").length;
+      const hasDecision = arr.some((x) => x.type === "decision");
+      const trivial = changesets === 0 && codeChanges === 1 && !hasDecision;
+      if (!hasDebrief && recentCode.length > 0 && !trivial) owesDebriefSession = id;
     }
   }
   if (owesDebriefSession !== null) {
