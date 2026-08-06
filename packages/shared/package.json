@@ -23,6 +23,9 @@
     "dist/",
     "src/"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "deeppairing",
     "schemas",

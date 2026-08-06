@@ -65,8 +65,10 @@ Two rhythms, and they're different:
   are the *exceptions*, not the beat. **Ceremony scales with task size:** the one
   case that skips the closing debrief is a single-file, no-decision, surgical fix
   — that self-summarizing `present_code_change` IS the comprehension surface, so
-  it owes no separate debrief. Everything larger (2+ files, any real decision, a
-  spec or plan, a guardrail-path file) owes the debrief. The review floor never
+  it owes no separate debrief. Everything larger — 2+ files, any real decision, a
+  spec or plan — owes the debrief; and a change touching guardrail paths
+  (migrations, CI, secrets) deserves the full arc too — use your judgment (the
+  preflight gate will escalate the edit itself regardless). The review floor never
   scales away:
   code is presented for review before it lands at every size.
 - **Tag every artifact with its `feature`.** When your work spans more than one
@@ -149,16 +151,19 @@ Two rhythms, and they're different:
   small/surgical diff — this ONE card both presents the change for review AND
   closes the task: fold the what-changed-and-why (the debrief narrative in
   miniature) into its `reasoning`, and no separate `present_debrief` is owed. The
-  moment the work escalates (a second file, a real decision, a spec or plan, a
-  guardrail-path file, or the human asks for more), you're back to the full arc
+  moment the work escalates (a second file, a real decision, a spec or plan, or
+  the human asks for more) — or your judgment says a change touching guardrail
+  paths (migrations, CI, secrets) warrants it (the preflight gate escalates the
+  edit itself regardless) — you're back to the full arc
   — batch into a `present_changeset` and end with one `present_debrief`.
 - **`present_debrief`** — **END EVERY feature or autonomous run with exactly
   ONE** — with a single size carve-out: a **single-file, no-decision, surgical
   fix** closes with its own self-summarizing `present_code_change` instead (the
   what-changed-and-why folded into its `reasoning`), so no separate debrief is
-  owed. ANYTHING larger — 2+ files, a real decision, a spec or plan, a
-  guardrail-path file, or the human asking for more — owes the full arc, ending
-  in exactly ONE debrief.
+  owed. ANYTHING larger — 2+ files, a real decision, a spec or plan, or the
+  human asking for more — owes the full arc, ending in exactly ONE debrief; a
+  change touching guardrail paths (migrations, CI, secrets) deserves it too —
+  use your judgment (the preflight gate escalates the edit itself regardless).
   (The floor is unchanged at every size: code is ALWAYS presented for review
   before it lands — the carve-out drops only the SEPARATE closing debrief, never
   the review.) This is the primary comprehension surface (the thesis's 80% case):

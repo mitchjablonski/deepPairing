@@ -33,6 +33,32 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # K1 (#215) — pin the npm publish SHAPE so a refactor can't silently drop the
+      # runnable entrypoint. `npm pack --dry-run` runs AFTER build (dist/ exists) and
+      # does NOT trigger prepublishOnly, so it reflects exactly what `npm publish`
+      # would ship. Assert the tarball carries the server entry + built web UI, and
+      # that the bin map keeps the scope-stripped "mcp-server" name (npx -y
+      # @deeppairing/mcp-server resolves the bin by the unscoped name). Dependency-free.
+      - name: Publish-shape gate (npm pack shape is pinned)
+        working-directory: packages/mcp-server
+        run: |
+          npm pack --dry-run --json > /tmp/dp-pack.json
+          node -e '
+            const fs = require("node:fs");
+            const pack = JSON.parse(fs.readFileSync("/tmp/dp-pack.json", "utf8"));
+            const entry = Array.isArray(pack) ? pack[0] : pack;
+            const files = (entry.files || []).map((f) => f.path);
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const need = ["dist/standalone.js", "dist/web/index.html"];
+            const errs = [];
+            for (const p of need) if (!files.includes(p)) errs.push("tarball is missing " + p);
+            if (!(pkg.bin && pkg.bin["mcp-server"] === "./dist/standalone.js")) {
+              errs.push("package.json bin must map \"mcp-server\" -> ./dist/standalone.js");
+            }
+            if (errs.length) { console.error("::error::publish-shape gate failed — " + errs.join("; ")); process.exit(1); }
+            console.log("publish-shape OK: " + need.join(" + ") + " packed; bin[mcp-server] set");
+          '
+
       # E1 — claude-plugin/server/ is generated-but-committed (the marketplace
       # ships the git repo). A stale bundle means marketplace users run old
       # code; fail loudly instead.

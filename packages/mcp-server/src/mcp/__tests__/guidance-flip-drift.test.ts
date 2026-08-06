@@ -16,7 +16,10 @@
  * false-fail. Needles are specific full sentences, not loose substrings.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildFirstCallHint } from "../first-call-hint.js";
+import { createMcpServer } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import fs from "node:fs";
@@ -50,6 +53,22 @@ async function assembleAllHints(): Promise<string> {
   store.setDetailDensity("terse");
   parts.push(await buildFirstCallHint(store, 4000));
   return parts.join("\n");
+}
+
+/** List the live MCP tool descriptions (the highest-visibility guidance surface —
+ *  injected every tool-use turn) via an in-memory client, so the drift net covers
+ *  the COMPILED tool-description strings too, not just SKILL.md + the hint. */
+async function readToolDescriptions(): Promise<Record<string, string>> {
+  const { server } = createMcpServer(store, () => {}, 4000);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: "drift-test", version: "1.0" });
+  await client.connect(clientTransport);
+  const { tools } = await client.listTools();
+  const out: Record<string, string> = {};
+  for (const t of tools) out[t.name] = t.description ?? "";
+  await client.close();
+  return out;
 }
 
 function readSkill(): string {
@@ -105,6 +124,15 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     const carveOuts = hint.match(/single-file, no-decision surgical fix closes with its own self-summarizing present_code_change/g) ?? [];
     // preamble headline + step 7 + balanced FLOOR + autonomous FLOOR = at least 4.
     expect(carveOuts.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("#215 K1 — the present_debrief tool description carries the size carve-out (tool-desc drift net)", async () => {
+    // F1-class fix: the tool description is injected every tool-use turn — the
+    // highest-visibility guidance surface. It must honor the trivial-task carve-out
+    // the preamble/SKILL/nags already carry, not re-absolutize "END EVERY … debrief".
+    const descriptions = await readToolDescriptions();
+    const debrief = descriptions["present_debrief"] ?? "";
+    expect(debrief).toMatch(/single-file, no-decision surgical fix closes with its own self-summarizing present_code_change/);
   });
 
   it("NEITHER SKILL.md NOR the assembled hint contains a stale per-edit mandate", async () => {

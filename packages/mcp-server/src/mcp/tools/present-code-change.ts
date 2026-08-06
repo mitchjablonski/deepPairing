@@ -85,6 +85,48 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
 
+  // J2a (#210) — ceremony scales with the task. When THIS is the trivial shape
+  // (the session's only live code artifact is this one code_change, no
+  // changeset, no decision/spec/plan), it CAN self-summarize and close the
+  // task. F3 — the note is CONDITIONAL: this may be the first of a planned
+  // sequence, so we must NOT signal completion outright. Phrase it as "if this
+  // is the whole task…" so the carve-out stays teachable without mis-signaling.
+  // NEVER echo "end with present_debrief" here (unlike present_changeset, which
+  // always owes one). If the shape has already escalated, stay silent on the
+  // debrief — the changeset/check_feedback surfaces carry that rule.
+  // Computed ONCE here (before the terminal-approve branch) so both the
+  // quick-approve and review return paths carry the same close-note (#215 K1).
+  const allArtifacts = await ctx.store.getArtifacts();
+
+  // #215 K1 — the changeset nudge. When the session ALREADY carries a LIVE
+  // code_change for a DIFFERENT filePath this run, the default fix (another
+  // per-file card) is the wrong shape: multi-file work belongs in ONE
+  // present_changeset. Live = not superseded/retracted/obsolete; a re-present of
+  // the SAME file (or a superseded prior of it) is not a distinct file, so it
+  // doesn't trip the nudge. Reuses the getArtifacts() read above.
+  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+  const hasOtherLiveFile = allArtifacts.some(
+    (a) =>
+      a.type === "code_change" &&
+      a.id !== id &&
+      !CODE_CLOSED.includes(a.status ?? "") &&
+      (a.content as any)?.filePath !== filePath,
+  );
+  const changesetNudge = hasOtherLiveFile
+    ? " 2nd file touched this run — the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief."
+    : "";
+
+  // AR-fix (#252 review) — closeNote and changesetNudge must never CO-FIRE. In
+  // the post-debrief follow-up lane a LIVE debrief short-circuits
+  // sessionOwesDebrief to false (closesTask=true), so a 2nd-file code_change
+  // presented AFTER a debrief would otherwise emit BOTH "no separate
+  // present_debrief owed" AND "close with a present_debrief". A distinct live
+  // file always means multi-file work → the nudge wins, closeNote is silent.
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile
+    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
+    : "";
+
   // S7 — quick-approve via elicitation for small, confident edits.
   // Threshold: ≤ 20 changed lines AND no low-confidence flag. Bigger or
   // hedged changes route straight to the companion UI where the diff +
@@ -104,25 +146,12 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
       await ctx.store.updateArtifactStatus(id, "approved");
       await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
       return {
-        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
       };
     }
   }
 
-  // J2a (#210) — ceremony scales with the task. When THIS is the trivial shape
-  // (the session's only live code artifact is this one code_change, no
-  // changeset, no decision/spec/plan), it CAN self-summarize and close the
-  // task. F3 — the note is CONDITIONAL: this may be the first of a planned
-  // sequence, so we must NOT signal completion outright. Phrase it as "if this
-  // is the whole task…" so the carve-out stays teachable without mis-signaling.
-  // NEVER echo "end with present_debrief" here (unlike present_changeset, which
-  // always owes one). If the shape has already escalated, stay silent on the
-  // debrief — the changeset/check_feedback surfaces carry that rule.
-  const closesTask = !sessionOwesDebrief(await ctx.store.getArtifacts());
-  const closeNote = closesTask
-    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
-    : "";
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

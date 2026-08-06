@@ -100,7 +100,7 @@ function coerceFinding(v: unknown): Finding {
   // never-drop-data contract (and making the exporter's string branch dead).
   if (typeof f.evidence === "string") out.evidence = f.evidence;
   else if (Array.isArray(f.evidence)) {
-    out.evidence = f.evidence.filter((x: unknown) => typeof x === "string" || isObj(x)) as any;
+    out.evidence = f.evidence.filter((x: unknown) => typeof x === "string" || isObj(x)) as Finding["evidence"];
   }
   const severity = optOneOf(f.severity, ["info", "low", "medium", "high", "critical"] as const);
   if (severity) out.severity = severity;

@@ -282,6 +282,60 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
       expect((art.content as any).changeType).toBe("create");
       expect((art.content as any).before).toBe("");
     });
+
+    // #215 K1 — the changeset nudge. A 2nd LIVE code_change for a DIFFERENT file
+    // this run means multi-file work snuck in one card at a time; nudge toward
+    // present_changeset + a closing present_debrief.
+    describe("changeset nudge (#215 K1)", () => {
+      const NUDGE = "2nd file touched this run";
+      const change = (filePath: string) => ({
+        filePath,
+        changeType: "modify" as const,
+        before: "const x = 1;",
+        after: "const x = 2;",
+        reasoning: `tweak ${filePath}`,
+        confidence: "high" as const,
+      });
+
+      it("1st file: no nudge", async () => {
+        const { text } = await callTool("present_code_change", change("/src/a.ts"));
+        expect(text).not.toContain(NUDGE);
+      });
+
+      it("2nd DISTINCT file: nudges toward present_changeset + present_debrief", async () => {
+        await callTool("present_code_change", change("/src/a.ts"));
+        const { text } = await callTool("present_code_change", change("/src/b.ts"));
+        expect(text).toContain(NUDGE);
+        expect(text).toContain("present_changeset");
+        expect(text).toContain("present_debrief");
+      });
+
+      it("same file re-presented: no nudge (not a distinct file)", async () => {
+        await callTool("present_code_change", change("/src/a.ts"));
+        const { text } = await callTool("present_code_change", change("/src/a.ts"));
+        expect(text).not.toContain(NUDGE);
+      });
+
+      it("superseded v1 + v2 of the SAME file: no nudge", async () => {
+        await callTool("present_code_change", change("/src/a.ts"));
+        const v1 = store.getArtifacts().find((a) => a.type === "code_change")!.id;
+        await store.updateArtifactStatus(v1, "superseded", "ui_supersede" as any);
+        const { text } = await callTool("present_code_change", change("/src/a.ts"));
+        expect(text).not.toContain(NUDGE);
+      });
+
+      // AR-fix (#252 review) — the co-fire hole: a LIVE debrief short-circuits
+      // sessionOwesDebrief to false, so a 2nd-file present AFTER a debrief used to
+      // emit BOTH the trivial close-note AND the nudge. The nudge must win alone.
+      it("post-debrief 2nd file: nudges WITHOUT the trivial close-note (no co-fire)", async () => {
+        await callTool("present_code_change", change("/src/a.ts"));
+        await callTool("present_debrief", { summary: "Shipped the /src/a.ts tweak." });
+        const { text } = await callTool("present_code_change", change("/src/b.ts"));
+        expect(text).toContain(NUDGE);
+        expect(text).not.toContain("no separate present_debrief owed");
+        expect(text).not.toContain("If this single-file change is the whole task");
+      });
+    });
   });
 
   describe("present_changeset (#171)", () => {

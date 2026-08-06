@@ -6,9 +6,13 @@
   "license": "MIT",
   "main": "./dist/standalone.js",
   "bin": {
+    "mcp-server": "./dist/standalone.js",
     "deeppairing-server": "./dist/standalone.js",
     "deeppairing-daemon": "./dist/daemon/index.js",
     "deeppairing": "./dist/cli/init.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist/",
