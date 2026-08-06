@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { computePending, isSinglePendingInView } from "../lib/pending";
 
@@ -24,7 +24,6 @@ export function PendingBanner() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const { drafts, total } = computePending(artifacts);
-  if (total === 0) return null;
   // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
   // already on screen, it IS the call to action (its own status badge + review
   // actions), so this banner would just restate what the card + the header count
@@ -32,7 +31,20 @@ export function PendingBanner() {
   // with the header-pill collapse in App (they can't disagree). The banner still
   // shows for 2+ pending and when the single pending draft is NOT selected (the
   // scent to reach it) — see isSinglePendingInView.
-  if (isSinglePendingInView(artifacts, selectedArtifactId)) return null;
+  const suppressed = isSinglePendingInView(artifacts, selectedArtifactId);
+
+  // Review (LOW) — the suppression is an in-component early return, so this
+  // instance never UNMOUNTS: a chip left in the armed "Dismiss?" state would
+  // persist across a suppress → reappear cycle (select the draft to hide the
+  // banner, deselect to bring it back), collapsing the two-step confirm to a
+  // single click across a hidden interval. Disarm whenever we suppress, so the
+  // banner always reappears with its chips reset (the onBlur reset can't fire —
+  // an unmounted-by-return chip never blurs).
+  useEffect(() => {
+    if (suppressed) setConfirmingId(null);
+  }, [suppressed]);
+
+  if (total === 0 || suppressed) return null;
 
   return (
     <div className="px-3 py-1.5 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2">

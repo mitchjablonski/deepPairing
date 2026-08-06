@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PendingBanner } from "../PendingBanner";
 import { useArtifactStore } from "../../stores/artifact";
@@ -83,6 +83,35 @@ describe("PendingBanner", () => {
     expect(useArtifactStore.getState().selectedArtifactId).toBe("d1"); // one is in view
     render(<PendingBanner />);
     expect(screen.getByText(/2 items waiting for you/i)).toBeInTheDocument();
+  });
+
+  it("J2b (#212, review LOW) — an armed 'Dismiss?' chip does NOT survive a suppress → reappear cycle", async () => {
+    // The suppression is an in-component early return, so the instance never
+    // unmounts. Without the disarm effect a chip left in the armed state would
+    // reappear pre-armed, collapsing the two-step confirm to one click across a
+    // hidden interval. Repro: arm → suppress (select the draft) → reappear
+    // (deselect) → the chip must be DISARMED.
+    useArtifactStore.getState().addArtifact(art({ id: "seen", status: "approved" }));
+    useArtifactStore.getState().addArtifact(art({ id: "d1", type: "decision", title: "pick a cache", status: "draft", content: { context: "x", options: [], decisionId: "dec" } }));
+    // "seen" is auto-selected first, so d1 (the single draft) is NOT in view →
+    // the banner shows and its dismiss chip is armable.
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("seen");
+    render(<PendingBanner />);
+
+    // Arm the chip.
+    await userEvent.click(screen.getByRole("button", { name: /^dismiss pick a cache$/i }));
+    expect(screen.getByText("Dismiss?")).toBeInTheDocument();
+
+    // Suppress: select the single draft → it is now the card in view.
+    act(() => { useArtifactStore.getState().selectArtifact("d1"); });
+    expect(screen.queryByText("Dismiss?")).not.toBeInTheDocument(); // banner hidden
+
+    // Reappear: deselect back to the approved sibling.
+    act(() => { useArtifactStore.getState().selectArtifact("seen"); });
+    // The chip is DISARMED — back to the "✕" affordance, not "Dismiss?".
+    expect(screen.getByRole("button", { name: /^dismiss pick a cache$/i })).toBeInTheDocument();
+    expect(screen.queryByText("Dismiss?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirm dismiss/i })).not.toBeInTheDocument();
   });
 
   it("UX5 — quick Dismiss is two-step: first click confirms, second marks obsolete", async () => {
