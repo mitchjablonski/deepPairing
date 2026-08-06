@@ -5150,15 +5150,32 @@ try {
       // exit 2 showed Claude only an empty-stderr "Stop hook error".
       exit(0, "pending artifacts in " + id);
     }
-    // #195 F1 \u2014 debrief-owed: RECENT code work presented, no debrief yet.
+    // #195 F1 + J2a (#210) \u2014 debrief-owed: ceremony scales with task size.
+    // INLINE TWIN of sessionOwesDebrief (debrief-gate.ts) \u2014 kept in lock-step
+    // with the bundled copy by stop-hook-debrief-parity.test.ts. Count LIVE
+    // artifacts: a LIVE debrief (not superseded/retracted/obsolete/rejected)
+    // closes the loop; code counts LIVE code_change/changeset (rejected KEPT,
+    // superseded/retracted/obsolete dropped); a decision/spec/plan (any status)
+    // OR a dead-but-attempted debrief is feature-shaping ceremony that escalates
+    // even a single-file fix. research/findings is NOT ceremony. Trivial: exactly
+    // one live single-file code_change, no changeset, no ceremony.
     if (owesDebriefSession === null) {
-      const hasRecentCode = arr.some((x) => {
+      const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+      const DEBRIEF_DEAD = ["superseded", "retracted", "obsolete", "rejected"];
+      const hasLiveDebrief = arr.some((x) => x.type === "debrief" && !DEBRIEF_DEAD.includes(x.status));
+      const recentCode = arr.filter((x) => {
         if (!["code_change", "changeset"].includes(x.type)) return false;
+        if (CODE_CLOSED.includes(x.status)) return false;
         const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
       });
-      const hasDebrief = arr.some((x) => x.type === "debrief");
-      if (hasRecentCode && !hasDebrief) owesDebriefSession = id;
+      const changesets = recentCode.filter((x) => x.type === "changeset").length;
+      const codeChanges = recentCode.filter((x) => x.type === "code_change").length;
+      const hasCeremony =
+        arr.some((x) => ["decision", "spec", "plan"].includes(x.type)) ||
+        arr.some((x) => x.type === "debrief");
+      const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
+      if (!hasLiveDebrief && recentCode.length > 0 && !trivial) owesDebriefSession = id;
     }
   }
   if (owesDebriefSession !== null) {

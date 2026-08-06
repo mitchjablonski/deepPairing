@@ -62,7 +62,13 @@ Two rhythms, and they're different:
   per-edit cards the human skims and forgets. So for CODE, the DEFAULT is a
   batched `present_changeset` at each feature boundary, and the run ENDS with one
   `present_debrief`. Per-edit `present_code_change` and per-step `log_reasoning`
-  are the *exceptions*, not the beat.
+  are the *exceptions*, not the beat. **Ceremony scales with task size:** the one
+  case that skips the closing debrief is a single-file, no-decision, surgical fix
+  — that self-summarizing `present_code_change` IS the comprehension surface, so
+  it owes no separate debrief. Everything larger (2+ files, any real decision, a
+  spec or plan, a guardrail-path file) owes the debrief. The review floor never
+  scales away:
+  code is presented for review before it lands at every size.
 - **Tag every artifact with its `feature`.** When your work spans more than one
   run — a milestone, a multi-session feature — pass the same `feature` tag on
   every `present_*` you make (findings, options, plan, spec, code changes,
@@ -139,9 +145,23 @@ Two rhythms, and they're different:
   see an edit before it lands. For anything spanning multiple files, batch into a
   `present_changeset` instead. (A change written straight to disk still needs a
   review surface — but the default surface is the changeset, not a card per
-  edit.)
+  edit.) When the whole task IS just that — one file, NO decision moment, a
+  small/surgical diff — this ONE card both presents the change for review AND
+  closes the task: fold the what-changed-and-why (the debrief narrative in
+  miniature) into its `reasoning`, and no separate `present_debrief` is owed. The
+  moment the work escalates (a second file, a real decision, a spec or plan, a
+  guardrail-path file, or the human asks for more), you're back to the full arc
+  — batch into a `present_changeset` and end with one `present_debrief`.
 - **`present_debrief`** — **END EVERY feature or autonomous run with exactly
-  ONE.** This is the primary comprehension surface (the thesis's 80% case):
+  ONE** — with a single size carve-out: a **single-file, no-decision, surgical
+  fix** closes with its own self-summarizing `present_code_change` instead (the
+  what-changed-and-why folded into its `reasoning`), so no separate debrief is
+  owed. ANYTHING larger — 2+ files, a real decision, a spec or plan, a
+  guardrail-path file, or the human asking for more — owes the full arc, ending
+  in exactly ONE debrief.
+  (The floor is unchanged at every size: code is ALWAYS presented for review
+  before it lands — the carve-out drops only the SEPARATE closing debrief, never
+  the review.) This is the primary comprehension surface (the thesis's 80% case):
   summarize what changed and why (the narrative), walk the `sections[]` (each
   with its named `concepts[]` — this is where concept-naming LIVES now, not in a
   stream of per-step cards), own the `decisionsMade[]` you made WITHOUT the human
@@ -328,4 +348,6 @@ to supervised for changes touching these paths.
 - Stream a `present_code_change` per edit for multi-file work, or a
   `log_reasoning` per step — batch code into `present_changeset` and end with one
   `present_debrief` instead.
-- Finish a feature or autonomous run WITHOUT a `present_debrief`.
+- Finish a feature or autonomous run WITHOUT a `present_debrief` — the one
+  exception is a single-file, no-decision, surgical fix, whose own
+  self-summarizing `present_code_change` closes it.

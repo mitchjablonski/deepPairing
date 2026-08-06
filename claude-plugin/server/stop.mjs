@@ -3,11 +3,32 @@ import { createRequire as __cr } from 'node:module'; const require = __cr(import
 // src/cli/stop-hook-entry.ts
 import fs from "node:fs";
 import path from "node:path";
+
+// src/debrief-gate.ts
+var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
+var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
+var CEREMONY_TYPES = ["decision", "spec", "plan"];
+function sessionOwesDebrief(artifacts, isRecent = () => true) {
+  const hasLiveDebrief = artifacts.some(
+    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")
+  );
+  if (hasLiveDebrief) return false;
+  const recentCode = artifacts.filter(
+    (a) => (a?.type === "code_change" || a?.type === "changeset") && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)
+  );
+  if (recentCode.length === 0) return false;
+  const changesets = recentCode.filter((a) => a?.type === "changeset").length;
+  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;
+  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");
+  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
+  return !trivial;
+}
+
+// src/cli/stop-hook-entry.ts
 var HOOK_NAME = "stop";
 var STATE_CAP = 50;
 var MAX_AGE_MS = 30 * 60 * 1e3;
 var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
-var CODE_TYPES = ["code_change", "changeset"];
 function projectRoot() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
@@ -59,13 +80,11 @@ try {
       exit(0, "pending artifacts in " + id);
     }
     if (owesDebriefSession === null) {
-      const hasRecentCode = arr.some((x) => {
-        if (!x?.type || !CODE_TYPES.includes(x.type)) return false;
+      const owes = sessionOwesDebrief(arr, (x) => {
         const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
       });
-      const hasDebrief = arr.some((x) => x?.type === "debrief");
-      if (hasRecentCode && !hasDebrief) owesDebriefSession = id;
+      if (owes) owesDebriefSession = id;
     }
   }
   if (owesDebriefSession !== null) {

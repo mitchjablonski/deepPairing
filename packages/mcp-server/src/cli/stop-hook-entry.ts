@@ -15,6 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { sessionOwesDebrief } from "../debrief-gate.js";
 
 const HOOK_NAME = "stop";
 const STATE_CAP = 50;
@@ -22,9 +23,6 @@ const MAX_AGE_MS = 30 * 60 * 1000;
 // #195 F1 — `changeset` joins the blocking set: a drafted multi-file changeset
 // awaiting review is exactly the "don't declare done" case the hook guards.
 const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
-// #195 F1 — the code types whose presence WITHOUT a debrief means the run owes
-// one (the "end every run with exactly ONE present_debrief" rule).
-const CODE_TYPES = ["code_change", "changeset"];
 
 function projectRoot(): string {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -87,16 +85,21 @@ try {
       process.stderr.write("deepPairing: pending artifacts need review — call check_feedback\n");
       exit(0, "pending artifacts in " + id);
     }
-    // #195 F1 — debrief-owed: RECENT code work presented, no debrief yet. Age-
-    // guarded like the blocking check so an ancient session isn't nagged forever.
+    // #195 F1 + J2a (#210) — debrief-owed: RECENT code work presented, no
+    // debrief yet — BUT ceremony scales with task size. A trivial single-file
+    // surgical fix (exactly one code_change, no changeset, no decision) closes
+    // with its own self-summarizing code_change and owes NO separate debrief;
+    // any escalation (a changeset, 2+ code_changes, or a decision) does. Age-
+    // guard the code artifacts like the blocking check so an ancient session
+    // isn't nagged forever. Shared predicate (debrief-gate.ts) — the
+    // init-script twin in setup-tasks.ts STOP_HOOK_SCRIPT inlines this same
+    // logic (kept in lock-step by stop-hook-debrief-parity.test.ts).
     if (owesDebriefSession === null) {
-      const hasRecentCode = arr.some((x: { type?: string; createdAt?: string }) => {
-        if (!x?.type || !CODE_TYPES.includes(x.type)) return false;
+      const owes = sessionOwesDebrief(arr as { type?: string; createdAt?: string; status?: string }[], (x) => {
         const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
       });
-      const hasDebrief = arr.some((x: { type?: string }) => x?.type === "debrief");
-      if (hasRecentCode && !hasDebrief) owesDebriefSession = id;
+      if (owes) owesDebriefSession = id;
     }
   }
   if (owesDebriefSession !== null) {

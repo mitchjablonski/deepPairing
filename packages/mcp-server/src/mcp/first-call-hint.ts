@@ -42,15 +42,15 @@ const PROTOCOL_PREAMBLE = [
   "Voice: write TO your pair in second person (\"which fits?\"), not ABOUT them (\"User asked X\") — a conversation, not an audit log.",
   // L2 — close-the-loop headline: the two highest-value rules, up top where they
   // won't lose the reading lottery to the visuals paragraph below.
-  "Close the loop — two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief.",
+  "Close the loop — two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead — no separate debrief).",
   "Happy path, in order:",
   "  1. recall (mode='any') — check prior stances/decisions before proposing.",
   "  2. present_findings — after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
   "  3. check_feedback — poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options — each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
   "  5. present_spec, then present_plan — non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first. Don't stream a log_reasoning card per step — name concepts in the debrief.",
-  "  7. present_debrief — END every feature/autonomous run with exactly ONE: what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread — the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
+  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning — no separate debrief). Don't stream a log_reasoning card per step — name concepts in the debrief.",
+  "  7. present_debrief — END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread — the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again — let your pair review in the UI.",
   "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer — a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made).",
   "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content — don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
@@ -117,7 +117,7 @@ const AUTONOMY_HINT_BALANCED = [
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs — not routine implementation choices with one reasonable answer.",
   "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings → options → spec/plan.",
-  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; this dial trims findings/options, never the review record.",
+  "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief (a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead); this dial trims findings/options, never the review record.",
 ].join("\n");
 //
 // AUTONOMOUS: bias to motion — but the FLOOR is stated explicitly and is
@@ -127,7 +127,7 @@ const AUTONOMY_HINT_BALANCED = [
 const AUTONOMY_HINT_AUTONOMOUS = [
   `\n🎚 Autonomy: AUTONOMOUS — the human set this dial, and it applies from your FIRST artifact. ${AUTONOMY_POLICY_LINE.autonomous}`,
   "  - Skip the opening findings/options ceremony for routine work: proceed with your recommended approach; the human reviews after the fact.",
-  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief; the human reviews the artifact, not raw edits on disk.",
+  "  - FLOOR (this dial never lifts it): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief (a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead); the human reviews the artifact, not raw edits on disk.",
   "  - Project guardrails override this dial: escalate to supervised for changes in guardrail paths.",
 ].join("\n");
 

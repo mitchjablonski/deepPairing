@@ -7,6 +7,7 @@ import { collectUnansweredQuestions, describeRequestIntent } from "@deeppairing/
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
+import { sessionOwesDebrief } from "../../debrief-gate.js";
 
 /**
  * H2-1 — surface a FROZEN cross-project philosophy ledger. v0.1.6 makes the
@@ -433,8 +434,13 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // wrongly let the nag fire on the next poll). We use the same
   // collectUnansweredQuestions tail-walk (answeredByCommentId) every other
   // surface uses, so the nag genuinely waits until questions are ANSWERED.
-  const hasCodeWork = allArtifacts.some((a) => a.type === "changeset" || a.type === "code_change");
-  const hasDebrief = allArtifacts.some((a) => a.type === "debrief");
+  // J2a (#210) — ceremony scales with task size. The nag fires only when the
+  // session SHAPE owes a debrief: a changeset, 2+ code_changes, or a decision
+  // moment. A trivial single-file surgical fix (exactly one code_change, no
+  // changeset, no decision) closes with its own self-summarizing code_change —
+  // no separate debrief owed, so no nag. Same predicate the Stop hook applies
+  // (debrief-gate.ts). This subsumes the old hasCodeWork + !hasDebrief gate.
+  const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
   let hasUnansweredQuestions = openQuestionCount > 0;
   try {
     const full = await store.getFullState();
@@ -446,8 +452,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     pendingArts.length === 0 &&
     freshlyRejected.length === 0 &&
     !hasUnansweredQuestions &&
-    hasCodeWork &&
-    !hasDebrief;
+    shapeOwesDebrief;
   if (owesDebrief) {
     suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet — when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
   }
