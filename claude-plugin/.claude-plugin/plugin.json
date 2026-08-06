@@ -17,6 +17,9 @@
     "before-edit",
     "claude-code",
     "pair-programming",
+    "review-loop",
+    "pair-review",
+    "spec-driven",
     "mcp"
   ],
   "mcpServers": "./.mcp.json"

@@ -251,7 +251,7 @@ directly off disk.
   for fast tests; full HTTP integration tests for the daemon-routes
   surface.
 - **Atomic suite**: `pnpm --filter @deeppairing/mcp-server test`
-  (1,800+ tests).
+  (~2,800 tests; 3,000+ across the whole surface with the shared + Playwright suites).
 - **Component tests** in `web/src/components/__tests__/` use happy-dom
   via the workspace vitest config; pure tests run in node.
 
