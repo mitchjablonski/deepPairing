@@ -11,7 +11,7 @@ and a gate stops the agent from re-proposing that concept — before the edit
 lands, in the project where you rejected it — and flags it, advisory, on every
 other project.
 
-*MIT · no account · no telemetry · 1,500+ tests · everything stays on your disk.*
+*MIT · no account · no telemetry · 3,000+ tests · everything stays on your disk.*
 
 ![Select a region of a plan's Mermaid diagram and comment on it — the comment anchors to the nodes it covers (here, the AuthGate node) and survives the agent redrawing the diagram.](docs/assets/region-comment.png)
 
@@ -313,7 +313,7 @@ Pre-1.0. Installable from this repo — via the Claude Code plugin marketplace
 (`/plugin marketplace add https://github.com/mitchjablonski/deepPairing`, which
 ships the committed self-contained server bundle), `--plugin-dir`, or from
 source. No npm publish or listing in a public/community marketplace yet.
-**1,500+ tests, an explicit threat model, a fully-live accessibility gate (axe,
+**3,000+ tests, an explicit threat model, a fully-live accessibility gate (axe,
 zero disabled rules), and strict TypeScript throughout** — the next step is
 earning a handful of delighted real users before broader distribution.
 

@@ -488,15 +488,24 @@ function App() {
               action). Kept as ONE compact palette affordance — the ⌘K hint leads
               so it reads as the shortcut it is, not a separate "search" feature —
               so mouse / non-keyboard users keep the discoverability. The cut is
-              the duplicate framing, not the affordance. */}
+              the duplicate framing, not the affordance.
+              #216 (K2) — J4's `hidden min-[1100px]:inline-flex` made the WHOLE
+              affordance vanish below 1100px, and since J4 this is the ONLY door
+              to the palette (also the only path to search + quick actions). At
+              900px — the VS Code webview width — that left no way in. Fixed like
+              the sibling nav buttons above: the ⌘K glyph stays at every width
+              (icon-only fallback), only the "Search" label drops below 1100px.
+              Restoring the always-visible affordance also de-orphans the "·"
+              separator above, which used to dangle before the settings gear when
+              the button disappeared. */}
           <button
             onClick={() => setShowPalette(true)}
-            className="hidden min-[1100px]:inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
             title="Command palette — search + quick actions (⌘K)"
             aria-label="Open the command palette"
           >
             <kbd className="font-mono bg-surface-elevated px-1 rounded text-[9px]">⌘K</kbd>
-            <span>Search</span>
+            <span className="hidden min-[1100px]:inline">Search</span>
           </button>
           <button
             onClick={() => setShowSettings(true)}

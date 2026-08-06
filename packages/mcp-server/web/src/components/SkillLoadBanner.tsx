@@ -11,9 +11,27 @@ import { useConnectionStore } from "../stores/connection";
  * Auto-hides as soon as a first artifact arrives (proof the skill is active,
  * regardless of what the status endpoint said). Also hides if the user
  * explicitly dismissed it (session-scoped via sessionStorage).
+ *
+ * K2 (#216) — grace window before the alarm. A freshly-connected session with
+ * no artifacts yet is the EXPECTED state: the header shows the reassuring
+ * "Connected — waiting for the agent's first move." Firing this alarming yellow
+ * "Claude may not be using deepPairing tools yet" banner at that same instant
+ * contradicts the reassurance for a run that is simply still gathering. So we
+ * hold the banner for the first GRACE_MS of a fresh session (the timer re-arms
+ * on a project switch). If the skill genuinely isn't loaded, the warning still
+ * surfaces the moment the grace passes — the honest signal for the
+ * genuinely-stuck case is kept, just not fired during the window where waiting
+ * is normal. An arriving artifact (runtime proof) or a positive skill-status
+ * short-circuits to null regardless, so the grace only ever DELAYS the
+ * negative case; it never suppresses a true positive.
  */
 
 const DISMISS_KEY = "dp:skill-banner-dismissed";
+
+/** How long a fresh session is allowed to sit artifact-less before the
+ *  not-loaded banner is treated as a real warning rather than expected waiting.
+ *  45s comfortably covers a normal gather → first `present_*` round-trip. */
+const GRACE_MS = 45_000;
 
 interface SkillStatus {
   claudeMdHasMarker: boolean;
@@ -22,7 +40,7 @@ interface SkillStatus {
   evidence: string;
 }
 
-export function SkillLoadBanner() {
+export function SkillLoadBanner({ graceMs = GRACE_MS }: { graceMs?: number } = {}) {
   const [status, setStatus] = useState<SkillStatus | null>(null);
   const [dismissed, setDismissed] = useState<boolean>(() => {
     try { return sessionStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; }
@@ -35,6 +53,18 @@ export function SkillLoadBanner() {
   useEffect(() => {
     setStatus(null);
   }, [projectHash]);
+
+  // K2 — the grace window (see the module doc). Held closed while a fresh
+  // session is within its first `graceMs`; re-armed on a project switch so a
+  // freshly-opened project gets its own window. graceMs<=0 opens immediately
+  // (used by tests that exercise the not-loaded/dismiss logic directly).
+  const [graceElapsed, setGraceElapsed] = useState(graceMs <= 0);
+  useEffect(() => {
+    if (graceMs <= 0) { setGraceElapsed(true); return; }
+    setGraceElapsed(false);
+    const t = setTimeout(() => setGraceElapsed(true), graceMs);
+    return () => clearTimeout(t);
+  }, [graceMs, projectHash]);
 
   // C1 — the resolution states only gated RENDERING; the 30s poll (which
   // fs.readFileSync's CLAUDE.md server-side per hit) kept firing for the tab's
@@ -67,6 +97,9 @@ export function SkillLoadBanner() {
   if (dismissed) return null;
   if (hasArtifacts) return null;
   if (!status || status.pairingProtocolSkillLikelyLoaded) return null;
+  // K2 — during the grace window, a not-loaded status is EXPECTED waiting, not
+  // a fault — hold the alarm so it doesn't contradict the reassuring header.
+  if (!graceElapsed) return null;
 
   const handleDismiss = () => {
     setDismissed(true);

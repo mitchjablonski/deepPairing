@@ -229,7 +229,7 @@ desktop. Slower hardware (or first-time `pnpm setup`) adds maybe
 ## "Is it stable enough for daily use?"
 
 Pre-1.0 honest answer: it works for the team that built it on real
-projects, but it's not battle-tested. Over 1,800 tests, an explicit threat
+projects, but it's not battle-tested. Over 3,000 tests, an explicit threat
 model in SECURITY.md, atomic writes on the data plane, structured
 error codes — the foundations are solid. The next ~weeks are about
 real-user signals telling us where the false-positive rate, the
