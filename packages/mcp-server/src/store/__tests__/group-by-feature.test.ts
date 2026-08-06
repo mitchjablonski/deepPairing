@@ -153,7 +153,7 @@ describe("normalizeFeaturePrefix — table-pinned corpus shapes", () => {
 
 describe("groupByFeature — grouping", () => {
   it("returns the empty shape when no sessions dir exists", () => {
-    expect(FileStore.groupByFeature(tmpDir)).toEqual({ groups: [], failedSessions: [] });
+    expect(FileStore.groupByFeature(tmpDir)).toEqual({ groups: [], failedSessions: [], assignedArtifactIds: [] });
   });
 
   it("groups artifacts sharing a mined prefix, and puts plain titles in Ungrouped (last)", () => {
@@ -437,6 +437,19 @@ describe("groupByFeature — human overrides (#206 I1)", () => {
     expect(groups.find((g) => g.id === "milestone-6")!.artifactRefs.map((r) => r.artifactId)).toEqual(["a2"]);
     expect(groups.at(-1)!.id).toBe("__ungrouped__");
     expect(groups.at(-1)!.artifactRefs.map((r) => r.artifactId)).toEqual(["a1"]);
+  });
+
+  // #213 (J3 M-4) — the result echoes which artifacts carry an explicit MOVE
+  // override, so the Features view can undo a move to the EXACT prior state.
+  it("reports assignedArtifactIds = the keys of artifactAssignments", () => {
+    writeSession("s1", [
+      art({ id: "a1", title: "Milestone 6 — x", createdAt: "2026-01-01T01:00:00.000Z" }),
+      art({ id: "a2", title: "Milestone 6 — y", createdAt: "2026-01-01T02:00:00.000Z" }),
+    ]);
+    const res = groupByFeature(tmpDir, { artifactAssignments: { a1: "__ungrouped__" } });
+    expect(res.assignedArtifactIds).toEqual(["a1"]);
+    // No overrides → empty (never undefined), so the view's Set(...) is safe.
+    expect(groupByFeature(tmpDir).assignedArtifactIds).toEqual([]);
   });
 
   it("a human RENAME overrides the derived group title", () => {

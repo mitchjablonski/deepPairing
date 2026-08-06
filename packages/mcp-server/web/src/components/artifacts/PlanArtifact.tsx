@@ -8,7 +8,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
-import { reviewLifecycle } from "../../lib/reviewLifecycle";
+import { useWriteLock } from "../../hooks/useWriteLock";
 import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
@@ -188,16 +188,13 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
 
   const replayActive = useReplayStore((st) => st.active);
   const hasUnchecked = checkedSteps.some((c) => !c);
-  // #207 (I2 review) — the WRITE AXIS, derived through the SAME reviewLifecycle
-  // helper research/spec/debrief use: a retracted (→ "closed") or replayed (→
-  // "frozen") plan withholds its composers (visuals + per-step ask/comment).
-  // Draft ("review") stays writable; approved ("follow_up") STAYS late-
-  // commentable (the #187 lane — comments on an approved/executing plan are new
-  // input, not a reopened review). Posted history stays readable.
-  const writeLocked = (() => {
-    const lc = reviewLifecycle(artifact.status, replayActive);
-    return lc === "closed" || lc === "frozen";
-  })();
+  // #207 (I2 review) — the WRITE AXIS, via the shared useWriteLock hook: a
+  // retracted (→ "closed") or replayed (→ "frozen") plan withholds its composers
+  // (visuals + per-step ask/comment). Draft ("review") stays writable; approved
+  // ("follow_up") STAYS late-commentable (the #187 lane — comments on an
+  // approved/executing plan are new input, not a reopened review). Posted history
+  // stays readable.
+  const writeLocked = useWriteLock(artifact.status);
 
   // C1 — mirror ArtifactStatusActions.handleAction: a submitting guard (a
   // double-click double-POSTed) and a catch (the store re-throws after

@@ -309,6 +309,40 @@ describe("ArtifactPanel new-item locator", () => {
     expect(glowing.textContent).toContain("Fresh finding");
   });
 
+  // L-8 (#213) — the collapsed icon-only rail (narrow viewport / webview) must
+  // name each artifact ON THE INTERACTIVE BUTTON, not a nested <div>: E3 (#194)
+  // added the scent but hung it on a non-interactive child, so the button a hover
+  // or a probe targets carried only the bare title. This pins the rich
+  // "Type: title — status" scent on the button's title AND aria-label when
+  // collapsed (they must agree), so the fix can't silently regress.
+  it("collapsed rail names each artifact on the button (title + aria-label = type, title, status)", () => {
+    // Narrow viewport → isNarrow → collapsed rail. reduced-motion stays false.
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+
+    useArtifactStore.getState().addArtifact(mk(1, { type: "plan", title: "Rate limiter", status: "draft" }));
+    render(<ArtifactPanel />);
+
+    const btn = document.querySelector('[data-artifact-item="art_1"]') as HTMLElement;
+    expect(btn).not.toBeNull();
+    const title = btn.getAttribute("title");
+    const aria = btn.getAttribute("aria-label");
+    // Same rich scent on both, and it carries type + title + status — never null
+    // or the bare title alone.
+    expect(title).toBe(aria);
+    expect(title).toContain("Plans"); // typeLabels['plan']
+    expect(title).toContain("Rate limiter"); // the artifact title
+    expect(title).toContain("Draft"); // statusLabels['draft'] = "Draft, awaiting review"
+  });
+
   it("keeps buildFlowGroups ordering identical (the locator must not re-sort)", () => {
     // Flow B starts before flow A; an orphan is oldest of all. Order must be by
     // each group's start time — unchanged by the locator work.

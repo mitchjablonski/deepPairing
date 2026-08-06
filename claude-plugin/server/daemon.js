@@ -25358,7 +25358,8 @@ function groupByFeature(projectRoot2, overrides = {}) {
   grouped.sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
   const orderedGroups = ungrouped ? [...grouped, ungrouped] : grouped;
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-  return { groups: orderedGroups, failedSessions };
+  const assignedArtifactIds = Object.keys(artifactAssignments);
+  return { groups: orderedGroups, failedSessions, assignedArtifactIds };
 }
 
 // src/store/ledger-digest.ts
@@ -26914,7 +26915,6 @@ import fs10 from "node:fs";
 import path9 from "node:path";
 var VERSION2 = 1;
 var loggedUnknownVersion = false;
-var UNGROUPED_KEY = "__ungrouped__";
 var TITLE_MAX = 120;
 function overridesPath(projectRoot2) {
   return path9.join(projectRoot2, ".deeppairing", "feature-overrides.json");
@@ -26983,8 +26983,8 @@ function assignArtifactToFeature(projectRoot2, artifactId, groupKey) {
   const rawKey = groupKey.trim();
   if (!rawKey) {
     delete file2.artifactAssignments[id];
-  } else if (rawKey === UNGROUPED_KEY) {
-    file2.artifactAssignments[id] = UNGROUPED_KEY;
+  } else if (rawKey === UNGROUPED_ID) {
+    file2.artifactAssignments[id] = UNGROUPED_ID;
   } else {
     const normalized = normalizeFeatureId(rawKey)?.slug ?? rawKey.slice(0, FEATURE_ID_MAX);
     file2.artifactAssignments[id] = normalized;

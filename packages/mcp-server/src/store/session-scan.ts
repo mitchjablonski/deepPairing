@@ -798,9 +798,20 @@ export interface FeatureGroupsResult {
    *  unreadable) — surfaced so the view is honest about a partial scan, mirroring
    *  listAllDecisions. Individual malformed elements are salvaged+dropped. */
   failedSessions: Array<{ sessionId: string; reason: string }>;
+  /** #213 (J3 M-4) — the artifactIds that carry an EXPLICIT human MOVE override
+   *  (the keys of overrides.artifactAssignments). The Features view reads this to
+   *  make a Move undoable HONESTLY: undo re-posts the prior assignment when the
+   *  artifact had one, or CLEARS the override (empty groupKey) when it didn't —
+   *  so undo restores the exact prior state instead of stamping a spurious
+   *  override. Optional for back-compat (absent → treat as none-assigned). */
+  assignedArtifactIds?: string[];
 }
 
-const UNGROUPED_ID = "__ungrouped__";
+/** The reserved group key that pulls an artifact OUT of every feature. The ONE
+ *  definition of this sentinel — feature-overrides.ts imports it (a human MOVE
+ *  to this target clears the artifact's feature membership); the assign write
+ *  path and this grouping read path MUST agree on the exact string. */
+export const UNGROUPED_ID = "__ungrouped__";
 
 /** Pull every code-touch path an artifact declares: a `code_change`'s single
  *  filePath and a `changeset`'s files[].path. Tolerant of any shape. */
@@ -1155,5 +1166,8 @@ export function groupByFeature(
   const orderedGroups = ungrouped ? [...grouped, ungrouped] : grouped;
 
   failedSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-  return { groups: orderedGroups, failedSessions };
+  // #213 (J3 M-4) — expose which artifacts carry an explicit human MOVE so the
+  // Features view can undo a move to the exact prior state (re-assign vs clear).
+  const assignedArtifactIds = Object.keys(artifactAssignments);
+  return { groups: orderedGroups, failedSessions, assignedArtifactIds };
 }

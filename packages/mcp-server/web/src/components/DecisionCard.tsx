@@ -11,7 +11,7 @@ import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
 import { DecisionDiagramFocus } from "./DecisionDiagramFocus";
 import { useReplayStore } from "../stores/replay";
-import { reviewLifecycle } from "../lib/reviewLifecycle";
+import { useWriteLock } from "../hooks/useWriteLock";
 import { OptionCard } from "./decision/OptionCard";
 import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
 import { DecisionFooter } from "./decision/DecisionFooter";
@@ -35,8 +35,8 @@ interface DecisionCardProps {
   /** For the Re-pair modal: which session this decision was recorded in. */
   sessionId?: string;
   /**
-   * #207 (I2) — the WRITE-AXIS lock, derived by DecisionArtifactView through the
-   * shared reviewLifecycle helper (retracted/terminal → "closed", replay →
+   * #207 (I2) — the WRITE-AXIS lock, derived by DecisionArtifactView via the
+   * shared useWriteLock hook (retracted/terminal → "closed", replay →
    * "frozen"). When true the option grid is READABLE but its write affordances
    * are pulled: Select is disabled + labelled read-only, the per-option ask
    * trigger + the "Discuss" workbench entry are withheld, and DecisionFooter's
@@ -789,15 +789,12 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
   const replayDecisions = useReplayStore((s) => s.decisions);
   const liveResolved = useArtifactStore((s) => s.resolvedDecisions[effectiveDecisionId]);
 
-  // #207 (I2) — the WRITE-AXIS lock, derived through the SAME reviewLifecycle
-  // helper every other renderer uses (retracted/terminal → "closed", replay →
-  // "frozen"). Threaded into DecisionCard so an UNRESOLVED retracted decision's
-  // option grid + footer + Discuss entry go read-only. (A resolved decision
-  // renders ResolvedDecisionView regardless — out of this residue's scope.)
-  const writeLocked = (() => {
-    const lc = reviewLifecycle(artifact.status, replayActive);
-    return lc === "closed" || lc === "frozen";
-  })();
+  // #207 (I2) — the WRITE-AXIS lock, via the shared useWriteLock hook
+  // (retracted/terminal → "closed", replay → "frozen"). Threaded into
+  // DecisionCard so an UNRESOLVED retracted decision's option grid + footer +
+  // Discuss entry go read-only. (A resolved decision renders ResolvedDecisionView
+  // regardless — out of this residue's scope.)
+  const writeLocked = useWriteLock(artifact.status);
 
   // An options-less decision has nothing to render, so bail (after the hooks).
   if (dc.options.length === 0) return null;

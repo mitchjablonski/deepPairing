@@ -9,8 +9,7 @@ import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
 import { OpenQuestionSection } from "./OpenQuestionSection";
-import { reviewLifecycle } from "../../lib/reviewLifecycle";
-import { useReplayStore } from "../../stores/replay";
+import { useWriteLock } from "../../hooks/useWriteLock";
 
 /**
  * #190 — the end-of-feature DEBRIEF renderer (the comprehension surface).
@@ -175,18 +174,13 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
     [artifact.content],
   );
   const comments = useChainComments(artifact.id);
-  // #207 (I2) — the WRITE AXIS, derived through the SAME reviewLifecycle helper
-  // ResearchArtifact uses post-H3. A retracted (→ "closed") or replayed (→
-  // "frozen") debrief withholds EVERY composer it hosts: per-item + per-block
-  // grain (BlockGrain), the walk's evidence gutters (renderEvidence), the open
-  // questions, and the ask-anything thread. Draft ("review") stays writable;
-  // approved ("follow_up") STAYS late-commentable (the #187 lane). Posted history
-  // stays readable throughout.
-  const replayActive = useReplayStore((s) => s.active);
-  const writeLocked = (() => {
-    const lc = reviewLifecycle(artifact.status, replayActive);
-    return lc === "closed" || lc === "frozen";
-  })();
+  // #207 (I2) — the WRITE AXIS, via the shared useWriteLock hook. A retracted
+  // (→ "closed") or replayed (→ "frozen") debrief withholds EVERY composer it
+  // hosts: per-item + per-block grain (BlockGrain), the walk's evidence gutters
+  // (renderEvidence), the open questions, and the ask-anything thread. Draft
+  // ("review") stays writable; approved ("follow_up") STAYS late-commentable (the
+  // #187 lane). Posted history stays readable throughout.
+  const writeLocked = useWriteLock(artifact.status);
 
   const sections = content.sections ?? [];
   const decisionsMade = content.decisionsMade ?? [];

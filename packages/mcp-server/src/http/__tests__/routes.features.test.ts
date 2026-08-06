@@ -20,7 +20,8 @@ describe("GET /api/features", () => {
   it("returns the empty shape when no artifacts exist", async () => {
     const res = await ctx.app.request("/api/features");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ groups: [], failedSessions: [] });
+    // #213 (J3 M-4) — groupByFeature now echoes assignedArtifactIds (empty here).
+    expect(await res.json()).toEqual({ groups: [], failedSessions: [], assignedArtifactIds: [] });
   });
 
   it("groups artifacts by mined title prefix, Ungrouped last", async () => {
