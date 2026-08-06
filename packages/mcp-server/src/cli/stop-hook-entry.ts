@@ -95,7 +95,7 @@ try {
     // init-script twin in setup-tasks.ts STOP_HOOK_SCRIPT inlines this same
     // logic (kept in lock-step by stop-hook-debrief-parity.test.ts).
     if (owesDebriefSession === null) {
-      const owes = sessionOwesDebrief(arr as { type?: string; createdAt?: string }[], (x) => {
+      const owes = sessionOwesDebrief(arr as { type?: string; createdAt?: string; status?: string }[], (x) => {
         const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
       });

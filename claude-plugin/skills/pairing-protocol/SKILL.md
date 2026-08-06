@@ -66,7 +66,8 @@ Two rhythms, and they're different:
   case that skips the closing debrief is a single-file, no-decision, surgical fix
   — that self-summarizing `present_code_change` IS the comprehension surface, so
   it owes no separate debrief. Everything larger (2+ files, any real decision, a
-  guardrail-path file) owes the debrief. The review floor never scales away:
+  spec or plan, a guardrail-path file) owes the debrief. The review floor never
+  scales away:
   code is presented for review before it lands at every size.
 - **Tag every artifact with its `feature`.** When your work spans more than one
   run — a milestone, a multi-session feature — pass the same `feature` tag on
@@ -148,15 +149,16 @@ Two rhythms, and they're different:
   small/surgical diff — this ONE card both presents the change for review AND
   closes the task: fold the what-changed-and-why (the debrief narrative in
   miniature) into its `reasoning`, and no separate `present_debrief` is owed. The
-  moment the work escalates (a second file, a real decision, a guardrail-path
-  file, or the human asks for more), you're back to the full arc — batch into a
-  `present_changeset` and end with one `present_debrief`.
+  moment the work escalates (a second file, a real decision, a spec or plan, a
+  guardrail-path file, or the human asks for more), you're back to the full arc
+  — batch into a `present_changeset` and end with one `present_debrief`.
 - **`present_debrief`** — **END EVERY feature or autonomous run with exactly
   ONE** — with a single size carve-out: a **single-file, no-decision, surgical
   fix** closes with its own self-summarizing `present_code_change` instead (the
   what-changed-and-why folded into its `reasoning`), so no separate debrief is
-  owed. ANYTHING larger — 2+ files, a real decision, a guardrail-path file, or
-  the human asking for more — owes the full arc, ending in exactly ONE debrief.
+  owed. ANYTHING larger — 2+ files, a real decision, a spec or plan, a
+  guardrail-path file, or the human asking for more — owes the full arc, ending
+  in exactly ONE debrief.
   (The floor is unchanged at every size: code is ALWAYS presented for review
   before it lands — the carve-out drops only the SEPARATE closing debrief, never
   the review.) This is the primary comprehension surface (the thesis's 80% case):

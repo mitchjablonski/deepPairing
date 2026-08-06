@@ -109,16 +109,18 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     }
   }
 
-  // J2a (#210) — ceremony scales with the task. When THIS is the trivial case
-  // (the session's only code artifact is this one code_change, no changeset, no
-  // decision), it self-summarizes and CLOSES the task — no separate
-  // present_debrief is owed. Say so, and NEVER echo "end with present_debrief"
-  // here (unlike present_changeset, which always owes one). If the shape has
-  // escalated (a changeset, a 2nd code_change, or a decision), stay silent on
-  // the debrief — the changeset/check_feedback surfaces carry that rule.
+  // J2a (#210) — ceremony scales with the task. When THIS is the trivial shape
+  // (the session's only live code artifact is this one code_change, no
+  // changeset, no decision/spec/plan), it CAN self-summarize and close the
+  // task. F3 — the note is CONDITIONAL: this may be the first of a planned
+  // sequence, so we must NOT signal completion outright. Phrase it as "if this
+  // is the whole task…" so the carve-out stays teachable without mis-signaling.
+  // NEVER echo "end with present_debrief" here (unlike present_changeset, which
+  // always owes one). If the shape has already escalated, stay silent on the
+  // debrief — the changeset/check_feedback surfaces carry that rule.
   const closesTask = !sessionOwesDebrief(await ctx.store.getArtifacts());
   const closeNote = closesTask
-    ? " This single-file surgical change self-summarizes and closes the task — fold the what-changed-and-why into `reasoning`; no separate present_debrief is owed."
+    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
     : "";
   return {
     content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],

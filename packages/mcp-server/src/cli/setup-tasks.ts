@@ -301,24 +301,32 @@ try {
       // exit 2 showed Claude only an empty-stderr "Stop hook error".
       exit(0, "pending artifacts in " + id);
     }
-    // #195 F1 + J2a (#210) — debrief-owed: RECENT code work presented, no
-    // debrief yet — BUT ceremony scales with task size. INLINE TWIN of
-    // sessionOwesDebrief (debrief-gate.ts): a trivial single-file surgical fix
-    // (exactly one code_change, no changeset, no decision) owes NO separate
-    // debrief; a changeset, 2+ code_changes, or a decision escalates. Kept in
-    // lock-step with the bundled copy by stop-hook-debrief-parity.test.ts.
+    // #195 F1 + J2a (#210) — debrief-owed: ceremony scales with task size.
+    // INLINE TWIN of sessionOwesDebrief (debrief-gate.ts) — kept in lock-step
+    // with the bundled copy by stop-hook-debrief-parity.test.ts. Count LIVE
+    // artifacts: a LIVE debrief (not superseded/retracted/obsolete/rejected)
+    // closes the loop; code counts LIVE code_change/changeset (rejected KEPT,
+    // superseded/retracted/obsolete dropped); a decision/spec/plan (any status)
+    // OR a dead-but-attempted debrief is feature-shaping ceremony that escalates
+    // even a single-file fix. research/findings is NOT ceremony. Trivial: exactly
+    // one live single-file code_change, no changeset, no ceremony.
     if (owesDebriefSession === null) {
-      const hasDebrief = arr.some((x) => x.type === "debrief");
+      const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+      const DEBRIEF_DEAD = ["superseded", "retracted", "obsolete", "rejected"];
+      const hasLiveDebrief = arr.some((x) => x.type === "debrief" && !DEBRIEF_DEAD.includes(x.status));
       const recentCode = arr.filter((x) => {
         if (!["code_change", "changeset"].includes(x.type)) return false;
+        if (CODE_CLOSED.includes(x.status)) return false;
         const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
       });
       const changesets = recentCode.filter((x) => x.type === "changeset").length;
       const codeChanges = recentCode.filter((x) => x.type === "code_change").length;
-      const hasDecision = arr.some((x) => x.type === "decision");
-      const trivial = changesets === 0 && codeChanges === 1 && !hasDecision;
-      if (!hasDebrief && recentCode.length > 0 && !trivial) owesDebriefSession = id;
+      const hasCeremony =
+        arr.some((x) => ["decision", "spec", "plan"].includes(x.type)) ||
+        arr.some((x) => x.type === "debrief");
+      const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
+      if (!hasLiveDebrief && recentCode.length > 0 && !trivial) owesDebriefSession = id;
     }
   }
   if (owesDebriefSession !== null) {

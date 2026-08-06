@@ -43,6 +43,10 @@ const cc = (id: string, createdAt = recent): Art => ({ id, type: "code_change", 
 const cs = (id: string, createdAt = recent): Art => ({ id, type: "changeset", status: "approved", createdAt });
 const dec = (id: string): Art => ({ id, type: "decision", status: "approved", createdAt: recent });
 const dbf = (id: string): Art => ({ id, type: "debrief", status: "approved", createdAt: recent });
+const plan = (id: string): Art => ({ id, type: "plan", status: "approved", createdAt: recent });
+const spec = (id: string): Art => ({ id, type: "spec", status: "approved", createdAt: recent });
+const ccSuperseded = (id: string): Art => ({ id, type: "code_change", status: "superseded", createdAt: recent });
+const dbfRetracted = (id: string): Art => ({ id, type: "debrief", status: "retracted", createdAt: recent });
 
 interface Case {
   name: string;
@@ -59,6 +63,15 @@ const MATRIX: Case[] = [
   { name: "changeset + code_change", artifacts: [cs("s1"), cc("c1")], owesDebrief: true },
   { name: "no code at all", artifacts: [], owesDebrief: false },
   { name: "single code_change aged out (>30m)", artifacts: [cc("c1", ancient)], owesDebrief: false },
+  // F1 — a spec or plan means the work was feature-shaped, not a surgical fix.
+  { name: "code_change + plan (F1)", artifacts: [cc("c1"), plan("p1")], owesDebrief: true },
+  { name: "code_change + spec (F1)", artifacts: [cc("c1"), spec("sp1")], owesDebrief: true },
+  // F2 — a superseded code_change + its live revision is ONE live change (a
+  // tweaked trivial fix keeps its carve-out), not two.
+  { name: "superseded code_change + live code_change (F2)", artifacts: [ccSuperseded("c0"), cc("c1")], owesDebrief: false },
+  // F2 — a RETRACTED debrief no longer satisfies the obligation; the close was
+  // attempted but isn't standing, so it's still owed.
+  { name: "code_change + retracted debrief (F2)", artifacts: [cc("c1"), dbfRetracted("b0")], owesDebrief: true },
 ];
 
 /** Runs a stop script against a project dir seeded with `artifacts`, returns

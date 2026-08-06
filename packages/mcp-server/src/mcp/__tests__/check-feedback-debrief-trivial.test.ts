@@ -75,6 +75,41 @@ describe("check_feedback — J2a debrief-owed scales with task size", () => {
     expect(res.text).toContain(NAG);
   });
 
+  it("ESCALATED: a single code_change + a plan DOES nag (F1 — planned work isn't a surgical fix)", async () => {
+    await callTool("present_plan", {
+      title: "Refactor pipeline",
+      steps: [{ description: "extract helper", reasoning: "reuse" }],
+      estimatedChanges: 1,
+    });
+    await approve(store.getArtifacts().find((a) => a.type === "plan")!.id);
+    await approve(await presentCodeChange("lib/a.ts"));
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain(NAG);
+  });
+
+  it("ESCALATED: a single code_change + a spec DOES nag (F1 — specced work isn't a surgical fix)", async () => {
+    await callTool("present_spec", {
+      title: "Auth spec",
+      objective: "ship login",
+      requirements: [{ id: "REQ-1", statement: "users log in", rationale: "core", acceptanceCriteria: ["works"] }],
+    });
+    await approve(store.getArtifacts().find((a) => a.type === "spec")!.id);
+    await approve(await presentCodeChange("lib/a.ts"));
+    const res = await callTool("check_feedback");
+    expect(res.text).toContain(NAG);
+  });
+
+  it("TRIVIAL: a code_change SUPERSEDED by its live revision is ONE live change → no nag (F2)", async () => {
+    // v1 gets tweaked into v2 — v1 flips to superseded, v2 is the live change.
+    const v1 = await presentCodeChange("lib/a.ts");
+    await store.updateArtifactStatus(v1, "superseded", "ui_supersede" as any);
+    const v2 = await presentCodeChange("lib/a.ts");
+    await approve(v2);
+    const res = await callTool("check_feedback");
+    // One superseded + one live code_change = ONE live change → still trivial.
+    expect(res.text).not.toContain(NAG);
+  });
+
   it("ESCALATED: a single code_change + a decision DOES nag (a real decision escalates)", async () => {
     // A decision moment happened — even a single-file fix owes the full arc.
     await callTool("present_options", {

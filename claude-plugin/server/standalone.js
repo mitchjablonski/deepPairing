@@ -30304,16 +30304,22 @@ async function recordRejectedOption(store, broadcast, params) {
 }
 
 // src/debrief-gate.ts
+var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
+var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
+var CEREMONY_TYPES = ["decision", "spec", "plan"];
 function sessionOwesDebrief(artifacts, isRecent = () => true) {
-  if (artifacts.some((a) => a?.type === "debrief")) return false;
+  const hasLiveDebrief = artifacts.some(
+    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")
+  );
+  if (hasLiveDebrief) return false;
   const recentCode = artifacts.filter(
-    (a) => (a?.type === "code_change" || a?.type === "changeset") && isRecent(a)
+    (a) => (a?.type === "code_change" || a?.type === "changeset") && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)
   );
   if (recentCode.length === 0) return false;
   const changesets = recentCode.filter((a) => a?.type === "changeset").length;
   const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;
-  const hasDecision = artifacts.some((a) => a?.type === "decision");
-  const trivial = changesets === 0 && codeChanges === 1 && !hasDecision;
+  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");
+  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
   return !trivial;
 }
 
@@ -31658,7 +31664,7 @@ Decline to review the diff at http://localhost:${ctx.port}`
     }
   }
   const closesTask = !sessionOwesDebrief(await ctx.store.getArtifacts());
-  const closeNote = closesTask ? " This single-file surgical change self-summarizes and closes the task \u2014 fold the what-changed-and-why into `reasoning`; no separate present_debrief is owed." : "";
+  const closeNote = closesTask ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
   return {
     content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
