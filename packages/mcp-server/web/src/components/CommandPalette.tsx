@@ -81,6 +81,19 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         onClose(); // open the modal from under the still-mounted palette
       },
     });
+    // #212 (J4) — the top-level header Ledger button was cut; the palette
+    // ("⌘K unifies everything") is now the keyboard door to the Ledger drawer,
+    // alongside the Diagnostics entry. Same dp:open-your-taste event the taste
+    // toasts + Diagnostics entry use, so all three land on the same drawer.
+    items.push({
+      id: "action_ledger",
+      label: "Open the Ledger (cross-project taste)",
+      type: "action",
+      action: () => {
+        window.dispatchEvent(new CustomEvent("dp:open-your-taste"));
+        onClose(); // open the drawer from under the still-mounted palette
+      },
+    });
     items.push({
       id: "action_approve_all",
       label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : !boundSessionId && draftSessionCount > 1 ? ` across ${draftSessionCount} sessions` : ""} (except decisions)`,

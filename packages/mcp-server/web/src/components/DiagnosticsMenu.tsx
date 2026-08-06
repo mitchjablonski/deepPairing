@@ -14,8 +14,12 @@ import { CompoundingBadge } from "./CompoundingBadge";
  *
  * NONE of it is deleted or made unreachable — each control lives here in full,
  * with its own popover, and its keyboard shortcut (if any) is untouched. The
- * point is only that a first-time human meets Conversation / Decisions / Search
- * / Ledger / settings / help first, not a wall of framework instrumentation.
+ * point is only that a first-time human meets Comment threads / Decisions /
+ * Features / ⌘K first, not a wall of framework instrumentation.
+ *
+ * #212 (J4) — the Ledger's compounding-stats entry (CompoundingBadge) is now
+ * the SINGLE door to the Ledger drawer (the redundant top-level header button
+ * was cut), reached via onOpenLedger.
  *
  * A live PERSISTENT signal (a gate block fired this session, or the latest hook
  * fire was a nag) is surfaced as a small amber dot on the "⋯" trigger even while

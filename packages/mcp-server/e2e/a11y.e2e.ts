@@ -1373,7 +1373,11 @@ test("a11y: the Ledger drawer with a stance row + armed remove confirm has no se
 
   await page.goto(`${baseURL}/?session=a11y`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
-  await page.click('[aria-label="Open the Ledger"]');
+  // #212 (J4) — the top-level header Ledger button was cut; the drawer's own
+  // entry points (the Diagnostics ⋯ entry + the ⌘K palette) all fire the shared
+  // dp:open-your-taste event. Dispatch it directly so the scan sees ONLY the
+  // drawer under test — no Diagnostics popover left open behind the backdrop.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("dp:open-your-taste")));
   // Marquee-surface rule: never analyze before the row + its remove button
   // exist (a drawer stuck on "Loading…" would pass hollow).
   const removeBtn = page.getByRole("button", { name: /^Remove stance: global mutable state$/ });

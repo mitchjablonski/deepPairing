@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
-import { computePending } from "../lib/pending";
+import { computePending, isSinglePendingInView } from "../lib/pending";
 
 /**
  * The "waiting for your review" banner. Driven by the shared computePending
@@ -17,6 +17,7 @@ import { computePending } from "../lib/pending";
 export function PendingBanner() {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   // UX5 — dismissing marks a draft obsolete, which the API can't undo back to
   // draft, so require a two-step confirm instead of a one-click destructive ✕.
@@ -24,6 +25,14 @@ export function PendingBanner() {
 
   const { drafts, total } = computePending(artifacts);
   if (total === 0) return null;
+  // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
+  // already on screen, it IS the call to action (its own status badge + review
+  // actions), so this banner would just restate what the card + the header count
+  // pill already say. Suppress it. The shared predicate keeps this in lockstep
+  // with the header-pill collapse in App (they can't disagree). The banner still
+  // shows for 2+ pending and when the single pending draft is NOT selected (the
+  // scent to reach it) — see isSinglePendingInView.
+  if (isSinglePendingInView(artifacts, selectedArtifactId)) return null;
 
   return (
     <div className="px-3 py-1.5 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2">

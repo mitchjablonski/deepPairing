@@ -144,17 +144,39 @@ test("#189/#4 — at 900px the 'Your turn' pill does not overlap the nav cluster
   const pill = page.getByRole("button", { name: /your turn/i });
   await pill.waitFor({ timeout: 15000 });
   // The nav labels collapse below 1100px; the buttons stay reachable by aria.
-  const ledger = page.getByRole("button", { name: /open the ledger/i });
+  // #212 (J4) — the header Ledger button is gone, so the leftmost nav button is
+  // now Comment threads; use it (and help, the rightmost) to bound the cluster.
+  const firstNav = page.getByRole("button", { name: /open comment threads rail/i });
   const help = page.getByRole("button", { name: /show keyboard shortcuts/i });
   const pillBox = await pill.boundingBox();
-  const ledgerBox = await ledger.boundingBox();
+  const firstNavBox = await firstNav.boundingBox();
   const helpBox = await help.boundingBox();
-  if (!pillBox || !ledgerBox || !helpBox) throw new Error("missing header geometry");
+  if (!pillBox || !firstNavBox || !helpBox) throw new Error("missing header geometry");
   // The pill (left group) must sit entirely left of the nav cluster — no garble.
-  expect(rectsOverlap(pillBox, ledgerBox), "pill overlaps the Ledger nav button").toBe(false);
+  expect(rectsOverlap(pillBox, firstNavBox), "pill overlaps the first nav button").toBe(false);
   expect(rectsOverlap(pillBox, helpBox), "pill overlaps the help nav button").toBe(false);
-  expect(pillBox.x + pillBox.width).toBeLessThanOrEqual(ledgerBox.x + 1);
+  expect(pillBox.x + pillBox.width).toBeLessThanOrEqual(firstNavBox.x + 1);
   await page.screenshot({ path: path.join(SHOTS, "after-900px-header.png") });
+});
+
+test("#212 (J4) — the header slims: no standalone Ledger button; ⌘K Search is the single palette affordance", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await gotoSession(page);
+  await page.getByRole("button", { name: /your turn/i }).waitFor({ timeout: 15000 });
+  // The top-level Ledger button is cut — nothing in the header (menu closed)
+  // carries "Open the Ledger" (the Diagnostics entry only mounts when opened).
+  await expect(page.getByRole("button", { name: /open the ledger/i })).toHaveCount(0);
+  // The single, clearly-labelled palette affordance remains (discoverability
+  // for non-keyboard users): "⌘K Search", opening the command palette.
+  const palette = page.getByRole("button", { name: /open the command palette/i });
+  await expect(palette).toBeVisible();
+  await expect(palette).toHaveText(/⌘K\s*Search/);
+  // And the Ledger is still reachable — the Diagnostics (⋯) entry opens it.
+  await page.getByRole("button", { name: /open diagnostics menu/i }).click();
+  const ledgerEntry = page.getByRole("button", { name: /open the ledger/i });
+  await ledgerEntry.waitFor({ timeout: 10000 });
+  await ledgerEntry.click();
+  await expect(page.getByText(/Cross-project Philosophy Ledger/i)).toBeVisible({ timeout: 10000 });
 });
 
 test("#189/#5 — a mermaid diagram on a LIGHT card gets light node fills (not dark)", async ({ page }) => {

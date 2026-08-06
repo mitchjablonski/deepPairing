@@ -154,18 +154,12 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
     await page.waitForTimeout(1000);
     await shot("reasoning-card.png");
 
-    // The Ledger drawer. The header control was renamed from "your taste" to
-    // "Ledger" (F2 rename) — the old /your taste/i selector matched nothing and
-    // silently fell through to screenshotting the un-opened review surface. Two
-    // header buttons now carry "Ledger" in their accessible name (the
-    // CompoundingBadge stat and this dedicated button), so match the dedicated
-    // one EXACTLY, then WAIT for the drawer to actually render before capturing
-    // — no silent .catch() fallthrough.
-    // The header button is the first "Open the Ledger" in DOM order. A
-    // daemon-mismatch toast can carry the same action label, so .first()
-    // (not an unscoped exact match, which would strict-throw) targets the
-    // real header control — and there's no <header> landmark to scope to.
-    await page.getByRole("button", { name: "Open the Ledger", exact: true }).first().click();
+    // The Ledger drawer. #212 (J4) — the top-level header Ledger button was cut;
+    // the drawer's entry points (the Diagnostics ⋯ entry + the ⌘K palette) all
+    // fire the shared dp:open-your-taste event. Dispatch it directly (the shot
+    // shows only the drawer, so the opening path is invisible), then WAIT for the
+    // drawer to actually render before capturing — no silent .catch() fallthrough.
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("dp:open-your-taste")));
     await page.getByText("Cross-project Philosophy Ledger").waitFor({ state: "visible", timeout: 10_000 });
     await page.waitForTimeout(1000); // let the drawer's slide-in + digest settle
     await shot("ledger.png");

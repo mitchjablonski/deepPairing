@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computePending, isDraftAwaitingReview, isUnresolvedQuestion, REVIEWABLE_TYPES, TURN_PART_BUCKETS, summarizeTurnParts } from "../pending";
+import { computePending, isDraftAwaitingReview, isSinglePendingInView, isUnresolvedQuestion, REVIEWABLE_TYPES, TURN_PART_BUCKETS, summarizeTurnParts } from "../pending";
 
 const art = (over: any) =>
   ({ id: "a", type: "research", title: "t", status: "draft", version: 1, createdAt: "2026-01-01T00:00:00.000Z", content: {}, ...over }) as any;
@@ -71,6 +71,38 @@ describe("computePending — single source of truth for 'waiting on human'", () 
     expect(isDraftAwaitingReview(art({ type: "plan", status: "approved" }))).toBe(false);
     expect(isUnresolvedQuestion(com({ intent: "question" }))).toBe(true);
     expect(isUnresolvedQuestion(com({ intent: "question", humanResolvedAt: "2026-01-02T00:00:00.000Z" }))).toBe(false);
+  });
+});
+
+// #212 (J2b) — the lite-frame step-down predicate: suppress the PendingBanner
+// (and collapse the header turn-pill to a count) ONLY when exactly one draft is
+// pending AND it is the artifact in view. Conservative on every other shape.
+describe("isSinglePendingInView — J2b lite-frame step-down rule", () => {
+  const draft = (id: string) => art({ id, type: "code_change", status: "draft" });
+
+  it("true when the one pending draft IS the selected/in-view artifact", () => {
+    expect(isSinglePendingInView([draft("only")], "only")).toBe(true);
+  });
+
+  it("false when the single pending draft is NOT the one in view (banner is the scent)", () => {
+    expect(isSinglePendingInView([draft("d1"), art({ id: "seen", status: "approved" })], "seen")).toBe(false);
+  });
+
+  it("false when nothing is selected (null/undefined)", () => {
+    expect(isSinglePendingInView([draft("d1")], null)).toBe(false);
+    expect(isSinglePendingInView([draft("d1")], undefined)).toBe(false);
+  });
+
+  it("false for 2+ pending drafts even if one of them is in view", () => {
+    expect(isSinglePendingInView([draft("d1"), draft("d2")], "d1")).toBe(false);
+  });
+
+  it("false when there is nothing pending (a selected approved artifact isn't a draft)", () => {
+    expect(isSinglePendingInView([art({ id: "a", status: "approved" })], "a")).toBe(false);
+  });
+
+  it("only DRAFT reviewables count — a selected reasoning artifact never triggers the step-down", () => {
+    expect(isSinglePendingInView([art({ id: "r", type: "reasoning", status: "draft" })], "r")).toBe(false);
   });
 });
 
