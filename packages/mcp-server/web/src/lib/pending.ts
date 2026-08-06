@@ -104,3 +104,29 @@ export function computePending(
   const drafts = artifacts.filter(isDraftAwaitingReview);
   return { drafts, total: drafts.length };
 }
+
+/**
+ * J2b (#212) — lite-frame step-down. The probe's one-artifact session fired the
+ * same "you have work" fact four times (header count pill + PendingBanner + the
+ * turn pill's verbatim label + the card's own status badge). When EXACTLY ONE
+ * draft is pending AND it is the artifact currently in view (selected), the card
+ * itself IS the call to action, so the frame steps down: the PendingBanner
+ * suppresses and the header turn-pill collapses to a bare count (the summary).
+ *
+ * Conservative by construction — returns FALSE (banner stays) for:
+ *   - 0 pending (the banner already self-hides),
+ *   - 2+ pending (the banner's chip strip is the only per-item triage surface),
+ *   - a single pending draft that is NOT the one on screen (then the banner is
+ *     the scent that lets you reach it).
+ *
+ * Shared so App (header-pill collapse + banner gate) and PendingBanner
+ * (self-suppress) evaluate the SAME rule and can't drift — the M4 no-drift
+ * principle the header-pill dedup already follows.
+ */
+export function isSinglePendingInView(
+  artifacts: Artifact[],
+  selectedArtifactId: string | null | undefined,
+): boolean {
+  const { drafts } = computePending(artifacts);
+  return drafts.length === 1 && !!selectedArtifactId && drafts[0]!.id === selectedArtifactId;
+}

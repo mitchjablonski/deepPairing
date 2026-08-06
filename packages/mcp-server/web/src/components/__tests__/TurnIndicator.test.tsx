@@ -301,6 +301,19 @@ describe("#196 F2 — banner-soup dedup (M4)", () => {
     expect(screen.getByText(/Your turn — 1 change/i)).toBeInTheDocument();
   });
 
+  it("J2b (#212) — collapses to a count when the single pending card is in view (banner suppressed)", () => {
+    // The banner is gone (App suppressed it because the one draft is on screen),
+    // so the pill drops the verbatim breakdown too — the visible card is the
+    // detail; the pill stays a bare count summary.
+    seedConnected();
+    seedArtifact({ id: "d1", type: "code_change", status: "draft" });
+    render(<TurnIndicator pendingCardInView />);
+    expect(screen.getByText(/1 for you/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Your turn — 1 change/i)).not.toBeInTheDocument();
+    // The jump affordance survives (accessible name is the full breakdown).
+    expect(screen.getByRole("button", { name: /your turn/i })).toBeInTheDocument();
+  });
+
   it("collapses the questions badge to a count when ResumeQuestionsBanner is visible", () => {
     seedConnected();
     seedArtifact({ id: "art_1" });

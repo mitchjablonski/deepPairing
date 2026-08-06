@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DiagnosticsMenu } from "../DiagnosticsMenu";
 import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { useHookStatusStore } from "../../stores/hookStatus";
@@ -37,6 +38,21 @@ describe("DiagnosticsMenu — closed-trigger attention dot", () => {
     // a11y — the state is announced through the trigger's accessible name.
     expect(screen.getByRole("button", { name: /attention needed/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^open diagnostics menu$/i })).not.toBeInTheDocument();
+  });
+
+  it("#212 (J4) — carries the SINGLE Ledger entry: opening the menu reveals it, and clicking opens the Ledger", async () => {
+    // The top-level header Ledger button was cut; this overflow entry is now the
+    // only in-header door to the drawer. It must render (labelled "Open the
+    // Ledger") when the menu opens and invoke onOpenLedger.
+    const onOpenLedger = vi.fn();
+    render(<DiagnosticsMenu onOpenLedger={onOpenLedger} />);
+    await userEvent.click(screen.getByRole("button", { name: /open diagnostics menu/i }));
+    // CompoundingBadge resolves its /api/metrics fetch (stubbed above) then
+    // renders the zero-state "Ledger" entry.
+    const ledger = await screen.findByRole("button", { name: /open the ledger/i });
+    expect(ledger).toHaveTextContent(/Ledger/);
+    await userEvent.click(ledger);
+    expect(onOpenLedger).toHaveBeenCalledTimes(1);
   });
 
   it("shows the dot when the latest hook fire is a nag (exitCode 2), and none for a pass", () => {

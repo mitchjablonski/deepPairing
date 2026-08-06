@@ -18,10 +18,11 @@ function mockMetrics(blocks: number, writes: number) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("CompoundingBadge", () => {
-  it("E3 (L6) — shows a muted zero-state at 0/0 (was: self-hiding, so new users never learned the meter existed)", async () => {
+  it("E3 (L6) — shows a muted labelled zero-state at 0/0 (was: self-hiding, so new users never learned the meter existed)", async () => {
     vi.stubGlobal("fetch", mockMetrics(0, 0));
     render(<CompoundingBadge onOpen={() => {}} />);
-    expect(await screen.findByText(/🛡 Ledger/)).toBeInTheDocument();
+    // #212 (J4) — the single ledger entry leads with the word "Ledger".
+    expect(await screen.findByText(/🧭 Ledger/)).toBeInTheDocument();
     // The counts only render once there's real signal.
     expect(screen.queryByText("🛡 0")).toBeNull();
   });
@@ -30,7 +31,9 @@ describe("CompoundingBadge", () => {
     vi.stubGlobal("fetch", mockMetrics(14, 23));
     const onOpen = vi.fn();
     render(<CompoundingBadge onOpen={onOpen} />);
-    const btn = await screen.findByRole("button", { name: /ledger stats/i });
+    // #212 (J4) — aria-label is now "Open the Ledger" (was "Ledger stats").
+    const btn = await screen.findByRole("button", { name: /open the ledger/i });
+    expect(btn.textContent).toContain("Ledger"); // leads with the label
     expect(btn.textContent).toContain("14"); // 🛡 blocks
     expect(btn.textContent).toContain("23"); // 🧭 ledger writes
     await userEvent.click(btn);

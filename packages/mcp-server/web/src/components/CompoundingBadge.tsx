@@ -4,12 +4,12 @@ import { useAbortableFetch } from "../hooks/useAbortableFetch";
 
 /**
  * Compact "look how much you've taught it" stat — the felt proof that the moat
- * is compounding. #189 moved it OFF the header into the Diagnostics overflow;
- * the header keeps the ONE primary "Ledger" button. This is the STATS view of
- * that same Ledger (headline cumulative counts — pre-flight blocks + ledger
- * writes), and clicking it opens the exact same drawer the header opens (L9,
- * #194 — the label + tooltip now say so, so the two entries don't read as
- * unrelated).
+ * is compounding. #189 moved it OFF the header into the Diagnostics overflow.
+ * #212 (J4) removed the top-level header "Ledger" button, so this IS now the
+ * single entry to the Ledger drawer — it leads with the word "Ledger" (not a
+ * bare stat) and carries the headline cumulative counts (pre-flight blocks +
+ * ledger writes) inline. Clicking opens the drawer (via onOpen → the shared
+ * dp:open-your-taste path the ⌘K palette + taste toasts also use).
  *
  * Refetches whenever the ledger store invalidates (a block fired / a stance
  * changed), so the count ticks up in the moment the taste compounds.
@@ -45,20 +45,21 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
     <button
       onClick={onOpen}
       title={isZero
-        ? "Ledger stats — pre-flight blocks and ledger writes accumulate across this project. Opens the same Ledger as the header button."
-        : `Ledger stats: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project. Opens the same Ledger as the header button.`}
-      aria-label="Ledger stats — opens the same Ledger as the header button"
+        ? "Open the Ledger — your cross-project taste. Pre-flight blocks and ledger writes accumulate here across this project."
+        : `Open the Ledger — your cross-project taste: ${stat.blocks} pre-flight block${stat.blocks === 1 ? "" : "s"} · ${stat.writes} ledger write${stat.writes === 1 ? "" : "s"} across this project.`}
+      aria-label="Open the Ledger"
       className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs text-text-muted
                  hover:text-text-secondary hover:bg-surface-hover transition-colors font-mono"
     >
-      {isZero ? (
-        // F1 — no opacity stacking: muted IS the floor of the AA ladder.
-        // L9 (#194) — "Ledger stats" (not a bare "Ledger") so this overflow
-        // entry doesn't read as a second, unrelated copy of the header's
-        // primary "Ledger" button; both open the same drawer.
-        <span>🛡 Ledger stats</span>
-      ) : (
+      {/* #212 (J4) — leads with the word "Ledger" so, as the SINGLE ledger entry
+          now, this reads unambiguously as the drawer's door rather than a bare
+          stat. The cumulative counts trail inline once there's something to show
+          (F1 — muted is the AA floor, no opacity stacking; E3 — a labelled
+          zero-state still teaches the affordance instead of self-hiding). */}
+      <span>🧭 Ledger</span>
+      {!isZero && (
         <>
+          <span className="text-border-default">·</span>
           <span>🛡 {stat.blocks}</span>
           <span className="text-border-default">·</span>
           <span>🧭 {stat.writes}</span>

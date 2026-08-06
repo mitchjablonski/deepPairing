@@ -24,11 +24,22 @@ import { buildThreads } from "../lib/threading";
  * verbatim twice (pills summarize, banners act). Both default false, so the
  * component renders the full pills in isolation (tests) and whenever a banner
  * is dismissed/absent.
+ *
+ * J2b (#212) — the same collapse also fires when the PendingBanner is
+ * SUPPRESSED because the one pending draft is the card on screen
+ * (`pendingCardInView`). The banner is gone, but the full "Your turn — 1 finding"
+ * breakdown would still restate what the visible card already says, so the pill
+ * steps down to the bare count summary too — the frame carries the fact once.
  */
 export function TurnIndicator({
   pendingBannerVisible = false,
   questionsBannerVisible = false,
-}: { pendingBannerVisible?: boolean; questionsBannerVisible?: boolean } = {}) {
+  pendingCardInView = false,
+}: {
+  pendingBannerVisible?: boolean;
+  questionsBannerVisible?: boolean;
+  pendingCardInView?: boolean;
+} = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
@@ -247,9 +258,12 @@ export function TurnIndicator({
           {/* M4 — PendingBanner (right below the header) lists these items with
               jump + dismiss chips, so when it's visible the header pill drops
               its verbatim "1 finding, 1 decision" breakdown to a count summary;
-              the full text stays in the title + aria-label. */}
+              the full text stays in the title + aria-label.
+              J2b (#212) — likewise when the banner is SUPPRESSED because the one
+              pending draft is the card in view: the visible card is the detail,
+              so the pill stays a count summary rather than restating it. */}
           <span className="truncate">
-            {pendingBannerVisible ? `${totalPending} for you` : `Your turn — ${parts.join(", ")}`}
+            {pendingBannerVisible || pendingCardInView ? `${totalPending} for you` : `Your turn — ${parts.join(", ")}`}
           </span>
         </button>
         {questionsBadge}

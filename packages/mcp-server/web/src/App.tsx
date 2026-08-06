@@ -3,7 +3,7 @@ import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard } from "./components/SessionWrapCard";
-import { computePending } from "./lib/pending";
+import { computePending, isSinglePendingInView } from "./lib/pending";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -84,7 +84,13 @@ function App() {
   // so they can't drift). Both banners self-hide when their count is 0.
   const artifactsList = useArtifactStore((s) => s.artifacts);
   const commentsMap = useArtifactStore((s) => s.comments);
-  const pendingBannerVisible = computePending(artifactsList).total > 0;
+  // J2b (#212) — lite-frame step-down. When the ONE pending draft is the card
+  // in view, the card is the CTA; the PendingBanner suppresses (below) and the
+  // header pill collapses to a bare count. Computed with the SHARED predicate so
+  // the banner-gate here and the banner's own self-suppress can't disagree.
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const singlePendingInView = isSinglePendingInView(artifactsList, selectedArtifactId);
+  const pendingBannerVisible = computePending(artifactsList).total > 0 && !singlePendingInView;
   const questionsBannerVisible =
     connected && noAgentLive(activeSessions) && countResumeQuestions(commentsMap) > 0;
 
@@ -416,38 +422,16 @@ function App() {
           <TurnIndicator
             pendingBannerVisible={pendingBannerVisible}
             questionsBannerVisible={questionsBannerVisible}
+            pendingCardInView={singlePendingInView}
           />
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {/* #189 — the ONE primary Ledger surface: the functional drawer. The
-              redundant compounding-stats "Ledger" pill moved into Diagnostics
-              (⋯) below, along with the autonomy dial, gate log, and hook log.
-              Nothing deleted — just no longer front-loaded. */}
-          <button
-            onClick={() => {
-              // CC3 — when the user is on the cold-start IdleHome (no
-              // artifacts yet), the home view's primary tab is already
-              // the ledger. The header button used to land on the
-              // "Stances" tab instead — so clicking the most ledger-
-              // shaped affordance during idle took users to a different
-              // surface than the one they were already looking at. Now
-              // the button respects the surface the user came from:
-              // idle → ledger tab, mid-session → default (stances).
-              setTasteOpts(hasArtifacts ? {} : { initialTab: "ledger" });
-              setShowTaste(true);
-            }}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
-            title="Your cross-project taste from the Philosophy Ledger"
-            aria-label="Open the Ledger"
-          >
-            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
-              <path d="M6 1.5c2.5 0 4.5 2 4.5 4.5 0 1.5-.8 2.8-2 3.5" />
-              <circle cx="6" cy="9.5" r="1" fill="currentColor" />
-              <path d="M6 1.5v2M1.5 6h2M10.5 6h-2" />
-            </svg>
-            <span className="hidden min-[1100px]:inline">Ledger</span>
-          </button>
-          <span className="text-2xs text-text-muted mx-1">·</span>
+          {/* #212 (J4) — the top-level Ledger button is GONE. It was a second
+              door to the drawer the Diagnostics (⋯) "Ledger" entry already
+              opens, so the header carried two affordances for one surface. The
+              Diagnostics entry is now THE single ledger entry; the drawer itself
+              is unchanged, still reachable from the ⌘K palette + the taste
+              toasts (dp:open-your-taste). */}
           <button
             onClick={() => setShowConversation(true)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
@@ -499,13 +483,20 @@ function App() {
             <span className="hidden min-[1100px]:inline">Features</span>
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
+          {/* #212 (J4) — the standalone "Search" button was a duplicate door to
+              the ⌘K command palette (which already unifies search + every quick
+              action). Kept as ONE compact palette affordance — the ⌘K hint leads
+              so it reads as the shortcut it is, not a separate "search" feature —
+              so mouse / non-keyboard users keep the discoverability. The cut is
+              the duplicate framing, not the affordance. */}
           <button
             onClick={() => setShowPalette(true)}
             className="hidden min-[1100px]:inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
-            title="Command palette (⌘K)"
+            title="Command palette — search + quick actions (⌘K)"
+            aria-label="Open the command palette"
           >
-            <span>Search</span>
             <kbd className="font-mono bg-surface-elevated px-1 rounded text-[9px]">⌘K</kbd>
+            <span>Search</span>
           </button>
           <button
             onClick={() => setShowSettings(true)}
