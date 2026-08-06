@@ -7,8 +7,7 @@ import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
-import { reviewLifecycle } from "../../lib/reviewLifecycle";
-import { useReplayStore } from "../../stores/replay";
+import { useWriteLock } from "../../hooks/useWriteLock";
 import { OpenQuestionSection } from "./OpenQuestionSection";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { SimpleMarkdown } from "../SimpleMarkdown";
@@ -172,7 +171,7 @@ function FindingTriage({
   findingIndex: number;
   findingTitle: string;
   comments: Comment[];
-  /** #204 (UX L2) — a retracted/terminal (reviewLifecycle "closed") or replayed
+  /** #204 (UX L2) — a retracted/terminal (useWriteLock "closed") or replayed
    *  ("frozen") artifact is READ-ONLY on the write axis: the verdict triad stays
    *  VISIBLE (the prior verdict is history) but dimmed + non-interactive, never a
    *  live-looking glyph you can click on a draft the agent already took back. */
@@ -599,16 +598,12 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
     [artifact.content],
   );
   const comments = useChainComments(artifact.id); // Bug2 — chain aggregation
-  // #204 (UX L2) — the WRITE AXIS, derived through the SAME reviewLifecycle
-  // helper ChangesetArtifact uses (not an ad-hoc `status === "retracted"`), so a
-  // retracted (→ "closed") or replayed (→ "frozen") artifact locks the per-finding
-  // verdict triad + the comment/ask composers uniformly. Draft ("review") and
-  // approved ("follow_up") stay fully writable — follow-up commenting is intact.
-  const replayActive = useReplayStore((s) => s.active);
-  const writeLocked = (() => {
-    const lc = reviewLifecycle(artifact.status, replayActive);
-    return lc === "closed" || lc === "frozen";
-  })();
+  // #204 (UX L2) — the WRITE AXIS, via the shared useWriteLock hook (not an
+  // ad-hoc `status === "retracted"`), so a retracted (→ "closed") or replayed (→
+  // "frozen") artifact locks the per-finding verdict triad + the comment/ask
+  // composers uniformly. Draft ("review") and approved ("follow_up") stay fully
+  // writable — follow-up commenting is intact.
+  const writeLocked = useWriteLock(artifact.status);
   const [focusMode, setFocusMode] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const [colorBy, setColorBy] = useState<ColorBy>("significance");

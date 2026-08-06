@@ -7,8 +7,7 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
-import { reviewLifecycle } from "../../lib/reviewLifecycle";
-import { useReplayStore } from "../../stores/replay";
+import { useWriteLock } from "../../hooks/useWriteLock";
 
 /**
  * #190 A2 — the read-only EXPLAINER renderer (the comprehension surface for how
@@ -165,18 +164,13 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
     [artifact.content],
   );
   const comments = useChainComments(artifact.id);
-  // #207 (I2 review) — the WRITE AXIS, derived through the SAME reviewLifecycle
-  // helper the other narrative renderers use. A retracted (→ "closed") or
-  // replayed (→ "frozen") explainer withholds every composer (overview + walk
-  // grain, evidence gutters, ask-anything). An ACKNOWLEDGED explainer is
-  // status "approved" → "follow_up": it STAYS late-commentable (you can keep
-  // asking about code you've read), so approved is NOT locked. Posted history
-  // stays readable.
-  const replayActive = useReplayStore((s) => s.active);
-  const writeLocked = (() => {
-    const lc = reviewLifecycle(artifact.status, replayActive);
-    return lc === "closed" || lc === "frozen";
-  })();
+  // #207 (I2 review) — the WRITE AXIS, via the shared useWriteLock hook. A
+  // retracted (→ "closed") or replayed (→ "frozen") explainer withholds every
+  // composer (overview + walk grain, evidence gutters, ask-anything). An
+  // ACKNOWLEDGED explainer is status "approved" → "follow_up": it STAYS late-
+  // commentable (you can keep asking about code you've read), so approved is NOT
+  // locked. Posted history stays readable.
+  const writeLocked = useWriteLock(artifact.status);
 
   const sections = content.sections ?? [];
   const relatedArtifactIds = content.relatedArtifactIds ?? [];

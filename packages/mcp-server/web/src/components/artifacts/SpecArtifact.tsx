@@ -6,8 +6,7 @@ import { OpenQuestionSection } from "./OpenQuestionSection";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { useChainComments } from "../../hooks/useChainComments";
-import { reviewLifecycle } from "../../lib/reviewLifecycle";
-import { useReplayStore } from "../../stores/replay";
+import { useWriteLock } from "../../hooks/useWriteLock";
 
 interface Props {
   artifact: Artifact;
@@ -44,17 +43,12 @@ export function SpecArtifact({ artifact }: Props) {
   // array) so the renderer can trust the shape without per-field guards.
   const spec = coerceSpecContent(artifact.content);
   const requirements = spec.requirements;
-  // #207 (I2) — the WRITE AXIS, derived through the SAME reviewLifecycle helper
-  // ResearchArtifact uses post-H3, so a retracted (→ "closed") or replayed (→
-  // "frozen") spec withholds EVERY composer it hosts (visuals, requirement
-  // threads, open questions) uniformly. Draft ("review") stays writable; approved
-  // ("follow_up") STAYS late-commentable (the #187 lane — approved is never
-  // locked). Posted history stays readable.
-  const replayActive = useReplayStore((s) => s.active);
-  const writeLocked = (() => {
-    const lc = reviewLifecycle(artifact.status, replayActive);
-    return lc === "closed" || lc === "frozen";
-  })();
+  // #207 (I2) — the WRITE AXIS, via the shared useWriteLock hook: a retracted
+  // (→ "closed") or replayed (→ "frozen") spec withholds EVERY composer it hosts
+  // (visuals, requirement threads, open questions) uniformly. Draft ("review")
+  // stays writable; approved ("follow_up") STAYS late-commentable (the #187 lane
+  // — approved is never locked). Posted history stays readable.
+  const writeLocked = useWriteLock(artifact.status);
 
   return (
     <div className="space-y-4">

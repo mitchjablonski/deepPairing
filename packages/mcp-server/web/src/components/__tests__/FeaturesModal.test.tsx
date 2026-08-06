@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FeaturesModal } from "../FeaturesModal";
 import { enterSessionReplay } from "../../lib/session-replay";
+import { useToastStore } from "../../stores/toast";
 
 // The cross-session navigation is exercised by its own module; here we assert
 // the modal CALLS it with the right target (and closes) — a fake, not a mock.
@@ -49,9 +50,11 @@ function stubFeatures(payload: { groups: unknown[]; failedSessions: unknown[] })
 
 beforeEach(() => {
   vi.mocked(enterSessionReplay).mockClear();
+  useToastStore.getState().dismissAll();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  useToastStore.getState().dismissAll();
 });
 
 describe("FeaturesModal", () => {
@@ -173,6 +176,67 @@ describe("FeaturesModal", () => {
       expect(post).toBeTruthy();
       expect(JSON.parse(String(post!.init!.body))).toEqual({ action: "assign", artifactId: "a1", groupKey: "__ungrouped__" });
     });
+  });
+
+  // #213 (J3 M-4) — a move is a persisted correction, so it toasts an UNDO. When
+  // the artifact carried NO prior override, undo CLEARS the freshly-written one
+  // (empty groupKey) so nothing spurious is left behind (undo-to-ungrouped path).
+  it("moving toasts an Undo; undo of an un-overridden artifact CLEARS the assignment (#213)", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        // Post-move payload: a1 now sits in Ungrouped, and it is the only
+        // assignment. (No assignedArtifactIds on the GET → a1 had no override.)
+        return Promise.resolve({ ok: true, json: async () => ({ groups: [M6, UNGROUPED], failedSessions: [], assignedArtifactIds: ["a1"] }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ groups: [M6, UNGROUPED], failedSessions: [] }) });
+    }));
+    render(<FeaturesModal onClose={() => {}} />);
+    await screen.findByText("quota backfill plan");
+    const selects = screen.getAllByLabelText(/to another feature/i);
+    await userEvent.selectOptions(selects[0]!, "__ungrouped__");
+
+    // The move posted the assign.
+    await waitFor(() => expect(bodies).toContainEqual({ action: "assign", artifactId: "a1", groupKey: "__ungrouped__" }));
+
+    // An Undo toast surfaced, worded for the destination.
+    const toast = useToastStore.getState().toasts.find((t) => t.title === "Moved to Ungrouped");
+    expect(toast).toBeTruthy();
+    expect(toast!.action?.label).toBe("Undo");
+
+    // Undo — a1 had no prior override, so it CLEARS (empty groupKey), leaving no
+    // residue instead of stamping a synthetic milestone-6 override.
+    toast!.action!.onClick();
+    await waitFor(() => expect(bodies).toContainEqual({ action: "assign", artifactId: "a1", groupKey: "" }));
+  });
+
+  // #213 (J3 M-4) — the other undo direction: an artifact that ALREADY carried an
+  // override restores its PRIOR assignment (the group it was displayed in), not a
+  // clear.
+  it("undo of an already-overridden artifact re-posts its previous group (#213)", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        return Promise.resolve({ ok: true, json: async () => ({ groups: [M6, UNGROUPED], failedSessions: [], assignedArtifactIds: ["a1"] }) });
+      }
+      // a1 already has an explicit override (it is shown in Milestone 6).
+      return Promise.resolve({ ok: true, json: async () => ({ groups: [M6, UNGROUPED], failedSessions: [], assignedArtifactIds: ["a1"] }) });
+    }));
+    render(<FeaturesModal onClose={() => {}} />);
+    await screen.findByText("quota backfill plan");
+    const selects = screen.getAllByLabelText(/to another feature/i);
+    await userEvent.selectOptions(selects[0]!, "__ungrouped__");
+    await waitFor(() => expect(bodies).toContainEqual({ action: "assign", artifactId: "a1", groupKey: "__ungrouped__" }));
+
+    const toast = useToastStore.getState().toasts.find((t) => t.title === "Moved to Ungrouped");
+    expect(toast).toBeTruthy();
+    // Undo restores a1 to Milestone 6 (its displayed source group == prior
+    // assignment value), NOT a clear.
+    toast!.action!.onClick();
+    await waitFor(() => expect(bodies).toContainEqual({ action: "assign", artifactId: "a1", groupKey: "milestone-6" }));
+    expect(bodies).not.toContainEqual({ action: "assign", artifactId: "a1", groupKey: "" });
   });
 
   it("the footnote mentions the feature tags and human corrections (#206)", async () => {

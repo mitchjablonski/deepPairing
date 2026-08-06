@@ -235,6 +235,44 @@ function UnsupportedArtifact({ artifact }: { artifact: Artifact }) {
   );
 }
 
+/**
+ * L-9 (#213) — the Suspense fallback while a lazy artifact renderer chunk loads
+ * (~1s on a cold cache). The old fallback was a single 24px pulse bar, so
+ * selecting an artifact flashed a near-empty grey body before content landed.
+ * This shimmer mimics an artifact's real shape — a title bar, a prose block, a
+ * body panel, a short trailing block — so the fill-in reads as content ARRIVING,
+ * not a layout jump. Deliberately generic (one skeleton for every type): a
+ * per-type skeleton would out-detail its value while the chunk is in flight.
+ * Distinct from UnsupportedArtifact (E3): that renders a text NOTICE outside the
+ * Suspense boundary for an unknown type; this is a decorative loading state.
+ */
+function ArtifactSkeleton() {
+  return (
+    <div
+      className="space-y-4 animate-pulse"
+      role="status"
+      aria-label="Loading artifact view"
+      data-testid="artifact-skeleton"
+    >
+      {/* Title bar */}
+      <div className="h-6 w-2/3 rounded bg-surface-elevated" />
+      {/* Prose block */}
+      <div className="space-y-2">
+        <div className="h-3 w-full rounded bg-surface-elevated" />
+        <div className="h-3 w-11/12 rounded bg-surface-elevated" />
+        <div className="h-3 w-4/5 rounded bg-surface-elevated" />
+      </div>
+      {/* Body panel (evidence / diagram / option grid stand-in) */}
+      <div className="h-24 rounded bg-surface-elevated" />
+      {/* Trailing block */}
+      <div className="space-y-2">
+        <div className="h-3 w-5/6 rounded bg-surface-elevated" />
+        <div className="h-3 w-2/3 rounded bg-surface-elevated" />
+      </div>
+    </div>
+  );
+}
+
 // Exported for tests (#158 — the secret-warning banner renders here).
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
@@ -314,7 +352,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       {/* D6 — lazy chunk boundary. MUST wrap every lazy component below
           (RevisionDiff included — review lesson: a suspension outside the
           boundary suspends the whole tree with no fallback). */}
-      <Suspense fallback={<div className="h-24 rounded bg-surface-elevated animate-pulse" aria-label="Loading artifact view" role="status" />}>
+      <Suspense fallback={<ArtifactSkeleton />}>
       {/* Revision diff — when this artifact supersedes a prior version, show
           what changed (anchored to the agent's revise reason) so the human
           sees their feedback land instead of eyeballing v2 against memory. */}
@@ -851,6 +889,16 @@ function ArtifactSidebar({
             // timeout, so the ring is NOT motion-dependent.
             const isNew = highlightedIds.includes(a.id);
             const arrivalClass = isNew ? (reducedMotion ? "dp-arrival-ring" : "dp-arrival-glow") : "";
+            // L-8 (#213) — the collapsed icon-only rail's SCENT. E3 (#194) put
+            // "Type: title — status" on the inner non-interactive <div>, leaving
+            // the interactive <button> with only the bare `a.title`; a hover or a
+            // probe reading the button (the element under the cursor / the one
+            // tests target) got the thin scent, and aria-label on a bare <div> is
+            // not reliably exposed. Compute the rich label once and hang it on the
+            // BUTTON itself (title + aria-label) when collapsed — the icon column
+            // is unreadable without it. Expanded rows show the title inline, so
+            // they keep the plain `a.title` tooltip.
+            const collapsedLabel = `${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`;
 
             return (
               <button
@@ -865,18 +913,11 @@ function ArtifactSidebar({
                     ? "bg-surface-hover border-l-2 border-l-accent-blue"
                     : "border-l-2 border-l-transparent hover:bg-surface-hover/50"
                 } ${arrivalClass}`}
-                title={a.title}
+                title={collapsed ? collapsedLabel : a.title}
+                aria-label={collapsed ? collapsedLabel : undefined}
               >
                 {collapsed ? (
-                  // L7 (#194) — the collapsed icon-only rail (webview / narrow
-                  // width) must name the artifact, not just its type+status:
-                  // without the title an icon column is unreadable. Tooltip AND
-                  // aria-label carry "Type: title — status".
-                  <div
-                    className="relative"
-                    title={`${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`}
-                    aria-label={`${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`}
-                  >
+                  <div className="relative">
                     <ArtifactIcon type={a.type} className={`w-4 h-4 ${isSelected ? "text-accent-blue" : "text-text-muted"}`} />
                     {isUnread && (
                       <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-accent-blue" />

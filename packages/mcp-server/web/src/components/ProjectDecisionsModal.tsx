@@ -46,17 +46,19 @@ interface ProjectDecision {
 }
 
 // #209 (J1) — the closed-decision badge label, keyed on the terminal status.
-// A retracted decision reads "Withdrawn" (parity with the write-lock wording),
-// superseded keeps its established "Superseded (never resolved)" phrasing.
+// A RETRACTED decision reads "Withdrawn" (the agent backed its OWN proposal out
+// — parity with the write-lock wording); a REJECTED one reads "Rejected" (the
+// HUMAN turned it down — #213 J1-review: "Withdrawn" mis-read as an agent
+// action). Superseded keeps its established "Superseded (never resolved)".
 // BACK-COMPAT: before J1, `closedUnresolved` ONLY ever meant superseded (S5), so
 // a record carrying the flag WITHOUT `closedStatus` (older payload) must keep the
-// historical superseded wording — never fall through to "Withdrawn".
+// historical superseded wording — never fall through to another label.
 function closedBadgeLabel(status?: string): string {
   switch (status) {
     case "retracted":
       return "Withdrawn";
     case "rejected":
-      return "Withdrawn";
+      return "Rejected";
     case "obsolete":
       return "Obsolete";
     case "superseded":

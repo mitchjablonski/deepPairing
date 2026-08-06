@@ -4,6 +4,7 @@ import { enterSessionReplay } from "../lib/session-replay";
 import { useModal } from "../hooks/useModal";
 import { timeAgo } from "../lib/time";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
+import { useToastStore } from "../stores/toast";
 
 /**
  * #203 (H2) — the Features view, slice 1. A DERIVED read-model: a FEATURE is a
@@ -54,6 +55,9 @@ interface FeatureGroup {
 interface FeatureGroupsResult {
   groups: FeatureGroup[];
   failedSessions: Array<{ sessionId: string; reason: string }>;
+  /** #213 (J3 M-4) — artifactIds carrying an explicit human MOVE override, so an
+   *  Undo can restore the exact prior state (re-assign vs clear). */
+  assignedArtifactIds?: string[];
 }
 
 const OPEN_ITEM_LABEL: Record<FeatureOpenItem["kind"], string> = {
@@ -91,7 +95,7 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
       .then((d) => {
         if (cancelled) return;
         const groups = d.groups ?? [];
-        setData({ groups, failedSessions: d.failedSessions ?? [] });
+        setData({ groups, failedSessions: d.failedSessions ?? [], assignedArtifactIds: d.assignedArtifactIds ?? [] });
         const seed: Record<string, boolean> = {};
         for (const g of groups) seed[g.id] = !g.ungrouped;
         setExpanded(seed);
@@ -108,6 +112,9 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
 
   const groups = data?.groups ?? [];
   const failedSessions = data?.failedSessions ?? [];
+  // #213 (J3 M-4) — artifactIds with an explicit human MOVE override; drives the
+  // Undo's restore-vs-clear branch.
+  const assignedIds = new Set(data?.assignedArtifactIds ?? []);
   const isEmpty = !loading && !error && groups.length === 0 && failedSessions.length === 0;
 
   const openArtifact = async (sessionId: string, artifactId: string) => {
@@ -126,7 +133,7 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
   // authoritative, not optimistic-then-refetch). Preserves the current expand
   // state so a correction doesn't collapse groups the human opened; a brand-new
   // group (a move to a not-yet-rendered key) defaults to expanded.
-  const postOverride = async (body: Record<string, unknown>): Promise<void> => {
+  const postOverride = async (body: Record<string, unknown>): Promise<boolean> => {
     setSavingOverride(true);
     setOverrideError(null);
     try {
@@ -137,14 +144,16 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
       });
       const next = (await res.json()) as FeatureGroupsResult;
       const nextGroups = next.groups ?? [];
-      setData({ groups: nextGroups, failedSessions: next.failedSessions ?? [] });
+      setData({ groups: nextGroups, failedSessions: next.failedSessions ?? [], assignedArtifactIds: next.assignedArtifactIds ?? [] });
       setExpanded((prev) => {
         const merged = { ...prev };
         for (const g of nextGroups) if (!(g.id in merged)) merged[g.id] = !g.ungrouped;
         return merged;
       });
+      return true;
     } catch (err) {
       setOverrideError(err instanceof Error ? err.message : "Could not save your correction.");
+      return false;
     } finally {
       setSavingOverride(false);
     }
@@ -162,8 +171,35 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
     if (title === g.title.trim()) return;
     await postOverride({ action: "rename", groupKey: g.id, title });
   };
-  const moveArtifact = async (artifactId: string, groupKey: string) => {
-    await postOverride({ action: "assign", artifactId, groupKey });
+  // #213 (J3 M-4) — a MOVE is a persisted correction, so it needs an UNDO. On a
+  // successful move we toast "Moved to <group> · Undo"; Undo restores the EXACT
+  // prior state — re-posting the previous assignment when the artifact already
+  // carried one, or CLEARING the override (empty groupKey) when it didn't (so
+  // undo of a move that only overrode the DERIVED grouping leaves no residue).
+  // `hadOverride`/`previousKey` are snapshotted BEFORE the write, off the current
+  // grouping (an override always determines the displayed group, so the source
+  // group's id IS the prior assignment value — including the Ungrouped bucket).
+  const moveArtifact = async (ref: FeatureArtifactRef, targetKey: string, sourceGroup: FeatureGroup) => {
+    const hadOverride = assignedIds.has(ref.artifactId);
+    const previousKey = sourceGroup.id;
+    const target = groups.find((t) => t.id === targetKey);
+    const targetLabel = target ? (target.ungrouped ? "Ungrouped" : target.title) : targetKey;
+    const ok = await postOverride({ action: "assign", artifactId: ref.artifactId, groupKey: targetKey });
+    if (!ok) return;
+    useToastStore.getState().push({
+      kind: "info",
+      title: `Moved to ${targetLabel}`,
+      action: {
+        label: "Undo",
+        onClick: () => {
+          void postOverride({
+            action: "assign",
+            artifactId: ref.artifactId,
+            groupKey: hadOverride ? previousKey : "",
+          });
+        },
+      },
+    });
   };
 
   return (
@@ -330,7 +366,7 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                               // Ungrouped). Only offered when a target exists.
                               const moveTargets = groups.filter((t) => t.id !== g.id);
                               return (
-                                <li key={key} className="flex items-center gap-1">
+                                <li key={key} className="group/row flex items-center gap-1">
                                   <button
                                     data-feature-artifact
                                     onClick={() => openArtifact(r.sessionId, r.artifactId)}
@@ -347,6 +383,11 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                                     </span>
                                   </button>
                                   {moveTargets.length > 0 && (
+                                    // L-5 — the per-row Move select was a text-2xs/max-w-[7rem] speck
+                                    // repeated on every row (visual noise + a tiny hit target). Bumped
+                                    // to the row's action-button sizing (text-xs, px-2/py-1) and
+                                    // revealed on row hover/focus only — it stays keyboard-reachable
+                                    // (group-focus-within) and fully in the DOM for assistive tech.
                                     <select
                                       data-feature-move
                                       aria-label={`Move ${r.title} to another feature`}
@@ -355,10 +396,11 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                                       value=""
                                       onChange={(e) => {
                                         const target = e.target.value;
-                                        if (target) void moveArtifact(r.artifactId, target);
+                                        if (target) void moveArtifact(r, target, g);
                                       }}
-                                      className="shrink-0 text-2xs bg-surface-secondary border border-border-default rounded px-1 py-0.5 text-text-muted
-                                                 hover:text-text-primary disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent-blue max-w-[7rem]"
+                                      className="shrink-0 text-xs bg-surface-secondary border border-border-default rounded px-2 py-1 text-text-muted
+                                                 hover:text-text-primary disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent-blue max-w-[9rem]
+                                                 opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus:opacity-100 transition-opacity"
                                     >
                                       <option value="">Move…</option>
                                       {moveTargets.map((t) => (

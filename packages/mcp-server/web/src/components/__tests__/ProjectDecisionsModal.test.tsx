@@ -153,6 +153,22 @@ describe("ProjectDecisionsModal", () => {
     expect(screen.queryByText(/superseded/i)).not.toBeInTheDocument();
   });
 
+  // #213 (J1 review) — a REJECTED decision (the human turned it down) badges
+  // "Rejected", NOT "Withdrawn" — "Withdrawn" reads as an AGENT action and only
+  // a retracted decision (the agent backed its own proposal out) earns it.
+  it("renders 'Rejected' (not 'Withdrawn') for a rejected (closedStatus) decision", async () => {
+    const rejected = {
+      ...UNRESOLVED, decisionId: "d6", context: "Rejected before anyone chose",
+      closedUnresolved: true, closedStatus: "rejected",
+    };
+    stubDecisions({ decisions: [rejected], failedSessions: [] });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Rejected before anyone chose")).toBeInTheDocument());
+    expect(screen.getByText(/^Rejected$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Withdrawn$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/awaiting your decision/i)).not.toBeInTheDocument();
+  });
+
   // #153 — the recovered-corruption case keeps the honest-partial banner
   // truthful after a session re-open rewrote a fresh valid decisions.json.
   it("words the partial banner for a recovered-from-corruption session and points at the sidecar", async () => {

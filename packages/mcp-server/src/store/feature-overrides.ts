@@ -4,6 +4,7 @@ import { writeJsonAtomic } from "./atomic-write.js";
 import {
   normalizeFeatureId,
   FEATURE_ID_MAX,
+  UNGROUPED_ID,
   type FeatureOverrides,
 } from "./session-scan.js";
 
@@ -41,10 +42,6 @@ const VERSION = 1 as const;
 // per process, so a future v2 written by a newer daemon doesn't spam the log on
 // every read while an older daemon is (safely) ignoring it.
 let loggedUnknownVersion = false;
-
-/** The reserved key that pulls an artifact OUT of every feature. Mirrors
- *  session-scan's UNGROUPED_ID (kept in sync via the assignment write path). */
-export const UNGROUPED_KEY = "__ungrouped__";
 
 /** A display title is human free-text — cap it generously so a rename can't
  *  bloat the file, but don't otherwise constrain it. */
@@ -162,8 +159,8 @@ export function assignArtifactToFeature(
   const rawKey = groupKey.trim();
   if (!rawKey) {
     delete file.artifactAssignments[id];
-  } else if (rawKey === UNGROUPED_KEY) {
-    file.artifactAssignments[id] = UNGROUPED_KEY;
+  } else if (rawKey === UNGROUPED_ID) {
+    file.artifactAssignments[id] = UNGROUPED_ID;
   } else {
     // #206 (I1, review Fix 3) — DELIBERATE: an arbitrary target key that matches
     // no existing group ESTABLISHES a new one (groupByFeature will materialize it
