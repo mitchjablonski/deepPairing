@@ -66,7 +66,17 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
   const unanswered = collectUnansweredQuestions(comments).filter(
     (q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId,
   );
-  const undrainedComments = comments.filter((c) => c.author === "human" && !c.acknowledged);
+  // #225 (N1) — DEDUPE: an unanswered question is a human comment with
+  // acknowledged=false, so before this it was counted TWICE — once as a question
+  // (collectUnansweredQuestions) and again as an "unread comment" — yielding the
+  // nonsense "1 unanswered question and 1 unread comment" for a single object. A
+  // question counts ONCE, as the question. Exclude the already-counted question
+  // ids from the undrained-comment bucket so a MIXED case (a real separate unread
+  // comment alongside a question) still reports both accurately.
+  const unansweredIds = new Set(unanswered.map((q) => q.question.id));
+  const undrainedComments = comments.filter(
+    (c) => c.author === "human" && !c.acknowledged && !unansweredIds.has(c.id),
+  );
   if (unanswered.length > 0 || undrainedComments.length > 0) {
     const bits: string[] = [];
     if (unanswered.length > 0) bits.push(`${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"}`);
@@ -102,12 +112,25 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
     author: "agent",
   });
   broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+  // #225 (N1, F2) — the load-bearing guard above inspects only THIS artifact's
+  // OWN comments, but the passive drain reads the whole session, so it can surface
+  // an unread PLAIN comment carried from an EARLIER version of this thread (the
+  // supersede chain). When that happens the withdrawal is NOT the clean, nothing-
+  // owed act the base text implies — so say so honestly rather than let the drained
+  // line ride in silently. (Obligation-bearing carried feedback — a question or a
+  // suggested edit — is NOT drained here after F1: it stays for check_feedback's
+  // rich lanes; and any feedback on THIS artifact would have BLOCKED the withdrawal
+  // outright via the guard. So this clause is specifically about carried chatter.)
+  const passive = await ctx.helpers.getPassiveFeedback();
+  const carriedNote = passive
+    ? ` Heads up: unread comment(s) carried from an earlier version of this thread were surfaced below — read them (they were plain comments; an open question or suggested edit would have stayed for check_feedback, and feedback on ${artifactId} itself would have blocked this withdrawal).`
+    : "";
   return {
     content: [{
       type: "text",
       text:
         `Withdrew ${artifactId} — "${reason}". It's off the human's review queue and recorded as retracted (not built). ` +
-        `Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${await ctx.helpers.getPassiveFeedback()}`,
+        `Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${carriedNote}${passive}`,
     }],
   };
 }

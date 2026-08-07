@@ -20,13 +20,13 @@ afterEach(() => {
   fx.dispose();
 });
 
-function makeCtx(store: FileStore): ToolContext {
+function makeCtx(store: FileStore, passive = ""): ToolContext {
   return {
     server: { notification: () => {} },
     store,
     broadcast: () => {},
     port: 4000,
-    helpers: { getPassiveFeedback: async () => "" } as ToolContext["helpers"],
+    helpers: { getPassiveFeedback: async () => passive } as ToolContext["helpers"],
     state: {
       checkFeedbackPollCount: 0,
       reportedRejectedVerdicts: new Set<string>(),
@@ -45,6 +45,32 @@ function seedDraft(store: FileStore, id = "art_1") {
 }
 
 describe("#198c withdraw_artifact", () => {
+  // #225 (N1, F2) — the guard inspects only THIS artifact's own comments, but the
+  // passive drain reads the whole session and can surface a PLAIN comment carried
+  // from an earlier version of the thread. When that happens the success text must
+  // NOT imply a spotless withdrawal — it adds an honest "carried from an earlier
+  // version" clause. When nothing was carried, no clause (byte-for-byte unchanged).
+  it("#225 F2 — adds an honest carried-feedback clause when the passive drain surfaced carried chatter", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    seedDraft(store);
+    const res = await handleWithdrawArtifact(
+      makeCtx(store, "\n\n[Human feedback]: - a carried plain comment"),
+      { artifactId: "art_1", reason: "moving on" },
+    );
+    expect(res.isError).toBeFalsy();
+    const text = res.content[0]!.text as string;
+    expect(text).toContain("carried from an earlier version");
+    // The drained line still rides along.
+    expect(text).toContain("a carried plain comment");
+  });
+
+  it("#225 F2 — no carried-feedback clause when nothing was drained", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    seedDraft(store);
+    const res = await handleWithdrawArtifact(makeCtx(store, ""), { artifactId: "art_1", reason: "moving on" });
+    expect((res.content[0]!.text as string)).not.toContain("carried from an earlier version");
+  });
+
   it("withdraws a clean draft: status → retracted + an agent 'Withdrawn' note; not an error", async () => {
     const store = fx.track(new FileStore(tmpDir, "s1"));
     seedDraft(store);
@@ -92,6 +118,55 @@ describe("#198c withdraw_artifact", () => {
     expect((res.content[0]!.text as string)).toMatch(/unanswered question/);
     // Status is untouched — still a draft.
     expect((await store.getArtifacts()).find((a) => a.id === "art_1")!.status).toBe("draft");
+  });
+
+  // #225 (N1, item 3) — a single unanswered question is ONE object; it must not
+  // be double-counted as both "unanswered question" AND "unread comment" (a
+  // question is a human comment with acknowledged=false, so it landed in both
+  // buckets pre-fix, yielding the nonsense "1 unanswered question and 1 unread
+  // comment").
+  it("#225 — does NOT double-count a single unanswered question as also an unread comment", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    seedDraft(store);
+    store.addComment({
+      id: "cmt_q",
+      artifactId: "art_1",
+      content: "why this approach?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_1" },
+    });
+    const res = await handleWithdrawArtifact(makeCtx(store), { artifactId: "art_1", reason: "eh" });
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/1 unanswered question/);
+    // The SAME object must NOT also be tallied as an unread comment.
+    expect(text).not.toMatch(/unread comment/);
+  });
+
+  // #225 (N1, item 3) — the MIXED case stays accurate: a genuinely separate
+  // unread comment alongside a question reports BOTH.
+  it("#225 — a separate unread comment alongside a question still reports both", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    seedDraft(store);
+    store.addComment({
+      id: "cmt_q",
+      artifactId: "art_1",
+      content: "why this approach?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_1" },
+    });
+    store.addComment({
+      id: "cmt_c",
+      artifactId: "art_1",
+      content: "also, consider the edge case",
+      author: "human",
+      target: { artifactId: "art_1" },
+    });
+    const res = await handleWithdrawArtifact(makeCtx(store), { artifactId: "art_1", reason: "eh" });
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/1 unanswered question/);
+    expect(text).toMatch(/1 unread comment/);
   });
 
   it("REFUSES when the draft has an undrained (unread) human comment", async () => {
