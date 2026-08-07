@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.1.32 — 2026-08-07
+
+The unswallowable release. An adversarial agent went hunting for the edges — the places where
+the protocol quietly loses something or says something untrue — and this release closes every
+one it found. **No human input can be lost, no duplicate can be minted, and no error message
+lies.** The N-batch is three fixes born from that edge hunt: N1 makes human input
+indestructible, N2 makes the protocol stop lying about what it did, and N3 makes the bundle
+tell reviewers its real story where they look.
+
+### Fixed
+- **No human input is ever swallowed — the edge hunt's HIGH is dead.** `revise_artifact`'s
+  supersede no longer force-acknowledges pending comments; the true cause was a **passive-feedback
+  drain in its return path**, now removed. Carried v1 comments, questions, and suggestions deliver
+  **richly on the next poll with their obligations intact**. Deeper still, the passive drain on
+  **every tool return** now spares obligation-bearing comments — a suggestion's must-respond and a
+  question's answer lane are **indestructible**. Carryover questions join `structuredContent`,
+  **withdraw counts honestly**, and debriefs **warn on dangling refs** (PR #261).
+- **The protocol stops lying about what it did.** `present_*` calls are **idempotent** — a
+  duplicate within ~30s returns the existing draft instead of minting a twin (status-scoped, so
+  re-present-after-rejection still mints; concurrency-safe with owner-error re-adoption;
+  eviction-swept). `answer_question` is **thread-wide idempotent**. **Scalar-constraint errors tell
+  the truth** (`title: too long (max 80, got 300)`). `present_options` **exposes its artifact id**,
+  stale drafts are **age-annotated on reconnect**, a **daemon port-change is announced once** with
+  the new companion URL, and the **just-answered question no longer echoes back** (PR #262).
+
+### Changed
+- **The manifests are the form — the directory listing tells the reproducibility story where
+  reviewers look.** Card-length **plugin description** and **`displayName`**, and reviewer-facing
+  **security disclosures in `SECURITY.md`** — both hooks verified **fail-open / ask-never-deny**
+  from source (PR #260).
+
 ## v0.1.31 — 2026-08-07
 
 The lived-in release. Every prior round was a dry-run — careful, hermetic, imagined. Then the
