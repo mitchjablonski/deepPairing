@@ -1,6 +1,6 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
-import type { TeamPreference } from "@deeppairing/shared";
+import type { TeamPreference, Comment } from "@deeppairing/shared";
 import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
@@ -297,15 +297,41 @@ export function formatPreflightTraceSummary(trace: PreflightTracePartial): strin
 }
 
 /**
+ * #225 (N1, F1) — an obligation-bearing comment is one whose only faithful
+ * delivery is check_feedback's RICH lane: a suggested edit (must-respond
+ * apply/counter) or an unanswered question (answer_question). A plain comment
+ * carries no such lane — its full content IS the delivery.
+ */
+export function isObligationBearingComment(c: Comment): boolean {
+  return !!c.suggestion || (c.intent === "question" && !c.answeredByCommentId);
+}
+
+/**
  * Drain unacknowledged human comments and format them for the agent. Returns
  * an empty string when nothing is pending (so the caller can append it
  * unconditionally).
+ *
+ * #225 (N1, F1) — the drain SKIPS obligation-bearing comments (questions /
+ * suggested edits). This passive drain acknowledges what it surfaces and renders
+ * it as a bare context-free line — lossless for chatter (a plain comment's whole
+ * content is right here, and acking it loses nothing check_feedback would have
+ * re-shown), but LOSSY for an obligation: a suggested edit's must-respond lane
+ * and a question's answer_question lane exist ONLY in check_feedback. If this
+ * drain acked those, the obligation would silently die on the next poll (the
+ * suggestion lane vanishes entirely; a question survives only via the #192
+ * carryover backstop). So leave obligation-bearing comments UNACKNOWLEDGED for
+ * the next check_feedback to deliver richly; drain only the plain comments. This
+ * is the same swallow class the supersede fix closed, one level down: it applies
+ * to EVERY tool return that appends passive feedback (present_*, withdraw,
+ * revise retract/obsolete, log_reasoning) after a carry.
  */
 export async function getPassiveFeedback(store: IStore): Promise<string> {
   const comments = await store.getUnacknowledgedComments();
   if (comments.length === 0) return "";
-  await store.acknowledgeComments(comments.map((c) => c.id));
-  const formatted = comments.map((c) => `- ${c.content}`).join("\n");
+  const drainable = comments.filter((c) => !isObligationBearingComment(c));
+  if (drainable.length === 0) return "";
+  await store.acknowledgeComments(drainable.map((c) => c.id));
+  const formatted = drainable.map((c) => `- ${c.content}`).join("\n");
   return `\n\n[Human feedback]: ${formatted}`;
 }
 

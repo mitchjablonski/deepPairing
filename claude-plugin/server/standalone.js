@@ -28537,11 +28537,16 @@ function formatPreflightTraceSummary(trace) {
   const nearMissText = nm.length ? `; near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}` : "";
   return ` Preflight: considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}${nearMissText}.`;
 }
+function isObligationBearingComment(c) {
+  return !!c.suggestion || c.intent === "question" && !c.answeredByCommentId;
+}
 async function getPassiveFeedback(store) {
   const comments = await store.getUnacknowledgedComments();
   if (comments.length === 0) return "";
-  await store.acknowledgeComments(comments.map((c) => c.id));
-  const formatted = comments.map((c) => `- ${c.content}`).join("\n");
+  const drainable = comments.filter((c) => !isObligationBearingComment(c));
+  if (drainable.length === 0) return "";
+  await store.acknowledgeComments(drainable.map((c) => c.id));
+  const formatted = drainable.map((c) => `- ${c.content}`).join("\n");
   return `
 
 [Human feedback]: ${formatted}`;
@@ -31444,10 +31449,12 @@ async function handleWithdrawArtifact(ctx, args) {
     author: "agent"
   });
   broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+  const passive = await ctx.helpers.getPassiveFeedback();
+  const carriedNote = passive ? ` Heads up: unread comment(s) carried from an earlier version of this thread were surfaced below \u2014 read them (they were plain comments; an open question or suggested edit would have stayed for check_feedback, and feedback on ${artifactId} itself would have blocked this withdrawal).` : "";
   return {
     content: [{
       type: "text",
-      text: `Withdrew ${artifactId} \u2014 "${reason}". It's off the human's review queue and recorded as retracted (not built). Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${await ctx.helpers.getPassiveFeedback()}`
+      text: `Withdrew ${artifactId} \u2014 "${reason}". It's off the human's review queue and recorded as retracted (not built). Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${carriedNote}${passive}`
     }]
   };
 }

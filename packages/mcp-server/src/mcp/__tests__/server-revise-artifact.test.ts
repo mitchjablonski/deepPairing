@@ -274,6 +274,61 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       expect((sc.suggestions ?? []).some((s: any) => s.commentId === "cmt_sug_swallow")).toBe(true);
     });
 
+    // #225 (N1, F1) — the residual swallow one level down: after a carry, the
+    // NEXT tool's passive drain (getPassiveFeedback on any present_* return) must
+    // NOT ack an obligation-bearing carried comment. Scenario: v1 carries a plain
+    // comment + a question + a suggestion; supersede to v2; the agent then calls
+    // present_findings (its return runs the passive drain). The plain comment
+    // drains context-free in that return (unchanged behavior); the QUESTION and
+    // SUGGESTION survive UNACKNOWLEDGED and reach the next check_feedback's PRIMARY
+    // rich lanes (not merely the #192 carryover backstop).
+    it("#225 F1 — a carried suggestion+question survive the NEXT present_*'s passive drain; only the plain comment drains", async () => {
+      await callTool("present_findings", {
+        summary: "v1",
+        findings: [{ category: "bug", detail: "d", significance: "medium" }],
+      });
+      const v1 = store.getArtifacts()[0];
+      await store.addComment({ id: "cmt_plain", artifactId: v1.id, content: "plain drain-me note", author: "human", intent: "comment" } as any);
+      await store.addComment({ id: "cmt_q", artifactId: v1.id, content: "does the old path still matter?", author: "human", intent: "question" } as any);
+      await store.addComment({
+        id: "cmt_sug", artifactId: v1.id, content: "prefer the explicit form", author: "human", intent: "suggestion",
+        target: { artifactId: v1.id, filePath: "src/store.js", lineStart: 15, lineEnd: 15 },
+        suggestion: { originalText: "Number(id)", replacementText: "parseInt(id, 10)", lineStart: 15, lineEnd: 15, state: "pending" },
+      } as any);
+
+      await callTool("revise_artifact", {
+        artifactId: v1.id, mode: "supersede", reason: "moving on",
+        content: { summary: "v2", findings: [{ category: "bug", detail: "d2", significance: "medium" }] },
+      });
+
+      // The NEXT tool call's return runs the passive drain.
+      const present = await callTool("present_findings", {
+        summary: "next work",
+        findings: [{ category: "other", detail: "z", significance: "low" }],
+      });
+      // Plain comment drained context-free in the present return (pin no-change).
+      expect(present.text).toContain("plain drain-me note");
+      // The obligation-bearing ones are NOT dumped context-free here.
+      expect(present.text).not.toContain("does the old path still matter?");
+      expect(present.text).not.toContain("prefer the explicit form");
+
+      const byId = (id: string) => store.getCommentsForArtifact(v1.id).find((c) => c.id === id);
+      expect(byId("cmt_plain")?.acknowledged).toBe(true);
+      expect(byId("cmt_q")?.acknowledged).toBeFalsy();
+      expect(byId("cmt_sug")?.acknowledged).toBeFalsy();
+
+      // check_feedback delivers them via the PRIMARY rich lanes (not carryover).
+      const res = await callTool("check_feedback");
+      const sc = res.structuredContent as any;
+      const q = sc.questions.find((x: any) => x.commentId === "cmt_q");
+      expect(q).toBeDefined();
+      expect(q.carryover).toBeUndefined(); // primary question lane, not the #192 backstop
+      expect((sc.suggestions ?? []).some((s: any) => s.commentId === "cmt_sug")).toBe(true);
+      expect(res.text).toMatch(/Suggested edits \(1\) — you MUST respond/);
+      // The plain comment was already drained — not re-surfaced.
+      expect(sc.comments.every((c: any) => c.id !== "cmt_plain")).toBe(true);
+    });
+
     it("refuses to supersede an already-superseded artifact", async () => {
       await callTool("present_findings", {
         summary: "x",

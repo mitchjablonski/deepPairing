@@ -112,12 +112,25 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
     author: "agent",
   });
   broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+  // #225 (N1, F2) — the load-bearing guard above inspects only THIS artifact's
+  // OWN comments, but the passive drain reads the whole session, so it can surface
+  // an unread PLAIN comment carried from an EARLIER version of this thread (the
+  // supersede chain). When that happens the withdrawal is NOT the clean, nothing-
+  // owed act the base text implies — so say so honestly rather than let the drained
+  // line ride in silently. (Obligation-bearing carried feedback — a question or a
+  // suggested edit — is NOT drained here after F1: it stays for check_feedback's
+  // rich lanes; and any feedback on THIS artifact would have BLOCKED the withdrawal
+  // outright via the guard. So this clause is specifically about carried chatter.)
+  const passive = await ctx.helpers.getPassiveFeedback();
+  const carriedNote = passive
+    ? ` Heads up: unread comment(s) carried from an earlier version of this thread were surfaced below — read them (they were plain comments; an open question or suggested edit would have stayed for check_feedback, and feedback on ${artifactId} itself would have blocked this withdrawal).`
+    : "";
   return {
     content: [{
       type: "text",
       text:
         `Withdrew ${artifactId} — "${reason}". It's off the human's review queue and recorded as retracted (not built). ` +
-        `Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${await ctx.helpers.getPassiveFeedback()}`,
+        `Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${carriedNote}${passive}`,
     }],
   };
 }
