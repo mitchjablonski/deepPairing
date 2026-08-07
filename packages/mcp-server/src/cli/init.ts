@@ -29,6 +29,7 @@ import { spawn } from "node:child_process";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
+import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
 
 const cwd = process.cwd();
 
@@ -162,7 +163,7 @@ freshness window means a recent \`present_code_change\` covers incidental
 edits — call the checkpoint for the main change, then the trailing config
 tweaks pass through.
 
-The PostToolUse hook (installed by \`node packages/mcp-server/dist/cli/init.js init\`) enforces this: if
+The PostToolUse hook (installed by \`${cliInvocation("init")}\`) enforces this: if
 you Write/Edit a non-skip file without an intervening present_code_change,
 the hook nags and forces you to checkpoint before continuing.
 
@@ -209,21 +210,17 @@ function bold(text: string): string {
 
 /**
  * Determine the right MCP server command for .mcp.json.
- * If running from a local dev checkout (not npm), use `node` with the absolute
- * path to the compiled standalone.js. Otherwise use `npx @deeppairing/mcp-server`.
+ *
+ * L1 (#218) — the old probe was `fs.existsSync(../standalone.js)`, which is
+ * ALWAYS true in a published package (dist/standalone.js sits beside
+ * dist/cli/init.js), so `init` NEVER emitted the npx form: it baked an absolute
+ * path into the transient npx cache dir, which npm may GC — silently breaking
+ * the user's .mcp.json later. The honest signal is whether this module resolves
+ * through a `node_modules` segment (installed → npx; source → node + abs path);
+ * `mcpServerConfigFor` encodes that, pure over the module dir for testability.
  */
 function getMcpServerConfig(): { command: string; args: string[] } {
-  // Check if the compiled standalone.js exists next to this script
-  const standaloneJs = path.join(__thisDir, "../standalone.js");
-  const isLocalDev = fs.existsSync(standaloneJs);
-
-  if (isLocalDev) {
-    // Running from local monorepo — use absolute path to dist
-    const absolutePath = path.resolve(standaloneJs);
-    return { command: "node", args: [absolutePath] };
-  }
-  // Running from npm install — use npx
-  return { command: "npx", args: ["@deeppairing/mcp-server"] };
+  return mcpServerConfigFor(__thisDir);
 }
 
 /**
@@ -250,7 +247,7 @@ you know what's already been rejected before proposing anything.
 
 For the full protocol (per-edit checkpoints, decision-revision
 semantics, comment-mirror via \`answer_question\`, Stop hook flow):
-run \`node packages/mcp-server/dist/cli/init.js init\` without
+run \`${cliInvocation("init")}\` without
 \`--minimal\` to inject the full version, or read it inline in this
 repo's \`packages/mcp-server/src/cli/init.ts\` (EMBEDDED_PROTOCOL).
 `;
@@ -480,7 +477,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
   ${dim("Claude will present findings, decisions, and plans. You review")}
   ${dim("and steer in the companion UI. Try: \"Analyze the auth module.\"")}
 
-  ${dim("If anything goes sideways:")} ${bold("node packages/mcp-server/dist/cli/init.js doctor")} ${dim("diagnoses;")} ${bold("--fix")} ${dim("heals.")}
+  ${dim("If anything goes sideways:")} ${bold(cliInvocation("doctor"))} ${dim("diagnoses;")} ${bold("--fix")} ${dim("heals.")}
 `);
 
   // Q1: offer to launch the scripted demo so the user SEES the hook fire in
@@ -493,7 +490,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
     opts.yes ||
     (await confirmPrompt(`  Want to see deepPairing's concept-aware rejection-block fire right now? [Y/n] `, /* default */ true));
   if (!shouldRun) {
-    console.log(`  ${dim("Skipped. Run")} ${bold("node packages/mcp-server/dist/cli/init.js demo")} ${dim("any time.")}`);
+    console.log(`  ${dim("Skipped. Run")} ${bold(cliInvocation("demo"))} ${dim("any time.")}`);
     console.log();
     return;
   }
@@ -1012,10 +1009,10 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
       console.log(`  ${bold("To recover — run this yourself (doctor will NOT touch this file):")}`);
       if (isPermIssue) {
         console.log(`      chmod u+rw ${shQuote(report.ledgerPath)}`);
-        console.log(`    ${dim("Then re-run ")}${bold("node packages/mcp-server/dist/cli/init.js doctor")}${dim(" — once the file is readable it'll tell you whether it's genuinely corrupt (with the mv remedy) or fine.")}`);
+        console.log(`    ${dim("Then re-run ")}${bold(cliInvocation("doctor"))}${dim(" — once the file is readable it'll tell you whether it's genuinely corrupt (with the mv remedy) or fine.")}`);
       } else {
         console.log(`      ${report.remedyCommand}`);
-        console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `node packages/mcp-server/dist/cli/init.js philosophy import <file> --merge` to keep its history.")}`);
+        console.log(`    ${dim("The unreadable file is preserved at that path; a fresh ledger starts on the next recording. Hand-repair the JSON and re-merge with `" + cliInvocation("philosophy import <file> --merge") + "` to keep its history.")}`);
       }
     }
   } catch (err) {
@@ -1223,7 +1220,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
       // Bare `philosophy publish` reports the current state.
       const current = seedStore.getGlobalLedgerPublish();
       console.log(`\n  Cross-project ledger publish for ${bold(projectName)}: ${bold(current ? "on" : "off")}`);
-      console.log(`  ${dim("Flip it: node packages/mcp-server/dist/cli/init.js philosophy publish on|off")}\n`);
+      console.log(`  ${dim("Flip it: " + cliInvocation("philosophy publish on|off"))}\n`);
       seedStore.forceFlush();
       return;
     }
@@ -1254,7 +1251,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     const merge = rest.includes("--merge");
     if (!file) {
       console.error(`  ${red("✗")} philosophy import requires a file path.`);
-      console.error(`  ${dim("   Example: node packages/mcp-server/dist/cli/init.js philosophy import stances.json --merge")}`);
+      console.error(`  ${dim("   Example: " + cliInvocation("philosophy import stances.json --merge"))}`);
       process.exit(1);
     }
     if (!merge) {
@@ -1293,7 +1290,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     const concept = rest.filter((a) => !a.startsWith("-")).join(" ").trim();
     if (!concept) {
       console.error(`  ${red("✗")} philosophy remove requires a concept.`);
-      console.error(`  ${dim('   Example: node packages/mcp-server/dist/cli/init.js philosophy remove "global mutable state"')}`);
+      console.error(`  ${dim("   Example: " + cliInvocation('philosophy remove "global mutable state"'))}`);
       process.exit(1);
     }
     let result;
@@ -1305,7 +1302,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     }
     if (!result) {
       console.error(`  ${red("✗")} No stance recorded for "${concept}" in ${store.getLedgerPath()}.`);
-      console.error(`  ${dim("   List your stances: node packages/mcp-server/dist/cli/init.js philosophy export | jq '.concepts | keys'")}`);
+      console.error(`  ${dim("   List your stances: " + cliInvocation("philosophy export") + " | jq '.concepts | keys'")}`);
       process.exit(1);
     }
     console.log(bold("\n  deepPairing philosophy remove"));
@@ -1313,7 +1310,7 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     console.log(`    ${dim("from:")}   ${store.getLedgerPath()}`);
     console.log(`    ${dim("backup:")} ${result!.backupPath ?? "(none)"}`);
     console.log(`  ${dim("Changed your mind? Restore the backup over the ledger, or re-merge it:")}`);
-    console.log(`  ${dim(`  node packages/mcp-server/dist/cli/init.js philosophy import ${result!.backupPath ?? "<backup>"} --merge`)}\n`);
+    console.log(`  ${dim("  " + cliInvocation(`philosophy import ${result!.backupPath ?? "<backup>"} --merge`))}\n`);
     return;
   }
 
@@ -1556,7 +1553,7 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
       console.log(`    ${dim("·")} ${s.id} ${dim(`— ${s.artifactCount} artifacts, last activity ${age}`)}`);
     }
     console.log();
-    console.log(`  ${dim("To remove empty/stale sessions:")} ${bold("node packages/mcp-server/dist/cli/init.js sessions prune")} ${dim("[--yes]")}`);
+    console.log(`  ${dim("To remove empty/stale sessions:")} ${bold(cliInvocation("sessions prune"))} ${dim("[--yes]")}`);
     console.log();
     return;
   }
@@ -1570,7 +1567,7 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
     const fromId = rest.find((a) => !a.startsWith("-") && rest.indexOf(a) === 0);
     const intoId = rest.filter((a) => !a.startsWith("-"))[1];
     if (!fromId || !intoId) {
-      console.error(`  ${red("✗")} Usage: node packages/mcp-server/dist/cli/init.js sessions merge <from-id> <into-id>`);
+      console.error(`  ${red("✗")} Usage: ${cliInvocation("sessions merge <from-id> <into-id>")}`);
       console.error(`  ${dim("   Example: sessions merge session_1777131724008 session_1777131802548_951295")}`);
       process.exit(1);
     }
@@ -1832,17 +1829,26 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     // that doesn't work. III9 fixed
     // this in the README; the CLI help was missed. Now: leading `dp`
     // placeholder = whichever invocation the user reached the help
-    // through (the linked `deeppairing` command after `pnpm link
-    // --global`, or the by-path `node packages/.../init.js`). A leading
-    // section makes the choice explicit. The grep guard test
-    // (cli/__tests__/no-npx-deeppairing.test.ts) keeps a future PR
-    // from putting them back.
+    // through. L1 (#218) — layout-aware: an INSTALLED package leads with the
+    // npx form (the source `node packages/.../init.js` path is meaningless
+    // there); a source checkout keeps the pnpm-link / by-path pair. The grep
+    // guard test (cli/__tests__/no-npx-deeppairing.test.ts) keeps a future PR
+    // from reintroducing the unpublished `npx <pkg-name>` dead end — the npx
+    // form below names the CLI bin explicitly (`-p … deeppairing`) so it
+    // never trips it.
+    const helpHeading = isInstalledPackage()
+      ? `${bold("This CLI")} ships in the ${bold("@deeppairing/mcp-server")} package. Invoke as either:`
+      : `${bold("This CLI:")} pre-1.0, run from a source checkout. Invoke as either:`;
+    const helpInvocations = isInstalledPackage()
+      ? `    ${dim("•")} ${bold("deeppairing <cmd>")}                                       ${dim("(if the package bin is on your PATH)")}
+    ${dim("•")} ${bold(cliInvocation("<cmd>"))}   ${dim("(no global install needed)")}`
+      : `    ${dim("•")} ${bold("deeppairing <cmd>")}                                 (after \`cd packages/mcp-server && pnpm link --global\`)
+    ${dim("•")} ${bold("node packages/mcp-server/dist/cli/init.js <cmd>")}   (no setup; works after \`pnpm build\`)`;
     console.log(`
   ${bold("deepPairing")} — Human-AI collaborative development
 
-  ${bold("This CLI:")} pre-1.0, not on npm. Invoke as either:
-    ${dim("•")} ${bold("deeppairing <cmd>")}                                 (after \`cd packages/mcp-server && pnpm link --global\`)
-    ${dim("•")} ${bold("node packages/mcp-server/dist/cli/init.js <cmd>")}   (no setup; works after \`pnpm build\`)
+  ${helpHeading}
+${helpInvocations}
 
   ${bold("Commands")} (substitute one of the invocations above for \`dp\`):
     dp                                     Set up deepPairing in current project (interactive; offers demo)
@@ -1907,7 +1913,7 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const format = args[1];
   const sessionId = args[2];
   if (!format) {
-    console.error(`  ${red("✗")} export requires a format. Run 'node packages/mcp-server/dist/cli/init.js --help'.`);
+    console.error(`  ${red("✗")} export requires a format. Run '${cliInvocation("--help")}'.`);
     process.exit(1);
   }
   exportCmd(format, sessionId).catch((err) => {
@@ -1970,7 +1976,7 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   const ref = args[1];
   if (!ref) {
     console.error(`  ${red("✗")} post-pr-review requires a PR number or URL.`);
-    console.error(`  ${dim("   Example: node packages/mcp-server/dist/cli/init.js post-pr-review 42")}`);
+    console.error(`  ${dim("   Example: " + cliInvocation("post-pr-review 42"))}`);
     process.exit(1);
   }
   // Parse optional --session-id and --event flags
@@ -1985,6 +1991,6 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     process.exit(1);
   });
 } else {
-  console.log(`  Unknown command: ${cmd}\n  Run ${dim("node packages/mcp-server/dist/cli/init.js --help")} for usage.`);
+  console.log(`  Unknown command: ${cmd}\n  Run ${dim(cliInvocation("--help"))} for usage.`);
   process.exit(1);
 }

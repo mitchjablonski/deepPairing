@@ -3,6 +3,7 @@ import { getGlobalStore } from "../store/global-store.js";
 import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 import { PENDING_DRAFT_TYPES } from "./tools/types.js";
 import { requestSecretNote } from "./tools/check-feedback-delivery.js";
+import { cliInvocation } from "../cli-invocation.js";
 
 /**
  * X4 — first-call hint builder, lifted out of server.ts so the CallTool
@@ -594,7 +595,7 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       const content = fs.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
-          "\n💡 Tip: run `node packages/mcp-server/dist/cli/init.js init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
+          "\n💡 Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional — the plugin's pairing-protocol skill covers most of this already).",
         );
       }
     }

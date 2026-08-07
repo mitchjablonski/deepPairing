@@ -26,6 +26,7 @@ import path from "node:path";
 import { runDaemonStartupSetup } from "../cli/setup-tasks.js";
 import { flushAllMetrics } from "../store/metrics-store.js";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
+import { cliInvocation } from "../cli-invocation.js";
 import { createDaemon } from "./create-daemon.js";
 
 const MAX_PORT_ATTEMPTS = 10;
@@ -316,7 +317,7 @@ async function main() {
         // U6 — point users at the recovery command in every fatal stderr.
         process.stderr.write(
           `deepPairing daemon: bind failed — ${result.err?.message ?? result.err}\n` +
-          `Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.\n`,
+          `Run \`${cliInvocation("doctor --fix")}\` to diagnose and heal common causes.\n`,
         );
         process.exit(3);
       }
@@ -326,7 +327,7 @@ async function main() {
 
     if (!server) {
       // U6 — `--fix` so the user gets the heal-it path, not just the diagnose-it one.
-      const msg = `No free port in ${MAX_PORT_ATTEMPTS} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}–${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal.`;
+      const msg = `No free port in ${MAX_PORT_ATTEMPTS} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}–${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`${cliInvocation("doctor --fix")}\` to diagnose and heal.`;
       log(`FATAL: ${msg}`);
       process.stderr.write(`deepPairing daemon: ${msg}\n`);
       process.exit(2);

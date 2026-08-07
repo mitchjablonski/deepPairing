@@ -3235,8 +3235,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path7) {
-      let input = path7;
+    function removeDotSegments(path8) {
+      let input = path8;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3435,8 +3435,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path7, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path7 && path7 !== "/" ? path7 : void 0;
+        const [path8, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path8 && path8 !== "/" ? path8 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6798,16 +6798,56 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs8, exportName) {
+    function addFormats(ajv, list, fs9, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs8[f]);
+        ajv.addFormat(f, fs9[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.default = formatsPlugin;
+  }
+});
+
+// src/cli-invocation.ts
+import fs3 from "node:fs";
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
+function isInstalledPackage(modulePath = __thisFile) {
+  return modulePath.split(/[\\/]/).includes("node_modules");
+}
+function resolveCompiledCliPath() {
+  const candidates = [
+    path2.join(__thisDir, "cli", "init.js"),
+    // dist/ → dist/cli/init.js
+    path2.join(__thisDir, "..", "cli", "init.js")
+  ];
+  return candidates.find((p) => fs3.existsSync(p)) ?? null;
+}
+function cliInvocation(subcommand = "") {
+  return formatCliInvocation({
+    installed: isInstalledPackage(),
+    cliPath: resolveCompiledCliPath(),
+    subcommand
+  });
+}
+function formatCliInvocation(args) {
+  const suffix = args.subcommand ? ` ${args.subcommand}` : "";
+  if (args.installed) {
+    return `npx -y -p ${PACKAGE_NAME} deeppairing${suffix}`;
+  }
+  if (args.cliPath) return `node "${args.cliPath}"${suffix}`;
+  return `node packages/mcp-server/dist/cli/init.js${suffix}`;
+}
+var __thisFile, __thisDir, PACKAGE_NAME;
+var init_cli_invocation = __esm({
+  "src/cli-invocation.ts"() {
+    "use strict";
+    __thisFile = fileURLToPath(import.meta.url);
+    __thisDir = path2.dirname(__thisFile);
+    PACKAGE_NAME = "@deeppairing/mcp-server";
   }
 });
 
@@ -6836,8 +6876,8 @@ var init_version = __esm({
 });
 
 // src/project-root.ts
-import path2 from "node:path";
-import fs3 from "node:fs";
+import path3 from "node:path";
+import fs4 from "node:fs";
 import crypto2 from "node:crypto";
 function projectHashOf(projectRoot2) {
   return crypto2.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
@@ -6881,15 +6921,15 @@ function resolveProjectRoot(opts = {}) {
   for (const c of candidates) {
     const v = c.value?.trim();
     if (!v) continue;
-    if (!path2.isAbsolute(v)) continue;
+    if (!path3.isAbsolute(v)) continue;
     try {
-      if (!fs3.statSync(v).isDirectory()) continue;
+      if (!fs4.statSync(v).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path2.resolve(v), source: c.source };
+    return { projectRoot: path3.resolve(v), source: c.source };
   }
-  return { projectRoot: path2.resolve(cwd()), source: "cwd" };
+  return { projectRoot: path3.resolve(cwd()), source: "cwd" };
 }
 var DEFAULT_BASE_PORT, DEFAULT_PORT_SPAN, portWindow, BASE_PORT, PORT_SPAN;
 var init_project_root = __esm({
@@ -6904,27 +6944,27 @@ var init_project_root = __esm({
 });
 
 // src/daemon/token.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import os2 from "node:os";
-import path4 from "node:path";
+import path5 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path4.isAbsolute(xdg)) {
+  if (xdg && path5.isAbsolute(xdg)) {
     try {
-      if (fs5.statSync(xdg).isDirectory()) return path4.join(xdg, "deeppairing");
+      if (fs6.statSync(xdg).isDirectory()) return path5.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path4.join(os2.tmpdir(), "deeppairing");
+  return path5.join(os2.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path4.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path5.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs5.existsSync(file2)) return null;
-    return JSON.parse(fs5.readFileSync(file2, "utf-8"));
+    if (!fs6.existsSync(file2)) return null;
+    return JSON.parse(fs6.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
@@ -6948,7 +6988,6 @@ __export(lifecycle_exports, {
   classifyDaemonVersion: () => classifyDaemonVersion,
   daemonAuthHeaders: () => daemonAuthHeaders,
   describeDaemonVersionHealth: () => describeDaemonVersionHealth,
-  doctorCommandHint: () => doctorCommandHint,
   ensureDaemon: () => ensureDaemon,
   evictDaemon: () => evictDaemon,
   isDaemonRunning: () => isDaemonRunning,
@@ -6957,10 +6996,10 @@ __export(lifecycle_exports, {
   waitForDaemon: () => waitForDaemon
 });
 import { spawn as spawn2 } from "node:child_process";
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import net from "node:net";
-import path5 from "node:path";
-import { fileURLToPath } from "node:url";
+import path6 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function logStale(msg) {
   try {
     process.stderr.write(`${msg}
@@ -6969,13 +7008,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path5.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path6.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs6.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs6.readFileSync(infoPath, "utf-8"));
+    if (!fs7.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs7.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -7093,7 +7132,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs6.unlinkSync(daemonInfoPath(projectRoot2));
+      fs7.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -7129,17 +7168,6 @@ async function waitForDaemon(projectRoot2, opts = {}) {
   const hint = await describeHolders(projectRoot2);
   throw new Error(buildReadinessTimeoutMessage({ timeoutMs, projectRoot: projectRoot2, hint }));
 }
-function resolveCliPath() {
-  const candidates = [
-    path5.join(__thisDir, "../cli/init.js"),
-    // dist/daemon → dist/cli/init.js
-    path5.join(__thisDir, "cli/init.js")
-  ];
-  return candidates.find((p) => fs6.existsSync(p)) ?? null;
-}
-function doctorCommandHint(cliPath = resolveCliPath()) {
-  return cliPath ? `node "${cliPath}" doctor` : "deeppairing doctor";
-}
 function buildReadinessTimeoutMessage(args) {
   const { timeoutMs, projectRoot: projectRoot2, hint } = args;
   const first = preferredPortFor(projectRoot2);
@@ -7148,11 +7176,11 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path5.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs6.existsSync(logPath)) {
+  const logPath = path6.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs7.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
-  lines.push(`To diagnose: ${doctorCommandHint()}`);
+  lines.push(`To diagnose: ${cliInvocation("doctor")}`);
   return lines.join("\n");
 }
 async function describePortHolders(projectRoot2) {
@@ -7191,8 +7219,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path5.join(__thisDir, "../../dist/daemon/index.js");
-  const scriptPath = fs6.existsSync(daemonScript) ? daemonScript : path5.join(__thisDir, "daemon.js");
+  const daemonScript = path6.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs7.existsSync(daemonScript) ? daemonScript : path6.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -7377,14 +7405,15 @@ ${tail}`);
     throw err;
   }
 }
-var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, realSleep, sleep;
+var __thisDir2, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, realSleep, sleep;
 var init_lifecycle = __esm({
   "src/daemon/lifecycle.ts"() {
     "use strict";
     init_token();
     init_project_root();
     init_version();
-    __thisDir = path5.dirname(fileURLToPath(import.meta.url));
+    init_cli_invocation();
+    __thisDir2 = path6.dirname(fileURLToPath2(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -7919,10 +7948,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path7) {
-  if (!path7)
+function getElementAtPath(obj2, path8) {
+  if (!path8)
     return obj2;
-  return path7.reduce((acc, key) => acc?.[key], obj2);
+  return path8.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -8331,11 +8360,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path8, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path8);
     return iss;
   });
 }
@@ -8482,16 +8511,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path7 = []) => {
+  const processError = (error52, path8 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path8, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -8518,17 +8547,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path7 = []) => {
+  const processError = (error52, path8 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path8, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -8560,8 +8589,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path7) {
+  const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path8) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -21559,13 +21588,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path7 = ref.slice(1).split("/").filter(Boolean);
-  if (path7.length === 0) {
+  const path8 = ref.slice(1).split("/").filter(Boolean);
+  if (path8.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path7[0] === defsKey) {
-    const key = path7[1];
+  if (path8[0] === defsKey) {
+    const key = path8[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -27513,6 +27542,7 @@ ${s.replacementText}${note ? `
 }
 
 // src/mcp/first-call-hint.ts
+init_cli_invocation();
 var HINT_BUDGET_CHARS = 1500;
 var POLICY_BUDGET_CHARS = 600;
 var PROTOCOL_PREAMBLE = [
@@ -27846,14 +27876,14 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs8 = await import("node:fs");
-    const path7 = await import("node:path");
-    const claudeMd = path7.join(process.cwd(), "CLAUDE.md");
-    if (fs8.existsSync(claudeMd)) {
-      const content = fs8.readFileSync(claudeMd, "utf-8");
+    const fs9 = await import("node:fs");
+    const path8 = await import("node:path");
+    const claudeMd = path8.join(process.cwd(), "CLAUDE.md");
+    if (fs9.existsSync(claudeMd)) {
+      const content = fs9.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
-          "\n\u{1F4A1} Tip: run `node packages/mcp-server/dist/cli/init.js init` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
+          "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
         );
       }
     }
@@ -28616,8 +28646,8 @@ function scalarTypeTag(i) {
   if ((i.code === "too_small" || i.code === "too_big") && i.origin) return i.origin;
   return "value";
 }
-function collapsePath(path7) {
-  return path7.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path8) {
+  return path8.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example) {
   const raw = err.issues;
@@ -28642,9 +28672,9 @@ function formatValidationError(toolName, err, example) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path7 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path8 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path7}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path8}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -30324,6 +30354,7 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
 }
 
 // src/mcp/tools/check-feedback.ts
+init_cli_invocation();
 function ledgerHealthField() {
   try {
     const health = getGlobalStore().getHealth();
@@ -30333,7 +30364,7 @@ function ledgerHealthField() {
         state: "frozen",
         ledgerPath: health.ledgerPath,
         ...health.backupPath ? { backupPath: health.backupPath } : {},
-        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `node packages/mcp-server/dist/cli/init.js doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
+        remedy: `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; new approvals/rejections are NOT being recorded until it is repaired. ` + (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") + "Run `" + cliInvocation("doctor") + "` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start)."
       }
     };
   } catch {
@@ -32022,22 +32053,22 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 
 // src/daemon/status.ts
 init_project_root();
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs5 from "node:fs";
+import path4 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path3.resolve(startDir);
+  let dir = path4.resolve(startDir);
   for (; ; ) {
-    const candidate = path3.join(dir, ".deeppairing", "daemon.json");
-    if (fs4.existsSync(candidate)) {
+    const candidate = path4.join(dir, ".deeppairing", "daemon.json");
+    if (fs5.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs4.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs5.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path3.dirname(dir);
+    const parent = path4.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -32918,6 +32949,7 @@ init_lifecycle();
 
 // src/daemon/client.ts
 init_project_root();
+init_cli_invocation();
 var DaemonClient = class {
   baseUrl;
   sessionId;
@@ -32983,11 +33015,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs8 = await import("node:fs");
-      const path7 = await import("node:path");
-      const infoPath = path7.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs8.existsSync(infoPath)) return false;
-      const raw = fs8.readFileSync(infoPath, "utf-8");
+      const fs9 = await import("node:fs");
+      const path8 = await import("node:path");
+      const infoPath = path8.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs9.existsSync(infoPath)) return false;
+      const raw = fs9.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -33038,7 +33070,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path7, init, isRetry = false) {
+  async request(path8, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -33048,15 +33080,15 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path7}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path8}`, initWithHash);
     } catch (err2) {
       if (err2?.name === "AbortError" || err2?.name === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path7, init, true);
+        if (recovered) return this.request(path8, init, true);
       }
       throw new Error(
-        `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`node packages/mcp-server/dist/cli/init.js doctor\` to diagnose, or restart Claude Code.`
+        `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
       );
     }
     if (res.ok) return res.json();
@@ -33068,7 +33100,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path7, init, true);
+        return this.request(path8, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -33080,7 +33112,7 @@ var DaemonClient = class {
       await this.register(this.lastRegisterMeta);
       void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
       });
-      return this.request(path7, init, true);
+      return this.request(path8, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -33088,15 +33120,15 @@ var DaemonClient = class {
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
   }
-  async post(path7, body) {
-    return this.request(path7, {
+  async post(path8, body) {
+    return this.request(path8, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path7) {
-    return this.request(path7, {});
+  async get(path8) {
+    return this.request(path8, {});
   }
   // --- Session lifecycle ---
   /**
@@ -33129,7 +33161,7 @@ var DaemonClient = class {
       this.lastRegisterMeta = void 0;
       const body = await res.json().catch(() => ({}));
       const code = body.code ?? "project_mismatch";
-      const explanation = code === "project_hash_mismatch" ? "The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run `node packages/mcp-server/dist/cli/init.js doctor --fix` to evict the squatter." : body.error ?? "Daemon serves a different project. Restart the wrapper.";
+      const explanation = code === "project_hash_mismatch" ? `The daemon on this port serves a different project. Either restart the wrapper to bind to the right daemon, or run \`${cliInvocation("doctor --fix")}\` to evict the squatter.` : body.error ?? "Daemon serves a different project. Restart the wrapper.";
       throw new Error(
         `[deepPairing] Daemon project mismatch (${code}). ${explanation}`
       );
@@ -33386,9 +33418,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path7) {
+  async requestPublic(path8) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path7}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path8}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -33433,18 +33465,19 @@ var DaemonClient = class {
 
 // src/standalone.ts
 init_project_root();
+init_cli_invocation();
 import crypto3 from "node:crypto";
-import fs7 from "node:fs";
-import path6 from "node:path";
+import fs8 from "node:fs";
+import path7 from "node:path";
 var { projectRoot, source: projectRootSource } = resolveProjectRoot();
-var dpDir = path6.join(projectRoot, ".deeppairing");
-var logFile = path6.join(dpDir, "server.log");
+var dpDir = path7.join(projectRoot, ".deeppairing");
+var logFile = path7.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs7.mkdirSync(path6.dirname(logFile), { recursive: true });
-    fs7.appendFileSync(logFile, line);
+    fs8.mkdirSync(path7.dirname(logFile), { recursive: true });
+    fs8.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -33454,10 +33487,10 @@ async function main() {
   const daemonInfo = await ensureDaemon(projectRoot);
   const port = daemonInfo.port;
   if (!daemonInfo.authToken) {
-    log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`node packages/mcp-server/dist/cli/init.js doctor\` to refresh daemon.json.`);
+    log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path6.basename(projectRoot);
+  const projectName = path7.basename(projectRoot);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto3.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
   const sessionId = `session_${safeProjectName}_${projectHash}`;
@@ -33502,7 +33535,7 @@ main().catch((err) => {
   log(`Fatal: ${err}`);
   process.stderr.write(
     `deepPairing wrapper: ${err?.message ?? err}
-Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.
+Run \`${cliInvocation("doctor --fix")}\` to diagnose and heal common causes.
 `
   );
   process.exit(1);

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { readTokenSidecar } from "./token.js";
 import { projectHashOf, preferredPortFor, BASE_PORT } from "../project-root.js";
 import { SERVER_VERSION, compareServerVersions } from "../version.js";
+import { cliInvocation } from "../cli-invocation.js";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -339,27 +340,6 @@ export async function waitForDaemon(
 }
 
 /**
- * #168 — resolve a path-form `doctor` invocation. Invoking `doctor` through the
- * unpublished `deeppairing` npm bin is a dead end for a plugin/cold-clone
- * install (it isn't on PATH, and `npx` fetches a placeholder), so we point at
- * the CLI entry by absolute path when we can find it. The
- * CLI is `dist/cli/init.js`; from this file's dist home (`dist/daemon/`) that's
- * one level up + `cli/init.js`. Pure over an injected resolved path so the
- * message builder stays unit-testable.
- */
-function resolveCliPath(): string | null {
-  const candidates = [
-    path.join(__thisDir, "../cli/init.js"), // dist/daemon → dist/cli/init.js
-    path.join(__thisDir, "cli/init.js"),
-  ];
-  return candidates.find((p) => fs.existsSync(p)) ?? null;
-}
-
-export function doctorCommandHint(cliPath: string | null = resolveCliPath()): string {
-  return cliPath ? `node "${cliPath}" doctor` : "deeppairing doctor";
-}
-
-/**
  * #168 — build a TRUTHFUL readiness-timeout error. The old message lied on
  * every clause: it reported `DEFAULT_PORT..+9` (the shared 3847 base) rather
  * than the ports actually probed (this project's DETERMINISTIC preferred port),
@@ -384,7 +364,9 @@ export function buildReadinessTimeoutMessage(args: {
   if (fs.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
-  lines.push(`To diagnose: ${doctorCommandHint()}`);
+  // L1 (#218) — one source of truth for the invocation form (source → resolved
+  // node-path; installed → the npx form). Replaces #168's local doctorCommandHint.
+  lines.push(`To diagnose: ${cliInvocation("doctor")}`);
   return lines.join("\n");
 }
 

@@ -48,6 +48,46 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/cli-invocation.ts
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+function isInstalledPackage(modulePath = __thisFile) {
+  return modulePath.split(/[\\/]/).includes("node_modules");
+}
+function resolveCompiledCliPath() {
+  const candidates = [
+    path.join(__thisDir, "cli", "init.js"),
+    // dist/ → dist/cli/init.js
+    path.join(__thisDir, "..", "cli", "init.js")
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
+function cliInvocation(subcommand = "") {
+  return formatCliInvocation({
+    installed: isInstalledPackage(),
+    cliPath: resolveCompiledCliPath(),
+    subcommand
+  });
+}
+function formatCliInvocation(args) {
+  const suffix = args.subcommand ? ` ${args.subcommand}` : "";
+  if (args.installed) {
+    return `npx -y -p ${PACKAGE_NAME} deeppairing${suffix}`;
+  }
+  if (args.cliPath) return `node "${args.cliPath}"${suffix}`;
+  return `node packages/mcp-server/dist/cli/init.js${suffix}`;
+}
+var __thisFile, __thisDir, PACKAGE_NAME;
+var init_cli_invocation = __esm({
+  "src/cli-invocation.ts"() {
+    "use strict";
+    __thisFile = fileURLToPath(import.meta.url);
+    __thisDir = path.dirname(__thisFile);
+    PACKAGE_NAME = "@deeppairing/mcp-server";
+  }
+});
+
 // src/project-root.ts
 import crypto2 from "node:crypto";
 function projectHashOf(projectRoot2) {
@@ -3798,29 +3838,29 @@ var init_version = __esm({
 });
 
 // src/daemon/token.ts
-import fs13 from "node:fs";
+import fs14 from "node:fs";
 import os3 from "node:os";
-import path12 from "node:path";
+import path13 from "node:path";
 function fsHonorsPosixMode(dir) {
   let probe = null;
   try {
-    fs13.mkdirSync(dir, { recursive: true });
-    probe = path12.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
-    const fd = fs13.openSync(probe, "w", 384);
-    fs13.closeSync(fd);
+    fs14.mkdirSync(dir, { recursive: true });
+    probe = path13.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
+    const fd = fs14.openSync(probe, "w", 384);
+    fs14.closeSync(fd);
     try {
-      fs13.chmodSync(probe, 384);
+      fs14.chmodSync(probe, 384);
     } catch {
       return false;
     }
-    const mode = fs13.statSync(probe).mode & 511;
+    const mode = fs14.statSync(probe).mode & 511;
     return (mode & 63) === 0;
   } catch {
     return false;
   } finally {
     if (probe) {
       try {
-        fs13.unlinkSync(probe);
+        fs14.unlinkSync(probe);
       } catch {
       }
     }
@@ -3832,53 +3872,53 @@ function tokenPlacement(opts) {
 }
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path12.isAbsolute(xdg)) {
+  if (xdg && path13.isAbsolute(xdg)) {
     try {
-      if (fs13.statSync(xdg).isDirectory()) return path12.join(xdg, "deeppairing");
+      if (fs14.statSync(xdg).isDirectory()) return path13.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path12.join(os3.tmpdir(), "deeppairing");
+  return path13.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path12.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path13.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function writeTokenSidecar(projectRoot2, payload) {
   const file2 = tokenSidecarPath(projectRoot2);
-  const dir = path12.dirname(file2);
-  fs13.mkdirSync(dir, { recursive: true, mode: 448 });
+  const dir = path13.dirname(file2);
+  fs14.mkdirSync(dir, { recursive: true, mode: 448 });
   try {
-    fs13.chmodSync(dir, 448);
+    fs14.chmodSync(dir, 448);
   } catch {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   try {
-    const dstat = fs13.lstatSync(dir);
+    const dstat = fs14.lstatSync(dir);
     if (dstat.isSymbolicLink() || uid !== void 0 && dstat.uid !== uid) {
       return { path: file2, mode: dstat.mode & 511, honored: false, refused: true };
     }
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
-  const O_NOFOLLOW = fs13.constants.O_NOFOLLOW ?? 0;
+  const O_NOFOLLOW = fs14.constants.O_NOFOLLOW ?? 0;
   let fd;
   try {
-    fd = fs13.openSync(file2, fs13.constants.O_WRONLY | fs13.constants.O_CREAT | fs13.constants.O_TRUNC | O_NOFOLLOW, 384);
+    fd = fs14.openSync(file2, fs14.constants.O_WRONLY | fs14.constants.O_CREAT | fs14.constants.O_TRUNC | O_NOFOLLOW, 384);
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
   try {
-    fs13.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
+    fs14.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
   } finally {
-    fs13.closeSync(fd);
+    fs14.closeSync(fd);
   }
   try {
-    fs13.chmodSync(file2, 384);
+    fs14.chmodSync(file2, 384);
   } catch {
   }
   let mode = 511;
   try {
-    mode = fs13.statSync(file2).mode & 511;
+    mode = fs14.statSync(file2).mode & 511;
   } catch {
   }
   return { path: file2, mode, honored: (mode & 63) === 0 };
@@ -3886,15 +3926,15 @@ function writeTokenSidecar(projectRoot2, payload) {
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs13.existsSync(file2)) return null;
-    return JSON.parse(fs13.readFileSync(file2, "utf-8"));
+    if (!fs14.existsSync(file2)) return null;
+    return JSON.parse(fs14.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 function unlinkTokenSidecar(projectRoot2) {
   try {
-    fs13.unlinkSync(tokenSidecarPath(projectRoot2));
+    fs14.unlinkSync(tokenSidecarPath(projectRoot2));
   } catch {
   }
 }
@@ -3917,7 +3957,6 @@ __export(lifecycle_exports, {
   classifyDaemonVersion: () => classifyDaemonVersion,
   daemonAuthHeaders: () => daemonAuthHeaders,
   describeDaemonVersionHealth: () => describeDaemonVersionHealth,
-  doctorCommandHint: () => doctorCommandHint,
   ensureDaemon: () => ensureDaemon,
   evictDaemon: () => evictDaemon,
   isDaemonRunning: () => isDaemonRunning,
@@ -3926,10 +3965,10 @@ __export(lifecycle_exports, {
   waitForDaemon: () => waitForDaemon
 });
 import { spawn } from "node:child_process";
-import fs14 from "node:fs";
+import fs15 from "node:fs";
 import net from "node:net";
-import path13 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import path14 from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 function logStale(msg) {
   try {
     process.stderr.write(`${msg}
@@ -3938,13 +3977,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path13.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path14.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs14.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs14.readFileSync(infoPath, "utf-8"));
+    if (!fs15.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs15.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -4062,7 +4101,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs14.unlinkSync(daemonInfoPath(projectRoot2));
+      fs15.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -4098,17 +4137,6 @@ async function waitForDaemon(projectRoot2, opts = {}) {
   const hint = await describeHolders(projectRoot2);
   throw new Error(buildReadinessTimeoutMessage({ timeoutMs, projectRoot: projectRoot2, hint }));
 }
-function resolveCliPath() {
-  const candidates = [
-    path13.join(__thisDir, "../cli/init.js"),
-    // dist/daemon → dist/cli/init.js
-    path13.join(__thisDir, "cli/init.js")
-  ];
-  return candidates.find((p) => fs14.existsSync(p)) ?? null;
-}
-function doctorCommandHint(cliPath = resolveCliPath()) {
-  return cliPath ? `node "${cliPath}" doctor` : "deeppairing doctor";
-}
 function buildReadinessTimeoutMessage(args) {
   const { timeoutMs, projectRoot: projectRoot2, hint } = args;
   const first = preferredPortFor(projectRoot2);
@@ -4117,11 +4145,11 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path13.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs14.existsSync(logPath)) {
+  const logPath = path14.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs15.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
-  lines.push(`To diagnose: ${doctorCommandHint()}`);
+  lines.push(`To diagnose: ${cliInvocation("doctor")}`);
   return lines.join("\n");
 }
 async function describePortHolders(projectRoot2) {
@@ -4160,8 +4188,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path13.join(__thisDir, "../../dist/daemon/index.js");
-  const scriptPath = fs14.existsSync(daemonScript) ? daemonScript : path13.join(__thisDir, "daemon.js");
+  const daemonScript = path14.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs15.existsSync(daemonScript) ? daemonScript : path14.join(__thisDir2, "daemon.js");
   const child = spawn("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -4346,14 +4374,15 @@ ${tail}`);
     throw err;
   }
 }
-var __thisDir, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, realSleep, sleep;
+var __thisDir2, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, realSleep, sleep;
 var init_lifecycle = __esm({
   "src/daemon/lifecycle.ts"() {
     "use strict";
     init_token();
     init_project_root();
     init_version();
-    __thisDir = path13.dirname(fileURLToPath2(import.meta.url));
+    init_cli_invocation();
+    __thisDir2 = path14.dirname(fileURLToPath3(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -5008,25 +5037,26 @@ var serve = (options, listeningListener) => {
 
 // src/daemon/index.ts
 import crypto4 from "node:crypto";
-import fs16 from "node:fs";
-import path15 from "node:path";
+import fs17 from "node:fs";
+import path16 from "node:path";
 
 // src/cli/setup-tasks.ts
-import fs from "node:fs";
+init_cli_invocation();
+import fs2 from "node:fs";
 import os from "node:os";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import path2 from "node:path";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
 function scopeFiles(projectRoot2) {
   return [
-    { scope: "user", path: path.join(os.homedir(), ".claude", "settings.json") },
-    { scope: "project-shared", path: path.join(projectRoot2, ".claude", "settings.json") },
-    { scope: "project-local", path: path.join(projectRoot2, ".claude", "settings.local.json") }
+    { scope: "user", path: path2.join(os.homedir(), ".claude", "settings.json") },
+    { scope: "project-shared", path: path2.join(projectRoot2, ".claude", "settings.json") },
+    { scope: "project-local", path: path2.join(projectRoot2, ".claude", "settings.local.json") }
   ];
 }
 function readJsonOrNull(filePath) {
   try {
-    if (!fs.existsSync(filePath)) return null;
-    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    if (!fs2.existsSync(filePath)) return null;
+    return JSON.parse(fs2.readFileSync(filePath, "utf-8"));
   } catch {
     return null;
   }
@@ -5060,29 +5090,29 @@ var STOP_HOOK_MARKER = (cmd) => cmd.includes("deepPairing") || cmd.includes("hoo
 var CHECKPOINT_HOOK_MARKER = (cmd) => cmd.includes("checkpoint.mjs");
 var PREFLIGHT_HOOK_MARKER = (cmd) => cmd.includes("preflight.mjs");
 function ensureDeepPairingDir(projectRoot2) {
-  const dpDir2 = path.join(projectRoot2, ".deeppairing");
+  const dpDir2 = path2.join(projectRoot2, ".deeppairing");
   try {
-    if (fs.existsSync(dpDir2)) {
+    if (fs2.existsSync(dpDir2)) {
       return { ok: true, changed: false, message: ".deeppairing/ already exists" };
     }
-    fs.mkdirSync(dpDir2, { recursive: true });
+    fs2.mkdirSync(dpDir2, { recursive: true });
     return { ok: true, changed: true, message: "Created .deeppairing/" };
   } catch (err) {
     return { ok: false, message: `Could not create .deeppairing/: ${err?.message ?? err}` };
   }
 }
 function ensureGitignoreEntry(projectRoot2) {
-  const gitignorePath = path.join(projectRoot2, ".gitignore");
+  const gitignorePath = path2.join(projectRoot2, ".gitignore");
   try {
-    if (!fs.existsSync(gitignorePath)) {
+    if (!fs2.existsSync(gitignorePath)) {
       return { ok: true, changed: false, message: "No .gitignore present (skipped)" };
     }
-    const content = fs.readFileSync(gitignorePath, "utf-8");
+    const content = fs2.readFileSync(gitignorePath, "utf-8");
     if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
       return { ok: true, changed: false, message: ".gitignore already lists .deeppairing/" };
     }
     const sep = content.endsWith("\n") ? "" : "\n";
-    fs.appendFileSync(gitignorePath, `${sep}.deeppairing/
+    fs2.appendFileSync(gitignorePath, `${sep}.deeppairing/
 `);
     return { ok: true, changed: true, message: "Added .deeppairing/ to .gitignore" };
   } catch (err) {
@@ -5190,17 +5220,17 @@ try {
 var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
 function ensureStopHook(projectRoot2) {
-  const claudeDir = path.join(projectRoot2, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.local.json");
-  const scriptPath = path.join(projectRoot2, STOP_SCRIPT_REL_PATH);
+  const claudeDir = path2.join(projectRoot2, ".claude");
+  const settingsPath = path2.join(claudeDir, "settings.local.json");
+  const scriptPath = path2.join(projectRoot2, STOP_SCRIPT_REL_PATH);
   try {
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
-    fs.chmodSync(scriptPath, 493);
+    fs2.mkdirSync(path2.dirname(scriptPath), { recursive: true });
+    fs2.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
+    fs2.chmodSync(scriptPath, 493);
     let settings = {};
-    if (fs.existsSync(settingsPath)) {
+    if (fs2.existsSync(settingsPath)) {
       try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
       } catch {
         return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
       }
@@ -5228,14 +5258,14 @@ function ensureStopHook(projectRoot2) {
       matcher: "",
       hooks: [{ type: "command", command: STOP_HOOK_COMMAND }]
     });
-    fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    fs2.mkdirSync(claudeDir, { recursive: true });
+    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
     const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", STOP_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`${cliInvocation("doctor --fix")}\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err) {
@@ -5368,17 +5398,17 @@ process.stdin.on("end", () => {
 `;
 var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
 function ensureCheckpointHook(projectRoot2) {
-  const claudeDir = path.join(projectRoot2, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.local.json");
-  const scriptPath = path.join(projectRoot2, CHECKPOINT_SCRIPT_REL_PATH);
+  const claudeDir = path2.join(projectRoot2, ".claude");
+  const settingsPath = path2.join(claudeDir, "settings.local.json");
+  const scriptPath = path2.join(projectRoot2, CHECKPOINT_SCRIPT_REL_PATH);
   try {
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
-    fs.chmodSync(scriptPath, 493);
+    fs2.mkdirSync(path2.dirname(scriptPath), { recursive: true });
+    fs2.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
+    fs2.chmodSync(scriptPath, 493);
     let settings = {};
-    if (fs.existsSync(settingsPath)) {
+    if (fs2.existsSync(settingsPath)) {
       try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
       } catch {
         return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
       }
@@ -5404,14 +5434,14 @@ function ensureCheckpointHook(projectRoot2) {
       matcher: "Write|Edit|MultiEdit",
       hooks: [{ type: "command", command: CANONICAL_CMD }]
     });
-    fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    fs2.mkdirSync(claudeDir, { recursive: true });
+    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
     const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", CHECKPOINT_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
+      msg += ` \u2014 but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`${cliInvocation("doctor --fix")}\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err) {
@@ -5422,14 +5452,14 @@ var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
 var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
 var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
 function resolvePreflightCoreUrl() {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const distCandidate = path.join(here, "preflight-hook-core.js");
+  const here = path2.dirname(fileURLToPath2(import.meta.url));
+  const distCandidate = path2.join(here, "preflight-hook-core.js");
   const candidates = [
     distCandidate,
-    path.join(here, "../../dist/cli/preflight-hook-core.js")
+    path2.join(here, "../../dist/cli/preflight-hook-core.js")
     // src/cli via tsx, after a build
   ];
-  const found = candidates.find((c) => fs.existsSync(c));
+  const found = candidates.find((c) => fs2.existsSync(c));
   return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
 }
 function preflightHookScript(coreUrl) {
@@ -5515,19 +5545,19 @@ process.stdin.on("end", async () => {
 `;
 }
 function ensurePreflightHook(projectRoot2) {
-  const claudeDir = path.join(projectRoot2, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.local.json");
-  const scriptPath = path.join(projectRoot2, PREFLIGHT_SCRIPT_REL_PATH);
+  const claudeDir = path2.join(projectRoot2, ".claude");
+  const settingsPath = path2.join(claudeDir, "settings.local.json");
+  const scriptPath = path2.join(projectRoot2, PREFLIGHT_SCRIPT_REL_PATH);
   try {
     const core = resolvePreflightCoreUrl();
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, preflightHookScript(core.url));
-    fs.chmodSync(scriptPath, 493);
+    fs2.mkdirSync(path2.dirname(scriptPath), { recursive: true });
+    fs2.writeFileSync(scriptPath, preflightHookScript(core.url));
+    fs2.chmodSync(scriptPath, 493);
     const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
     let settings = {};
-    if (fs.existsSync(settingsPath)) {
+    if (fs2.existsSync(settingsPath)) {
       try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+        settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
       } catch {
         return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
       }
@@ -5551,8 +5581,8 @@ function ensurePreflightHook(projectRoot2) {
       matcher: PREFLIGHT_MATCHER,
       hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }]
     });
-    fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    fs2.mkdirSync(claudeDir, { recursive: true });
+    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
@@ -5561,8 +5591,8 @@ function ensurePreflightHook(projectRoot2) {
 function isPluginManaged() {
   if (process.env.CLAUDE_PLUGIN_ROOT) return true;
   try {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    return fs.existsSync(path.join(here, "..", ".claude-plugin", "plugin.json"));
+    const here = path2.dirname(fileURLToPath2(import.meta.url));
+    return fs2.existsSync(path2.join(here, "..", ".claude-plugin", "plugin.json"));
   } catch {
     return false;
   }
@@ -5585,11 +5615,11 @@ function runDaemonStartupSetup(projectRoot2) {
 }
 
 // src/store/metrics-store.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 
 // src/store/atomic-write.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import { randomBytes } from "node:crypto";
 function writeJsonAtomic(filePath, value, indent = 2, opts) {
   writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
@@ -5598,25 +5628,25 @@ function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
   try {
     if (opts?.mode !== void 0) {
-      const O_NOFOLLOW = fs2.constants.O_NOFOLLOW ?? 0;
-      const fd = fs2.openSync(
+      const O_NOFOLLOW = fs3.constants.O_NOFOLLOW ?? 0;
+      const fd = fs3.openSync(
         tmp,
-        fs2.constants.O_WRONLY | fs2.constants.O_CREAT | fs2.constants.O_EXCL | O_NOFOLLOW,
+        fs3.constants.O_WRONLY | fs3.constants.O_CREAT | fs3.constants.O_EXCL | O_NOFOLLOW,
         opts.mode
       );
       try {
-        fs2.fchmodSync(fd, opts.mode);
-        fs2.writeFileSync(fd, data);
+        fs3.fchmodSync(fd, opts.mode);
+        fs3.writeFileSync(fd, data);
       } finally {
-        fs2.closeSync(fd);
+        fs3.closeSync(fd);
       }
     } else {
-      fs2.writeFileSync(tmp, data);
+      fs3.writeFileSync(tmp, data);
     }
-    fs2.renameSync(tmp, filePath);
+    fs3.renameSync(tmp, filePath);
   } catch (err) {
     try {
-      fs2.unlinkSync(tmp);
+      fs3.unlinkSync(tmp);
     } catch {
     }
     throw err;
@@ -5639,16 +5669,16 @@ function emptyCounts() {
   };
 }
 function metricsPath(projectRoot2) {
-  return path2.join(projectRoot2, ".deeppairing", "metrics.json");
+  return path3.join(projectRoot2, ".deeppairing", "metrics.json");
 }
 function readMetricsFromDisk(projectRoot2) {
   const file2 = metricsPath(projectRoot2);
   try {
-    if (!fs3.existsSync(file2)) {
+    if (!fs4.existsSync(file2)) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
     }
-    const parsed = JSON.parse(fs3.readFileSync(file2, "utf-8"));
+    const parsed = JSON.parse(fs4.readFileSync(file2, "utf-8"));
     if (parsed.version !== VERSION || !parsed.counts) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       return { version: VERSION, firstSeenAt: now, lastActivityAt: now, sessions: 0, counts: emptyCounts() };
@@ -5680,7 +5710,7 @@ function readMetricsFromDisk(projectRoot2) {
 function writeMetrics(projectRoot2, data) {
   const file2 = metricsPath(projectRoot2);
   try {
-    fs3.mkdirSync(path2.dirname(file2), { recursive: true });
+    fs4.mkdirSync(path3.dirname(file2), { recursive: true });
     writeJsonAtomic(file2, data);
   } catch {
   }
@@ -5767,6 +5797,7 @@ function recordMetricEvent(projectRoot2, event) {
 
 // src/daemon/index.ts
 init_project_root();
+init_cli_invocation();
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/compose.js
 var compose = (middleware, onError, onNotFound) => {
@@ -5921,26 +5952,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path16) => {
-  const paths = path16.split("/");
+var splitPath = (path17) => {
+  const paths = path17.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path16 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path16);
+  const { groups, path: path17 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path17);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path16) => {
+var extractGroupsFromPath = (path17) => {
   const groups = [];
-  path16 = path16.replace(/\{[^}]+\}/g, (match2, index) => {
+  path17 = path17.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path16 };
+  return { groups, path: path17 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -5997,8 +6028,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path16 = url2.slice(start, end);
-      return tryDecodeURI(path16.includes("%25") ? path16.replace(/%25/g, "%2525") : path16);
+      const path17 = url2.slice(start, end);
+      return tryDecodeURI(path17.includes("%25") ? path17.replace(/%25/g, "%2525") : path17);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -6015,11 +6046,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path16) => {
-  if (path16.charCodeAt(path16.length - 1) !== 63 || !path16.includes(":")) {
+var checkOptionalParameter = (path17) => {
+  if (path17.charCodeAt(path17.length - 1) !== 63 || !path17.includes(":")) {
     return null;
   }
-  const segments = path16.split("/");
+  const segments = path17.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -6160,9 +6191,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path16 = "/", matchResult = [[]]) {
+  constructor(request, path17 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path16;
+    this.path = path17;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -6914,8 +6945,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path16, ...handlers) => {
-      for (const p of [path16].flat()) {
+    this.on = (method, path17, ...handlers) => {
+      for (const p of [path17].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -6972,8 +7003,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path16, app) {
-    const subApp = this.basePath(path16);
+  route(path17, app) {
+    const subApp = this.basePath(path17);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -6999,9 +7030,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path16) {
+  basePath(path17) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path16);
+    subApp._basePath = mergePath(this._basePath, path17);
     return subApp;
   }
   /**
@@ -7075,7 +7106,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path16, applicationHandler, options) {
+  mount(path17, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -7102,7 +7133,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path16);
+      const mergedPath = mergePath(this._basePath, path17);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -7117,19 +7148,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path16, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path17, "*"), handler);
     return this;
   }
-  #addRoute(method, path16, handler, baseRoutePath) {
+  #addRoute(method, path17, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path16 = mergePath(this._basePath, path16);
+    path17 = mergePath(this._basePath, path17);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path16,
+      path: path17,
       method,
       handler
     };
-    this.router.add(method, path16, [handler, r]);
+    this.router.add(method, path17, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -7142,10 +7173,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path16 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path16);
+    const path17 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path17);
     const c = new Context(request, {
-      path: path16,
+      path: path17,
       matchResult,
       env,
       executionCtx,
@@ -7245,7 +7276,7 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path16) {
+function match(method, path17) {
   const matchers = this.buildAllMatchers();
   const match2 = ((method2, path22) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
@@ -7261,7 +7292,7 @@ function match(method, path16) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path16);
+  return match2(method, path17);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -7376,12 +7407,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path16, index, pathErrorCheckOnly) {
+  insert(path17, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path16 = path16.replace(/\{[^}]+\}/g, (m) => {
+      path17 = path17.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -7392,7 +7423,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path16.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path17.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -7431,9 +7462,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path16) {
-  return wildcardRegExpCache[path16] ??= new RegExp(
-    path16 === "*" ? "" : `^${path16.replace(
+function buildWildcardRegExp(path17) {
+  return wildcardRegExpCache[path17] ??= new RegExp(
+    path17 === "*" ? "" : `^${path17.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -7455,17 +7486,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path16, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path17, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path16] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path17] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path16, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path17, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path16) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path17) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -7499,12 +7530,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path16) {
+function findMiddleware(middleware, path17) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path16)) {
+    if (buildWildcardRegExp(k).test(path17)) {
       return [...middleware[k]];
     }
   }
@@ -7518,7 +7549,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path16, handler) {
+  add(method, path17, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -7533,18 +7564,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path16 === "/*") {
-      path16 = "*";
+    if (path17 === "/*") {
+      path17 = "*";
     }
-    const paramCount = (path16.match(/\/:/g) || []).length;
-    if (/\*$/.test(path16)) {
-      const re = buildWildcardRegExp(path16);
+    const paramCount = (path17.match(/\/:/g) || []).length;
+    if (/\*$/.test(path17)) {
+      const re = buildWildcardRegExp(path17);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path16] ||= findMiddleware(middleware[m], path16) || findMiddleware(middleware[METHOD_NAME_ALL], path16) || [];
+          middleware[m][path17] ||= findMiddleware(middleware[m], path17) || findMiddleware(middleware[METHOD_NAME_ALL], path17) || [];
         });
       } else {
-        middleware[method][path16] ||= findMiddleware(middleware[method], path16) || findMiddleware(middleware[METHOD_NAME_ALL], path16) || [];
+        middleware[method][path17] ||= findMiddleware(middleware[method], path17) || findMiddleware(middleware[METHOD_NAME_ALL], path17) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -7562,7 +7593,7 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path16) || [path16];
+    const paths = checkOptionalParameter(path17) || [path17];
     for (let i = 0, len = paths.length; i < len; i++) {
       const path22 = paths[i];
       Object.keys(routes).forEach((m) => {
@@ -7589,13 +7620,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path16) => [path16, r[method][path16]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path17) => [path17, r[method][path17]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path16) => [path16, r[METHOD_NAME_ALL][path16]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path17) => [path17, r[METHOD_NAME_ALL][path17]])
         );
       }
     });
@@ -7615,13 +7646,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path16, handler) {
+  add(method, path17, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path16, handler]);
+    this.#routes.push([method, path17, handler]);
   }
-  match(method, path16) {
+  match(method, path17) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -7636,7 +7667,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path16);
+        res = router.match(method, path17);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -7686,10 +7717,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path16, handler) {
+  insert(method, path17, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path16);
+    const parts = splitRoutingPath(path17);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -7738,12 +7769,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path16) {
+  search(method, path17) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path16);
+    const parts = splitPath(path17);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -7785,13 +7816,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path16[0] === "/" ? 1 : 0;
+              let offset = path17[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path16.substring(partOffsets[i]);
+            const restPathString = path17.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -7844,18 +7875,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path16, handler) {
-    const results = checkOptionalParameter(path16);
+  add(method, path17, handler) {
+    const results = checkOptionalParameter(path17);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path16, handler);
+    this.#node.insert(method, path17, handler);
   }
-  match(method, path16) {
-    return this.#node.search(method, path16);
+  match(method, path17) {
+    return this.#node.search(method, path17);
   }
 };
 
@@ -7967,9 +7998,9 @@ var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
-import { fileURLToPath as fileURLToPath3 } from "node:url";
-import fs15 from "node:fs";
-import path14 from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+import fs16 from "node:fs";
+import path15 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
 
 // src/error-codes.ts
@@ -8070,8 +8101,8 @@ var TOOL_ERROR_RETRYABLE = {
 };
 
 // src/store/file-store.ts
-import fs9 from "node:fs";
-import path8 from "node:path";
+import fs10 from "node:fs";
+import path9 from "node:path";
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -8839,10 +8870,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path16) {
-  if (!path16)
+function getElementAtPath(obj2, path17) {
+  if (!path17)
     return obj2;
-  return path16.reduce((acc, key) => acc?.[key], obj2);
+  return path17.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -9251,11 +9282,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path16, issues) {
+function prefixIssues(path17, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path16);
+    iss.path.unshift(path17);
     return iss;
   });
 }
@@ -9402,16 +9433,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path16 = []) => {
+  const processError = (error52, path17 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path16, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path17, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path17, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path17, ...issue2.path]);
       } else {
-        const fullpath = [...path16, ...issue2.path];
+        const fullpath = [...path17, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -9438,17 +9469,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path16 = []) => {
+  const processError = (error52, path17 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path16, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path17, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path17, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path17, ...issue2.path]);
       } else {
-        const fullpath = [...path16, ...issue2.path];
+        const fullpath = [...path17, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -9480,8 +9511,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path16 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path16) {
+  const path17 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path17) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -22173,13 +22204,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path16 = ref.slice(1).split("/").filter(Boolean);
-  if (path16.length === 0) {
+  const path17 = ref.slice(1).split("/").filter(Boolean);
+  if (path17.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path16[0] === defsKey) {
-    const key = path16[1];
+  if (path17[0] === defsKey) {
+    const key = path17[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -24150,9 +24181,9 @@ function nanoid3(size = 21) {
 }
 
 // src/store/global-store.ts
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import os2 from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 
 // src/store/salvage.ts
 var salvageLogged = /* @__PURE__ */ new Set();
@@ -24183,7 +24214,7 @@ function salvageRecord(label, raw2, fallback) {
 // src/store/global-store.ts
 var LEDGER_VERSION = 1;
 function realHomeLedgerPath() {
-  return path3.join(os2.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+  return path4.join(os2.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
 }
 function defaultLedgerPath() {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -24263,7 +24294,7 @@ var GlobalStore = class _GlobalStore {
   snapshotLedger(prefix = "corrupt") {
     const backup = `${this.ledgerPath}.${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      fs4.copyFileSync(this.ledgerPath, backup);
+      fs5.copyFileSync(this.ledgerPath, backup);
       return backup;
     } catch {
       return null;
@@ -24326,13 +24357,13 @@ var GlobalStore = class _GlobalStore {
     this.lastReadCorrupt = false;
     this.lastReadCorruptReason = void 0;
     this.lastReadDroppedEntries = false;
-    if (!fs4.existsSync(this.ledgerPath)) {
+    if (!fs5.existsSync(this.ledgerPath)) {
       corruptSnapshots.delete(this.ledgerPath);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     let raw2;
     try {
-      raw2 = fs4.readFileSync(this.ledgerPath, "utf-8");
+      raw2 = fs5.readFileSync(this.ledgerPath, "utf-8");
     } catch (err) {
       this.markCorrupt(err);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
@@ -24386,7 +24417,7 @@ var GlobalStore = class _GlobalStore {
       this.snapshotLedger();
     }
     try {
-      fs4.mkdirSync(path3.dirname(this.ledgerPath), { recursive: true });
+      fs5.mkdirSync(path4.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
     } catch {
@@ -24621,13 +24652,13 @@ function getGlobalStore() {
 }
 
 // src/store/project-signals.ts
-import fs5 from "node:fs";
-import path4 from "node:path";
+import fs6 from "node:fs";
+import path5 from "node:path";
 function senseProjectGuardrails(projectRoot2) {
   const guardrails = [];
   const exists = (rel) => {
     try {
-      return fs5.existsSync(path4.join(projectRoot2, rel));
+      return fs6.existsSync(path5.join(projectRoot2, rel));
     } catch {
       return false;
     }
@@ -24670,10 +24701,10 @@ function stripJsoncComments(src) {
   return src.split("\n").map((line) => /^\s*\/\//.test(line) ? "" : line).join("\n");
 }
 function loadTeamPreferences(basePath) {
-  const filePath = path4.join(basePath, "team.json");
+  const filePath = path5.join(basePath, "team.json");
   try {
-    if (!fs5.existsSync(filePath)) return [];
-    const raw2 = JSON.parse(stripJsoncComments(fs5.readFileSync(filePath, "utf-8")));
+    if (!fs6.existsSync(filePath)) return [];
+    const raw2 = JSON.parse(stripJsoncComments(fs6.readFileSync(filePath, "utf-8")));
     const parsed = parseTeamPreferencesFile(raw2);
     if (!parsed) {
       console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
@@ -24801,27 +24832,27 @@ function scanContentForSecrets(content, maxDepth = 6) {
 }
 
 // src/store/session-scan.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
+import fs7 from "node:fs";
+import path6 from "node:path";
 function listSessions(projectRoot2) {
-  const sessionsDir = path5.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs6.existsSync(sessionsDir)) return [];
-  const entries = fs6.readdirSync(sessionsDir, { withFileTypes: true });
+  const sessionsDir = path6.join(projectRoot2, ".deeppairing", "sessions");
+  if (!fs7.existsSync(sessionsDir)) return [];
+  const entries = fs7.readdirSync(sessionsDir, { withFileTypes: true });
   const sessions = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const sessionDir = path5.join(sessionsDir, entry.name);
+    const sessionDir = path6.join(sessionsDir, entry.name);
     try {
-      const artFile = path5.join(sessionDir, "artifacts.json");
-      if (!fs6.existsSync(artFile)) continue;
+      const artFile = path6.join(sessionDir, "artifacts.json");
+      if (!fs7.existsSync(artFile)) continue;
       const artifacts = salvageArray(
         `${entry.name}/artifacts.json`,
-        JSON.parse(fs6.readFileSync(artFile, "utf-8")),
+        JSON.parse(fs7.readFileSync(artFile, "utf-8")),
         "id"
       );
       if (artifacts.length === 0) continue;
-      const decFile = path5.join(sessionDir, "decisions.json");
-      const decRaw = fs6.existsSync(decFile) ? JSON.parse(fs6.readFileSync(decFile, "utf-8")) : [];
+      const decFile = path6.join(sessionDir, "decisions.json");
+      const decRaw = fs7.existsSync(decFile) ? JSON.parse(fs7.readFileSync(decFile, "utf-8")) : [];
       const hasDecisions = Array.isArray(decRaw) && decRaw.length > 0;
       const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       const firstArtifact = sorted[0];
@@ -24846,20 +24877,20 @@ function searchAll(projectRoot2, query, limit = 50) {
   const results = [];
   const sessions = listSessions(projectRoot2);
   for (const session of sessions) {
-    const sessionDir = path5.join(projectRoot2, ".deeppairing", "sessions", session.id);
-    const artFile = path5.join(sessionDir, "artifacts.json");
-    if (!fs6.existsSync(artFile)) continue;
+    const sessionDir = path6.join(projectRoot2, ".deeppairing", "sessions", session.id);
+    const artFile = path6.join(sessionDir, "artifacts.json");
+    if (!fs7.existsSync(artFile)) continue;
     let artifacts;
     try {
-      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs6.readFileSync(artFile, "utf-8")), "id");
+      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs7.readFileSync(artFile, "utf-8")), "id");
     } catch {
       continue;
     }
-    const prefsFile = path5.join(projectRoot2, ".deeppairing", "preferences.json");
+    const prefsFile = path6.join(projectRoot2, ".deeppairing", "preferences.json");
     let rejected = [];
     try {
-      if (fs6.existsSync(prefsFile)) {
-        const prefs = JSON.parse(fs6.readFileSync(prefsFile, "utf-8"));
+      if (fs7.existsSync(prefsFile)) {
+        const prefs = JSON.parse(fs7.readFileSync(prefsFile, "utf-8"));
         const raw2 = prefs.rejectedApproaches ?? [];
         rejected = Array.isArray(raw2) ? raw2.map((r) => typeof r === "string" ? { description: r } : r) : [];
       }
@@ -24936,7 +24967,7 @@ function resolveLiveArtifact(artifacts, id) {
   return current;
 }
 function listAllDecisions(projectRoot2, liveSessions = []) {
-  const sessionsDir = path5.join(projectRoot2, ".deeppairing", "sessions");
+  const sessionsDir = path6.join(projectRoot2, ".deeppairing", "sessions");
   const decisions = [];
   const failedSessions = [];
   const pushSession = (sessionId, decRecords, artifacts) => {
@@ -24976,9 +25007,9 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   const consumedLive = /* @__PURE__ */ new Set();
   const sidecarSessions = [];
   let entries = [];
-  if (fs6.existsSync(sessionsDir)) {
+  if (fs7.existsSync(sessionsDir)) {
     try {
-      entries = fs6.readdirSync(sessionsDir, { withFileTypes: true });
+      entries = fs7.readdirSync(sessionsDir, { withFileTypes: true });
     } catch {
       entries = [];
     }
@@ -24986,10 +25017,10 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const sessionId = entry.name;
-    const sessionDir = path5.join(sessionsDir, sessionId);
-    const decFile = path5.join(sessionDir, "decisions.json");
+    const sessionDir = path6.join(sessionsDir, sessionId);
+    const decFile = path6.join(sessionDir, "decisions.json");
     try {
-      if (fs6.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
+      if (fs7.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
     } catch {
     }
     const liveSrc = liveById.get(sessionId);
@@ -24998,13 +25029,13 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       pushSession(sessionId, liveSrc.decisions, liveSrc.artifacts);
       continue;
     }
-    if (!fs6.existsSync(decFile)) continue;
+    if (!fs7.existsSync(decFile)) continue;
     let raw2;
     try {
-      raw2 = JSON.parse(fs6.readFileSync(decFile, "utf-8"));
+      raw2 = JSON.parse(fs7.readFileSync(decFile, "utf-8"));
     } catch (err) {
       try {
-        fs6.copyFileSync(decFile, decFile + ".corrupt");
+        fs7.copyFileSync(decFile, decFile + ".corrupt");
       } catch {
       }
       failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json", kind: "unreadable" });
@@ -25029,12 +25060,12 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       continue;
     }
     let artifacts = [];
-    const artFile = path5.join(sessionDir, "artifacts.json");
-    if (fs6.existsSync(artFile)) {
+    const artFile = path6.join(sessionDir, "artifacts.json");
+    if (fs7.existsSync(artFile)) {
       try {
         artifacts = salvageArray(
           `${sessionId}/artifacts.json`,
-          JSON.parse(fs6.readFileSync(artFile, "utf-8")),
+          JSON.parse(fs7.readFileSync(artFile, "utf-8")),
           "id"
         );
       } catch {
@@ -25139,13 +25170,13 @@ function fileTouchesOf(artifact) {
 function groupByFeature(projectRoot2, overrides = {}) {
   const artifactAssignments = overrides.artifactAssignments ?? {};
   const groupTitles = overrides.groupTitles ?? {};
-  const sessionsDir = path5.join(projectRoot2, ".deeppairing", "sessions");
+  const sessionsDir = path6.join(projectRoot2, ".deeppairing", "sessions");
   const failedSessions = [];
   const scans = [];
   let entries = [];
-  if (fs6.existsSync(sessionsDir)) {
+  if (fs7.existsSync(sessionsDir)) {
     try {
-      entries = fs6.readdirSync(sessionsDir, { withFileTypes: true });
+      entries = fs7.readdirSync(sessionsDir, { withFileTypes: true });
     } catch {
       entries = [];
     }
@@ -25153,14 +25184,14 @@ function groupByFeature(projectRoot2, overrides = {}) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const sessionId = entry.name;
-    const sessionDir = path5.join(sessionsDir, sessionId);
-    const artFile = path5.join(sessionDir, "artifacts.json");
-    if (!fs6.existsSync(artFile)) continue;
+    const sessionDir = path6.join(sessionsDir, sessionId);
+    const artFile = path6.join(sessionDir, "artifacts.json");
+    if (!fs7.existsSync(artFile)) continue;
     let artifacts;
     try {
       artifacts = salvageArray(
         `${sessionId}/artifacts.json`,
-        JSON.parse(fs6.readFileSync(artFile, "utf-8")),
+        JSON.parse(fs7.readFileSync(artFile, "utf-8")),
         "id"
       );
     } catch (err) {
@@ -25169,10 +25200,10 @@ function groupByFeature(projectRoot2, overrides = {}) {
     }
     if (artifacts.length === 0) continue;
     let decisions = [];
-    const decFile = path5.join(sessionDir, "decisions.json");
-    if (fs6.existsSync(decFile)) {
+    const decFile = path6.join(sessionDir, "decisions.json");
+    if (fs7.existsSync(decFile)) {
       try {
-        const raw2 = JSON.parse(fs6.readFileSync(decFile, "utf-8"));
+        const raw2 = JSON.parse(fs7.readFileSync(decFile, "utf-8"));
         if (Array.isArray(raw2)) {
           decisions = salvageArray(`${sessionId}/decisions.json`, raw2, "decisionId");
         }
@@ -25180,10 +25211,10 @@ function groupByFeature(projectRoot2, overrides = {}) {
       }
     }
     let comments = [];
-    const cmtFile = path5.join(sessionDir, "comments.json");
-    if (fs6.existsSync(cmtFile)) {
+    const cmtFile = path6.join(sessionDir, "comments.json");
+    if (fs7.existsSync(cmtFile)) {
       try {
-        const raw2 = JSON.parse(fs6.readFileSync(cmtFile, "utf-8"));
+        const raw2 = JSON.parse(fs7.readFileSync(cmtFile, "utf-8"));
         if (Array.isArray(raw2)) {
           comments = salvageArray(`${sessionId}/comments.json`, raw2, "id");
         }
@@ -25363,8 +25394,8 @@ function groupByFeature(projectRoot2, overrides = {}) {
 }
 
 // src/store/ledger-digest.ts
-import fs7 from "node:fs";
-import path6 from "node:path";
+import fs8 from "node:fs";
+import path7 from "node:path";
 var ledgerDigestCache = /* @__PURE__ */ new Map();
 var DIGEST_CACHE_TTL_MS = 2e3;
 function invalidateLedgerDigestCache(projectRoot2) {
@@ -25375,8 +25406,8 @@ function ledgerDigest(projectRoot2) {
   if (cached2 && Date.now() - cached2.computedAt < DIGEST_CACHE_TTL_MS) {
     return cached2.result;
   }
-  const sessionsDir = path6.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs7.existsSync(sessionsDir)) {
+  const sessionsDir = path7.join(projectRoot2, ".deeppairing", "sessions");
+  if (!fs8.existsSync(sessionsDir)) {
     const empty = {
       shapedThisProject: 0,
       nearMissesThisProject: 0,
@@ -25392,13 +25423,13 @@ function ledgerDigest(projectRoot2) {
   let blockedThisProject = 0;
   let sessionsTouched = 0;
   const cites = /* @__PURE__ */ new Map();
-  for (const entry of fs7.readdirSync(sessionsDir, { withFileTypes: true })) {
+  for (const entry of fs8.readdirSync(sessionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const tracesPath = path6.join(sessionsDir, entry.name, "preflight-traces.json");
-    if (!fs7.existsSync(tracesPath)) continue;
+    const tracesPath = path7.join(sessionsDir, entry.name, "preflight-traces.json");
+    if (!fs8.existsSync(tracesPath)) continue;
     let map2;
     try {
-      map2 = salvageRecord("preflight-traces.json", JSON.parse(fs7.readFileSync(tracesPath, "utf-8")), {});
+      map2 = salvageRecord("preflight-traces.json", JSON.parse(fs8.readFileSync(tracesPath, "utf-8")), {});
     } catch {
       continue;
     }
@@ -25446,8 +25477,8 @@ function ledgerDigest(projectRoot2) {
 }
 
 // src/store/preflight-residual.ts
-import fs8 from "node:fs";
-import path7 from "node:path";
+import fs9 from "node:fs";
+import path8 from "node:path";
 
 // src/mcp/preflight-validator.ts
 var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
@@ -25486,20 +25517,20 @@ function meaningfulTokens(s) {
 // src/store/preflight-residual.ts
 var RESIDUAL_CAP = 100;
 function residualPath(projectRoot2) {
-  return path7.join(projectRoot2, ".deeppairing", "preflight-residual.json");
+  return path8.join(projectRoot2, ".deeppairing", "preflight-residual.json");
 }
 function appendResidual(projectRoot2, entry) {
   const p = residualPath(projectRoot2);
   let file2 = { version: 1, escapes: [] };
   try {
-    const raw2 = JSON.parse(fs8.readFileSync(p, "utf-8"));
+    const raw2 = JSON.parse(fs9.readFileSync(p, "utf-8"));
     if (raw2?.version === 1 && Array.isArray(raw2.escapes)) file2 = raw2;
   } catch {
   }
   file2.escapes.push(entry);
   file2.escapes = file2.escapes.slice(-RESIDUAL_CAP);
   try {
-    fs8.mkdirSync(path7.dirname(p), { recursive: true });
+    fs9.mkdirSync(path8.dirname(p), { recursive: true });
     writeJsonAtomic(p, file2);
   } catch {
   }
@@ -25620,8 +25651,8 @@ var FileStore = class _FileStore {
   projectRoot;
   constructor(projectRoot2, sessionId) {
     this.projectRoot = projectRoot2;
-    this.basePath = path8.join(projectRoot2, ".deeppairing");
-    this.projectHint = path8.basename(projectRoot2);
+    this.basePath = path9.join(projectRoot2, ".deeppairing");
+    this.projectHint = path9.basename(projectRoot2);
     this.guardrails = senseProjectGuardrails(projectRoot2);
     this.teamPreferences = loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
@@ -25635,14 +25666,14 @@ var FileStore = class _FileStore {
     this.loadPreferences();
   }
   ensureDir() {
-    const sessionDir = path8.join(this.basePath, "sessions", this.sessionId);
-    fs9.mkdirSync(sessionDir, { recursive: true });
+    const sessionDir = path9.join(this.basePath, "sessions", this.sessionId);
+    fs10.mkdirSync(sessionDir, { recursive: true });
   }
   sessionDir() {
-    return path8.join(this.basePath, "sessions", this.sessionId);
+    return path9.join(this.basePath, "sessions", this.sessionId);
   }
   loadPreferences() {
-    const prefsPath = path8.join(this.basePath, "preferences.json");
+    const prefsPath = path9.join(this.basePath, "preferences.json");
     const prefs = _FileStore.salvageRecord(
       // G6 — labels are the once-per-process suppression KEY: session-scope
       // them (F10's sid:file format) so a second corrupt session still logs.
@@ -25661,27 +25692,27 @@ var FileStore = class _FileStore {
     const dir = this.sessionDir();
     this.artifacts = _FileStore.salvageArray(
       `${this.sessionId}:artifacts.json`,
-      this.loadJsonFile(path8.join(dir, "artifacts.json"), []),
+      this.loadJsonFile(path9.join(dir, "artifacts.json"), []),
       "id"
     );
     this.comments = _FileStore.salvageArray(
       `${this.sessionId}:comments.json`,
-      this.loadJsonFile(path8.join(dir, "comments.json"), []),
+      this.loadJsonFile(path9.join(dir, "comments.json"), []),
       "id"
     );
     const decArr = _FileStore.salvageArray(
       `${this.sessionId}:decisions.json`,
-      this.loadJsonFile(path8.join(dir, "decisions.json"), []),
+      this.loadJsonFile(path9.join(dir, "decisions.json"), []),
       "decisionId"
     );
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = _FileStore.salvageArray(
       `${this.sessionId}:plan-reviews.json`,
-      this.loadJsonFile(path8.join(dir, "plan-reviews.json"), []),
+      this.loadJsonFile(path9.join(dir, "plan-reviews.json"), []),
       "artifactId"
     );
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
-    const rawFailures = this.loadJsonFile(path8.join(dir, "render-failures.json"), []);
+    const rawFailures = this.loadJsonFile(path9.join(dir, "render-failures.json"), []);
     const keyedFailures = (Array.isArray(rawFailures) ? rawFailures : []).map((r) => ({
       ...r,
       __key: `${r?.artifactId} ${r?.visualId}`
@@ -25693,10 +25724,10 @@ var FileStore = class _FileStore {
     ).map(({ __key, ...r }) => r);
     this.requests = _FileStore.salvageArray(
       `${this.sessionId}:requests.json`,
-      this.loadJsonFile(path8.join(dir, "requests.json"), []),
+      this.loadJsonFile(path9.join(dir, "requests.json"), []),
       "id"
     );
-    const rawMetrics = this.loadJsonFile(path8.join(dir, "metrics.json"), []);
+    const rawMetrics = this.loadJsonFile(path9.join(dir, "metrics.json"), []);
     if (Array.isArray(rawMetrics)) {
       const kept = rawMetrics.filter(
         (e) => !!e && typeof e === "object" && typeof e.type === "string" && typeof e.latencyMs === "number" && Number.isFinite(e.latencyMs)
@@ -25722,15 +25753,15 @@ var FileStore = class _FileStore {
    *  later flush can detect external writes and merge instead of clobber. */
   loadJsonFile(filePath, fallback) {
     try {
-      if (!fs9.existsSync(filePath)) {
+      if (!fs10.existsSync(filePath)) {
         delete this.fileMtimeMs[filePath];
         delete this.fileSizes[filePath];
         return fallback;
       }
-      const stat = fs9.statSync(filePath);
+      const stat = fs10.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
-      return JSON.parse(fs9.readFileSync(filePath, "utf-8"));
+      return JSON.parse(fs10.readFileSync(filePath, "utf-8"));
     } catch (err) {
       if (err?.code === "ENOENT") {
         delete this.fileMtimeMs[filePath];
@@ -25739,7 +25770,7 @@ var FileStore = class _FileStore {
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${err.message}`);
       try {
-        fs9.copyFileSync(filePath, filePath + ".corrupt");
+        fs10.copyFileSync(filePath, filePath + ".corrupt");
       } catch {
       }
       return fallback;
@@ -25757,15 +25788,15 @@ var FileStore = class _FileStore {
    */
   readIfChanged(filePath) {
     try {
-      if (!fs9.existsSync(filePath)) return null;
-      const stat = fs9.statSync(filePath);
+      if (!fs10.existsSync(filePath)) return null;
+      const stat = fs10.statSync(filePath);
       const lastMtime = this.fileMtimeMs[filePath] ?? 0;
       const lastSize = this.fileSizes[filePath];
       const mtimeAdvanced = stat.mtimeMs > lastMtime;
       const sizeChanged = lastSize !== void 0 && stat.size !== lastSize;
       const sizeFirstSeen = lastSize === void 0;
       if (!mtimeAdvanced && !sizeChanged && !sizeFirstSeen) return null;
-      const parsed = JSON.parse(fs9.readFileSync(filePath, "utf-8"));
+      const parsed = JSON.parse(fs10.readFileSync(filePath, "utf-8"));
       return parsed;
     } catch {
       return null;
@@ -25798,7 +25829,7 @@ var FileStore = class _FileStore {
     writeStringAtomic(filePath, serialized);
     this.lastSerialized[filePath] = serialized;
     try {
-      const stat = fs9.statSync(filePath);
+      const stat = fs10.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
     } catch {
@@ -25820,10 +25851,10 @@ var FileStore = class _FileStore {
   }
   flush() {
     const dir = this.sessionDir();
-    const artifactsPath = path8.join(dir, "artifacts.json");
-    const commentsPath = path8.join(dir, "comments.json");
-    const decisionsPath = path8.join(dir, "decisions.json");
-    const plansPath = path8.join(dir, "plan-reviews.json");
+    const artifactsPath = path9.join(dir, "artifacts.json");
+    const commentsPath = path9.join(dir, "comments.json");
+    const decisionsPath = path9.join(dir, "decisions.json");
+    const plansPath = path9.join(dir, "plan-reviews.json");
     const diskArtifacts = this.readIfChanged(artifactsPath);
     if (diskArtifacts) {
       this.artifacts = this.mergeArrayById(
@@ -25865,13 +25896,13 @@ var FileStore = class _FileStore {
     this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
     this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
     if (this.reviewLatencies.length > 0) {
-      this.atomicWrite(path8.join(dir, "metrics.json"), this.reviewLatencies);
+      this.atomicWrite(path9.join(dir, "metrics.json"), this.reviewLatencies);
     }
     if (this.renderFailures.length > 0) {
-      this.atomicWrite(path8.join(dir, "render-failures.json"), this.renderFailures);
+      this.atomicWrite(path9.join(dir, "render-failures.json"), this.renderFailures);
     }
     if (this.requests.length > 0) {
-      this.atomicWrite(path8.join(dir, "requests.json"), this.requests);
+      this.atomicWrite(path9.join(dir, "requests.json"), this.requests);
     }
   }
   /** Force an immediate flush — call before process exit */
@@ -25935,7 +25966,7 @@ var FileStore = class _FileStore {
    */
   touchCodeChangeMarker(at) {
     try {
-      writeJsonAtomic(path8.join(this.basePath, "last-code-change.json"), { at });
+      writeJsonAtomic(path9.join(this.basePath, "last-code-change.json"), { at });
     } catch {
     }
   }
@@ -26710,7 +26741,7 @@ var FileStore = class _FileStore {
   }
   readPreferences() {
     if (this.demoPreferences) return this.demoPreferences;
-    const prefsPath = path8.join(this.basePath, "preferences.json");
+    const prefsPath = path9.join(this.basePath, "preferences.json");
     return _FileStore.salvageRecord("preferences.json", this.loadJsonFile(prefsPath, {}), {});
   }
   writePreferences(prefs) {
@@ -26718,7 +26749,7 @@ var FileStore = class _FileStore {
       this.demoPreferences = prefs;
       return;
     }
-    const prefsPath = path8.join(this.basePath, "preferences.json");
+    const prefsPath = path9.join(this.basePath, "preferences.json");
     writeJsonAtomic(prefsPath, prefs);
   }
   // --- Session annotations (learner's replay notes) ---
@@ -26729,7 +26760,7 @@ var FileStore = class _FileStore {
    * accidentally becoming agent context.
    */
   annotationsPath() {
-    return path8.join(this.sessionDir(), "annotations.json");
+    return path9.join(this.sessionDir(), "annotations.json");
   }
   getAnnotations() {
     return this.loadJsonFile(this.annotationsPath(), []);
@@ -26801,7 +26832,7 @@ var FileStore = class _FileStore {
    * evolves separately if needed).
    */
   preflightTracesPath() {
-    return path8.join(this.sessionDir(), "preflight-traces.json");
+    return path9.join(this.sessionDir(), "preflight-traces.json");
   }
   recordPreflightTrace(artifactId, trace) {
     const map2 = _FileStore.salvageRecord(
@@ -26907,17 +26938,17 @@ var FileStore = class _FileStore {
 };
 
 // src/http/routes.ts
-import fs11 from "node:fs";
-import path10 from "node:path";
+import fs12 from "node:fs";
+import path11 from "node:path";
 
 // src/store/feature-overrides.ts
-import fs10 from "node:fs";
-import path9 from "node:path";
+import fs11 from "node:fs";
+import path10 from "node:path";
 var VERSION2 = 1;
 var loggedUnknownVersion = false;
 var TITLE_MAX = 120;
 function overridesPath(projectRoot2) {
-  return path9.join(projectRoot2, ".deeppairing", "feature-overrides.json");
+  return path10.join(projectRoot2, ".deeppairing", "feature-overrides.json");
 }
 function emptyOverrides() {
   return { version: VERSION2, groupTitles: {}, artifactAssignments: {} };
@@ -26935,8 +26966,8 @@ function sanitizeRecord(raw2) {
 function readFeatureOverridesFile(projectRoot2) {
   const file2 = overridesPath(projectRoot2);
   try {
-    if (!fs10.existsSync(file2)) return emptyOverrides();
-    const parsed = JSON.parse(fs10.readFileSync(file2, "utf-8"));
+    if (!fs11.existsSync(file2)) return emptyOverrides();
+    const parsed = JSON.parse(fs11.readFileSync(file2, "utf-8"));
     if (parsed?.version !== VERSION2) {
       if (!loggedUnknownVersion) {
         loggedUnknownVersion = true;
@@ -26963,7 +26994,7 @@ function readFeatureOverrides(projectRoot2) {
 }
 function writeFeatureOverridesFile(projectRoot2, data) {
   const file2 = overridesPath(projectRoot2);
-  fs10.mkdirSync(path9.dirname(file2), { recursive: true });
+  fs11.mkdirSync(path10.dirname(file2), { recursive: true });
   writeJsonAtomic(file2, data);
 }
 function setFeatureGroupTitle(projectRoot2, groupKey, title) {
@@ -28920,33 +28951,33 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!filePath || !projectRoot2) {
       return c.json({ error: "path parameter required" }, 400);
     }
-    const resolved = path10.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
-    const resolvedRoot = path10.resolve(projectRoot2);
-    if (!resolved.startsWith(resolvedRoot + path10.sep) && resolved !== resolvedRoot) {
+    const resolved = path11.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
+    const resolvedRoot = path11.resolve(projectRoot2);
+    if (!resolved.startsWith(resolvedRoot + path11.sep) && resolved !== resolvedRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     let realResolved;
     let realRoot;
     try {
-      realResolved = fs11.realpathSync(resolved);
-      realRoot = fs11.realpathSync(resolvedRoot);
+      realResolved = fs12.realpathSync(resolved);
+      realRoot = fs12.realpathSync(resolvedRoot);
     } catch (err) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
-    if (!realResolved.startsWith(realRoot + path10.sep) && realResolved !== realRoot) {
+    if (!realResolved.startsWith(realRoot + path11.sep) && realResolved !== realRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     try {
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const size = fs11.statSync(realResolved).size;
+      const size = fs12.statSync(realResolved).size;
       if (size > MAX_FILE_BYTES) {
         return c.json(
           { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
           413
         );
       }
-      const content = fs11.readFileSync(realResolved, "utf-8");
+      const content = fs12.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
@@ -28960,10 +28991,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/hook-state", (c) => {
     if (!projectRoot2) return c.json({ version: 1, fires: [] });
-    const statePath = path10.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    if (!fs11.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    const statePath = path11.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    if (!fs12.existsSync(statePath)) return c.json({ version: 1, fires: [] });
     try {
-      const raw2 = JSON.parse(fs11.readFileSync(statePath, "utf-8"));
+      const raw2 = JSON.parse(fs12.readFileSync(statePath, "utf-8"));
       const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25) : [];
       return c.json({ version: 1, fires });
     } catch {
@@ -29088,28 +29119,28 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sessionTag = sanitize(body?.sessionId);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
-    const promptsDir = path10.join(projectRoot2, ".deeppairing", "prompts");
+    const promptsDir = path11.join(projectRoot2, ".deeppairing", "prompts");
     try {
-      fs11.mkdirSync(promptsDir, { recursive: true });
-      const fullPath = path10.join(promptsDir, filename);
-      const resolved = path10.resolve(fullPath);
-      const resolvedDir = path10.resolve(promptsDir);
-      if (!resolved.startsWith(resolvedDir + path10.sep)) {
+      fs12.mkdirSync(promptsDir, { recursive: true });
+      const fullPath = path11.join(promptsDir, filename);
+      const resolved = path11.resolve(fullPath);
+      const resolvedDir = path11.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path11.sep)) {
         return c.json({ error: "invalid path" }, 400);
       }
       try {
-        const stat = fs11.lstatSync(resolved);
+        const stat = fs12.lstatSync(resolved);
         if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
       } catch (err) {
         if (err?.code !== "ENOENT") throw err;
       }
-      const realDir = fs11.realpathSync(resolvedDir);
-      const realRoot = fs11.realpathSync(path10.resolve(projectRoot2));
-      if (!realDir.startsWith(realRoot + path10.sep) && realDir !== realRoot) {
+      const realDir = fs12.realpathSync(resolvedDir);
+      const realRoot = fs12.realpathSync(path11.resolve(projectRoot2));
+      if (!realDir.startsWith(realRoot + path11.sep) && realDir !== realRoot) {
         return c.json({ error: "invalid path" }, 400);
       }
-      fs11.writeFileSync(resolved, content, "utf-8");
-      const relPath = path10.relative(projectRoot2, resolved);
+      fs12.writeFileSync(resolved, content, "utf-8");
+      const relPath = path11.relative(projectRoot2, resolved);
       return c.json({ status: "saved", path: resolved, relPath });
     } catch (err) {
       return c.json({ error: err?.message ?? "Save failed" }, 500);
@@ -29130,8 +29161,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
 }
 
 // src/http/static-ui.ts
-import fs12 from "node:fs";
-import path11 from "node:path";
+import fs13 from "node:fs";
+import path12 from "node:path";
 var MIME_TYPES = {
   html: "text/html",
   js: "application/javascript",
@@ -29143,9 +29174,9 @@ var MIME_TYPES = {
 };
 function mountStaticUi(app, opts) {
   const { webDistPath, authToken, projectHash, log: log2 } = opts;
-  if (!fs12.existsSync(webDistPath)) return;
+  if (!fs13.existsSync(webDistPath)) return;
   const serveInjectedIndex = (indexPath) => {
-    const html = fs12.readFileSync(indexPath, "utf-8");
+    const html = fs13.readFileSync(indexPath, "utf-8");
     const tokenJson = JSON.stringify(authToken);
     const hashJson = JSON.stringify(projectHash);
     const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
@@ -29167,22 +29198,22 @@ function mountStaticUi(app, opts) {
   app.get("/*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) return next();
     const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path11.join(webDistPath, filePath);
-    const resolvedPath = path11.resolve(fullPath);
-    const resolvedBase = path11.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path11.sep) && resolvedPath !== resolvedBase) {
+    const fullPath = path12.join(webDistPath, filePath);
+    const resolvedPath = path12.resolve(fullPath);
+    const resolvedBase = path12.resolve(webDistPath);
+    if (!resolvedPath.startsWith(resolvedBase + path12.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
-    if (fs12.existsSync(fullPath)) {
-      const ext = path11.extname(filePath).slice(1);
+    if (fs13.existsSync(fullPath)) {
+      const ext = path12.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
-      const content = fs12.readFileSync(fullPath);
+      const content = fs13.readFileSync(fullPath);
       return new Response(content, {
         headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
       });
     }
-    const indexPath = path11.join(webDistPath, "index.html");
-    if (fs12.existsSync(indexPath)) {
+    const indexPath = path12.join(webDistPath, "index.html");
+    if (fs13.existsSync(indexPath)) {
       return serveInjectedIndex(indexPath);
     }
     return c.notFound();
@@ -30297,13 +30328,13 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs15.watch(dir, listener),
+    watch = (dir, listener) => fs16.watch(dir, listener),
     heartbeatIntervalMs = 3e4
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path14.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path14.join(dpDir2, "daemon.json");
+  const dpDir2 = path15.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path15.join(dpDir2, "daemon.json");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
@@ -30559,11 +30590,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path14.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path15.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs15.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs15.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs16.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs16.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -30616,10 +30647,10 @@ function createDaemon(deps) {
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
   app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
-  const __thisDir2 = path14.dirname(fileURLToPath3(import.meta.url));
-  const monorepoWebDist = path14.join(__thisDir2, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path14.join(__thisDir2, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs15.existsSync(p)) ?? monorepoWebDist;
+  const __thisDir3 = path15.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path15.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path15.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs16.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -30631,7 +30662,7 @@ function createDaemon(deps) {
       store.forceFlush();
     }
     try {
-      if (fs15.existsSync(daemonInfoFile)) fs15.unlinkSync(daemonInfoFile);
+      if (fs16.existsSync(daemonInfoFile)) fs16.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -30655,7 +30686,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs15.mkdirSync(dpDir2, { recursive: true });
+      fs16.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -30783,11 +30814,11 @@ function createDaemon(deps) {
   let hooksWatcher = null;
   function startHooksWatcher() {
     let lastFireSeen = 0;
-    const hooksStatePath = path14.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path15.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs15.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs15.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs16.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs16.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -30799,8 +30830,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs15.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs15.readFileSync(hooksStatePath, "utf-8"));
+      if (fs16.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs16.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -30810,10 +30841,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path14.dirname(hooksStatePath);
-      fs15.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path15.dirname(hooksStatePath);
+      fs16.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path14.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path15.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -30836,11 +30867,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path14.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path15.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs15.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs15.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs16.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs16.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -30929,21 +30960,21 @@ function createDaemon(deps) {
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS2 = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
-var dpDir = path15.join(projectRoot, ".deeppairing");
-var logFile = path15.join(dpDir, "daemon.log");
+var dpDir = path16.join(projectRoot, ".deeppairing");
+var logFile = path16.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var daemonAuthToken = crypto4.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs16.statSync(logFile);
+    const stat = fs17.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs16.existsSync(src)) fs16.renameSync(src, dst);
+        if (fs17.existsSync(src)) fs17.renameSync(src, dst);
       } catch {
       }
     }
@@ -30954,9 +30985,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs16.mkdirSync(path15.dirname(logFile), { recursive: true });
+    fs17.mkdirSync(path16.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs16.appendFileSync(logFile, line);
+    fs17.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -31068,7 +31099,7 @@ async function main() {
       log(`FATAL bind error on port ${candidate}: ${result.err}`);
       process.stderr.write(
         `deepPairing daemon: bind failed \u2014 ${result.err?.message ?? result.err}
-Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal common causes.
+Run \`${cliInvocation("doctor --fix")}\` to diagnose and heal common causes.
 `
       );
       process.exit(3);
@@ -31079,7 +31110,7 @@ Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and h
     }
   }
   if (!server) {
-    const msg = `No free port in ${MAX_PORT_ATTEMPTS2} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}\u2013${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to diagnose and heal.`;
+    const msg = `No free port in ${MAX_PORT_ATTEMPTS2} slots from this project's preferred ${preferredPort} (range ${BASE_PORT}\u2013${BASE_PORT + PORT_SPAN - 1}). Last error: ${lastBindErr?.message ?? lastBindErr}. Run \`${cliInvocation("doctor --fix")}\` to diagnose and heal.`;
     log(`FATAL: ${msg}`);
     process.stderr.write(`deepPairing daemon: ${msg}
 `);

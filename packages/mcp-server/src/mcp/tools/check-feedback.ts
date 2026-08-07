@@ -8,6 +8,7 @@ import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
+import { cliInvocation } from "../../cli-invocation.js";
 
 /**
  * H2-1 — surface a FROZEN cross-project philosophy ledger. v0.1.6 makes the
@@ -34,7 +35,7 @@ function ledgerHealthField(): { ledgerHealth?: { state: "frozen"; ledgerPath: st
           `The cross-project philosophy ledger at ${health.ledgerPath} is corrupt; ` +
           `new approvals/rejections are NOT being recorded until it is repaired. ` +
           (health.backupPath ? `A backup is at ${health.backupPath}. ` : "") +
-          "Run `node packages/mcp-server/dist/cli/init.js doctor` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start).",
+          "Run `" + cliInvocation("doctor") + "` for the exact one-line fix (move the unreadable file aside so a fresh ledger can start).",
       },
     };
   } catch {

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
+import { isDraftAwaitingReview } from "../lib/pending";
 
 // Monotonic counter for provisional (optimistic) comment ids until the server
 // assigns a real one. Module-scoped so ids stay unique across submits.
@@ -266,6 +267,16 @@ export interface ArtifactState {
   /** Re-select the artifact you were last on (persisted across reloads), if
    *  it's present in the freshly-hydrated session. Called after hydration. */
   restoreSelection: () => void;
+  /** L1 (#218) — one-shot hydration fallback. If NOTHING is selected after
+   *  hydration + restoreSelection but reviewable artifacts exist, land the
+   *  human on the first draft awaiting review (else the first non-superseded
+   *  artifact, by creation order) instead of a blank center pane — e.g. the
+   *  served demo's hero rejected-research, which makes the pre-flight toast's
+   *  context visible. Guarded to `selectedArtifactId === null` so it NEVER
+   *  overrides addArtifact's / restoreSelection's pick and never steals focus
+   *  mid-review (it runs once, at hydration). Does not persist the pick, so a
+   *  saved cross-session selection is left intact for its own session. */
+  selectDefaultOnHydration: () => void;
 
   submitComment: (
     artifactId: string,
@@ -621,6 +632,25 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       };
     }
     return {};
+  }),
+
+  selectDefaultOnHydration: () => set((state) => {
+    // Guard: never override an existing selection (addArtifact's first-artifact
+    // pick or restoreSelection's saved pick). Only fill a genuinely blank pane.
+    if (state.selectedArtifactId !== null) return {};
+    const candidates = state.artifacts
+      .filter((a) => a.status !== "superseded")
+      .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+    if (candidates.length === 0) return {};
+    // Prefer the first thing awaiting review; otherwise the earliest visible
+    // artifact (the demo's rejected-research hero, whose toast context we want
+    // on screen). Not persisted — see the interface doc.
+    const target = candidates.find(isDraftAwaitingReview) ?? candidates[0];
+    if (!target) return {};
+    return {
+      selectedArtifactId: target.id,
+      unreadIds: state.unreadIds.filter((uid) => uid !== target.id),
+    };
   }),
 
   // U3 — every mutation goes through safeFetch and toasts on failure.

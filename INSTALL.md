@@ -68,6 +68,10 @@ and drops the protocol preamble into `CLAUDE.md`. Installing the rejection-gate
 at `init` time (not waiting for the first daemon start) means the gate is live
 from your very first session.
 
+> Run this inside **your** project, not inside the deepPairing clone itself:
+> the repo already ships a dev `.mcp.json`, so `init` there is a no-op on that
+> file (it detects deeppairing is already configured and leaves it alone).
+
 ## `init` vs. the plugin — what differs
 
 Under the plugin, the per-project `.mcp.json` is unnecessary (the plugin

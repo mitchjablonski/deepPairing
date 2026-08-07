@@ -160,6 +160,35 @@ test("FD-2 — `init demo` runs against the daemon with no project hash (cold-cl
   expect(body.sessionId, "demo run returns a fresh demo session id").toMatch(/^demo_/);
 });
 
+test("L1 (#218) — the served demo lands on an artifact, not a blank center pane", async ({ page, request }) => {
+  // Kick the scripted demo, then open the companion UI scoped to that session
+  // exactly as `deeppairing demo` does (?session=demo_...). The center pane
+  // must show an artifact's detail — never the empty "Select an artifact"
+  // placeholder — because addArtifact's first-artifact pick plus the L1
+  // selectDefaultOnHydration fallback land the human on the hero
+  // rejected-research (the pre-flight toast's context) automatically.
+  const runRes = await request.post(`${baseURL}/api/demo/run`);
+  expect(runRes.status()).toBe(200);
+  const { sessionId } = (await runRes.json()) as { sessionId: string };
+
+  await page.goto(`${baseURL}/?session=${encodeURIComponent(sessionId)}`, { waitUntil: "domcontentloaded" });
+
+  // Wait for the store to connect, then for the detail pane to carry a real
+  // artifact (ArtifactDetail renders a data-artifact-id root; the empty state
+  // does not). The demo's first artifact lands ~500ms after the POST.
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__dpConnectionStore?.getState?.()?.connected ?? false), { timeout: 15_000 })
+    .toBe(true);
+  const detail = page.locator("[data-artifact-id]");
+  await expect(detail.first()).toBeVisible({ timeout: 15_000 });
+
+  // The blank-pane placeholder must NOT be showing — a visible [data-artifact-id]
+  // root proves a concrete artifact was auto-selected and rendered.
+  await expect(page.getByText("Select an artifact to view details")).toHaveCount(0);
+
+  await page.screenshot({ path: process.env.DP_DEMO_SHOT ?? "test-results/l1-demo-auto-select.png", fullPage: false });
+});
+
 /** The daemon's bearer token lives in daemon.json on POSIX dirs, or a 0600
  *  sidecar otherwise. The e2e tmpdir is POSIX so daemon.json carries it. */
 function readDaemonToken(): string {

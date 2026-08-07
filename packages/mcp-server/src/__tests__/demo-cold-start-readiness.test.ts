@@ -16,7 +16,6 @@ import path from "node:path";
 import {
   waitForDaemon,
   buildReadinessTimeoutMessage,
-  doctorCommandHint,
   DEFAULT_READINESS_TIMEOUT_MS,
   READINESS_PROGRESS_MESSAGE,
   MAX_PORT_ATTEMPTS,
@@ -134,11 +133,7 @@ describe("#168 buildReadinessTimeoutMessage — truthful on every clause", () =>
   });
 });
 
-describe("#168 doctorCommandHint", () => {
-  it("uses node + absolute path when the CLI entry is resolvable", () => {
-    expect(doctorCommandHint("/abs/dist/cli/init.js")).toBe('node "/abs/dist/cli/init.js" doctor');
-  });
-  it("falls back to a bare (non-npx) doctor when the CLI can't be located", () => {
-    expect(doctorCommandHint(null)).toBe("deeppairing doctor");
-  });
-});
+// L1 (#218) — #168's local doctorCommandHint was folded into the shared
+// cli-invocation helper (one source of truth for source-vs-installed form).
+// The buildReadinessTimeoutMessage tests above still pin the diagnostic's
+// truthfulness; cli-invocation.test.ts pins the helper's per-layout output.
