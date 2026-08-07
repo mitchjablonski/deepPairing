@@ -28,7 +28,7 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   // N2 (#226) — short-window de-dup: an identical present_findings still in
   // draft returns the existing artifact instead of minting a twin.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
 
   // V4 — non-blocking secret-shape scan. Flags vendor-prefixed API
   // keys + PEM blocks the agent may have pasted into evidence

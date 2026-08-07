@@ -15,7 +15,7 @@ import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { validatePresentOptionsInput, formatHandlerError } from "../validate-tool-input.js";
-import { PresentIdempotencyRegistry, hashPresentArgs, getPassiveFeedback } from "../tool-helpers.js";
+import { PresentIdempotencyRegistry, hashPresentArgs, getPassiveFeedback, buildDedupResponse } from "../tool-helpers.js";
 import { buildFirstCallHint } from "../first-call-hint.js";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
@@ -66,6 +66,28 @@ describe("N2 present_* idempotency + present_options art_ id", () => {
     expect(artId).toMatch(/^art_/);
     expect((res.structuredContent as any)?.decisionId).toMatch(/^dec_/);
     expect(res.text).toContain(`artifact ${artId}`);
+  });
+
+  it("F4 — the present_options DEDUP reply carries artifactId AND decisionId", async () => {
+    const opts = { context: "Which store?", options: [validOption("a", "SQLite"), validOption("b", "Postgres")] };
+    const first = await callTool("present_options", opts);
+    const firstDec = (first.structuredContent as any)?.decisionId as string;
+    const dup = await callTool("present_options", opts);
+    expect(dup.text).toContain("Already presented");
+    expect((dup.structuredContent as any)?.deduplicated).toBe(true);
+    expect((dup.structuredContent as any)?.artifactId).toMatch(/^art_/);
+    expect((dup.structuredContent as any)?.decisionId).toBe(firstDec);
+  });
+});
+
+// -------------------- Scope 1/F4 — buildDedupResponse honors live port + extras --------------------
+describe("N2 buildDedupResponse", () => {
+  it("uses the passed (live) port and merges extra structured fields", () => {
+    const res = buildDedupResponse({ artifactId: "art_z", type: "decision" }, 5555, { decisionId: "dec_z" });
+    expect(res.content[0].text).toContain("localhost:5555");
+    expect((res.structuredContent as any)?.artifactId).toBe("art_z");
+    expect((res.structuredContent as any)?.decisionId).toBe("dec_z");
+    expect((res.structuredContent as any)?.deduplicated).toBe(true);
   });
 });
 
@@ -118,6 +140,56 @@ describe("N2 PresentIdempotencyRegistry", () => {
     const t2 = await reg.begin(store, "present_findings", hash);
     expect(t2.duplicate).toBeUndefined();
     expect(t2.commit).toBeTruthy();
+  });
+
+  it("F1 — sweeps settled+expired entries so the map can't grow unbounded", async () => {
+    const store = fx.track(new FileStore(fx.dir, "regF1"));
+    let clock = 1_000_000;
+    const reg = new PresentIdempotencyRegistry(30_000, () => clock);
+    const commitOne = async (suffix: string, hashInput: unknown) => {
+      const t = await reg.begin(store, "present_findings", hashPresentArgs(hashInput));
+      const art = await store.createArtifact({ id: `art_${suffix}`, type: "research", title: "R", content: { summary: suffix, findings: [] } });
+      t.commit!(art.id);
+    };
+    await commitOne("a", { ...FINDINGS, summary: "A" });
+    await commitOne("b", { ...FINDINGS, summary: "B" });
+    expect(reg.size).toBe(2);
+    clock += 31_000; // both now settled + expired
+    // A begin on a THIRD distinct hash sweeps the two stale entries first.
+    const t = await reg.begin(store, "present_findings", hashPresentArgs({ ...FINDINGS, summary: "C" }));
+    expect(reg.size).toBe(1); // only the just-reserved C survives
+    t.abort?.();
+  });
+
+  it("F2 — owner error + 3 concurrent identical calls → exactly ONE artifact after the retry", async () => {
+    // A store whose FIRST createArtifact throws (the owner), then succeeds.
+    class ThrowOnceStore extends FileStore {
+      private threw = false;
+      async createArtifact(params: Parameters<FileStore["createArtifact"]>[0]) {
+        if (!this.threw) { this.threw = true; throw new Error("transient createArtifact failure"); }
+        return super.createArtifact(params);
+      }
+    }
+    const store = fx.track(new ThrowOnceStore(fx.dir, "regF2")) as ThrowOnceStore;
+    const reg = new PresentIdempotencyRegistry();
+    const hash = hashPresentArgs(FINDINGS);
+    const present = async (suffix: string) => {
+      const t = await reg.begin(store, "present_findings", hash);
+      if (t.duplicate) return "dup" as const;
+      try {
+        const art = await store.createArtifact({ id: `art_${suffix}`, type: "research", title: "R", content: { summary: "s", findings: [] } });
+        t.commit!(art.id);
+        return "owner" as const;
+      } catch {
+        t.abort!();
+        return "error" as const;
+      }
+    };
+    const roles = await Promise.all([present("a"), present("b"), present("c")]);
+    expect(roles.filter((r) => r === "error").length).toBe(1);
+    expect(roles.filter((r) => r === "owner").length).toBe(1);
+    expect(roles.filter((r) => r === "dup").length).toBe(1);
+    expect((await store.getArtifacts()).filter((a) => a.type === "research").length).toBe(1);
   });
 });
 
@@ -260,6 +332,12 @@ describe("N2 answer_question echo + idempotency", () => {
     expect(diff.text).toContain("Answered cmt_q2");
     const agentComments2 = (await ctx.store.getCommentsForArtifact("art_q2")).filter((c) => c.author === "agent");
     expect(agentComments2.length).toBe(2);
+    // F3 — re-sending an OLDER answer (not the most recent) after a follow-up is
+    // still caught as a duplicate: the guard scans ALL replies, not just the last.
+    const older = await callTool("answer_question", { commentId: "cmt_q2", answer: "first answer" });
+    expect(older.text).toContain("already answered");
+    const agentComments3 = (await ctx.store.getCommentsForArtifact("art_q2")).filter((c) => c.author === "agent");
+    expect(agentComments3.length).toBe(2); // no third append
   });
 });
 

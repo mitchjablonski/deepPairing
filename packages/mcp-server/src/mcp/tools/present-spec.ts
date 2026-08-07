@@ -22,7 +22,7 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
 
   // N2 (#226) — short-window de-dup for an identical, still-draft present_spec.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
 
   const id = `art_${nanoid(10)}`;
   const content = {

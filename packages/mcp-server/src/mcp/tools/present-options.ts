@@ -41,8 +41,18 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
 
   // N2 (#226) — short-window de-dup: an identical present_options still in
   // draft returns the existing decision artifact instead of minting a twin.
+  // F4 — surface the existing artifact's decisionId (from its stored content)
+  // alongside the artifactId so the agent can resolve the dedup'd decision too.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) {
+    const dupArt = (await ctx.store.getArtifacts()).find((a) => a.id === dedup.duplicate!.artifactId);
+    const dupDecisionId = (dupArt?.content as { decisionId?: unknown } | undefined)?.decisionId;
+    return buildDedupResponse(
+      dedup.duplicate,
+      ctx.store.getLivePort?.() ?? ctx.port,
+      typeof dupDecisionId === "string" ? { decisionId: dupDecisionId } : undefined,
+    );
+  }
 
   const id = `art_${nanoid(10)}`;
   const decisionId = `dec_${nanoid(10)}`;

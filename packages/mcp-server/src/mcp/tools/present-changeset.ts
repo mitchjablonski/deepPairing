@@ -30,7 +30,7 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
 
   // N2 (#226) — short-window de-dup for an identical, still-draft changeset.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
 
   const id = `art_${nanoid(10)}`;
   const content = {

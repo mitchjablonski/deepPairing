@@ -36,7 +36,7 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
 
   // N2 (#226) — short-window de-dup for an identical, still-draft explainer.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
 
   const id = `art_${nanoid(10)}`;
   const content = {

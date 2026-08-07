@@ -28,7 +28,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
 
   // N2 (#226) — short-window de-dup for an identical, still-draft present_plan.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
 
   const id = `art_${nanoid(10)}`;
   const content = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };

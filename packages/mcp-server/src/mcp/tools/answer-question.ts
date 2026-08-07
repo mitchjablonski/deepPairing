@@ -128,16 +128,23 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
     // Fall through to the plain-answer path below.
   }
 
-  // N2 (#226 scope 1b) — idempotent answer. If this question was ALREADY
-  // answered and the re-sent answer text is IDENTICAL, it's a duplicate
+  // N2 (#226 scope 1b, F3) — idempotent answer. If ANY existing agent reply in
+  // this question's thread already carries this exact text, it's a duplicate
   // re-send (an agent retry): return the existing answer state instead of
-  // stacking a second identical reply under the human's question. When the new
-  // text DIFFERS it's a deliberate follow-up, so we fall through and append —
-  // a documented judgment call (a second, different reply is legitimate; a
-  // verbatim repeat is noise).
-  if (parent.answeredByCommentId) {
-    const prior = await store.getComment(parent.answeredByCommentId);
-    if (prior && prior.content.trim() === answer) {
+  // stacking a verbatim reply under the human's question. When the text DIFFERS
+  // it's a deliberate follow-up, so we fall through and append.
+  //
+  // F3 — scan ALL agent replies to this comment, not just the LAST one
+  // (parent.answeredByCommentId): re-sending an OLDER answer after a different
+  // follow-up must still be caught as a duplicate, and answeredByCommentId only
+  // ever points at the most-recent reply.
+  {
+    const threadArtifactId = parent.target?.artifactId ?? "__session__";
+    const threadComments = await store.getCommentsForArtifact(threadArtifactId);
+    const alreadyAnswered = threadComments.some(
+      (c) => c.author === "agent" && c.parentCommentId === commentId && c.content.trim() === answer,
+    );
+    if (alreadyAnswered) {
       return {
         content: [{ type: "text", text: `${commentId} was already answered with this exact reply — nothing appended (no duplicate). The human already sees it under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
       };

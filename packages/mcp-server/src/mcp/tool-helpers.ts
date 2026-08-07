@@ -379,7 +379,10 @@ type PresentSettled = { artifactId: string } | null;
 interface PresentEntry {
   at: number;
   promise: Promise<PresentSettled>;
-  resolve: (v: PresentSettled) => void;
+  /** True once the owner has committed/aborted. Only settled+expired entries
+   *  are swept — an in-flight reservation (a live owner, or a promise a waiter
+   *  is mid-await on) is never evicted out from under anyone. */
+  settled: boolean;
 }
 
 export interface PresentIdempotencyBegin {
@@ -400,8 +403,22 @@ export class PresentIdempotencyRegistry {
     private readonly now: () => number = () => Date.now(),
   ) {}
 
+  /** Live reservation count — for tests asserting the F1 sweep prunes. */
+  get size(): number {
+    return this.entries.size;
+  }
+
   async begin(store: IStore, toolName: string, contentHash: string): Promise<PresentIdempotencyBegin> {
     const key = `${toolName} ${contentHash}`;
+    // F1 - evict settled+expired reservations so the map cannot grow unbounded
+    // (one entry per distinct present-hash for the whole process lifetime).
+    this.sweep(this.now());
+    // F2 - loop so that when we fall through from a settled-but-unusable
+    // reservation (the owner's createArtifact threw, or the prior artifact left
+    // draft), EXACTLY ONE caller re-adopts as the new owner and the rest wait on
+    // it. Without this, N concurrent waiters all resolve, all fall through, and
+    // all re-reserve -> all mint (the thundering-herd double-mint).
+    for (;;) {
     const now = this.now();
     const existing = this.entries.get(key);
     if (existing && now - existing.at < this.windowMs) {
@@ -416,31 +433,56 @@ export class PresentIdempotencyRegistry {
         }
       }
       // Owner failed, or the prior artifact is no longer a draft (rejected /
-      // superseded / withdrawn) → a re-present is legitimate: fall through and
-      // mint, replacing the stale reservation below.
+      // superseded / withdrawn) -> a re-present is legitimate. Re-adopt
+      // atomically: only the caller that still sees `existing` as the current
+      // entry becomes the new owner (there is no await between this get and
+      // reserve's set); every other faller-through loops and waits on the
+      // replacement reservation.
+      if (this.entries.get(key) === existing) {
+        return this.reserve(key, now);
+      }
+      continue;
     }
-    // Reserve as the owner. No await between the get above and this set for a
-    // fresh key, so the reservation is atomic w.r.t. concurrent callers.
+    return this.reserve(key, now);
+    }
+  }
+
+  /** Create + register a fresh owner reservation for `key`. Synchronous, so a
+   *  fresh-key get->reserve pair in begin() is atomic w.r.t. concurrent callers. */
+  private reserve(key: string, now: number): PresentIdempotencyBegin {
     let resolve!: (v: PresentSettled) => void;
     const promise = new Promise<PresentSettled>((r) => {
       resolve = r;
     });
-    this.entries.set(key, { at: now, promise, resolve });
+    const entry: PresentEntry = { at: now, promise, settled: false };
+    this.entries.set(key, entry);
     let done = false;
     return {
       commit: (artifactId: string) => {
         if (done) return;
         done = true;
+        entry.settled = true;
         resolve({ artifactId });
       },
       abort: () => {
         if (done) return;
         done = true;
+        entry.settled = true;
         resolve(null);
-        // Only evict if we're still the current reservation for this key.
-        if (this.entries.get(key)?.promise === promise) this.entries.delete(key);
+        // Only evict if we're still the current reservation for this key, so a
+        // faller-through that already re-adopted is not clobbered.
+        if (this.entries.get(key) === entry) this.entries.delete(key);
       },
     };
+  }
+
+  /** F1 - drop settled reservations older than the window. In-flight (unsettled)
+   *  entries are always recent (the owner settles within its handler call) and
+   *  are never swept - a live owner or a mid-await waiter keeps its promise. */
+  private sweep(now: number): void {
+    for (const [k, e] of this.entries) {
+      if (e.settled && now - e.at >= this.windowMs) this.entries.delete(k);
+    }
   }
 }
 
@@ -470,8 +512,17 @@ function stableStringify(v: unknown): string {
  * N2 — the success response returned in place of minting a twin. Generic across
  * every present_* tool: it names the existing artifact id (so the agent can
  * withdraw/revise it) and states plainly that no duplicate was created.
+ *
+ * F4 — `port` must be the LIVE port (callers pass `store.getLivePort?.() ?? port`)
+ * so the URL is correct after a mid-session daemon respawn. `extraStructured`
+ * carries tool-specific ids (e.g. present_options' decisionId) alongside the
+ * artifactId so the agent can drive the resolve flow from the dedup reply too.
  */
-export function buildDedupResponse(dup: { artifactId: string; type: string }, port: number): ToolResult {
+export function buildDedupResponse(
+  dup: { artifactId: string; type: string },
+  port: number,
+  extraStructured?: Record<string, unknown>,
+): ToolResult {
   const at = Number.isFinite(port) && port > 0 ? ` at localhost:${port}` : "";
   return {
     content: [
@@ -484,7 +535,7 @@ export function buildDedupResponse(dup: { artifactId: string; type: string }, po
           `revise_artifact / withdraw_artifact on ${dup.artifactId} if it needs changing.`,
       },
     ],
-    structuredContent: { artifactId: dup.artifactId, deduplicated: true },
+    structuredContent: { artifactId: dup.artifactId, deduplicated: true, ...(extraStructured ?? {}) },
   };
 }
 

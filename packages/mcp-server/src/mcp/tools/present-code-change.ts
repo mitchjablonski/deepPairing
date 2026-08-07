@@ -53,7 +53,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // the raw args, so the history-based `before` reconstruction (which differs
   // once the first twin lands) can't defeat the match.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
-  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
 
   // V4 — code-change before/after snippets are the highest-risk
   // surface for leaked vendor-prefixed API keys; a refactor near
