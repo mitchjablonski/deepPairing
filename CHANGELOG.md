@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.1.29 — 2026-08-06
+
+The ready release. Round 6 left two kinds of residue: guidance surfaces that still
+said one thing while the machine did another, and a package that described itself as
+ready to publish without being shaped to. This round closes both. **The guidance
+contradictions are closed**: v0.1.28 taught the ceremony to scale with the task, but
+the `present_debrief` tool description was the last surface still mandating a debrief
+on *every* run — so the drift net now covers **compiled tool descriptions**, not just
+the SKILL, and the trivial-task carve-out finally reads the same everywhere the agent
+looks. `present_code_change` now **nudges toward `present_changeset` the moment a
+second distinct file is touched** in a run, and the trivial close-note yields to that
+nudge rather than contradicting it — the quick-approve branch carries the close-note
+too, so no path closes a loop it shouldn't. SKILL's guardrail-path escalation is
+**softened to match what the gate actually enforces**, not a sterner story than the
+code tells. **The small-task story is now coherent on every surface** — tool
+descriptions, SKILL, and stop-hook all tell one truth about when a debrief is owed.
+**And the package is shaped to publish the moment credentials exist**: a `mcp-server`
+bin alias makes `npx -y @deeppairing/mcp-server` resolve, both packages declare
+`publishConfig` public access, and a CI **publish-shape gate pins the tarball
+contents** so the published surface can't drift unnoticed. On the launch-hygiene
+side, the **⌘K palette gets an icon door at every width** — it had gone invisible
+below 1100px after becoming the only entry — and the first-run **SkillLoadBanner
+holds its alarm through a 45s grace window** so it can't contradict the reassuring
+connected-header while the skill is still loading (genuine warnings still fire after).
+Test counts are **reconciled to one honest figure** (3,000+ across the whole surface),
+plugin keywords add `review-loop` / `pair-review` / `spec-driven`, and one shared-package
+lint warning is paid down (PRs #252, #253).
+
+### Added
+- **Publish-prep — shaped to ship the moment credentials exist.** A `mcp-server` **bin
+  alias** makes `npx -y @deeppairing/mcp-server` resolve, both packages declare
+  **`publishConfig` public access**, and a new CI **publish-shape gate pins the tarball
+  contents** so the published surface can't drift unnoticed (PR #252).
+- **The ⌘K palette has a door at every width.** The command palette — now the *only*
+  entry after the duplicate Search button folded away — had gone **invisible below
+  1100px**. It regains an **icon affordance at every width**, so the sole door is never
+  hidden (PR #253).
+
+### Changed
+- **The guidance contradictions are closed — the drift net covers compiled tool
+  descriptions.** The `present_debrief` **tool description** was the last guidance
+  surface still mandating a debrief on *every* run; it now carries the **trivial-task
+  carve-out**, and the drift net that keeps SKILL and stop-hook honest now covers
+  compiled tool descriptions too. `present_code_change` **nudges toward
+  `present_changeset` the moment a second distinct file is touched** in a run — and the
+  trivial close-note **yields to the nudge** (and the quick-approve branch carries the
+  close-note), so no path contradicts another. SKILL's **guardrail-path escalation is
+  softened to match what the gate enforces**. The small-task story now tells **one
+  truth** on tool descriptions, SKILL, and stop-hook alike (PR #252).
+- **The first-run SkillLoadBanner holds its alarm through a 45s grace window.** On a
+  cold start the banner could **contradict the reassuring connected-header** while the
+  skill was still loading; it now **suppresses its warning through a 45s grace window**,
+  after which genuine warnings still fire (PR #253).
+- **Test counts reconciled to one honest figure.** The scattered per-surface counts
+  collapse to **one figure — 3,000+ across the whole surface** — and plugin keywords add
+  `review-loop`, `pair-review`, and `spec-driven` (PR #253).
+
+### Fixed
+- **One shared-package lint warning paid down** (PR #252).
+
 ## v0.1.28 — 2026-08-06
 
 The right-sized release. Round 5 didn't find the parts broken — it asked whether
