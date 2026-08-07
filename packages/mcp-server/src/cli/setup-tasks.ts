@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { cliInvocation } from "../cli-invocation.js";
 
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
@@ -445,7 +446,7 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`${cliInvocation("doctor --fix")}\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {
@@ -675,7 +676,7 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
-      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`node packages/mcp-server/dist/cli/init.js doctor --fix\` to clean them.`;
+      msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`${cliInvocation("doctor --fix")}\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
   } catch (err: any) {

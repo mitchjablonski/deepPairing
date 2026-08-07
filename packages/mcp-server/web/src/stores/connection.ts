@@ -219,6 +219,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             // QOL — return to the artifact you were last on, now that the
             // session has hydrated (overrides addArtifact's first-artifact pick).
             store.restoreSelection();
+            // L1 (#218) — belt-and-suspenders: if hydration still left NOTHING
+            // selected (all-superseded edge, or any future path that doesn't
+            // route through addArtifact's first-artifact pick), land on the
+            // first draft awaiting review — else the earliest visible artifact
+            // (the served demo's hero rejected-research) — so the center pane is
+            // never a blank "Select an artifact". Guarded to null selection, so
+            // it never fights restoreSelection or steals focus mid-review.
+            store.selectDefaultOnHydration();
           }
 
           set({ hydrated: true });
