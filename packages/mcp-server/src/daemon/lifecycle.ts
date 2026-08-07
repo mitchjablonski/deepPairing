@@ -2,7 +2,7 @@
  * Daemon lifecycle management — detect, spawn, and connect to the
  * shared deepPairing HTTP daemon process.
  */
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -574,6 +574,50 @@ function pidIsGone(pid: number): boolean {
   }
 }
 
+/**
+ * M3-F1 (#221) — a process's START-TIME, used as an anti-PID-recycle token.
+ *
+ * A raw pid is reusable: the OS can recycle a dead daemon's integer into an
+ * unrelated LIVE process inside our SIGTERM grace window, and a blind
+ * `SIGKILL(pid)` would then land on that innocent (the reviewer's executed
+ * repro killed a throwaway `sleep 600` that had inherited the recycled pid).
+ * The (pid, start-time) pair is stable-and-unique for the life of a process,
+ * so capturing the start-time at identity-confirm and re-checking it UNCHANGED
+ * immediately before the SIGKILL proves we are still signalling the exact same
+ * process — not a recycled impostor.
+ *
+ * Returns an OPAQUE string token (never parsed for meaning, only compared for
+ * equality), or `null` when the start-time can't be read. Callers treat `null`
+ * (unverifiable) as "do not escalate": fail-safe, never signal a process whose
+ * identity we can't pin.
+ *
+ * Linux: `/proc/<pid>/stat` field 22 (starttime, in clock ticks since boot).
+ * The comm field (2nd) may itself contain spaces AND parens, so we split only
+ * AFTER the last ')'. It is kernel-maintained and readable regardless of the
+ * daemon's event-loop state, so this works even on a daemon too wedged to
+ * answer HTTP. macOS/BSD fallback: `ps -p <pid> -o lstart=`.
+ */
+export function readProcessStartTime(pid: number): string | null {
+  try {
+    if (process.platform === "linux") {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const rparen = stat.lastIndexOf(")");
+      if (rparen === -1) return null;
+      // After ')': index 0 = field 3 (state) … starttime = field 22 = index 19.
+      const rest = stat.slice(rparen + 1).trim().split(/\s+/);
+      const starttime = rest[19];
+      return starttime && starttime.length ? starttime : null;
+    }
+    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf-8",
+      timeout: 2000,
+    }).trim();
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function waitForPortRelease(
@@ -598,10 +642,21 @@ export async function waitForPortRelease(
      * and a squatter/fresh owner bound it — we must never SIGKILL across that.
      */
     expectedProjectRoot?: string;
-    /** Injectable identity probe (defaults to the real HTTP one) — testable with fakes. */
+    /** Injectable identity probe (defaults to the real HTTP one) — testable with fakes.
+     *  Used ONLY for forensic logging in the gone-pid branch, never as a SIGKILL gate. */
     probeIdentity?: (port: number) => Promise<{ pid: number; projectRoot: string } | null>;
     /** Injectable pid-liveness check (defaults to the real process.kill(pid,0)) — testable with fakes. */
     pidGone?: (pid: number) => boolean;
+    /**
+     * M3-F1 (#221) — the target daemon's process START-TIME captured at
+     * identity-confirm (before the SIGTERM), the anti-PID-recycle baseline.
+     * The SIGKILL escalation only fires if the live start-time still matches
+     * this. `undefined`/`null` here ⇒ no verifiable baseline ⇒ NEVER escalate
+     * (fail-safe: a raw pid alone is not proof of identity).
+     */
+    targetStartTime?: string | null;
+    /** Injectable start-time reader (defaults to the real /proc reader) — testable with fakes. */
+    readStartTime?: (pid: number) => string | null;
   } = {},
 ): Promise<void> {
   const graceMs = opts.graceMs ?? 6000;
@@ -610,6 +665,7 @@ export async function waitForPortRelease(
   const log = opts.log ?? (() => {});
   const probeIdentity = opts.probeIdentity ?? probeDaemonIdentity;
   const pidGone = opts.pidGone ?? pidIsGone;
+  const readStartTime = opts.readStartTime ?? readProcessStartTime;
 
   const isDown = async (): Promise<boolean> =>
     pidGone(pid) && (await portRefusesConnections(port));
@@ -620,49 +676,57 @@ export async function waitForPortRelease(
     await sleep(50);
   }
 
-  // M3 (#221) — the graceful window elapsed WITHOUT a clean release. Before the
-  // blind SIGKILL(pid) the pre-M3 code issued, rule out the two ways that kill
-  // would land on an innocent process — the dogfood's "daemon died, no log"
-  // class:
-  //   (1) Our SIGTERM'd pid is ALREADY GONE, but the port is still bound. Our
-  //       target is dead; a fast-follow/foreign daemon claimed the slot, and
-  //       the OS may have recycled `pid` into an unrelated process. SIGKILL(pid)
-  //       would hit that recycled innocent. There is nothing of ours to
-  //       escalate against — never signal.
-  //   (2) The port now answers as a DIFFERENT projectRoot (identity re-probe).
-  //       Same conclusion: our old daemon released, a foreign one owns the port
-  //       — leave both alone.
-  // Only case (3) — our pid provably STILL ALIVE (wedged, ignored SIGTERM) —
-  // escalates, and it logs loudly first.
+  // M3-F1 (#221) — the graceful window elapsed WITHOUT a clean release. Before
+  // the blind SIGKILL(pid) the pre-M3 code issued, prove we are still about to
+  // signal the EXACT process we SIGTERM'd. A raw pid is NOT proof: the OS can
+  // recycle a dead daemon's integer into an unrelated LIVE process inside the
+  // grace window (the reviewer's executed repro killed a throwaway `sleep 600`
+  // that inherited the recycled pid). Two guards, precisely scoped:
+  //
+  //   (1) pid GONE → there is nothing of OURS left to signal; the integer is
+  //       free and may already have been recycled. Never signal. (A forensic
+  //       HTTP probe of who, if anyone, now holds the port is logged — for
+  //       diagnostics only, it does NOT gate anything.)
+  //   (2) pid ALIVE → verify its process START-TIME still equals the baseline
+  //       captured at identity-confirm. UNCHANGED ⇒ provably our original
+  //       daemon, wedged (ignored SIGTERM) ⇒ escalate. CHANGED or UNREADABLE
+  //       (or no baseline) ⇒ the pid was recycled into a different process, or
+  //       we can't prove otherwise ⇒ NEVER signal, log the refusal.
+  //
+  // No HTTP re-confirm gates the SIGKILL itself: a genuinely wedged daemon may
+  // be too stuck to answer HTTP, and gating on a reply would defeat the very
+  // escalation this exists for. /proc/<pid>/stat is kernel-maintained and stays
+  // readable through an event-loop wedge, so the start-time check is the right
+  // instrument.
   if (pidGone(pid)) {
     const takeover = await probeIdentity(port);
     log(
-      `[deepPairing] waitForPortRelease: SIGTERM'd daemon pid ${pid} on :${port} is already gone; ` +
+      `[deepPairing] waitForPortRelease: SIGTERM'd daemon pid ${pid} on :${port} has exited; ` +
       (takeover
-        ? `port now served by pid ${takeover.pid} for ${takeover.projectRoot} — NOT escalating (foreign/fresh owner; pid may be recycled).`
-        : `no daemon answers there — NOT escalating a dead/recycled pid.`),
+        ? `port now served by pid ${takeover.pid} for ${takeover.projectRoot} — NOT escalating (the pid is free and may have been recycled).`
+        : `no daemon answers there — NOT escalating a pid that is gone (and may be recycled).`),
     );
     return;
   }
-  const takeover = await probeIdentity(port);
-  if (
-    takeover &&
-    takeover.pid !== pid &&
-    opts.expectedProjectRoot !== undefined &&
-    takeover.projectRoot !== opts.expectedProjectRoot
-  ) {
+  const liveStart = readStartTime(pid);
+  if (opts.targetStartTime == null || liveStart == null || liveStart !== opts.targetStartTime) {
     log(
-      `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on :${port} — our pid ${pid} still shows alive but the port now answers as pid ${takeover.pid} for ${takeover.projectRoot} (foreign takeover of ${opts.expectedProjectRoot}'s slot). Leaving both alone.`,
+      `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on pid ${pid} (:${port})` +
+      `${opts.expectedProjectRoot ? ` for ${opts.expectedProjectRoot}` : ""} — ` +
+      `cannot prove it is still our SIGTERM'd daemon ` +
+      `(start-time baseline=${opts.targetStartTime ?? "unreadable"}, now=${liveStart ?? "unreadable"}). ` +
+      `The pid may have been recycled into an unrelated process; leaving it alone.`,
     );
     return;
   }
-  // Our SIGTERM'd daemon is still alive and it's still ours — escalate ONCE to
-  // SIGKILL (bounded fallback), then wait a little longer for the kernel to
-  // release the LISTEN slot.
+  // Provably our original daemon, still alive with an UNCHANGED start-time →
+  // wedged (ignored SIGTERM). Escalate ONCE to SIGKILL (bounded fallback), then
+  // wait a little longer for the kernel to release the LISTEN slot.
   log(
     `[deepPairing] waitForPortRelease: daemon pid ${pid} on :${port}` +
     `${opts.expectedProjectRoot ? ` (project ${opts.expectedProjectRoot})` : ""}` +
-    ` did not exit on SIGTERM within ${graceMs}ms — escalating to SIGKILL (confirmed still alive; this is our own project's stale daemon).`,
+    ` did not exit on SIGTERM within ${graceMs}ms and its start-time is unchanged ` +
+    `(confirmed our own wedged daemon, not a recycled pid) — escalating to SIGKILL.`,
   );
   kill(pid, "SIGKILL");
   const killDeadline = Date.now() + killWaitMs;
@@ -699,7 +763,8 @@ export async function waitForPortRelease(
  *     foreign-root, adopt on probe-timeout, fail-to-bind rather than kill on a
  *     full collision. The residual gap was purely FORENSIC (an unlogged SIGKILL
  *     escalation) + a pid-recycle window in waitForPortRelease — both closed
- *     above with logging + a gone-pid / foreign-takeover guard, not a lock.
+ *     above with logging + a process-START-TIME anti-recycle guard (kernel
+ *     /proc, not a network probe), not a lock.
  *
  * A lock's only real use is deduping two wrappers of the SAME project racing to
  * spawn — a different, non-safety concern the port bind-loop's EADDRINUSE +
@@ -725,19 +790,30 @@ export async function resolveStaleDaemon(
   deps: {
     probeIdentity?: (port: number) => Promise<{ pid: number; projectRoot: string; startedAt: string; version?: string } | null>;
     kill?: (pid: number, sig: NodeJS.Signals) => void;
-    waitForRelease?: (port: number, pid: number) => Promise<void>;
+    /** M3-F1 (#221) — 3rd arg carries the anti-recycle start-time baseline captured before the SIGTERM. */
+    waitForRelease?: (port: number, pid: number, startTime?: string | null) => Promise<void>;
     log?: (msg: string) => void;
+    /** M3-F1 (#221) — injectable start-time reader for the anti-recycle baseline (defaults to the real /proc reader). */
+    readStartTime?: (pid: number) => string | null;
   } = {},
 ): Promise<"adopt" | "restarted"> {
   const probeIdentity = deps.probeIdentity ?? probeDaemonIdentity;
   const kill = deps.kill ?? ((p, s) => { try { process.kill(p, s); } catch { /* already gone */ } });
   const log = deps.log ?? (() => {});
-  // M3 (#221) — thread the loud log + our projectRoot into the release wait so
-  // the SIGKILL escalation is forensically logged and can recognise a foreign
-  // takeover of the port (never SIGKILL across a slot another project rebound).
+  const readStartTime = deps.readStartTime ?? readProcessStartTime;
+  // M3-F1 (#221) — thread the loud log, our projectRoot, and the anti-recycle
+  // start-time baseline into the release wait: the SIGKILL escalation is
+  // forensically logged AND only fires when the target's start-time is unchanged
+  // (never SIGKILL a pid the OS recycled into an unrelated process).
   const waitForRelease =
     deps.waitForRelease ??
-    ((port, pid) => waitForPortRelease(port, pid, { log, expectedProjectRoot: projectRoot }));
+    ((port, pid, startTime) =>
+      waitForPortRelease(port, pid, {
+        log,
+        expectedProjectRoot: projectRoot,
+        targetStartTime: startTime,
+        readStartTime,
+      }));
 
   const verdict = classifyDaemonVersion(existing.version, myVersion);
   if (!verdictIsStale(verdict)) {
@@ -795,10 +871,18 @@ export async function resolveStaleDaemon(
     `was running v${runningLabel}, plugin is v${myVersion} — sending SIGTERM (identity HTTP-reconfirmed as ours). ` +
     `A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`,
   );
+  // M3-F1 (#221) — capture the target's process START-TIME NOW, while it is the
+  // HTTP-reconfirmed OURS process still running (pid can't have been recycled in
+  // the window between the confirm above and this line). waitForPortRelease
+  // re-checks it UNCHANGED before any SIGKILL escalation, so a pid the OS
+  // recycles into an unrelated process during the SIGTERM grace window can never
+  // catch the kill. A null baseline (unreadable) ⇒ escalation is skipped
+  // (fail-safe); the graceful SIGTERM below still runs.
+  const targetStartTime = readStartTime(existing.pid);
   // SIGTERM triggers the daemon's graceful path (releaseListenSocket → flush
   // pending session state → exit 0), so no in-flight review data is lost.
   kill(existing.pid, "SIGTERM");
-  await waitForRelease(existing.port, existing.pid);
+  await waitForRelease(existing.port, existing.pid, targetStartTime);
   return "restarted";
 }
 

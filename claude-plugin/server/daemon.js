@@ -3961,11 +3961,12 @@ __export(lifecycle_exports, {
   evictDaemon: () => evictDaemon,
   isDaemonRunning: () => isDaemonRunning,
   probeDaemonIdentity: () => probeDaemonIdentity,
+  readProcessStartTime: () => readProcessStartTime,
   resolveStaleDaemon: () => resolveStaleDaemon,
   waitForDaemon: () => waitForDaemon,
   waitForPortRelease: () => waitForPortRelease
 });
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import fs15 from "node:fs";
 import net from "node:net";
 import path14 from "node:path";
@@ -4283,6 +4284,25 @@ function pidIsGone(pid) {
     return true;
   }
 }
+function readProcessStartTime(pid) {
+  try {
+    if (process.platform === "linux") {
+      const stat = fs15.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const rparen = stat.lastIndexOf(")");
+      if (rparen === -1) return null;
+      const rest = stat.slice(rparen + 1).trim().split(/\s+/);
+      const starttime = rest[19];
+      return starttime && starttime.length ? starttime : null;
+    }
+    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf-8",
+      timeout: 2e3
+    }).trim();
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
 async function waitForPortRelease(port, pid, opts = {}) {
   const graceMs = opts.graceMs ?? 6e3;
   const killWaitMs = opts.killWaitMs ?? 2e3;
@@ -4296,6 +4316,7 @@ async function waitForPortRelease(port, pid, opts = {}) {
   });
   const probeIdentity = opts.probeIdentity ?? probeDaemonIdentity;
   const pidGone = opts.pidGone ?? pidIsGone;
+  const readStartTime = opts.readStartTime ?? readProcessStartTime;
   const isDown = async () => pidGone(pid) && await portRefusesConnections(port);
   const graceDeadline = Date.now() + graceMs;
   while (Date.now() < graceDeadline) {
@@ -4303,21 +4324,21 @@ async function waitForPortRelease(port, pid, opts = {}) {
     await sleep(50);
   }
   if (pidGone(pid)) {
-    const takeover2 = await probeIdentity(port);
+    const takeover = await probeIdentity(port);
     log2(
-      `[deepPairing] waitForPortRelease: SIGTERM'd daemon pid ${pid} on :${port} is already gone; ` + (takeover2 ? `port now served by pid ${takeover2.pid} for ${takeover2.projectRoot} \u2014 NOT escalating (foreign/fresh owner; pid may be recycled).` : `no daemon answers there \u2014 NOT escalating a dead/recycled pid.`)
+      `[deepPairing] waitForPortRelease: SIGTERM'd daemon pid ${pid} on :${port} has exited; ` + (takeover ? `port now served by pid ${takeover.pid} for ${takeover.projectRoot} \u2014 NOT escalating (the pid is free and may have been recycled).` : `no daemon answers there \u2014 NOT escalating a pid that is gone (and may be recycled).`)
     );
     return;
   }
-  const takeover = await probeIdentity(port);
-  if (takeover && takeover.pid !== pid && opts.expectedProjectRoot !== void 0 && takeover.projectRoot !== opts.expectedProjectRoot) {
+  const liveStart = readStartTime(pid);
+  if (opts.targetStartTime == null || liveStart == null || liveStart !== opts.targetStartTime) {
     log2(
-      `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on :${port} \u2014 our pid ${pid} still shows alive but the port now answers as pid ${takeover.pid} for ${takeover.projectRoot} (foreign takeover of ${opts.expectedProjectRoot}'s slot). Leaving both alone.`
+      `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on pid ${pid} (:${port})${opts.expectedProjectRoot ? ` for ${opts.expectedProjectRoot}` : ""} \u2014 cannot prove it is still our SIGTERM'd daemon (start-time baseline=${opts.targetStartTime ?? "unreadable"}, now=${liveStart ?? "unreadable"}). The pid may have been recycled into an unrelated process; leaving it alone.`
     );
     return;
   }
   log2(
-    `[deepPairing] waitForPortRelease: daemon pid ${pid} on :${port}${opts.expectedProjectRoot ? ` (project ${opts.expectedProjectRoot})` : ""} did not exit on SIGTERM within ${graceMs}ms \u2014 escalating to SIGKILL (confirmed still alive; this is our own project's stale daemon).`
+    `[deepPairing] waitForPortRelease: daemon pid ${pid} on :${port}${opts.expectedProjectRoot ? ` (project ${opts.expectedProjectRoot})` : ""} did not exit on SIGTERM within ${graceMs}ms and its start-time is unchanged (confirmed our own wedged daemon, not a recycled pid) \u2014 escalating to SIGKILL.`
   );
   kill(pid, "SIGKILL");
   const killDeadline = Date.now() + killWaitMs;
@@ -4336,7 +4357,13 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
   });
   const log2 = deps.log ?? (() => {
   });
-  const waitForRelease = deps.waitForRelease ?? ((port, pid) => waitForPortRelease(port, pid, { log: log2, expectedProjectRoot: projectRoot2 }));
+  const readStartTime = deps.readStartTime ?? readProcessStartTime;
+  const waitForRelease = deps.waitForRelease ?? ((port, pid, startTime) => waitForPortRelease(port, pid, {
+    log: log2,
+    expectedProjectRoot: projectRoot2,
+    targetStartTime: startTime,
+    readStartTime
+  }));
   const verdict = classifyDaemonVersion(existing.version, myVersion);
   if (!verdictIsStale(verdict)) {
     if (verdict === "newer") {
@@ -4370,8 +4397,9 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
   log2(
     `[deepPairing] restarting stale daemon: pid ${existing.pid} on :${existing.port} for project ${projectRoot2} was running v${runningLabel}, plugin is v${myVersion} \u2014 sending SIGTERM (identity HTTP-reconfirmed as ours). A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`
   );
+  const targetStartTime = readStartTime(existing.pid);
   kill(existing.pid, "SIGTERM");
-  await waitForRelease(existing.port, existing.pid);
+  await waitForRelease(existing.port, existing.pid, targetStartTime);
   return "restarted";
 }
 async function ensureDaemon(projectRoot2, opts = {}) {
