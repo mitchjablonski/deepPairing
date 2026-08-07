@@ -319,6 +319,10 @@ source. No npm publish or listing in a public/community marketplace yet.
 zero disabled rules), and strict TypeScript throughout** — the next step is
 earning a handful of delighted real users before broader distribution.
 
+Ships a committed, reproducible server bundle (verify via `pnpm build:clean`);
+the two bundled hooks are local-only and fail-open — see
+[SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE)

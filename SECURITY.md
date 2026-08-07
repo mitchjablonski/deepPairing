@@ -103,6 +103,33 @@ model assumes:
   localhost-only; per-port one daemon at a time, eviction requires the
   daemon's own pid in `X-DeepPairing-Confirm-Pid`.
 
+### Hooks (what the plugin runs on your machine)
+
+deepPairing installs two Claude Code hooks, both local-only, network-free, and fail-open:
+
+- **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit. When
+  a proposed change matches an approach you previously rejected, it returns
+  `permissionDecision: "ask"` — a prompt you can approve or decline. It never
+  emits `deny` and never silently blocks. Any error, a missing ledger, or a
+  non-matching edit exits 0 (allow), so a hook fault can never stop your work.
+- **Stop (`server/stop.mjs`)** runs when the agent finishes a turn. It only
+  writes an advisory nudge to stderr (e.g. "pending artifacts need review") and
+  always exits 0 — it can never trap the agent in a loop or block a stop.
+
+Both hooks read only local JSON under `.deeppairing/`. They make no network
+calls and write no files outside the project's `.deeppairing/` directory.
+
+### The committed server bundle (`claude-plugin/server/`)
+
+The plugin ships a self-contained JS bundle so it installs with no build step.
+That bundle is generated, not hand-written, from `packages/mcp-server/src/` by
+`packages/mcp-server/scripts/bundle-plugin.mjs`, and is reproducible:
+`pnpm build:clean` wipes all caches and rebuilds it, and CI's "Plugin bundle
+staleness gate" fails any PR whose committed bundle differs from a cold build.
+You can diff the committed bundle against a fresh `pnpm build:clean` to verify it
+matches the published source — there is no opaque binary and no post-install
+download.
+
 ## Disclosure timeline (template)
 
 For accepted reports we'll confirm within 5 business days, fix on
