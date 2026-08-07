@@ -113,7 +113,10 @@ describe("#136 — resolveStaleDaemon adopt/restart policy", () => {
     expect(outcome).toBe("restarted");
     expect(f.kills).toEqual([{ pid: 111, sig: "SIGTERM" }]);
     expect(f.released).toEqual([{ port: 3901, pid: 111 }]);
-    expect(f.logs.join("\n")).toMatch(/restarting it/);
+    // M3 (#221) — the pre-signal line now names the exact target (pid, port,
+    // projectRoot) + reason before the SIGTERM.
+    expect(f.logs.join("\n")).toMatch(/restarting stale daemon: pid 111 on :3901 for project \/projects\/mine/);
+    expect(f.logs.join("\n")).toMatch(/sending SIGTERM/);
   });
 
   it("SAME version → adopted, NO respawn (fast path: no probe, no kill)", async () => {

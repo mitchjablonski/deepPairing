@@ -576,25 +576,94 @@ function pidIsGone(pid: number): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function waitForPortRelease(
+export async function waitForPortRelease(
   port: number,
   pid: number,
-  opts: { graceMs?: number; killWaitMs?: number; kill?: (pid: number, sig: NodeJS.Signals) => void } = {},
+  opts: {
+    graceMs?: number;
+    killWaitMs?: number;
+    kill?: (pid: number, sig: NodeJS.Signals) => void;
+    /**
+     * M3 (#221) — loud forensics on the SIGKILL escalation. The dogfood saw
+     * daemons die with ZERO log, which made diagnosis impossible. Every path
+     * that signals a process now logs pid+port+reason BEFORE the signal.
+     * Defaults to a no-op so the pure-unit callers stay quiet; ensureDaemon
+     * wires `logStale` (stderr) through.
+     */
+    log?: (msg: string) => void;
+    /**
+     * M3 (#221) — the projectRoot we believe owns this daemon (ours). Used to
+     * recognise a foreign takeover of the port before escalating: if the port
+     * now answers as a DIFFERENT project, our SIGTERM'd daemon already released
+     * and a squatter/fresh owner bound it — we must never SIGKILL across that.
+     */
+    expectedProjectRoot?: string;
+    /** Injectable identity probe (defaults to the real HTTP one) — testable with fakes. */
+    probeIdentity?: (port: number) => Promise<{ pid: number; projectRoot: string } | null>;
+    /** Injectable pid-liveness check (defaults to the real process.kill(pid,0)) — testable with fakes. */
+    pidGone?: (pid: number) => boolean;
+  } = {},
 ): Promise<void> {
   const graceMs = opts.graceMs ?? 6000;
   const killWaitMs = opts.killWaitMs ?? 2000;
   const kill = opts.kill ?? ((p, s) => { try { process.kill(p, s); } catch { /* already gone */ } });
+  const log = opts.log ?? (() => {});
+  const probeIdentity = opts.probeIdentity ?? probeDaemonIdentity;
+  const pidGone = opts.pidGone ?? pidIsGone;
 
   const isDown = async (): Promise<boolean> =>
-    pidIsGone(pid) && (await portRefusesConnections(port));
+    pidGone(pid) && (await portRefusesConnections(port));
 
   const graceDeadline = Date.now() + graceMs;
   while (Date.now() < graceDeadline) {
     if (await isDown()) return;
     await sleep(50);
   }
-  // Graceful window elapsed — escalate ONCE to SIGKILL (bounded fallback), then
-  // wait a little longer for the kernel to release the LISTEN slot.
+
+  // M3 (#221) — the graceful window elapsed WITHOUT a clean release. Before the
+  // blind SIGKILL(pid) the pre-M3 code issued, rule out the two ways that kill
+  // would land on an innocent process — the dogfood's "daemon died, no log"
+  // class:
+  //   (1) Our SIGTERM'd pid is ALREADY GONE, but the port is still bound. Our
+  //       target is dead; a fast-follow/foreign daemon claimed the slot, and
+  //       the OS may have recycled `pid` into an unrelated process. SIGKILL(pid)
+  //       would hit that recycled innocent. There is nothing of ours to
+  //       escalate against — never signal.
+  //   (2) The port now answers as a DIFFERENT projectRoot (identity re-probe).
+  //       Same conclusion: our old daemon released, a foreign one owns the port
+  //       — leave both alone.
+  // Only case (3) — our pid provably STILL ALIVE (wedged, ignored SIGTERM) —
+  // escalates, and it logs loudly first.
+  if (pidGone(pid)) {
+    const takeover = await probeIdentity(port);
+    log(
+      `[deepPairing] waitForPortRelease: SIGTERM'd daemon pid ${pid} on :${port} is already gone; ` +
+      (takeover
+        ? `port now served by pid ${takeover.pid} for ${takeover.projectRoot} — NOT escalating (foreign/fresh owner; pid may be recycled).`
+        : `no daemon answers there — NOT escalating a dead/recycled pid.`),
+    );
+    return;
+  }
+  const takeover = await probeIdentity(port);
+  if (
+    takeover &&
+    takeover.pid !== pid &&
+    opts.expectedProjectRoot !== undefined &&
+    takeover.projectRoot !== opts.expectedProjectRoot
+  ) {
+    log(
+      `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on :${port} — our pid ${pid} still shows alive but the port now answers as pid ${takeover.pid} for ${takeover.projectRoot} (foreign takeover of ${opts.expectedProjectRoot}'s slot). Leaving both alone.`,
+    );
+    return;
+  }
+  // Our SIGTERM'd daemon is still alive and it's still ours — escalate ONCE to
+  // SIGKILL (bounded fallback), then wait a little longer for the kernel to
+  // release the LISTEN slot.
+  log(
+    `[deepPairing] waitForPortRelease: daemon pid ${pid} on :${port}` +
+    `${opts.expectedProjectRoot ? ` (project ${opts.expectedProjectRoot})` : ""}` +
+    ` did not exit on SIGTERM within ${graceMs}ms — escalating to SIGKILL (confirmed still alive; this is our own project's stale daemon).`,
+  );
   kill(pid, "SIGKILL");
   const killDeadline = Date.now() + killWaitMs;
   while (Date.now() < killDeadline) {
@@ -605,6 +674,37 @@ async function waitForPortRelease(
   // waitForDaemon backstops); a leftover socket would surface there as a bind
   // rescan, not a wrapper hang.
 }
+
+/**
+ * M3 (#221) — why NO project-scoped daemon.lock / pidfile.
+ *
+ * The batch brief asked whether a `.deeppairing/daemon.lock` (pid+port) would
+ * let a spawner tell "my project's daemon" from "a squatter on my slot" WITHOUT
+ * a network probe. It would not add safety, and here is the reasoning kept next
+ * to the code it would have touched:
+ *
+ *   - daemon.json IS already the project-scoped pid+port+projectRoot record. It
+ *     lives under THIS project's `.deeppairing/`, so it can only ever describe
+ *     OUR own daemon. A squatter on our deterministic slot has its OWN
+ *     daemon.json in ITS OWN project dir — the two never alias. So the "is this
+ *     my daemon?" question a lock would answer is already answered locally.
+ *   - The genuinely dangerous question — "who is the process CURRENTLY BOUND to
+ *     port P?" — is inherently cross-process and cannot be answered by any file
+ *     inside our project dir. Only that port's own `/api/daemon-info` can say,
+ *     and that is exactly the identity re-probe every kill path here already
+ *     performs (projectRoot guard). A lock file cannot see a foreign squatter's
+ *     identity, so it cannot make the SIGTERM/SIGKILL decision any safer.
+ *   - The collision experiment (scratchpad, span=1) proved the automatic path
+ *     already refuses to signal a foreign daemon on every branch: adopt on
+ *     foreign-root, adopt on probe-timeout, fail-to-bind rather than kill on a
+ *     full collision. The residual gap was purely FORENSIC (an unlogged SIGKILL
+ *     escalation) + a pid-recycle window in waitForPortRelease — both closed
+ *     above with logging + a gone-pid / foreign-takeover guard, not a lock.
+ *
+ * A lock's only real use is deduping two wrappers of the SAME project racing to
+ * spawn — a different, non-safety concern the port bind-loop's EADDRINUSE +
+ * adopt-on-next-probe already handles. So: not built, by design.
+ */
 
 /**
  * #136 — decide + act on a running daemon that matched OUR projectRoot. Returns
@@ -631,8 +731,13 @@ export async function resolveStaleDaemon(
 ): Promise<"adopt" | "restarted"> {
   const probeIdentity = deps.probeIdentity ?? probeDaemonIdentity;
   const kill = deps.kill ?? ((p, s) => { try { process.kill(p, s); } catch { /* already gone */ } });
-  const waitForRelease = deps.waitForRelease ?? ((port, pid) => waitForPortRelease(port, pid));
   const log = deps.log ?? (() => {});
+  // M3 (#221) — thread the loud log + our projectRoot into the release wait so
+  // the SIGKILL escalation is forensically logged and can recognise a foreign
+  // takeover of the port (never SIGKILL across a slot another project rebound).
+  const waitForRelease =
+    deps.waitForRelease ??
+    ((port, pid) => waitForPortRelease(port, pid, { log, expectedProjectRoot: projectRoot }));
 
   const verdict = classifyDaemonVersion(existing.version, myVersion);
   if (!verdictIsStale(verdict)) {
@@ -681,8 +786,13 @@ export async function resolveStaleDaemon(
   }
 
   const runningLabel = identity.version ?? (liveVerdict === "absent" ? "pre-0.1.4 (no version)" : "unknown");
+  // M3 (#221) — the loud pre-signal line. Name the exact target (pid, port,
+  // projectRoot) and the reason BEFORE the SIGTERM so any future "daemon died"
+  // incident is diagnosable from the log alone. The identity is HTTP-reconfirmed
+  // as OURS (pid + projectRoot) at this point — see the guards above.
   log(
-    `[deepPairing] daemon was running v${runningLabel}, plugin is v${myVersion} — restarting it. ` +
+    `[deepPairing] restarting stale daemon: pid ${existing.pid} on :${existing.port} for project ${projectRoot} ` +
+    `was running v${runningLabel}, plugin is v${myVersion} — sending SIGTERM (identity HTTP-reconfirmed as ours). ` +
     `A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`,
   );
   // SIGTERM triggers the daemon's graceful path (releaseListenSocket → flush

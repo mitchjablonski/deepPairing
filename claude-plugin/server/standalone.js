@@ -6993,7 +6993,8 @@ __export(lifecycle_exports, {
   isDaemonRunning: () => isDaemonRunning,
   probeDaemonIdentity: () => probeDaemonIdentity,
   resolveStaleDaemon: () => resolveStaleDaemon,
-  waitForDaemon: () => waitForDaemon
+  waitForDaemon: () => waitForDaemon,
+  waitForPortRelease: () => waitForPortRelease
 });
 import { spawn as spawn2 } from "node:child_process";
 import fs7 from "node:fs";
@@ -7322,12 +7323,33 @@ async function waitForPortRelease(port, pid, opts = {}) {
     } catch {
     }
   });
-  const isDown = async () => pidIsGone(pid) && await portRefusesConnections(port);
+  const log2 = opts.log ?? (() => {
+  });
+  const probeIdentity = opts.probeIdentity ?? probeDaemonIdentity;
+  const pidGone = opts.pidGone ?? pidIsGone;
+  const isDown = async () => pidGone(pid) && await portRefusesConnections(port);
   const graceDeadline = Date.now() + graceMs;
   while (Date.now() < graceDeadline) {
     if (await isDown()) return;
     await sleep(50);
   }
+  if (pidGone(pid)) {
+    const takeover2 = await probeIdentity(port);
+    log2(
+      `[deepPairing] waitForPortRelease: SIGTERM'd daemon pid ${pid} on :${port} is already gone; ` + (takeover2 ? `port now served by pid ${takeover2.pid} for ${takeover2.projectRoot} \u2014 NOT escalating (foreign/fresh owner; pid may be recycled).` : `no daemon answers there \u2014 NOT escalating a dead/recycled pid.`)
+    );
+    return;
+  }
+  const takeover = await probeIdentity(port);
+  if (takeover && takeover.pid !== pid && opts.expectedProjectRoot !== void 0 && takeover.projectRoot !== opts.expectedProjectRoot) {
+    log2(
+      `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on :${port} \u2014 our pid ${pid} still shows alive but the port now answers as pid ${takeover.pid} for ${takeover.projectRoot} (foreign takeover of ${opts.expectedProjectRoot}'s slot). Leaving both alone.`
+    );
+    return;
+  }
+  log2(
+    `[deepPairing] waitForPortRelease: daemon pid ${pid} on :${port}${opts.expectedProjectRoot ? ` (project ${opts.expectedProjectRoot})` : ""} did not exit on SIGTERM within ${graceMs}ms \u2014 escalating to SIGKILL (confirmed still alive; this is our own project's stale daemon).`
+  );
   kill(pid, "SIGKILL");
   const killDeadline = Date.now() + killWaitMs;
   while (Date.now() < killDeadline) {
@@ -7343,9 +7365,9 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
     } catch {
     }
   });
-  const waitForRelease = deps.waitForRelease ?? ((port, pid) => waitForPortRelease(port, pid));
   const log2 = deps.log ?? (() => {
   });
+  const waitForRelease = deps.waitForRelease ?? ((port, pid) => waitForPortRelease(port, pid, { log: log2, expectedProjectRoot: projectRoot2 }));
   const verdict = classifyDaemonVersion(existing.version, myVersion);
   if (!verdictIsStale(verdict)) {
     if (verdict === "newer") {
@@ -7377,7 +7399,7 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
   }
   const runningLabel = identity.version ?? (liveVerdict === "absent" ? "pre-0.1.4 (no version)" : "unknown");
   log2(
-    `[deepPairing] daemon was running v${runningLabel}, plugin is v${myVersion} \u2014 restarting it. A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`
+    `[deepPairing] restarting stale daemon: pid ${existing.pid} on :${existing.port} for project ${projectRoot2} was running v${runningLabel}, plugin is v${myVersion} \u2014 sending SIGTERM (identity HTTP-reconfirmed as ours). A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`
   );
   kill(existing.pid, "SIGTERM");
   await waitForRelease(existing.port, existing.pid);
