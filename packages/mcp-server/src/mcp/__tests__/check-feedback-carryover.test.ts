@@ -49,6 +49,16 @@ describe("check_feedback — unanswered-question carryover (#192)", () => {
     const entry = sc.unansweredCarryover.find((q: any) => q.commentId === "cmt_q_old");
     expect(entry).toBeDefined();
     expect(entry.artifactId).toBe(id);
+
+    // #225 (N1, item 2) — the SAME carried-over question ALSO joins
+    // structuredContent.questions (flagged carryover:true), so a structured-only
+    // client that branches on `.questions` and never prose-parses still sees it.
+    const q = sc.questions.find((x: any) => x.commentId === "cmt_q_old");
+    expect(q).toBeDefined();
+    expect(q.carryover).toBe(true);
+    expect(q.artifactId).toBe(id);
+    // Not double-listed within `questions`.
+    expect(sc.questions.filter((x: any) => x.commentId === "cmt_q_old")).toHaveLength(1);
   });
 
   // Fix 1 (HIGH) — the reviewer's exact repro. A follow-up question asked AS A

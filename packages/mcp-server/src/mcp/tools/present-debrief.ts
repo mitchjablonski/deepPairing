@@ -80,6 +80,32 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const sectionCount = sections?.length ?? 0;
   const eyesCount = needsYourEyes?.length ?? 0;
+
+  // #225 (N1, item 4) — dangling drill-in refs. A debrief's sections and
+  // needsYourEyes items link to underlying artifacts (changesetRef / artifactRefs
+  // / artifactRef). Pre-this, an id that resolves to NOTHING (a typo, or a
+  // fabricated "art_DOESNOTEXIST") was accepted silently — the human clicks a
+  // drill-in link that goes nowhere. WARN, don't reject: a ref to a WITHDRAWN /
+  // superseded artifact still resolves to a real record (it exists in the store,
+  // just isn't the live head), and pointing at that history can be legitimate —
+  // so we only flag ids that match NO artifact at all. The ArtifactRefLink UI
+  // already degrades gracefully for these (it renders the raw id, verified — not
+  // changed). Report ONCE in the success text so the agent can self-correct.
+  const refIds: string[] = [
+    ...(sections ?? []).flatMap((s) => [
+      ...(typeof s.changesetRef === "string" ? [s.changesetRef] : []),
+      ...(Array.isArray(s.artifactRefs) ? s.artifactRefs : []),
+    ]),
+    ...(needsYourEyes ?? []).flatMap((n) => (typeof n.artifactRef === "string" ? [n.artifactRef] : [])),
+  ].filter((r): r is string => typeof r === "string" && r.length > 0);
+  const knownIds = new Set((await ctx.store.getArtifacts()).map((a) => a.id));
+  // Preserve first-seen order, de-dupe, and drop any that resolve.
+  const dangling = [...new Set(refIds)].filter((r) => !knownIds.has(r));
+  const danglingNote =
+    dangling.length > 0
+      ? ` ⚠ ${dangling.length} reference${dangling.length === 1 ? "" : "s"} don't resolve to a live artifact: ${dangling.join(", ")} — the drill-in link${dangling.length === 1 ? "" : "s"} will go nowhere. Fix the id${dangling.length === 1 ? "" : "s"} (or drop the ref) with revise_artifact if that wasn't intentional.`
+      : "";
+
   return {
     content: [{
       type: "text",
@@ -87,7 +113,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
         `Debrief "${artifact.title}" presented for review (${id}) — ${sectionCount} section${sectionCount === 1 ? "" : "s"}` +
         `${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. ` +
         `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. ` +
-        `Call check_feedback for their questions, comments, and verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

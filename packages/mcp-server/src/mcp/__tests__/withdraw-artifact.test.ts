@@ -94,6 +94,55 @@ describe("#198c withdraw_artifact", () => {
     expect((await store.getArtifacts()).find((a) => a.id === "art_1")!.status).toBe("draft");
   });
 
+  // #225 (N1, item 3) — a single unanswered question is ONE object; it must not
+  // be double-counted as both "unanswered question" AND "unread comment" (a
+  // question is a human comment with acknowledged=false, so it landed in both
+  // buckets pre-fix, yielding the nonsense "1 unanswered question and 1 unread
+  // comment").
+  it("#225 — does NOT double-count a single unanswered question as also an unread comment", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    seedDraft(store);
+    store.addComment({
+      id: "cmt_q",
+      artifactId: "art_1",
+      content: "why this approach?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_1" },
+    });
+    const res = await handleWithdrawArtifact(makeCtx(store), { artifactId: "art_1", reason: "eh" });
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/1 unanswered question/);
+    // The SAME object must NOT also be tallied as an unread comment.
+    expect(text).not.toMatch(/unread comment/);
+  });
+
+  // #225 (N1, item 3) — the MIXED case stays accurate: a genuinely separate
+  // unread comment alongside a question reports BOTH.
+  it("#225 — a separate unread comment alongside a question still reports both", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    seedDraft(store);
+    store.addComment({
+      id: "cmt_q",
+      artifactId: "art_1",
+      content: "why this approach?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_1" },
+    });
+    store.addComment({
+      id: "cmt_c",
+      artifactId: "art_1",
+      content: "also, consider the edge case",
+      author: "human",
+      target: { artifactId: "art_1" },
+    });
+    const res = await handleWithdrawArtifact(makeCtx(store), { artifactId: "art_1", reason: "eh" });
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/1 unanswered question/);
+    expect(text).toMatch(/1 unread comment/);
+  });
+
   it("REFUSES when the draft has an undrained (unread) human comment", async () => {
     const store = fx.track(new FileStore(tmpDir, "s1"));
     seedDraft(store);

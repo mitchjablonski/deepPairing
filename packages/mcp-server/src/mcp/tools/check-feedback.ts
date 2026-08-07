@@ -601,11 +601,24 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     );
     if (older.length > 0) {
       for (const q of older) {
-        structuredCarryover.push({
+        const entry = {
           commentId: q.question.id,
           artifactId: q.artifactId,
           content: String(q.question.content ?? "").slice(0, 200),
-        });
+        };
+        structuredCarryover.push(entry);
+        // #225 (N1, item 2) — carried-over questions ALSO join structuredContent
+        // .questions. Pre-this they landed ONLY in prose (the "↩️ carried over"
+        // block) and the `unansweredCarryover` array — so a STRUCTURED-ONLY client
+        // (one that branches on `.questions` and never prose-parses) never saw an
+        // open question re-raised from a prior run. They're the same answer_question
+        // obligation as a fresh question, so the primary lane must carry them too;
+        // `carryover: true` distinguishes them for a client that cares. `older`
+        // already excludes everything delivered NEW this poll (deliveredIds), so
+        // there is no double-listing within `questions`. Spread-discipline holds:
+        // this runs ONLY when older.length > 0, so the healthy hot-path payload
+        // (empty structuredQuestions) is byte-for-byte unchanged.
+        structuredQuestions.push({ ...entry, carryover: true as const });
       }
       // FIX 4 — carry the secret-warning note the normal drain appends, so a
       // carried-over question that may contain a pasted credential is flagged.

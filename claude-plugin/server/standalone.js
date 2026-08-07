@@ -30807,11 +30807,13 @@ ${otherLines.join("\n")}`);
     );
     if (older.length > 0) {
       for (const q of older) {
-        structuredCarryover.push({
+        const entry = {
           commentId: q.question.id,
           artifactId: q.artifactId,
           content: String(q.question.content ?? "").slice(0, 200)
-        });
+        };
+        structuredCarryover.push(entry);
+        structuredQuestions.push({ ...entry, carryover: true });
       }
       const lines = older.map(
         (q) => `  \u2022 ${q.artifactId || "(session)"} \u2014 comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`
@@ -31348,7 +31350,7 @@ async function handleReviseArtifact(ctx, args) {
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review.${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).` }]
     };
   }
   const artifacts = await store.getArtifacts();
@@ -31416,7 +31418,10 @@ async function handleWithdrawArtifact(ctx, args) {
   const unanswered = collectUnansweredQuestions(comments).filter(
     (q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId
   );
-  const undrainedComments = comments.filter((c) => c.author === "human" && !c.acknowledged);
+  const unansweredIds = new Set(unanswered.map((q) => q.question.id));
+  const undrainedComments = comments.filter(
+    (c) => c.author === "human" && !c.acknowledged && !unansweredIds.has(c.id)
+  );
   if (unanswered.length > 0 || undrainedComments.length > 0) {
     const bits = [];
     if (unanswered.length > 0) bits.push(`${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"}`);
@@ -31930,10 +31935,20 @@ async function handlePresentDebrief(ctx, args) {
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const sectionCount = sections?.length ?? 0;
   const eyesCount = needsYourEyes?.length ?? 0;
+  const refIds = [
+    ...(sections ?? []).flatMap((s) => [
+      ...typeof s.changesetRef === "string" ? [s.changesetRef] : [],
+      ...Array.isArray(s.artifactRefs) ? s.artifactRefs : []
+    ]),
+    ...(needsYourEyes ?? []).flatMap((n) => typeof n.artifactRef === "string" ? [n.artifactRef] : [])
+  ].filter((r) => typeof r === "string" && r.length > 0);
+  const knownIds = new Set((await ctx.store.getArtifacts()).map((a) => a.id));
+  const dangling = [...new Set(refIds)].filter((r) => !knownIds.has(r));
+  const danglingNote = dangling.length > 0 ? ` \u26A0 ${dangling.length} reference${dangling.length === 1 ? "" : "s"} don't resolve to a live artifact: ${dangling.join(", ")} \u2014 the drill-in link${dangling.length === 1 ? "" : "s"} will go nowhere. Fix the id${dangling.length === 1 ? "" : "s"} (or drop the ref) with revise_artifact if that wasn't intentional.` : "";
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions, comments, and verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }

@@ -66,7 +66,17 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
   const unanswered = collectUnansweredQuestions(comments).filter(
     (q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId,
   );
-  const undrainedComments = comments.filter((c) => c.author === "human" && !c.acknowledged);
+  // #225 (N1) — DEDUPE: an unanswered question is a human comment with
+  // acknowledged=false, so before this it was counted TWICE — once as a question
+  // (collectUnansweredQuestions) and again as an "unread comment" — yielding the
+  // nonsense "1 unanswered question and 1 unread comment" for a single object. A
+  // question counts ONCE, as the question. Exclude the already-counted question
+  // ids from the undrained-comment bucket so a MIXED case (a real separate unread
+  // comment alongside a question) still reports both accurately.
+  const unansweredIds = new Set(unanswered.map((q) => q.question.id));
+  const undrainedComments = comments.filter(
+    (c) => c.author === "human" && !c.acknowledged && !unansweredIds.has(c.id),
+  );
   if (unanswered.length > 0 || undrainedComments.length > 0) {
     const bits: string[] = [];
     if (unanswered.length > 0) bits.push(`${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"}`);

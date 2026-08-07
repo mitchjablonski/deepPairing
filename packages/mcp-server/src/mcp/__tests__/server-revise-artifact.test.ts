@@ -162,6 +162,118 @@ describe("MCP Tool Handlers — revise_artifact", () => {
         c.author === "agent" && c.content.includes("misidentified"))).toBe(true);
     });
 
+    // #225 (N1) — THE SUPERSEDE-SWALLOW fix. The edge-hunt's exact repro: a
+    // human posts a plain comment on v1, then the agent supersedes to v2 BEFORE
+    // its next check_feedback. Pre-fix, the supersede's getPassiveFeedback() drain
+    // ACKNOWLEDGED that undrained comment (and dumped it context-free), so it
+    // vanished — never surfaced, never carried. Now it survives UNACKNOWLEDGED and
+    // check_feedback delivers it with its v1 context.
+    it("#225 — a plain comment on v1 survives supersede UNACKNOWLEDGED and is delivered by the next check_feedback (fail-on-revert)", async () => {
+      await callTool("present_findings", {
+        summary: "v1",
+        findings: [{ category: "bug", detail: "d", significance: "medium" }],
+      });
+      const v1 = store.getArtifacts()[0];
+      await store.addComment({
+        id: "cmt_swallow",
+        artifactId: v1.id,
+        content: "please keep the old behavior",
+        author: "human",
+        intent: "comment",
+      } as any);
+      // acknowledged=false at this point (human, freshly posted).
+      expect(store.getCommentsForArtifact(v1.id).find((c) => c.id === "cmt_swallow")?.acknowledged).toBeFalsy();
+
+      const { isError } = await callTool("revise_artifact", {
+        artifactId: v1.id,
+        mode: "supersede",
+        reason: "moving on",
+        content: { summary: "v2", findings: [{ category: "bug", detail: "d2", significance: "medium" }] },
+      });
+      expect(isError).toBeFalsy();
+
+      // THE INVARIANT: the supersede itself must NOT have acknowledged the comment.
+      expect(store.getCommentsForArtifact(v1.id).find((c) => c.id === "cmt_swallow")?.acknowledged).toBeFalsy();
+
+      // And check_feedback now delivers it — anchored to v1 (its context), in both
+      // the prose and the structured comments mirror.
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain("keep the old behavior");
+      expect(res.text).toContain(v1.id);
+      const sc = res.structuredContent as any;
+      expect(sc.comments.some((c: any) => c.id === "cmt_swallow" && c.artifactId === v1.id)).toBe(true);
+    });
+
+    // #225 (N1) — a pending QUESTION on v1 keeps its answer_question obligation.
+    it("#225 — a pending question on v1 survives supersede and keeps its answer_question obligation", async () => {
+      await callTool("present_findings", {
+        summary: "v1",
+        findings: [{ category: "bug", detail: "d", significance: "medium" }],
+      });
+      const v1 = store.getArtifacts()[0];
+      await store.addComment({
+        id: "cmt_q_swallow",
+        artifactId: v1.id,
+        content: "Is the old behavior still needed anywhere?",
+        author: "human",
+        intent: "question",
+      } as any);
+
+      await callTool("revise_artifact", {
+        artifactId: v1.id,
+        mode: "supersede",
+        reason: "moving on",
+        content: { summary: "v2", findings: [{ category: "bug", detail: "d2", significance: "medium" }] },
+      });
+
+      const res = await callTool("check_feedback");
+      const sc = res.structuredContent as any;
+      // Delivered as a QUESTION (proper obligation), not a bare comment.
+      expect(sc.questions.some((q: any) => q.commentId === "cmt_q_swallow")).toBe(true);
+      expect(res.text).toContain("old behavior still needed");
+    });
+
+    // #225 (N1) — the explicit edge case: a first-class SUGGESTED EDIT pending on
+    // v1 at supersede time. Its must-respond obligation must survive too — the next
+    // check_feedback delivers it in the suggestions lane, unacknowledged by the
+    // supersede.
+    it("#225 — a pending suggestion on v1 survives supersede and keeps its must-respond obligation", async () => {
+      await callTool("present_findings", {
+        summary: "v1",
+        findings: [{ category: "bug", detail: "d", significance: "medium" }],
+      });
+      const v1 = store.getArtifacts()[0];
+      await store.addComment({
+        id: "cmt_sug_swallow",
+        artifactId: v1.id,
+        content: "prefer the explicit form",
+        author: "human",
+        intent: "suggestion",
+        target: { artifactId: v1.id, filePath: "src/store.js", lineStart: 15, lineEnd: 15 },
+        suggestion: {
+          originalText: "Number(id)",
+          replacementText: "parseInt(id, 10)",
+          lineStart: 15,
+          lineEnd: 15,
+          state: "pending",
+        },
+      } as any);
+
+      await callTool("revise_artifact", {
+        artifactId: v1.id,
+        mode: "supersede",
+        reason: "moving on",
+        content: { summary: "v2", findings: [{ category: "bug", detail: "d2", significance: "medium" }] },
+      });
+      // Not swallowed by the supersede.
+      expect(store.getCommentsForArtifact(v1.id).find((c) => c.id === "cmt_sug_swallow")?.acknowledged).toBeFalsy();
+
+      const res = await callTool("check_feedback");
+      const sc = res.structuredContent as any;
+      expect(res.text).toMatch(/Suggested edits \(1\) — you MUST respond/);
+      expect((sc.suggestions ?? []).some((s: any) => s.commentId === "cmt_sug_swallow")).toBe(true);
+    });
+
     it("refuses to supersede an already-superseded artifact", async () => {
       await callTool("present_findings", {
         summary: "x",

@@ -177,8 +177,31 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // one's content. Both are list-changing events.
     notifyResourcesListChanged(server);
 
+    // #225 (N1) — the supersede-swallow fix. DELIBERATELY no getPassiveFeedback()
+    // here (unlike the retract/obsolete path below and every present_* tool). That
+    // helper drains ALL unacknowledged human comments session-wide, ACKNOWLEDGES
+    // them, and dumps them as bare context-free lines. On a supersede that would
+    // SWALLOW the human's still-undrained v1 comments/questions/suggestions — the
+    // agent never called check_feedback, so those comments were never delivered
+    // with their v1 context, never routed to their proper obligation lane, and
+    // never carried onto v2. The comment flipped acknowledged and vanished
+    // everywhere (the #225 ship-blocker).
+    //
+    // CARRY, don't block (the deliberate design asymmetry vs. withdraw_artifact):
+    // a supersede is usually the agent legitimately improving the artifact, so
+    // refusing it (the way withdraw REFUSES on undrained comments) would fight the
+    // review loop. Instead we leave those v1 comments UNACKNOWLEDGED. They survive
+    // the supersede and the NEXT check_feedback delivers each one richly through
+    // deliverComment (its artsForTargets snapshot still contains the superseded v1,
+    // so titles/findings/options resolve and a QUESTION keeps its answer_question
+    // obligation, a SUGGESTION keeps its must-respond obligation). The UI already
+    // renders them on the v2 view via useChainComments (whole-chain read).
+    //
+    // So: withdraw BLOCKS (a retraction must never dodge review), supersede CARRIES
+    // (a revision must never lose the review it hasn't seen yet). Both protect the
+    // same invariant — no human input is ever swallowed — by opposite means.
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review.${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).` }],
     };
   }
 
