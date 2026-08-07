@@ -409,7 +409,7 @@ export class PresentIdempotencyRegistry {
   }
 
   async begin(store: IStore, toolName: string, contentHash: string): Promise<PresentIdempotencyBegin> {
-    const key = `${toolName} ${contentHash}`;
+    const key = `${toolName}::${contentHash}`;
     // F1 - evict settled+expired reservations so the map cannot grow unbounded
     // (one entry per distinct present-hash for the whole process lifetime).
     this.sweep(this.now());

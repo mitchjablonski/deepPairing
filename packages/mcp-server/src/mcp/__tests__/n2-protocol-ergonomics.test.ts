@@ -45,6 +45,15 @@ describe("N2 present_* idempotency + present_options art_ id", () => {
     expect(research.length).toBe(1);
   });
 
+  it("F5 — de-dups two identical present_debrief into ONE draft", async () => {
+    const debrief = { title: "Wrap-up", summary: "we shipped it", sections: [{ title: "What", body: "did the thing" }] };
+    const first = await callTool("present_debrief", debrief);
+    expect(first.isError).toBeFalsy();
+    const second = await callTool("present_debrief", debrief);
+    expect(second.text).toContain("Already presented");
+    expect((await ctx.store.getArtifacts()).filter((a) => a.type === "debrief").length).toBe(1);
+  });
+
   it("re-presents (mints) after the prior draft is REJECTED — the freshlyRejected pin", async () => {
     await callTool("present_findings", FINDINGS);
     const [first] = (await ctx.store.getArtifacts()).filter((a) => a.type === "research");
