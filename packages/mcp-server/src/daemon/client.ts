@@ -63,12 +63,35 @@ export class DaemonClient implements IStore {
    */
   private readonly projectRoot: string | undefined;
 
+  /**
+   * N2 (#226 scope 5) — the port this client currently talks to. Kept in sync
+   * with baseUrl; recoverDaemonConnection updates it when the daemon respawns
+   * on a new port, and records `portChangeNotice` so the next check_feedback
+   * can tell the agent the companion URL moved.
+   */
+  private livePort: number;
+  private portChangeNotice: { previousPort: number; newPort: number } | null = null;
+
   constructor(port: number, sessionId: string, expectedProjectRoot?: string, authToken?: string) {
     this.baseUrl = `http://localhost:${port}/api/internal/sessions/${sessionId}`;
     this.sessionId = sessionId;
     this.projectHash = expectedProjectRoot ? projectHashOf(expectedProjectRoot) : undefined;
     this.authToken = authToken;
     this.projectRoot = expectedProjectRoot;
+    this.livePort = port;
+  }
+
+  /** N2 (#226 scope 5) — the live companion-UI port (updated after a self-heal
+   *  to a new port). check_feedback reads this so its companionUrl stays true. */
+  getLivePort(): number | undefined {
+    return this.livePort;
+  }
+
+  /** N2 (#226 scope 5) — drain the pending "daemon moved ports" notice (once). */
+  consumePortChangeNotice(): { previousPort: number; newPort: number } | null {
+    const n = this.portChangeNotice;
+    this.portChangeNotice = null;
+    return n;
   }
 
   /**
@@ -123,6 +146,15 @@ export class DaemonClient implements IStore {
       if (!info) return false;
       if (info.authToken) this.authToken = info.authToken;
       // The daemon may have respawned on a new port — rebuild baseUrl.
+      // N2 (#226 scope 5) — when it's a DIFFERENT port, record a drain-once
+      // notice so the next check_feedback tells the agent the companion URL
+      // moved (the daemon writes its new port to daemon.json before we get
+      // here; the human's browser tab, and any URL the agent already quoted,
+      // now point at the dead port).
+      if (info.port !== this.livePort) {
+        this.portChangeNotice = { previousPort: this.livePort, newPort: info.port };
+      }
+      this.livePort = info.port;
       this.baseUrl = `http://localhost:${info.port}/api/internal/sessions/${this.sessionId}`;
       await this.register(this.lastRegisterMeta);
       return true;

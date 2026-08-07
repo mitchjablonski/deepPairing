@@ -5,6 +5,31 @@ import { PENDING_DRAFT_TYPES } from "./tools/types.js";
 import { requestSecretNote } from "./tools/check-feedback-delivery.js";
 import { cliInvocation } from "../cli-invocation.js";
 
+/** N2 (#226 scope 4) — age in ms of the OLDEST pending draft, or null if no
+ *  draft carries a parseable createdAt. Used to flag an abandoned-arc backlog. */
+function staleDraftAgeMs(drafts: Array<{ createdAt?: unknown }>): number | null {
+  const now = Date.now();
+  let oldest: number | null = null;
+  for (const d of drafts) {
+    const t = typeof d.createdAt === "string" || typeof d.createdAt === "number"
+      ? new Date(d.createdAt).getTime()
+      : NaN;
+    if (!Number.isFinite(t)) continue;
+    const age = now - t;
+    if (oldest == null || age > oldest) oldest = age;
+  }
+  return oldest;
+}
+
+/** Coarse human-friendly age: "Nh"/"Nd" once past an hour, else "Nm". */
+function humanizeAge(ms: number): string {
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${Math.max(1, mins)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 /**
  * X4 — first-call hint builder, lifted out of server.ts so the CallTool
  * handler reads as routing, not 300 lines of context assembly.
@@ -490,8 +515,19 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
       const typeCounts = new Map<string, number>();
       for (const a of pendingDrafts) typeCounts.set(a.type, (typeCounts.get(a.type) ?? 0) + 1);
       const typesList = [...typeCounts.entries()].map(([t, n]) => `${n} ${t}`).join(", ");
+      // N2 (#226 scope 4) — stale-arc signal. On a reconnect after an abandoned
+      // arc, drafts left by a PRIOR connection look identical to fresh work. If
+      // the oldest pending draft was presented long ago (~30min+), annotate its
+      // age so the agent reviews/revises/withdraws it before piling on — a
+      // draft still under review after that long is almost certainly abandoned,
+      // not being actively looked at. Budget-conscious: extends this one line.
+      const oldestAgeMs = staleDraftAgeMs(pendingDrafts);
+      const staleNote =
+        oldestAgeMs != null && oldestAgeMs >= 30 * 60 * 1000
+          ? ` (stale — oldest presented ${humanizeAge(oldestAgeMs)} ago; review, revise, or withdraw it before new work)`
+          : "";
       blockingParts.push(
-        `\n📥 ${pendingDrafts.length} artifact${pendingDrafts.length === 1 ? "" : "s"} you presented earlier still await${pendingDrafts.length === 1 ? "s" : ""} review (${typesList}) — call check_feedback before presenting new work.`,
+        `\n📥 ${pendingDrafts.length} artifact${pendingDrafts.length === 1 ? "" : "s"} you presented earlier still await${pendingDrafts.length === 1 ? "s" : ""} review (${typesList})${staleNote} — call check_feedback before presenting new work.`,
       );
     }
     // #192 — also exclude humanResolvedAt (a question the human marked done):

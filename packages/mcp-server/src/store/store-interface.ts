@@ -595,4 +595,21 @@ export interface IStore {
 
   // Feedback polling
   waitForFeedback(timeoutMs?: number): Promise<void>;
+
+  /**
+   * N2 (#226 scope 5) — the LIVE companion-UI port. Only the DaemonClient
+   * implements it (its port can change under it when the daemon idle-shuts and
+   * respawns on a new port after a host sleep / TIME_WAIT). The in-process
+   * FileStore has no such notion, so it's optional; callers fall back to the
+   * port captured at server start.
+   */
+  getLivePort?(): number | undefined;
+  /**
+   * N2 (#226 scope 5) — drain-once notice that a self-heal (recoverDaemon-
+   * Connection) re-adopted the daemon on a DIFFERENT port than before. The
+   * next check_feedback surfaces this in prose so the agent corrects any old
+   * companion URL it already gave the human. Returns null when no port change
+   * is pending (the common case).
+   */
+  consumePortChangeNotice?(): { previousPort: number; newPort: number } | null;
 }

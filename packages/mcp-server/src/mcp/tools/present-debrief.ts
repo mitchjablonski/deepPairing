@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentDebriefInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -37,6 +37,11 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   const pre = await ctx.helpers.preflightRejectedApproaches("present_debrief", proposals, [], proposalConcepts);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226, F5) — short-window de-dup for an identical, still-draft debrief
+  // (same begin/commit/abort pattern as the other 7 present_* tools).
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+
   const id = `art_${nanoid(10)}`;
   const content = {
     summary,
@@ -48,14 +53,21 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   };
   // #162 parity — the secret scan runs INSIDE createArtifact; a debrief narrates
   // real code and may inline a snippet, so it's a scan surface like the others.
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "debrief",
-    title,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "debrief",
+      title,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb paints populated.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_debrief", pre.trace);

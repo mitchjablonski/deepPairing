@@ -27622,6 +27622,24 @@ ${s.replacementText}${note ? `
 
 // src/mcp/first-call-hint.ts
 init_cli_invocation();
+function staleDraftAgeMs(drafts) {
+  const now = Date.now();
+  let oldest = null;
+  for (const d of drafts) {
+    const t = typeof d.createdAt === "string" || typeof d.createdAt === "number" ? new Date(d.createdAt).getTime() : NaN;
+    if (!Number.isFinite(t)) continue;
+    const age = now - t;
+    if (oldest == null || age > oldest) oldest = age;
+  }
+  return oldest;
+}
+function humanizeAge(ms) {
+  const mins = Math.floor(ms / 6e4);
+  if (mins < 60) return `${Math.max(1, mins)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
 var HINT_BUDGET_CHARS = 1500;
 var POLICY_BUDGET_CHARS = 600;
 var PROTOCOL_PREAMBLE = [
@@ -27882,9 +27900,11 @@ ${philosophyParts.join("\n")}`
       const typeCounts = /* @__PURE__ */ new Map();
       for (const a of pendingDrafts) typeCounts.set(a.type, (typeCounts.get(a.type) ?? 0) + 1);
       const typesList = [...typeCounts.entries()].map(([t, n]) => `${n} ${t}`).join(", ");
+      const oldestAgeMs = staleDraftAgeMs(pendingDrafts);
+      const staleNote = oldestAgeMs != null && oldestAgeMs >= 30 * 60 * 1e3 ? ` (stale \u2014 oldest presented ${humanizeAge(oldestAgeMs)} ago; review, revise, or withdraw it before new work)` : "";
       blockingParts.push(
         `
-\u{1F4E5} ${pendingDrafts.length} artifact${pendingDrafts.length === 1 ? "" : "s"} you presented earlier still await${pendingDrafts.length === 1 ? "s" : ""} review (${typesList}) \u2014 call check_feedback before presenting new work.`
+\u{1F4E5} ${pendingDrafts.length} artifact${pendingDrafts.length === 1 ? "" : "s"} you presented earlier still await${pendingDrafts.length === 1 ? "s" : ""} review (${typesList})${staleNote} \u2014 call check_feedback before presenting new work.`
       );
     }
     const unanswered = allComments.filter(
@@ -28016,6 +28036,9 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   return `
 ${assembled.join("\n")}`;
 }
+
+// src/mcp/tool-helpers.ts
+import { createHash } from "node:crypto";
 
 // src/mcp/elicit.ts
 var ELICIT_APPROVE_SCHEMA = {
@@ -28540,16 +28563,113 @@ function formatPreflightTraceSummary(trace) {
 function isObligationBearingComment(c) {
   return !!c.suggestion || c.intent === "question" && !c.answeredByCommentId;
 }
-async function getPassiveFeedback(store) {
+async function getPassiveFeedback(store, excludeIds = []) {
   const comments = await store.getUnacknowledgedComments();
   if (comments.length === 0) return "";
   const drainable = comments.filter((c) => !isObligationBearingComment(c));
   if (drainable.length === 0) return "";
   await store.acknowledgeComments(drainable.map((c) => c.id));
-  const formatted = drainable.map((c) => `- ${c.content}`).join("\n");
+  const exclude = new Set(excludeIds);
+  const shown = drainable.filter((c) => !exclude.has(c.id));
+  if (shown.length === 0) return "";
+  const formatted = shown.map((c) => `- ${c.content}`).join("\n");
   return `
 
 [Human feedback]: ${formatted}`;
+}
+var PresentIdempotencyRegistry = class {
+  constructor(windowMs = 3e4, now = () => Date.now()) {
+    this.windowMs = windowMs;
+    this.now = now;
+  }
+  windowMs;
+  now;
+  entries = /* @__PURE__ */ new Map();
+  /** Live reservation count — for tests asserting the F1 sweep prunes. */
+  get size() {
+    return this.entries.size;
+  }
+  async begin(store, toolName, contentHash) {
+    const key = `${toolName}::${contentHash}`;
+    this.sweep(this.now());
+    for (; ; ) {
+      const now = this.now();
+      const existing = this.entries.get(key);
+      if (existing && now - existing.at < this.windowMs) {
+        const settled = await existing.promise;
+        if (settled) {
+          const art = (await store.getArtifacts()).find((a) => a.id === settled.artifactId);
+          if (art && art.status === "draft") {
+            return { duplicate: { artifactId: art.id, type: art.type } };
+          }
+        }
+        if (this.entries.get(key) === existing) {
+          return this.reserve(key, now);
+        }
+        continue;
+      }
+      return this.reserve(key, now);
+    }
+  }
+  /** Create + register a fresh owner reservation for `key`. Synchronous, so a
+   *  fresh-key get->reserve pair in begin() is atomic w.r.t. concurrent callers. */
+  reserve(key, now) {
+    let resolve;
+    const promise2 = new Promise((r) => {
+      resolve = r;
+    });
+    const entry = { at: now, promise: promise2, settled: false };
+    this.entries.set(key, entry);
+    let done = false;
+    return {
+      commit: (artifactId) => {
+        if (done) return;
+        done = true;
+        entry.settled = true;
+        resolve({ artifactId });
+      },
+      abort: () => {
+        if (done) return;
+        done = true;
+        entry.settled = true;
+        resolve(null);
+        if (this.entries.get(key) === entry) this.entries.delete(key);
+      }
+    };
+  }
+  /** F1 - drop settled reservations older than the window. In-flight (unsettled)
+   *  entries are always recent (the owner settles within its handler call) and
+   *  are never swept - a live owner or a mid-await waiter keeps its promise. */
+  sweep(now) {
+    for (const [k, e] of this.entries) {
+      if (e.settled && now - e.at >= this.windowMs) this.entries.delete(k);
+    }
+  }
+};
+function hashPresentArgs(args) {
+  return createHash("sha256").update(stableStringify(args)).digest("hex");
+}
+function stableStringify(v) {
+  if (v === null || typeof v !== "object") {
+    const s = JSON.stringify(v);
+    return s === void 0 ? "null" : s;
+  }
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const obj2 = v;
+  const keys = Object.keys(obj2).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj2[k])}`).join(",")}}`;
+}
+function buildDedupResponse(dup, port, extraStructured) {
+  const at = Number.isFinite(port) && port > 0 ? ` at localhost:${port}` : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Already presented \u2014 returning the existing ${dup.type} artifact (${dup.artifactId}). An identical ${dup.type} was presented moments ago and is still awaiting review${at}; no duplicate was created. Call check_feedback for the human's response, or revise_artifact / withdraw_artifact on ${dup.artifactId} if it needs changing.`
+      }
+    ],
+    structuredContent: { artifactId: dup.artifactId, deduplicated: true, ...extraStructured ?? {} }
+  };
 }
 async function linkServedRequest(store, args, artifactId) {
   const servedRequestId = args?.servedRequestId;
@@ -28733,14 +28853,43 @@ function scalarTypeTag(i) {
   if ((i.code === "too_small" || i.code === "too_big") && i.origin) return i.origin;
   return "value";
 }
+function isScalarBoundIssue(i) {
+  return i.code === "too_big" || i.code === "too_small";
+}
+function receivedSize(input, path8) {
+  let cur = input;
+  for (const seg of path8) {
+    if (cur == null || typeof cur !== "object") return void 0;
+    cur = cur[seg];
+  }
+  if (typeof cur === "string" || Array.isArray(cur)) return cur.length;
+  if (typeof cur === "number") return cur;
+  return void 0;
+}
+function scalarIssueClause(i, input) {
+  const field = `\`${i.path.join(".") || "(root)"}\``;
+  if (isScalarBoundIssue(i)) {
+    const isString = i.origin === "string";
+    const isArray = i.origin === "array";
+    const unit = isString ? " chars" : isArray ? " items" : "";
+    const size = receivedSize(input, i.path);
+    const got = size !== void 0 ? `, got ${size}` : "";
+    if (i.code === "too_big") {
+      return `${field}: too long (max ${i.maximum}${unit}${got})`;
+    }
+    return `${field}: too short (min ${i.minimum}${unit}${got})`;
+  }
+  return `${field} (${scalarTypeTag(i)})`;
+}
 function collapsePath(path8) {
   return path8.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
-function formatValidationError(toolName, err, example) {
+function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
   if (raw.length > 0 && raw.every(isTopLevelScalarIssue)) {
-    const fields = raw.map((i) => `\`${i.path.join(".") || "(root)"}\` (${scalarTypeTag(i)})`).join(", ");
-    const text2 = `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 ${raw.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${fields}. Add/fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
+    const clauses = raw.map((i) => scalarIssueClause(i, input)).join(", ");
+    const hasBound = raw.some(isScalarBoundIssue);
+    const text2 = hasBound ? `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 ${raw.length === 1 ? "a field is invalid" : "fields are invalid"}: ${clauses}. Fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.` : `INPUT_VALIDATION_FAILED: ${toolName} refused \u2014 ${raw.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${clauses}. Add/fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
     return {
       content: [{ type: "text", text: text2 }],
       isError: true,
@@ -28819,9 +28968,10 @@ Trim the input and retry: shorten long before/after or code snippets, split find
   const looksNetwork = typeof e?.code === "string" && NETWORK_ERROR_CODES.has(e.code) || NETWORK_ERROR_MSG.test(msg);
   const retryable = status !== void 0 ? status >= 500 || status === 408 || status === 429 : looksNetwork;
   const code = TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED;
+  const dedupSafeNote = toolName.startsWith("present_") ? ` If the error was transient, a re-send of identical content is safe \u2014 it will NOT create a duplicate (an identical draft presented in the last ~30s is de-duplicated to the existing artifact).` : "";
   const text = retryable ? `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
 
-This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been created \u2014 call check_feedback to see the current state, then retry ${toolName} if needed.` : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
+This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been created \u2014 call check_feedback to see the current state, then retry ${toolName} if needed.${dedupSafeNote}` : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.
 
 This looks deterministic (a handler bug or an unsupported request), not transient \u2014 retrying the identical input will fail the same way. The artifact may NOT have been created \u2014 call check_feedback to see the current state, then adjust the input or approach before calling ${toolName} again.`;
   return {
@@ -29076,7 +29226,7 @@ function validatePresentFindingsInput(args) {
   if (result.success) return admit("present_findings", result.data);
   const truncated = detectTruncatedCall("present_findings", args, "summary", "findings");
   if (truncated) return { ok: false, error: truncated };
-  return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS) };
+  return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS, args) };
 }
 var PresentOptionsInputSchema = external_exports.object({
   context: external_exports.string().min(1),
@@ -29095,12 +29245,12 @@ function validatePresentOptionsInput(args) {
   if (result.success) return admit("present_options", result.data);
   const truncated = detectTruncatedCall("present_options", args, "context", "options");
   if (truncated) return { ok: false, error: truncated };
-  return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS) };
+  return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS, args) };
 }
 function validatePresentSpecInput(args) {
   const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_spec", titleParse.error, EXAMPLE_SPEC) };
+    return { ok: false, error: formatValidationError("present_spec", titleParse.error, EXAMPLE_SPEC, args) };
   }
   const contentParse = SpecContentSchema.safeParse({
     objective: args?.objective,
@@ -29112,14 +29262,14 @@ function validatePresentSpecInput(args) {
     visuals: args?.visuals
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC) };
+    return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC, args) };
   }
   return admit("present_spec", { title: titleParse.data.title, ...contentParse.data });
 }
 function validatePresentPlanInput(args) {
   const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_plan", titleParse.error, EXAMPLE_PLAN) };
+    return { ok: false, error: formatValidationError("present_plan", titleParse.error, EXAMPLE_PLAN, args) };
   }
   const contentParse = PlanContentSchema.safeParse({
     // M1.2 — a plan step's structured FileChange list uses the code family too;
@@ -29132,7 +29282,7 @@ function validatePresentPlanInput(args) {
     visuals: aliasPlanVisuals(args?.visuals)
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };
+    return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN, args) };
   }
   return admit("present_plan", { title: titleParse.data.title, ...contentParse.data });
 }
@@ -29149,12 +29299,12 @@ function validatePresentCodeChangeInput(args) {
     concept: args?.concept
   });
   if (result.success) return admit("present_code_change", result.data);
-  return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };
+  return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE, args) };
 }
 function validatePresentChangesetInput(args) {
   const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_changeset", titleParse.error, EXAMPLE_CHANGESET) };
+    return { ok: false, error: formatValidationError("present_changeset", titleParse.error, EXAMPLE_CHANGESET, args) };
   }
   const contentParse = ChangesetContentSchema.safeParse({
     summary: args?.summary,
@@ -29165,14 +29315,14 @@ function validatePresentChangesetInput(args) {
     // agent input — deliberately not read here.
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET) };
+    return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET, args) };
   }
   return admit("present_changeset", { title: titleParse.data.title, ...contentParse.data });
 }
 function validatePresentDebriefInput(args) {
   const titleParse = external_exports.object({ title: external_exports.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF) };
+    return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF, args) };
   }
   const contentParse = DebriefContentSchema.safeParse({
     summary: args?.summary,
@@ -29183,7 +29333,7 @@ function validatePresentDebriefInput(args) {
     openQuestions: args?.openQuestions
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF) };
+    return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF, args) };
   }
   return admit("present_debrief", { title: titleParse.data.title, ...contentParse.data });
 }
@@ -29198,7 +29348,7 @@ function validatePresentExplainerInput(args) {
   if (result.success) return admit("present_explainer", result.data);
   const truncated = detectTruncatedCall("present_explainer", args, "overview", "sections");
   if (truncated) return { ok: false, error: truncated };
-  return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER) };
+  return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER, args) };
 }
 function validateLogReasoningInput(args) {
   const result = ReasoningContentSchema.safeParse({
@@ -29212,7 +29362,7 @@ function validateLogReasoningInput(args) {
     confidence: args?.confidence
   });
   if (result.success) return admit("log_reasoning", result.data);
-  return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING) };
+  return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING, args) };
 }
 var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
 var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
@@ -30331,20 +30481,29 @@ async function handlePresentFindings(ctx, args) {
   );
   const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const content = {
     summary: validated.data.summary,
     findings: validated.data.findings,
     openQuestions: validated.data.openQuestions ?? []
   };
   const id = `art_${nanoid3(10)}`;
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "research",
-    title: args?.title ?? "Research Findings",
-    content,
-    // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "research",
+      title: args?.title ?? "Research Findings",
+      content,
+      // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_findings", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -30396,17 +30555,34 @@ async function handlePresentOptions(ctx, args) {
   const proposalConcepts = proposedOptions.map((o) => o.concept?.name).filter((n) => Boolean(n && n.trim()));
   const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
+  if (dedup.duplicate) {
+    const dupArt = (await ctx.store.getArtifacts()).find((a) => a.id === dedup.duplicate.artifactId);
+    const dupDecisionId = dupArt?.content?.decisionId;
+    return buildDedupResponse(
+      dedup.duplicate,
+      ctx.store.getLivePort?.() ?? ctx.port,
+      typeof dupDecisionId === "string" ? { decisionId: dupDecisionId } : void 0
+    );
+  }
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
   const content = { context, ...title ? { title } : {}, options: proposedOptions, decisionId, stakes };
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "decision",
-    title: artifactTitle,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "decision",
+      title: artifactTitle,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
   await ctx.store.recordDecisionRequest({
@@ -30441,7 +30617,8 @@ async function handlePresentOptions(ctx, args) {
     stakes
   });
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    structuredContent: { artifactId: id, decisionId }
   };
 }
 
@@ -30550,7 +30727,18 @@ function scopeHasSignal(scope, signals) {
 }
 async function handleCheckFeedback(ctx, args) {
   const { store, server, broadcast, port } = ctx;
-  const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
+  let companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
+  const portRecoveryNote = () => {
+    const livePort = store.getLivePort?.();
+    if (typeof livePort === "number" && livePort > 0) {
+      companionUrl = `http://localhost:${livePort}`;
+    }
+    const notice = store.consumePortChangeNotice?.() ?? null;
+    if (!notice) return "";
+    return `
+
+\u26A0\uFE0F The daemon restarted on a new port \u2014 the companion UI is now at ${companionUrl} (was http://localhost:${notice.previousPort}). If you already gave the human the old URL, correct it: send them ${companionUrl}.`;
+  };
   const waitForRaw = typeof args?.waitFor === "string" ? args.waitFor : "any";
   const waitForScope = ["any", "comments", "decision", "plan_review", "artifact_status"].includes(
     waitForRaw
@@ -30621,10 +30809,11 @@ async function handleCheckFeedback(ctx, args) {
     });
     const newRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
+      const portNote2 = portRecoveryNote();
       return {
         content: [{
           type: "text",
-          text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll \u2014 no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).`
+          text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll \u2014 no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).${portNote2}`
         }],
         structuredContent: {
           status: "waiting",
@@ -30984,6 +31173,7 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
   pendingRequests.length > 0;
   const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
+  const portNote = portRecoveryNote();
   const structuredContent = {
     status,
     // M3 — busy-poll dedup: the full suggestedAction can run long on busy polls
@@ -31047,12 +31237,12 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   const [preamble] = parts;
   if (parts.length === 1 && preamble !== void 0) {
     return {
-      content: [{ type: "text", text: preamble }],
+      content: [{ type: "text", text: `${preamble}${portNote}` }],
       structuredContent
     };
   }
   return {
-    content: [{ type: "text", text: parts.join("\n\n") }],
+    content: [{ type: "text", text: `${parts.join("\n\n")}${portNote}` }],
     structuredContent
   };
 }
@@ -31154,7 +31344,22 @@ async function handleAnswerQuestion(ctx, args) {
       if (updated) broadcast({ type: "comment_updated", comment: updated });
       const verb = suggestionStateRaw === "countered" ? "Countered the suggestion" : `Applied the suggestion${updated?.suggestion?.appliedInVersion ? ` (in v${updated.suggestion.appliedInVersion})` : ""}`;
       return {
-        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback()}` }]
+        // N2 (#226 scope 6) — exclude the comment we just answered from the
+        // passive drain so the reply doesn't echo the human's own question
+        // back as "[Human feedback]".
+        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback([commentId])}` }]
+      };
+    }
+  }
+  {
+    const threadArtifactId = parent.target?.artifactId ?? "__session__";
+    const threadComments = await store.getCommentsForArtifact(threadArtifactId);
+    const alreadyAnswered = threadComments.some(
+      (c) => c.author === "agent" && c.parentCommentId === commentId && c.content.trim() === answer
+    );
+    if (alreadyAnswered) {
+      return {
+        content: [{ type: "text", text: `${commentId} was already answered with this exact reply \u2014 nothing appended (no duplicate). The human already sees it under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }]
       };
     }
   }
@@ -31184,7 +31389,10 @@ async function handleAnswerQuestion(ctx, args) {
     answerExcerpt: answer.slice(0, 120)
   });
   return {
-    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback()}` }]
+    // N2 (#226 scope 6) — exclude the just-answered comment from the passive
+    // drain: pre-N2 this spliced the human's question back into the reply as
+    // "[Human feedback]: - <the question>", echoing the very thing we answered.
+    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }]
   };
 }
 
@@ -31648,6 +31856,8 @@ async function handlePresentSpec(ctx, args) {
   ].filter(Boolean);
   const pre = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const id = `art_${nanoid3(10)}`;
   const content = {
     objective,
@@ -31658,13 +31868,20 @@ async function handlePresentSpec(ctx, args) {
     openQuestions: openQuestions ?? [],
     ...visuals ? { visuals } : {}
   };
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "spec",
-    title,
-    content,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "spec",
+      title,
+      content,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_spec", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -31718,16 +31935,25 @@ async function handlePresentPlan(ctx, args) {
   );
   const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const id = `art_${nanoid3(10)}`;
   const content = { steps: planSteps, estimatedChanges, ...visuals ? { visuals } : {} };
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "plan",
-    title,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "plan",
+      title,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await ctx.store.recordPlanReview(id);
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_plan", pre.trace);
@@ -31789,17 +32015,26 @@ async function handlePresentCodeChange(ctx, args) {
   const proposalConcepts = [concept?.name].filter((n) => Boolean(n && n.trim()));
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
   const id = `art_${nanoid3(10)}`;
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "code_change",
-    title: `${effectiveChangeType} ${filePath}`,
-    content,
-    agentReasoning: reasoning,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "code_change",
+      title: `${effectiveChangeType} ${filePath}`,
+      content,
+      agentReasoning: reasoning,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_code_change", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -31853,20 +32088,29 @@ async function handlePresentChangeset(ctx, args) {
   const proposalPaths = files.map((f) => f.path).filter(Boolean);
   const pre = await ctx.helpers.preflightRejectedApproaches("present_changeset", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const id = `art_${nanoid3(10)}`;
   const content = {
     ...summary ? { summary } : {},
     files,
     ...risks && risks.length > 0 ? { risks } : {}
   };
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "changeset",
-    title,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "changeset",
+      title,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -31906,6 +32150,8 @@ async function handlePresentDebrief(ctx, args) {
   const proposalConcepts = (sections ?? []).flatMap((s) => (s.concepts ?? []).map((c) => c.name)).filter(Boolean);
   const pre = await ctx.helpers.preflightRejectedApproaches("present_debrief", proposals, [], proposalConcepts);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const id = `art_${nanoid3(10)}`;
   const content = {
     summary,
@@ -31915,14 +32161,21 @@ async function handlePresentDebrief(ctx, args) {
     ...deferred && deferred.length > 0 ? { deferred } : {},
     ...openQuestions && openQuestions.length > 0 ? { openQuestions } : {}
   };
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "debrief",
-    title,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "debrief",
+      title,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_debrief", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -31972,6 +32225,8 @@ async function handlePresentExplainer(ctx, args) {
   ].filter(Boolean);
   const pre = await ctx.helpers.preflightRejectedApproaches("present_explainer", proposals, [], []);
   if (!pre.ok) return pre.response;
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const id = `art_${nanoid3(10)}`;
   const content = {
     title,
@@ -31980,14 +32235,21 @@ async function handlePresentExplainer(ctx, args) {
     ...relatedArtifactIds && relatedArtifactIds.length > 0 ? { relatedArtifactIds } : {},
     ...suggestedQuestions && suggestedQuestions.length > 0 ? { suggestedQuestions } : {}
   };
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "explainer",
-    title,
-    content,
-    relatedArtifactIds,
-    feature: args?.feature
-  });
+  let artifact;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "explainer",
+      title,
+      content,
+      relatedArtifactIds,
+      feature: args?.feature
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_explainer", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
@@ -32958,7 +33220,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     }
     throw new Error(`Unknown prompt: ${name}`);
   });
-  const getPassiveFeedback2 = () => getPassiveFeedback(store);
+  const getPassiveFeedback2 = (excludeIds) => getPassiveFeedback(store, excludeIds);
+  const presentIdempotency = new PresentIdempotencyRegistry();
   let firstToolCall = true;
   const HINT_EXCLUDED_TOOLS = /* @__PURE__ */ new Set([
     "export_session"
@@ -32987,7 +33250,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         tryElicit: tryElicit2,
         preflightRejectedApproaches: preflightRejectedApproaches2,
         autoNameSession,
-        getPassiveFeedback: getPassiveFeedback2
+        getPassiveFeedback: getPassiveFeedback2,
+        beginPresentIdempotency: (toolName, contentHash) => presentIdempotency.begin(store, toolName, contentHash)
       },
       state: {
         get checkFeedbackPollCount() {
@@ -33126,12 +33390,32 @@ var DaemonClient = class {
    * authToken after a daemon respawn.
    */
   projectRoot;
+  /**
+   * N2 (#226 scope 5) — the port this client currently talks to. Kept in sync
+   * with baseUrl; recoverDaemonConnection updates it when the daemon respawns
+   * on a new port, and records `portChangeNotice` so the next check_feedback
+   * can tell the agent the companion URL moved.
+   */
+  livePort;
+  portChangeNotice = null;
   constructor(port, sessionId, expectedProjectRoot, authToken) {
     this.baseUrl = `http://localhost:${port}/api/internal/sessions/${sessionId}`;
     this.sessionId = sessionId;
     this.projectHash = expectedProjectRoot ? projectHashOf(expectedProjectRoot) : void 0;
     this.authToken = authToken;
     this.projectRoot = expectedProjectRoot;
+    this.livePort = port;
+  }
+  /** N2 (#226 scope 5) — the live companion-UI port (updated after a self-heal
+   *  to a new port). check_feedback reads this so its companionUrl stays true. */
+  getLivePort() {
+    return this.livePort;
+  }
+  /** N2 (#226 scope 5) — drain the pending "daemon moved ports" notice (once). */
+  consumePortChangeNotice() {
+    const n = this.portChangeNotice;
+    this.portChangeNotice = null;
+    return n;
   }
   /**
    * IV1 — re-read .deeppairing/daemon.json and rotate the cached
@@ -33182,6 +33466,10 @@ var DaemonClient = class {
       const info = await ensureDaemon2(this.projectRoot);
       if (!info) return false;
       if (info.authToken) this.authToken = info.authToken;
+      if (info.port !== this.livePort) {
+        this.portChangeNotice = { previousPort: this.livePort, newPort: info.port };
+      }
+      this.livePort = info.port;
       this.baseUrl = `http://localhost:${info.port}/api/internal/sessions/${this.sessionId}`;
       await this.register(this.lastRegisterMeta);
       return true;

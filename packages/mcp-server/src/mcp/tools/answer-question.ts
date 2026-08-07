@@ -117,12 +117,38 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
         ? "Countered the suggestion"
         : `Applied the suggestion${updated?.suggestion?.appliedInVersion ? ` (in v${updated.suggestion.appliedInVersion})` : ""}`;
       return {
-        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback()}` }],
+        // N2 (#226 scope 6) — exclude the comment we just answered from the
+        // passive drain so the reply doesn't echo the human's own question
+        // back as "[Human feedback]".
+        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
       };
     }
     // else: not owing a response + no state → a legitimate plain reply (e.g. to
     // a countered suggestion awaiting the human, or an already-applied one).
     // Fall through to the plain-answer path below.
+  }
+
+  // N2 (#226 scope 1b, F3) — idempotent answer. If ANY existing agent reply in
+  // this question's thread already carries this exact text, it's a duplicate
+  // re-send (an agent retry): return the existing answer state instead of
+  // stacking a verbatim reply under the human's question. When the text DIFFERS
+  // it's a deliberate follow-up, so we fall through and append.
+  //
+  // F3 — scan ALL agent replies to this comment, not just the LAST one
+  // (parent.answeredByCommentId): re-sending an OLDER answer after a different
+  // follow-up must still be caught as a duplicate, and answeredByCommentId only
+  // ever points at the most-recent reply.
+  {
+    const threadArtifactId = parent.target?.artifactId ?? "__session__";
+    const threadComments = await store.getCommentsForArtifact(threadArtifactId);
+    const alreadyAnswered = threadComments.some(
+      (c) => c.author === "agent" && c.parentCommentId === commentId && c.content.trim() === answer,
+    );
+    if (alreadyAnswered) {
+      return {
+        content: [{ type: "text", text: `${commentId} was already answered with this exact reply — nothing appended (no duplicate). The human already sees it under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
+      };
+    }
   }
 
   const answerId = `cmt_${nanoid(10)}`;
@@ -167,6 +193,9 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
     answerExcerpt: answer.slice(0, 120),
   });
   return {
-    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback()}` }],
+    // N2 (#226 scope 6) — exclude the just-answered comment from the passive
+    // drain: pre-N2 this spliced the human's question back into the reply as
+    // "[Human feedback]: - <the question>", echoing the very thing we answered.
+    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
   };
 }
