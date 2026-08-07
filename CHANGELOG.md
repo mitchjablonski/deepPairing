@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.1.30 — 2026-08-06
+
+The truthful-install release. Whichever way deepPairing reaches you — a source clone, the
+marketplace bundle, or a future `npm install` — every path it writes and every command it
+suggests now matches your actual layout. The round-7 hermetic dry-run surfaced one real bug:
+`init` run inside an **npm-installed layout** mis-detected itself as "local dev" and wrote
+**npx-cache-mortal absolute paths** into `.mcp.json` — paths that evaporate when the npx
+cache is swept. `init` now detects a `node_modules` path segment and writes the durable
+`npx -y @deeppairing/mcp-server` form, while genuine source checkouts still get the absolute
+`node dist/standalone.js` form — robust across pnpm-store and workspace-link layouts, proven
+by an executed repro. **Every remediation string now speaks the reader's layout**: the ~25
+"run this to recover" hints across standalone, daemon, lifecycle, init, and skill hints render
+through one shared helper — npm users see `npx -y -p @deeppairing/mcp-server deeppairing doctor`
+(the `-p` form, since the package-name bin is the stdio server), source users see the node
+path. The CLAUDE.md protocol templates and `--help` got the same treatment. On the demo side:
+the served demo now **lands on the hero artifact** instead of a blank pane (a conservative,
+hydration-only auto-select), the README's ~90s claim gains an honest **warm-store hedge**, and
+INSTALL notes that running `init` inside the clone is a no-op (PR #255).
+
+### Fixed
+- **`init` in an npm-installed layout no longer writes cache-mortal paths.** Run inside an
+  npm/npx-installed layout, `init` mis-detected as "local dev" and wrote **absolute paths into
+  the npx cache** — paths that vanish when the cache is swept. It now detects a `node_modules`
+  path segment and writes the durable **`npx -y @deeppairing/mcp-server`** form, while genuine
+  source checkouts keep the absolute `node dist/standalone.js` form. Robust across pnpm-store
+  and workspace-link layouts, proven by an executed repro (PR #255).
+
+### Changed
+- **Every remediation string renders the invocation for the actual layout.** The ~25
+  "run this to recover" hints across standalone, daemon, lifecycle, init, and skill hints now
+  route through **one shared helper**: npm users see
+  `npx -y -p @deeppairing/mcp-server deeppairing doctor` (the `-p` form, since the package-name
+  bin is the stdio server), source users see the node path. The CLAUDE.md protocol templates
+  and `--help` got the same treatment (PR #255).
+- **The served demo lands on the hero artifact, not a blank pane.** A conservative,
+  hydration-only auto-select opens the demo on its hero artifact. The README's ~90s claim gains
+  an honest **warm-store hedge**, and INSTALL notes that running `init` inside the clone is a
+  no-op (PR #255).
+
 ## v0.1.29 — 2026-08-06
 
 The ready release. Round 6 left two kinds of residue: guidance surfaces that still
