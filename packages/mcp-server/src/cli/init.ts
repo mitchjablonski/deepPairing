@@ -29,7 +29,7 @@ import { spawn } from "node:child_process";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
-import { cliInvocation, mcpServerConfigFor } from "../cli-invocation.js";
+import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
 
 const cwd = process.cwd();
 
@@ -163,7 +163,7 @@ freshness window means a recent \`present_code_change\` covers incidental
 edits — call the checkpoint for the main change, then the trailing config
 tweaks pass through.
 
-The PostToolUse hook (installed by \`node packages/mcp-server/dist/cli/init.js init\`) enforces this: if
+The PostToolUse hook (installed by \`${cliInvocation("init")}\`) enforces this: if
 you Write/Edit a non-skip file without an intervening present_code_change,
 the hook nags and forces you to checkpoint before continuing.
 
@@ -247,7 +247,7 @@ you know what's already been rejected before proposing anything.
 
 For the full protocol (per-edit checkpoints, decision-revision
 semantics, comment-mirror via \`answer_question\`, Stop hook flow):
-run \`node packages/mcp-server/dist/cli/init.js init\` without
+run \`${cliInvocation("init")}\` without
 \`--minimal\` to inject the full version, or read it inline in this
 repo's \`packages/mcp-server/src/cli/init.ts\` (EMBEDDED_PROTOCOL).
 `;
@@ -1829,17 +1829,26 @@ if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
     // that doesn't work. III9 fixed
     // this in the README; the CLI help was missed. Now: leading `dp`
     // placeholder = whichever invocation the user reached the help
-    // through (the linked `deeppairing` command after `pnpm link
-    // --global`, or the by-path `node packages/.../init.js`). A leading
-    // section makes the choice explicit. The grep guard test
-    // (cli/__tests__/no-npx-deeppairing.test.ts) keeps a future PR
-    // from putting them back.
+    // through. L1 (#218) — layout-aware: an INSTALLED package leads with the
+    // npx form (the source `node packages/.../init.js` path is meaningless
+    // there); a source checkout keeps the pnpm-link / by-path pair. The grep
+    // guard test (cli/__tests__/no-npx-deeppairing.test.ts) keeps a future PR
+    // from reintroducing the unpublished `npx <pkg-name>` dead end — the npx
+    // form below names the CLI bin explicitly (`-p … deeppairing`) so it
+    // never trips it.
+    const helpHeading = isInstalledPackage()
+      ? `${bold("This CLI")} ships in the ${bold("@deeppairing/mcp-server")} package. Invoke as either:`
+      : `${bold("This CLI:")} pre-1.0, run from a source checkout. Invoke as either:`;
+    const helpInvocations = isInstalledPackage()
+      ? `    ${dim("•")} ${bold("deeppairing <cmd>")}                                       ${dim("(if the package bin is on your PATH)")}
+    ${dim("•")} ${bold(cliInvocation("<cmd>"))}   ${dim("(no global install needed)")}`
+      : `    ${dim("•")} ${bold("deeppairing <cmd>")}                                 (after \`cd packages/mcp-server && pnpm link --global\`)
+    ${dim("•")} ${bold("node packages/mcp-server/dist/cli/init.js <cmd>")}   (no setup; works after \`pnpm build\`)`;
     console.log(`
   ${bold("deepPairing")} — Human-AI collaborative development
 
-  ${bold("This CLI:")} pre-1.0, not on npm. Invoke as either:
-    ${dim("•")} ${bold("deeppairing <cmd>")}                                 (after \`cd packages/mcp-server && pnpm link --global\`)
-    ${dim("•")} ${bold("node packages/mcp-server/dist/cli/init.js <cmd>")}   (no setup; works after \`pnpm build\`)
+  ${helpHeading}
+${helpInvocations}
 
   ${bold("Commands")} (substitute one of the invocations above for \`dp\`):
     dp                                     Set up deepPairing in current project (interactive; offers demo)
