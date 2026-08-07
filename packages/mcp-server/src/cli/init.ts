@@ -655,6 +655,14 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
           // note: on Windows Node ignores the signal name and process.kill
           // is unconditional termination (no graceful cleanup runs). Tell
           // the user.
+          // M3 (#221) — loud pre-signal forensics: name the exact target (pid,
+          // port, projectRoot) and reason BEFORE any signal, so a "daemon died"
+          // incident is diagnosable from the log alone. This is a user-confirmed
+          // cross-project eviction (requiresExplicitConfirmation), and the pid +
+          // projectRoot were re-confirmed at the top of apply().
+          console.log(
+            `  ${dim("[deepPairing] doctor: signalling foreign daemon PID")} ${expectedPid} ${dim("on :")}${port} ${dim("(project")} ${expectedProject}${dim(") — cooperative evict refused; user-confirmed fallback.")}`,
+          );
           if (process.platform === "win32") {
             try {
               process.kill(expectedPid);
@@ -723,6 +731,11 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
             }
             // SIGTERM → graceful flush + port release (no data loss). On Windows
             // Node has no SIGTERM equivalent; process.kill is unconditional.
+            // M3 (#221) — loud pre-signal forensics. Target is HTTP-reconfirmed
+            // as OURS (pid + projectRoot === cwd) directly above.
+            console.log(
+              `  ${dim("[deepPairing] doctor: restarting stale daemon PID")} ${expectedPid} ${dim("on :")}${port} ${dim("(this project")} ${cwd}${dim(") — running")} ${mine.version ? "v" + mine.version : "unversioned"} ${dim("< plugin v")}${SERVER_VERSION}${dim("; sending SIGTERM.")}`,
+            );
             try {
               process.kill(expectedPid, process.platform === "win32" ? undefined : "SIGTERM");
               return {
