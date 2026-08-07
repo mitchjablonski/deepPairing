@@ -720,6 +720,80 @@ describe("MCP Tool Handlers — firstCallHint", () => {
       });
       expect(text).not.toMatch(/💬 \d+ human comment.*without an agent reply/);
     });
+
+    // #220 M1.6 — a bare approval ack ("ship it") on an APPROVED artifact does
+    // NOT owe a reply; a substantive follow-up on the same approved artifact
+    // still does (via the ↳ lane). The dogfood flagged two acks as owing.
+    it("M1.6 — a bare ack on an APPROVED artifact is NOT flagged as owing a reply", async () => {
+      const cs = store.createArtifact({
+        id: "art_cs_approved",
+        type: "changeset",
+        title: "tags feature",
+        content: { summary: "x", files: [] },
+      });
+      store.updateArtifactStatus(cs.id, "approved");
+      // The dogfood's exact ack — top-level, non-question, verdictFeedback unset.
+      store.addComment({
+        id: "cmt_ship_it",
+        artifactId: cs.id,
+        content: "Yep, i+1 is exactly it. Ship it.",
+        author: "human",
+      });
+      const { text } = await callTool("present_findings", {
+        summary: "x",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
+      expect(text).not.toMatch(/💬 \d+ human comment.*without an agent reply/);
+    });
+
+    it("M1.6 — a top-level comment on a STILL-OPEN (draft) artifact STILL owes a mirror", async () => {
+      const research = store.createArtifact({
+        id: "art_draft_open",
+        type: "research",
+        title: "x",
+        content: { summary: "x", findings: [] },
+      });
+      // status left as draft (not approved).
+      store.addComment({
+        id: "cmt_open_thought",
+        artifactId: research.id,
+        content: "reconsider the naming here",
+        author: "human",
+      });
+      const { text } = await callTool("present_findings", {
+        summary: "y",
+        findings: [{ category: "y", detail: "y", significance: "low" }],
+      });
+      expect(text).toMatch(/💬 1 human comment.*without an agent reply/);
+    });
+
+    it("M1.6 — a SUBSTANTIVE follow-up on an APPROVED artifact still owes (via the ↳ lane)", async () => {
+      const cs = store.createArtifact({
+        id: "art_cs_appr_followup",
+        type: "changeset",
+        title: "tags feature",
+        content: { summary: "x", files: [] },
+      });
+      store.updateArtifactStatus(cs.id, "approved");
+      store.addComment({ id: "agent_reply", artifactId: cs.id, content: "done", author: "agent" });
+      // A follow-up reply to the agent's comment — parentCommentId → agent.
+      store.addComment({
+        id: "human_followup",
+        artifactId: cs.id,
+        content: "wait, does this also cover the delete path?",
+        author: "human",
+        parentCommentId: "agent_reply",
+      });
+      const { text } = await callTool("present_findings", {
+        summary: "z",
+        findings: [{ category: "z", detail: "z", significance: "low" }],
+      });
+      // The follow-up lane fires regardless of approval status.
+      expect(text).toMatch(/↳ 1 follow-up reply/);
+      expect(text).toContain("human_followup");
+      // And it is NOT double-counted in the (now ack-gated) mirror line.
+      expect(text).not.toMatch(/💬 \d+ human comment.*without an agent reply/);
+    });
   });
 
   describe("firstCallHint budget + tier ordering (X3)", () => {
@@ -835,13 +909,12 @@ describe("MCP Tool Handlers — firstCallHint", () => {
     });
   });
 
-  describe("Y2 — firstCallHint gating (write tools only)", () => {
-    // Pre-Y2 the hint appended to EVERY first tool call. That contaminated
-    // read-only tools — recall returned the philosophy ledger duplicated
-    // underneath itself, export_session leaked session-memory text into
-    // the markdown the user wanted to grab. Y2 restricts the append to
-    // tools that WRITE (present_*, log_reasoning, revise_artifact,
-    // post_pr_review). These tests pin both directions.
+  describe("M1.5 — firstCallHint fires on the FIRST tool call (any tool)", () => {
+    // Pre-M1 (Y2) the hint was gated to WRITE tools, so an agent whose opener is
+    // the protocol-recommended `recall` never saw the companion-URL / protocol
+    // block on call #1 (the dogfood friction). M1.5 fires it on the FIRST tool
+    // call whichever tool it is — with ONE carve-out, `export_session`, whose
+    // grab-and-paste markdown must stay clean. These tests pin both directions.
 
     it("present_findings (write) — first call carries the hint", async () => {
       const { text } = await callTool("present_findings", {
@@ -866,25 +939,27 @@ describe("MCP Tool Handlers — firstCallHint", () => {
       expect(text).toMatch(/not plain terminal text/i);
     });
 
-    it("recall (read) — first call does NOT carry the hint", async () => {
+    it("recall (read) — first call NOW carries the hint (M1.5: the happy-path opener)", async () => {
+      // The protocol preamble tells the agent to `recall` first; pre-M1 that
+      // opener silently dropped the companion-URL / protocol block. Now it rides.
       const { text } = await callTool("recall", { query: "anything", mode: "any" });
-      expect(text).not.toMatch(/\[First use this session\]/);
-      // Negative spot-check — common contextual sections shouldn't leak in.
-      expect(text).not.toMatch(/Cross-project philosophy ledger \(use recall/);
+      expect(text).toMatch(/\[First use this session\]/);
+      expect(text).toMatch(/\[deepPairing protocol\]/);
     });
 
-    it("export_session (read) — first call does NOT carry the hint", async () => {
-      // export_session returns markdown; contamination here was the worst
-      // offender (the user pastes the export elsewhere).
+    it("export_session (read) — first call STILL does NOT carry the hint (grab-and-paste stays clean)", async () => {
+      // export_session returns markdown the user pastes elsewhere; splicing an
+      // onboarding block into it was the worst offender, so it stays the ONE
+      // carve-out from M1.5's first-call delivery.
       const { text } = await callTool("export_session", { format: "full" });
       expect(text).not.toMatch(/\[First use this session\]/);
     });
 
-    it("check_feedback (read) — first call does NOT carry the hint", async () => {
-      // check_feedback long-polls; an empty-state response shouldn't be
-      // splattered with rejected-approach lists either.
+    it("check_feedback (read) — first call NOW carries the hint (M1.5)", async () => {
+      // A session that opens by polling should still learn the companion URL and
+      // the protocol on call #1.
       const { text } = await callTool("check_feedback", {});
-      expect(text).not.toMatch(/\[First use this session\]/);
+      expect(text).toMatch(/\[First use this session\]/);
     });
 
     // III1 — gate also requires !result.isError. Pre-III1 the push
@@ -936,18 +1011,29 @@ describe("MCP Tool Handlers — firstCallHint", () => {
       expect(text).toMatch(/\[deepPairing protocol\]/);
     });
 
-    it("hint still fires on the first WRITE call even if a READ call ran first", async () => {
-      // II12.1 — the latch is consumed only on the first HINT_TOOL (write)
-      // call, so a leading read (recall/check_feedback) no longer burns the
-      // hint. This matters because the protocol preamble itself tells the agent
-      // to `recall` first — dropping the hint on a read-then-write sequence
-      // would routinely lose the onboarding/protocol context.
-      await callTool("recall", { query: "x", mode: "any" });
+    it("M1.5 — a leading recall carries the hint and BURNS the latch (fires exactly once)", async () => {
+      // Pre-M1 the latch was consumed only on the first write, so a leading
+      // recall kept it armed. M1.5 delivers on the FIRST tool call (recall here),
+      // which burns the latch — so a subsequent present_findings does NOT repeat
+      // the hint. The agent sees it exactly once, on call #1.
+      const first = await callTool("recall", { query: "x", mode: "any" });
+      expect(first.text).toMatch(/\[First use this session\]/);
       const { text } = await callTool("present_findings", {
         summary: "trigger",
         findings: [{ category: "x", detail: "x", significance: "low" }],
       });
-      // The first WRITE after the leading read DOES carry the hint.
+      expect(text).not.toMatch(/\[First use this session\]/);
+    });
+
+    it("M1.5 — export_session does NOT burn the latch: the first non-export call still gets the hint", async () => {
+      // The one excluded tool must not consume the once-only latch, else a
+      // session opening with an export would lose onboarding forever.
+      const exp = await callTool("export_session", { format: "full" });
+      expect(exp.text).not.toMatch(/\[First use this session\]/);
+      const { text } = await callTool("present_findings", {
+        summary: "trigger",
+        findings: [{ category: "x", detail: "x", significance: "low" }],
+      });
       expect(text).toMatch(/\[First use this session\]/);
     });
   });

@@ -8,6 +8,12 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
   const { context, options: validatedOptions, stakes } = validated.data;
+  // M1.1 — the short fork-naming title (already trimmed/capped by the input
+  // schema). When present it becomes the artifact/session title, the card
+  // header, and the whole-card-reject ledger key; `context` keeps the full
+  // background. Absent → everything falls back to context exactly as before.
+  const title = validated.data.title;
+  const artifactTitle = title ?? context;
   // DV1 — stamp stable option-scoped ids on any per-option visuals the agent
   // sent id-less, so the stored content AND the broadcast event carry the same
   // canonical shape (and future comment threads anchor consistently). Mirrors
@@ -35,7 +41,9 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
 
   const id = `art_${nanoid(10)}`;
   const decisionId = `dec_${nanoid(10)}`;
-  const content = { context, options: proposedOptions, decisionId, stakes };
+  // M1.1 — spread title only when present so an absent-title artifact's content
+  // is byte-identical to today (no `title: undefined` key on disk).
+  const content = { context, ...(title ? { title } : {}), options: proposedOptions, decisionId, stakes };
   // #160 — decisions were a scanner GAP: option descriptions/pros/cons quote
   // sample configs ("with key sk-…") exactly like findings evidence does.
   // #162 — the scan runs INSIDE createArtifact now (parity with addComment);
@@ -44,7 +52,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   const artifact = await ctx.store.createArtifact({
     id,
     type: "decision",
-    title: context,
+    title: artifactTitle,
     content,
     relatedArtifactIds: args?.relatedFindings,
     feature: args?.feature,
@@ -56,6 +64,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     decisionId,
     artifactId: id,
     context,
+    ...(title ? { title } : {}),
     options: proposedOptions,
     stakes,
   } as any);
@@ -75,6 +84,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
     decisionId,
     artifactId: id,
     context,
+    ...(title ? { title } : {}),
     // DV1 — broadcast the validated+id-stamped options (was args?.options, the
     // raw pre-validation input). This makes the live event match the stored
     // artifact content and carries per-option visuals to the live DecisionCard.

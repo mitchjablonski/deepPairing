@@ -25488,7 +25488,13 @@ var PlanVisualSchema = external_exports.object({
 });
 var PlanContentSchema = external_exports.object({
   steps: external_exports.array(PlanStepSchema),
-  estimatedChanges: external_exports.number(),
+  /**
+   * M1.3 — a rough size signal. A NUMBER ("~N file changes") OR a short STRING
+   * ("a handful across the CLI + store") — agents reach for prose here and a
+   * number-only field rejected the whole plan (the dogfood friction). Both are
+   * accepted; a string is stored and rendered verbatim.
+   */
+  estimatedChanges: external_exports.union([external_exports.number(), external_exports.string()]).describe("Rough size of the change \u2014 a number of files (e.g. 3) OR a short phrase (e.g. 'a handful across the CLI + store'). Either works."),
   /** Optional visuals (diagrams / file maps / prototypes) that frame the plan.
    *  Optional for back-compat. */
   visuals: external_exports.array(PlanVisualSchema).optional()
@@ -25567,7 +25573,13 @@ var DecisionOptionBaseSchema = external_exports.object({
   cons: external_exports.array(external_exports.string()),
   effort: external_exports.enum(["low", "medium", "high"]),
   risk: external_exports.enum(["low", "medium", "high"]),
-  recommendation: external_exports.boolean(),
+  /**
+   * M1.4 — is this the option you'd pick? OPTIONAL (absent = false / no
+   * recommendation): an agent presenting a genuinely open call shouldn't have
+   * to assert a preference on every arm. The UI's "recommended" badge + the
+   * default keyboard focus already treat a missing flag as "not recommended".
+   */
+  recommendation: external_exports.boolean().optional(),
   concept: DecisionOptionConceptSchema.optional(),
   /** DV1 — optional per-option visuals (Mermaid diagram / file map /
    *  annotated code), reusing PlanVisualSchema so the whole render + comment
@@ -25796,6 +25808,15 @@ var ArtifactSchema = external_exports.object({
 var DecisionOptionContentSchema = DecisionOptionBaseSchema;
 var DecisionContentSchema = external_exports.object({
   context: external_exports.string(),
+  /**
+   * M1.1 — a SHORT question naming the fork ("Which storage format for tags?").
+   * When present it is the card header + the artifact/session title + the
+   * learnings-export heading + the whole-card-reject ledger key, while `context`
+   * keeps the full background. OPTIONAL and backcompat: an absent title behaves
+   * byte-identically to today (context is used everywhere it was). Capped/
+   * trimmed at the tool-input boundary; lenient here for old artifacts.
+   */
+  title: external_exports.string().optional(),
   options: external_exports.array(DecisionOptionContentSchema),
   decisionId: external_exports.string(),
   /** How consequential this decision is. Only "high" triggers prediction capture. */
@@ -25978,6 +25999,9 @@ var DecisionOptionSchema = DecisionOptionBaseSchema;
 var DecisionRequestSchema = external_exports.object({
   decisionId: external_exports.string(),
   context: external_exports.string(),
+  /** M1.1 — optional short question naming the fork (the card header). Full
+   *  background stays in `context`. Absent → context is used as before. */
+  title: external_exports.string().optional(),
   options: external_exports.array(DecisionOptionSchema).min(2).max(4),
   /**
    * How consequential is this decision? Agent sets this on architecturally
@@ -26041,6 +26065,9 @@ var DecisionRequestEventSchema = external_exports.object({
   type: external_exports.literal("decision_request"),
   decisionId: external_exports.string(),
   context: external_exports.string(),
+  /** M1.1 — optional short fork-naming question (the card header). Absent →
+   *  the card falls back to rendering `context` as the header, as before. */
+  title: external_exports.string().optional(),
   // Reuse the canonical option schema (decision.ts) instead of a drifted inline
   // copy — the inline one was missing `concept`, so DecisionCard's
   // `option.concept` reads didn't type-check (Z5 noted both the wire/event and
@@ -26235,7 +26262,9 @@ function coercePlanContent(raw) {
   const c = obj(raw);
   const out = {
     steps: arr(c.steps).map(coercePlanStep),
-    estimatedChanges: num(c.estimatedChanges)
+    // M1.3 — estimatedChanges is number|string. Preserve a non-empty string
+    // verbatim (agents pass prose here); otherwise coerce to a number.
+    estimatedChanges: typeof c.estimatedChanges === "string" && c.estimatedChanges.trim() ? c.estimatedChanges : num(c.estimatedChanges)
   };
   if (Array.isArray(c.visuals)) {
     out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
@@ -27556,7 +27585,7 @@ var PROTOCOL_PREAMBLE = [
   "  2. present_findings \u2014 after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
   "  3. check_feedback \u2014 poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options \u2014 each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
-  "  5. present_spec, then present_plan \u2014 non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
+  "  5. present_spec and/or present_plan \u2014 for small multi-file work (one changeset, no architectural decision beyond the options card) present just ONE: spec when the WHAT needs agreement, plan when the HOW/sequence does. Stack BOTH (spec before the plan) only for genuinely large features. LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
   "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning \u2014 no separate debrief). Don't stream a log_reasoning card per step \u2014 name concepts in the debrief.",
   "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again \u2014 let your pair review in the UI.",
@@ -27864,8 +27893,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
       );
     }
     const followUpIds = new Set(followUps.map((c) => c.id));
+    const approvedArtifactIds = new Set(
+      (fullState.artifacts ?? []).filter((a) => a.status === "approved").map((a) => a.id)
+    );
     const plainCommentsNeedingMirror = allComments.filter(
-      (c) => c.author === "human" && c.intent !== "question" && !c.answeredByCommentId && !followUpIds.has(c.id) && c.target?.artifactId && c.target.artifactId !== "__session__"
+      (c) => c.author === "human" && c.intent !== "question" && !c.answeredByCommentId && !followUpIds.has(c.id) && c.target?.artifactId && c.target.artifactId !== "__session__" && !approvedArtifactIds.has(c.target.artifactId)
     );
     if (plainCommentsNeedingMirror.length > 0) {
       blockingParts.push(
@@ -28951,6 +28983,35 @@ function detectTruncatedCall(toolName, args, presentField, missingArray) {
   }
   return null;
 }
+var TO_CODE_FILE_KIND = {
+  added: "create",
+  modified: "modify",
+  deleted: "delete"
+};
+var TO_CHANGESET_FILE_KIND = {
+  create: "added",
+  modify: "modified",
+  delete: "deleted"
+};
+function aliasFileKind(v, map2) {
+  return typeof v === "string" && map2[v] ? map2[v] : v;
+}
+function aliasFileArray(files, map2) {
+  if (!Array.isArray(files)) return files;
+  return files.map(
+    (f) => f && typeof f === "object" && "changeType" in f ? { ...f, changeType: aliasFileKind(f.changeType, map2) } : f
+  );
+}
+function aliasPlanVisuals(visuals) {
+  if (!Array.isArray(visuals)) return visuals;
+  return visuals.map((v) => {
+    if (!v || typeof v !== "object" || !Array.isArray(v.files)) return v;
+    const files = v.files.map(
+      (f) => f && typeof f === "object" && "change" in f ? { ...f, change: aliasFileKind(f.change, TO_CODE_FILE_KIND) } : f
+    );
+    return { ...v, files };
+  });
+}
 function validatePresentFindingsInput(args) {
   const result = ResearchContentSchema.safeParse({
     summary: args?.summary,
@@ -28964,6 +29025,9 @@ function validatePresentFindingsInput(args) {
 }
 var PresentOptionsInputSchema = external_exports.object({
   context: external_exports.string().min(1),
+  // M1.1 — optional short question naming the fork. Trimmed + capped so it
+  // stays a header, not a paragraph (the full background lives in `context`).
+  title: external_exports.string().trim().min(1).max(80).optional().describe("A short question naming the fork, e.g. 'Which storage format for tags?' \u2014 the full background stays in context. Becomes the card header + the decision/session title."),
   options: external_exports.array(DecisionOptionBaseSchema.extend({
     id: external_exports.string().min(1).describe("Stable id \u2014 discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
     title: external_exports.string().min(1),
@@ -29003,9 +29067,14 @@ function validatePresentPlanInput(args) {
     return { ok: false, error: formatValidationError("present_plan", titleParse.error, EXAMPLE_PLAN) };
   }
   const contentParse = PlanContentSchema.safeParse({
-    steps: args?.steps,
+    // M1.2 — a plan step's structured FileChange list uses the code family too;
+    // accept the changeset family and normalize both step files and file_map
+    // visuals to create/modify/delete.
+    steps: Array.isArray(args?.steps) ? args.steps.map(
+      (s) => s && typeof s === "object" && "files" in s ? { ...s, files: aliasFileArray(s.files, TO_CODE_FILE_KIND) } : s
+    ) : args?.steps,
     estimatedChanges: args?.estimatedChanges,
-    visuals: args?.visuals
+    visuals: aliasPlanVisuals(args?.visuals)
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };
@@ -29015,7 +29084,8 @@ function validatePresentPlanInput(args) {
 function validatePresentCodeChangeInput(args) {
   const result = CodeChangeContentSchema.safeParse({
     filePath: args?.filePath,
-    changeType: args?.changeType,
+    // M1.2 — accept the changeset family (added/modified/deleted) too.
+    changeType: aliasFileKind(args?.changeType, TO_CODE_FILE_KIND),
     before: args?.before ?? "",
     after: args?.after ?? "",
     reasoning: args?.reasoning,
@@ -29033,7 +29103,8 @@ function validatePresentChangesetInput(args) {
   }
   const contentParse = ChangesetContentSchema.safeParse({
     summary: args?.summary,
-    files: args?.files,
+    // M1.2 — accept the code_change family (create/modify/delete) on each file.
+    files: aliasFileArray(args?.files, TO_CHANGESET_FILE_KIND),
     risks: args?.risks
     // reviewState is HUMAN-driven (set via the review route), never taken from
     // agent input — deliberately not read here.
@@ -29457,7 +29528,7 @@ function formatPrDescription(state) {
     sections.push("### Decisions\n");
     for (const d of resolved) {
       const option = d.options.find((o) => o.id === d.response?.optionId);
-      sections.push(`- **${d.context}**: ${option?.title ?? d.response?.optionId}`);
+      sections.push(`- **${d.title?.trim() || d.context}**: ${option?.title ?? d.response?.optionId}`);
       if (d.response?.reasoning) {
         sections.push(`  - *Reasoning*: ${d.response.reasoning}`);
       }
@@ -29817,7 +29888,7 @@ function formatFull(state) {
 }
 function getSessionTitle(state) {
   const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
-  if (firstDecision) return firstDecision.context;
+  if (firstDecision) return firstDecision.title?.trim() || firstDecision.context;
   const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
   if (firstResearch) return firstResearch.title;
   return "Session " + state.sessionId;
@@ -30257,6 +30328,8 @@ async function handlePresentOptions(ctx, args) {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
   const { context, options: validatedOptions, stakes } = validated.data;
+  const title = validated.data.title;
+  const artifactTitle = title ?? context;
   const proposedOptions = validatedOptions.map(
     (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v, i) => ({ ...v, id: v.id ?? `${o.id}_visual_${i}` })) } : o
   );
@@ -30270,11 +30343,11 @@ async function handlePresentOptions(ctx, args) {
   if (!pre.ok) return pre.response;
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
-  const content = { context, options: proposedOptions, decisionId, stakes };
+  const content = { context, ...title ? { title } : {}, options: proposedOptions, decisionId, stakes };
   const artifact = await ctx.store.createArtifact({
     id,
     type: "decision",
-    title: context,
+    title: artifactTitle,
     content,
     relatedArtifactIds: args?.relatedFindings,
     feature: args?.feature
@@ -30285,6 +30358,7 @@ async function handlePresentOptions(ctx, args) {
     decisionId,
     artifactId: id,
     context,
+    ...title ? { title } : {},
     options: proposedOptions,
     stakes
   });
@@ -30304,6 +30378,7 @@ async function handlePresentOptions(ctx, args) {
     decisionId,
     artifactId: id,
     context,
+    ...title ? { title } : {},
     // DV1 — broadcast the validated+id-stamped options (was args?.options, the
     // raw pre-validation input). This makes the live event match the stored
     // artifact content and carries per-option visuals to the live DecisionCard.
@@ -32813,22 +32888,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
   });
   const getPassiveFeedback2 = () => getPassiveFeedback(store);
   let firstToolCall = true;
-  const HINT_TOOLS = /* @__PURE__ */ new Set([
-    "present_findings",
-    "present_options",
-    "present_spec",
-    "present_plan",
-    "present_code_change",
-    "present_changeset",
-    "present_debrief",
-    "present_explainer",
-    "log_reasoning",
-    "revise_artifact",
-    "withdraw_artifact",
-    "post_pr_review",
-    "answer_question",
-    "update_plan_progress"
+  const HINT_EXCLUDED_TOOLS = /* @__PURE__ */ new Set([
+    "export_session"
   ]);
+  const carriesFirstCallHint = (name) => !HINT_EXCLUDED_TOOLS.has(name);
   const sessionNameLatch = new SessionNameLatch(store);
   let checkFeedbackPollCount = 0;
   const reportedRejectedVerdicts = /* @__PURE__ */ new Set();
@@ -32837,7 +32900,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     const { name, arguments: rawArgs } = request.params;
     const args = rawArgs ?? {};
     let firstCallHint = "";
-    if (firstToolCall && HINT_TOOLS.has(name)) {
+    if (firstToolCall && carriesFirstCallHint(name)) {
       firstCallHint = await buildFirstCallHint(store, port);
     }
     const tryElicit2 = (message) => tryElicit(server, message);
@@ -32922,7 +32985,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     } catch (err) {
       result = formatHandlerError(name, err);
     }
-    if (firstCallHint && HINT_TOOLS.has(name) && result?.content && Array.isArray(result.content)) {
+    if (firstCallHint && carriesFirstCallHint(name) && result?.content && Array.isArray(result.content)) {
       if (!result.isError) {
         result.content.push({ type: "text", text: firstCallHint });
         firstToolCall = false;

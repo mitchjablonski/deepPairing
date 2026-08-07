@@ -22766,7 +22766,13 @@ var PlanVisualSchema = external_exports.object({
 });
 var PlanContentSchema = external_exports.object({
   steps: external_exports.array(PlanStepSchema),
-  estimatedChanges: external_exports.number(),
+  /**
+   * M1.3 — a rough size signal. A NUMBER ("~N file changes") OR a short STRING
+   * ("a handful across the CLI + store") — agents reach for prose here and a
+   * number-only field rejected the whole plan (the dogfood friction). Both are
+   * accepted; a string is stored and rendered verbatim.
+   */
+  estimatedChanges: external_exports.union([external_exports.number(), external_exports.string()]).describe("Rough size of the change \u2014 a number of files (e.g. 3) OR a short phrase (e.g. 'a handful across the CLI + store'). Either works."),
   /** Optional visuals (diagrams / file maps / prototypes) that frame the plan.
    *  Optional for back-compat. */
   visuals: external_exports.array(PlanVisualSchema).optional()
@@ -22845,7 +22851,13 @@ var DecisionOptionBaseSchema = external_exports.object({
   cons: external_exports.array(external_exports.string()),
   effort: external_exports.enum(["low", "medium", "high"]),
   risk: external_exports.enum(["low", "medium", "high"]),
-  recommendation: external_exports.boolean(),
+  /**
+   * M1.4 — is this the option you'd pick? OPTIONAL (absent = false / no
+   * recommendation): an agent presenting a genuinely open call shouldn't have
+   * to assert a preference on every arm. The UI's "recommended" badge + the
+   * default keyboard focus already treat a missing flag as "not recommended".
+   */
+  recommendation: external_exports.boolean().optional(),
   concept: DecisionOptionConceptSchema.optional(),
   /** DV1 — optional per-option visuals (Mermaid diagram / file map /
    *  annotated code), reusing PlanVisualSchema so the whole render + comment
@@ -23077,6 +23089,15 @@ var ArtifactSchema = external_exports.object({
 var DecisionOptionContentSchema = DecisionOptionBaseSchema;
 var DecisionContentSchema = external_exports.object({
   context: external_exports.string(),
+  /**
+   * M1.1 — a SHORT question naming the fork ("Which storage format for tags?").
+   * When present it is the card header + the artifact/session title + the
+   * learnings-export heading + the whole-card-reject ledger key, while `context`
+   * keeps the full background. OPTIONAL and backcompat: an absent title behaves
+   * byte-identically to today (context is used everywhere it was). Capped/
+   * trimmed at the tool-input boundary; lenient here for old artifacts.
+   */
+  title: external_exports.string().optional(),
   options: external_exports.array(DecisionOptionContentSchema),
   decisionId: external_exports.string(),
   /** How consequential this decision is. Only "high" triggers prediction capture. */
@@ -23259,6 +23280,9 @@ var DecisionOptionSchema = DecisionOptionBaseSchema;
 var DecisionRequestSchema = external_exports.object({
   decisionId: external_exports.string(),
   context: external_exports.string(),
+  /** M1.1 — optional short question naming the fork (the card header). Full
+   *  background stays in `context`. Absent → context is used as before. */
+  title: external_exports.string().optional(),
   options: external_exports.array(DecisionOptionSchema).min(2).max(4),
   /**
    * How consequential is this decision? Agent sets this on architecturally
@@ -23322,6 +23346,9 @@ var DecisionRequestEventSchema = external_exports.object({
   type: external_exports.literal("decision_request"),
   decisionId: external_exports.string(),
   context: external_exports.string(),
+  /** M1.1 — optional short fork-naming question (the card header). Absent →
+   *  the card falls back to rendering `context` as the header, as before. */
+  title: external_exports.string().optional(),
   // Reuse the canonical option schema (decision.ts) instead of a drifted inline
   // copy — the inline one was missing `concept`, so DecisionCard's
   // `option.concept` reads didn't type-check (Z5 noted both the wire/event and
@@ -23516,7 +23543,9 @@ function coercePlanContent(raw2) {
   const c = obj(raw2);
   const out = {
     steps: arr(c.steps).map(coercePlanStep),
-    estimatedChanges: num(c.estimatedChanges)
+    // M1.3 — estimatedChanges is number|string. Preserve a non-empty string
+    // verbatim (agents pass prose here); otherwise coerce to a number.
+    estimatedChanges: typeof c.estimatedChanges === "string" && c.estimatedChanges.trim() ? c.estimatedChanges : num(c.estimatedChanges)
   };
   if (Array.isArray(c.visuals)) {
     out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
@@ -27213,7 +27242,7 @@ function formatPrDescription(state) {
     sections.push("### Decisions\n");
     for (const d of resolved) {
       const option = d.options.find((o) => o.id === d.response?.optionId);
-      sections.push(`- **${d.context}**: ${option?.title ?? d.response?.optionId}`);
+      sections.push(`- **${d.title?.trim() || d.context}**: ${option?.title ?? d.response?.optionId}`);
       if (d.response?.reasoning) {
         sections.push(`  - *Reasoning*: ${d.response.reasoning}`);
       }
@@ -27573,7 +27602,7 @@ function formatFull(state) {
 }
 function getSessionTitle(state) {
   const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
-  if (firstDecision) return firstDecision.context;
+  if (firstDecision) return firstDecision.title?.trim() || firstDecision.context;
   const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
   if (firstResearch) return firstResearch.title;
   return "Session " + state.sessionId;
@@ -28461,7 +28490,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       } else if (artifact && artifact.type === "decision") {
         const content = artifact.content;
         const context = content?.context?.trim() || artifact.title;
-        const concept = humanConcept?.trim() || context || void 0;
+        const concept = humanConcept?.trim() || content?.title?.trim() || context || void 0;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || void 0,

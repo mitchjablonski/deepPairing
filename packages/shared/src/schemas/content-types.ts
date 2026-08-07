@@ -169,7 +169,14 @@ export type PlanVisual = z.infer<typeof PlanVisualSchema>;
 
 export const PlanContentSchema = z.object({
   steps: z.array(PlanStepSchema),
-  estimatedChanges: z.number(),
+  /**
+   * M1.3 — a rough size signal. A NUMBER ("~N file changes") OR a short STRING
+   * ("a handful across the CLI + store") — agents reach for prose here and a
+   * number-only field rejected the whole plan (the dogfood friction). Both are
+   * accepted; a string is stored and rendered verbatim.
+   */
+  estimatedChanges: z.union([z.number(), z.string()])
+    .describe("Rough size of the change — a number of files (e.g. 3) OR a short phrase (e.g. 'a handful across the CLI + store'). Either works."),
   /** Optional visuals (diagrams / file maps / prototypes) that frame the plan.
    *  Optional for back-compat. */
   visuals: z.array(PlanVisualSchema).optional(),
@@ -306,7 +313,13 @@ export const DecisionOptionBaseSchema = z.object({
   cons: z.array(z.string()),
   effort: z.enum(["low", "medium", "high"]),
   risk: z.enum(["low", "medium", "high"]),
-  recommendation: z.boolean(),
+  /**
+   * M1.4 — is this the option you'd pick? OPTIONAL (absent = false / no
+   * recommendation): an agent presenting a genuinely open call shouldn't have
+   * to assert a preference on every arm. The UI's "recommended" badge + the
+   * default keyboard focus already treat a missing flag as "not recommended".
+   */
+  recommendation: z.boolean().optional(),
   concept: DecisionOptionConceptSchema.optional(),
   /** DV1 — optional per-option visuals (Mermaid diagram / file map /
    *  annotated code), reusing PlanVisualSchema so the whole render + comment

@@ -37,6 +37,9 @@ export interface DecisionRecord {
   decisionId: string;
   artifactId: string;
   context: string;
+  /** M1.1 — optional short fork-naming title (the learnings/session heading
+   *  prefers it over the full-paragraph context). Absent on pre-M1 records. */
+  title?: string;
   /** C6c — typed via the unified DecisionOptionBaseSchema (was any[], the
    *  root of ~10 `as any` reads in check-feedback). */
   options: DecisionOption[];
@@ -183,6 +186,8 @@ export interface RecordDecisionParams {
   decisionId: string;
   artifactId: string;
   context: string;
+  /** M1.1 — optional short fork-naming title (see DecisionRecord.title). */
+  title?: string;
   /** C6c — typed via the unified DecisionOptionBaseSchema (was any[], the
    *  root of ~10 `as any` reads in check-feedback). */
   options: DecisionOption[];
