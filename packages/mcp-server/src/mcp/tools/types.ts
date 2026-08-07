@@ -1,6 +1,6 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../../store/store-interface.js";
-import type { PreflightHelperResult } from "../tool-helpers.js";
+import type { PreflightHelperResult, PresentIdempotencyBegin } from "../tool-helpers.js";
 
 /**
  * X4 — shared per-call context for tool handlers.
@@ -55,8 +55,19 @@ export interface ToolHelpers {
   ) => Promise<PreflightHelperResult>;
   /** Idempotently rename the session from the first meaningful artifact title. */
   autoNameSession: (title: string) => Promise<void>;
-  /** Drain unacknowledged human comments and format for the agent. */
-  getPassiveFeedback: () => Promise<string>;
+  /**
+   * Drain unacknowledged human comments and format for the agent. `excludeIds`
+   * (N2 #226) keeps specific comments out of the echoed text while still
+   * acknowledging them — e.g. answer_question excludes the comment it just
+   * answered so its own success reply doesn't echo the human's question back.
+   */
+  getPassiveFeedback: (excludeIds?: string[]) => Promise<string>;
+  /**
+   * N2 (#226) — short-window content-hash de-dup for present_* tools. Call
+   * before minting: `duplicate` set → return the dedup response; otherwise the
+   * caller owns creation and must `commit(id)` on success / `abort()` on throw.
+   */
+  beginPresentIdempotency: (toolName: string, contentHash: string) => Promise<PresentIdempotencyBegin>;
 }
 
 /** Per-session mutable counters that cross tool-call boundaries. */

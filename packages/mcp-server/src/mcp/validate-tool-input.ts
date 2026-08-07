@@ -66,6 +66,9 @@ type LooseIssue = {
   message: string;
   expected?: string;
   origin?: string;
+  // IV/N2 — the actual bound on a too_small/too_big issue (Zod4 carries these).
+  maximum?: number;
+  minimum?: number;
 };
 
 /**
@@ -102,6 +105,52 @@ function scalarTypeTag(i: LooseIssue): string {
   return "value";
 }
 
+/** N2 (#226 scope 2) — a scalar CONSTRAINT violation (too long / too short),
+ *  as opposed to a missing / wrong-type omission. */
+function isScalarBoundIssue(i: LooseIssue): boolean {
+  return i.code === "too_big" || i.code === "too_small";
+}
+
+/** Resolve the received size at a top-level scalar path so we can report
+ *  "got N" — string/array length, or the raw number for numeric caps. */
+function receivedSize(input: unknown, path: PropertyKey[]): number | undefined {
+  let cur: unknown = input;
+  for (const seg of path) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[seg];
+  }
+  if (typeof cur === "string" || Array.isArray(cur)) return cur.length;
+  if (typeof cur === "number") return cur;
+  return undefined;
+}
+
+/**
+ * N2 (#226 scope 2) — render a single top-level scalar issue.
+ *
+ * Pre-N2 a too_big on a scalar (a 300-char title vs a max(80) cap) was
+ * flattened by scalarTypeTag into the SAME "missing or wrong type: `title`
+ * (string)" line as a genuine omission — Zod's real "too big" message was
+ * discarded, so the agent was told a field it DID send was absent. Now a
+ * too_big/too_small renders the honest constraint: "`title`: too long (max 80
+ * chars, got 300)".
+ */
+function scalarIssueClause(i: LooseIssue, input: unknown): string {
+  const field = `\`${i.path.join(".") || "(root)"}\``;
+  if (isScalarBoundIssue(i)) {
+    const isString = i.origin === "string";
+    const isArray = i.origin === "array";
+    const unit = isString ? " chars" : isArray ? " items" : "";
+    const size = receivedSize(input, i.path);
+    const got = size !== undefined ? `, got ${size}` : "";
+    if (i.code === "too_big") {
+      return `${field}: too long (max ${i.maximum}${unit}${got})`;
+    }
+    return `${field}: too short (min ${i.minimum}${unit}${got})`;
+  }
+  // Missing / wrong primitive type — the original terse tag.
+  return `${field} (${scalarTypeTag(i)})`;
+}
+
 /** Collapse numeric path indices to a wildcard so N identical per-item issues
  *  (options[0..4].pros: required) dedupe to one line: options[*].pros. */
 function collapsePath(path: PropertyKey[]): string {
@@ -126,17 +175,24 @@ function formatValidationError(
   toolName: string,
   err: z.ZodError,
   example: string,
+  // N2 (#226 scope 2) — the parsed input, so a too_big/too_small scalar can
+  // report the received size ("got 300"). Optional: absent → the constraint
+  // still renders honestly, just without the "got N" suffix.
+  input?: unknown,
 ): ToolErrorResponse {
   const raw = err.issues as unknown as LooseIssue[];
 
-  // L1 — trivial top-level scalar omission(s): targeted hint, no example dump.
+  // L1 — trivial top-level scalar issue(s): targeted hint, no example dump.
   if (raw.length > 0 && raw.every(isTopLevelScalarIssue)) {
-    const fields = raw
-      .map((i) => `\`${i.path.join(".") || "(root)"}\` (${scalarTypeTag(i)})`)
-      .join(", ");
-    const text =
-      `INPUT_VALIDATION_FAILED: ${toolName} refused — ${raw.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${fields}. ` +
-      `Add/fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
+    const clauses = raw.map((i) => scalarIssueClause(i, input)).join(", ");
+    // N2 — a scalar CONSTRAINT breach (too long/short) is not an omission, so
+    // the "missing or the wrong type" lead-in would be a lie. Split the two.
+    const hasBound = raw.some(isScalarBoundIssue);
+    const text = hasBound
+      ? `INPUT_VALIDATION_FAILED: ${toolName} refused — ${raw.length === 1 ? "a field is invalid" : "fields are invalid"}: ${clauses}. ` +
+        `Fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`
+      : `INPUT_VALIDATION_FAILED: ${toolName} refused — ${raw.length === 1 ? "a required field is" : "required fields are"} missing or the wrong type: ${clauses}. ` +
+        `Add/fix ${raw.length === 1 ? "it" : "them"} and call ${toolName} again. The artifact was NOT created.`;
     return {
       content: [{ type: "text", text }],
       isError: true as const,
@@ -296,10 +352,18 @@ export function formatHandlerError(
       : looksNetwork;
 
   const code = TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED;
+  // N2 (#226 scope 1c) — the retry advice used to say "retry" without telling
+  // the agent a re-send is safe. For the present_* tools it now IS safe: the
+  // short-window content-hash de-dup returns the existing artifact rather than
+  // minting a twin, so an identical re-send after a transient error can't
+  // duplicate. Only claim this for present_* (the tools the de-dup covers).
+  const dedupSafeNote = toolName.startsWith("present_")
+    ? ` If the error was transient, a re-send of identical content is safe — it will NOT create a duplicate (an identical draft presented in the last ~30s is de-duplicated to the existing artifact).`
+    : "";
   const text = retryable
     ? `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
       `This is usually transient (the daemon may be busy or restarting). The artifact may NOT have been ` +
-      `created — call check_feedback to see the current state, then retry ${toolName} if needed.`
+      `created — call check_feedback to see the current state, then retry ${toolName} if needed.${dedupSafeNote}`
     : `${code}: ${toolName} hit an unexpected error and did not complete: ${msg}.\n\n` +
       `This looks deterministic (a handler bug or an unsupported request), not transient — retrying the ` +
       `identical input will fail the same way. The artifact may NOT have been created — call check_feedback ` +
@@ -777,7 +841,7 @@ export function validatePresentFindingsInput(args: any): ValidationResult<z.infe
   // #184 — truncation preempts the example-bearing generic error.
   const truncated = detectTruncatedCall("present_findings", args, "summary", "findings");
   if (truncated) return { ok: false, error: truncated };
-  return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS) };
+  return { ok: false, error: formatValidationError("present_findings", result.error, EXAMPLE_FINDINGS, args) };
 }
 
 // D7 — extends the C6b single-source base instead of hand-redeclaring all
@@ -807,14 +871,14 @@ export function validatePresentOptionsInput(args: any): ValidationResult<z.infer
   // Return the truncation error (no embedded example) BEFORE the generic one.
   const truncated = detectTruncatedCall("present_options", args, "context", "options");
   if (truncated) return { ok: false, error: truncated };
-  return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS) };
+  return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS, args) };
 }
 
 export function validatePresentSpecInput(args: any): ValidationResult<z.infer<typeof SpecContentSchema> & { title: string }> {
   // Spec needs a title (artifact-level) plus the content fields.
   const titleParse = z.object({ title: z.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_spec", titleParse.error, EXAMPLE_SPEC) };
+    return { ok: false, error: formatValidationError("present_spec", titleParse.error, EXAMPLE_SPEC, args) };
   }
   const contentParse = SpecContentSchema.safeParse({
     objective: args?.objective,
@@ -826,7 +890,7 @@ export function validatePresentSpecInput(args: any): ValidationResult<z.infer<ty
     visuals: args?.visuals,
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC) };
+    return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC, args) };
   }
   return admit("present_spec", { title: titleParse.data.title, ...contentParse.data });
 }
@@ -834,7 +898,7 @@ export function validatePresentSpecInput(args: any): ValidationResult<z.infer<ty
 export function validatePresentPlanInput(args: any): ValidationResult<z.infer<typeof PlanContentSchema> & { title: string }> {
   const titleParse = z.object({ title: z.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_plan", titleParse.error, EXAMPLE_PLAN) };
+    return { ok: false, error: formatValidationError("present_plan", titleParse.error, EXAMPLE_PLAN, args) };
   }
   const contentParse = PlanContentSchema.safeParse({
     // M1.2 — a plan step's structured FileChange list uses the code family too;
@@ -851,7 +915,7 @@ export function validatePresentPlanInput(args: any): ValidationResult<z.infer<ty
     visuals: aliasPlanVisuals(args?.visuals),
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };
+    return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN, args) };
   }
   return admit("present_plan", { title: titleParse.data.title, ...contentParse.data });
 }
@@ -869,14 +933,14 @@ export function validatePresentCodeChangeInput(args: any): ValidationResult<z.in
     concept: args?.concept,
   });
   if (result.success) return admit("present_code_change", result.data);
-  return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE) };
+  return { ok: false, error: formatValidationError("present_code_change", result.error, EXAMPLE_CODE_CHANGE, args) };
 }
 
 export function validatePresentChangesetInput(args: any): ValidationResult<z.infer<typeof ChangesetContentSchema> & { title: string }> {
   // A changeset needs a title (artifact-level) plus the content fields.
   const titleParse = z.object({ title: z.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_changeset", titleParse.error, EXAMPLE_CHANGESET) };
+    return { ok: false, error: formatValidationError("present_changeset", titleParse.error, EXAMPLE_CHANGESET, args) };
   }
   const contentParse = ChangesetContentSchema.safeParse({
     summary: args?.summary,
@@ -887,7 +951,7 @@ export function validatePresentChangesetInput(args: any): ValidationResult<z.inf
     // agent input — deliberately not read here.
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET) };
+    return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET, args) };
   }
   return admit("present_changeset", { title: titleParse.data.title, ...contentParse.data });
 }
@@ -900,7 +964,7 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
   // still nets any example replay.
   const titleParse = z.object({ title: z.string().min(1) }).safeParse(args);
   if (!titleParse.success) {
-    return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF) };
+    return { ok: false, error: formatValidationError("present_debrief", titleParse.error, EXAMPLE_DEBRIEF, args) };
   }
   const contentParse = DebriefContentSchema.safeParse({
     summary: args?.summary,
@@ -911,7 +975,7 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
     openQuestions: args?.openQuestions,
   });
   if (!contentParse.success) {
-    return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF) };
+    return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF, args) };
   }
   return admit("present_debrief", { title: titleParse.data.title, ...contentParse.data });
 }
@@ -936,7 +1000,7 @@ export function validatePresentExplainerInput(args: Record<string, unknown> | nu
   if (result.success) return admit("present_explainer", result.data);
   const truncated = detectTruncatedCall("present_explainer", args, "overview", "sections");
   if (truncated) return { ok: false, error: truncated };
-  return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER) };
+  return { ok: false, error: formatValidationError("present_explainer", result.error, EXAMPLE_EXPLAINER, args) };
 }
 
 export function validateLogReasoningInput(args: any): ValidationResult<z.infer<typeof ReasoningContentSchema>> {
@@ -951,7 +1015,7 @@ export function validateLogReasoningInput(args: any): ValidationResult<z.infer<t
     confidence: args?.confidence,
   });
   if (result.success) return admit("log_reasoning", result.data);
-  return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING) };
+  return { ok: false, error: formatValidationError("log_reasoning", result.error, EXAMPLE_REASONING, args) };
 }
 
 // ---------------------------------------------------------------------------

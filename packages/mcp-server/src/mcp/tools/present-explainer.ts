@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentExplainerInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -34,6 +34,10 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
   const pre = await ctx.helpers.preflightRejectedApproaches("present_explainer", proposals, [], []);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226) — short-window de-dup for an identical, still-draft explainer.
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+
   const id = `art_${nanoid(10)}`;
   const content = {
     title,
@@ -44,14 +48,21 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
   };
   // #162 parity — the secret scan runs INSIDE createArtifact; an explainer inlines
   // real code snippets as evidence, so it's a scan surface like the others.
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "explainer",
-    title,
-    content,
-    relatedArtifactIds,
-    feature: args?.feature as string | undefined,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "explainer",
+      title,
+      content,
+      relatedArtifactIds,
+      feature: args?.feature as string | undefined,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb paints populated.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_explainer", pre.trace);

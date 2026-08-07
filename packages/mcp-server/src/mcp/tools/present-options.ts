@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -39,6 +39,11 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226) — short-window de-dup: an identical present_options still in
+  // draft returns the existing decision artifact instead of minting a twin.
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+
   const id = `art_${nanoid(10)}`;
   const decisionId = `dec_${nanoid(10)}`;
   // M1.1 — spread title only when present so an absent-title artifact's content
@@ -49,14 +54,21 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // #162 — the scan runs INSIDE createArtifact now (parity with addComment);
   // matches PERSIST (labels+location only — never the value) and we read them
   // back for the broadcast below.
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "decision",
-    title: artifactTitle,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "decision",
+      title: artifactTitle,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   // Y1' — record the preflight trace alongside the artifact.
   await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_options", pre.trace);
@@ -94,7 +106,15 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
 
   // Decisions with multiple options are best reviewed in the companion UI;
   // the option comparison surface is much richer than a terminal form.
+  //
+  // N2 (#226 scope 3) — surface the ARTIFACT id (art_) alongside the decision
+  // id (dec_). Every other present_* tool returns art_; present_options used to
+  // return ONLY dec_, so an agent scraping its own reply to withdraw/revise the
+  // decision had no id to pass (withdraw_artifact/revise_artifact take art_).
+  // dec_ stays too — the decision-resolve flow keys on it — and it's mirrored
+  // in structuredContent so strict clients don't prose-parse.
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    structuredContent: { artifactId: id, decisionId },
   };
 }

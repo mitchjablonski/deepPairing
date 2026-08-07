@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentCodeChangeInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
@@ -48,6 +48,13 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226) — short-window de-dup: an identical present_code_change still in
+  // draft returns the existing artifact rather than minting a twin card. Hashes
+  // the raw args, so the history-based `before` reconstruction (which differs
+  // once the first twin lands) can't defeat the match.
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+
   // V4 — code-change before/after snippets are the highest-risk
   // surface for leaked vendor-prefixed API keys; a refactor near
   // auth code or a finding that quotes a config block is exactly
@@ -60,15 +67,22 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // for the broadcast — one scan per artifact, at the choke point.
   const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
   const id = `art_${nanoid(10)}`;
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "code_change",
-    title: `${effectiveChangeType} ${filePath}`,
-    content,
-    agentReasoning: reasoning,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "code_change",
+      title: `${effectiveChangeType} ${filePath}`,
+      content,
+      agentReasoning: reasoning,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb is populated on
   // first paint (see present-findings.ts for the full rationale).

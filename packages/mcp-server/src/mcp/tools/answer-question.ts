@@ -117,12 +117,31 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
         ? "Countered the suggestion"
         : `Applied the suggestion${updated?.suggestion?.appliedInVersion ? ` (in v${updated.suggestion.appliedInVersion})` : ""}`;
       return {
-        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback()}` }],
+        // N2 (#226 scope 6) — exclude the comment we just answered from the
+        // passive drain so the reply doesn't echo the human's own question
+        // back as "[Human feedback]".
+        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
       };
     }
     // else: not owing a response + no state → a legitimate plain reply (e.g. to
     // a countered suggestion awaiting the human, or an already-applied one).
     // Fall through to the plain-answer path below.
+  }
+
+  // N2 (#226 scope 1b) — idempotent answer. If this question was ALREADY
+  // answered and the re-sent answer text is IDENTICAL, it's a duplicate
+  // re-send (an agent retry): return the existing answer state instead of
+  // stacking a second identical reply under the human's question. When the new
+  // text DIFFERS it's a deliberate follow-up, so we fall through and append —
+  // a documented judgment call (a second, different reply is legitimate; a
+  // verbatim repeat is noise).
+  if (parent.answeredByCommentId) {
+    const prior = await store.getComment(parent.answeredByCommentId);
+    if (prior && prior.content.trim() === answer) {
+      return {
+        content: [{ type: "text", text: `${commentId} was already answered with this exact reply — nothing appended (no duplicate). The human already sees it under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
+      };
+    }
   }
 
   const answerId = `cmt_${nanoid(10)}`;
@@ -167,6 +186,9 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
     answerExcerpt: answer.slice(0, 120),
   });
   return {
-    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback()}` }],
+    // N2 (#226 scope 6) — exclude the just-answered comment from the passive
+    // drain: pre-N2 this spliced the human's question back into the reply as
+    // "[Human feedback]: - <the question>", echoing the very thing we answered.
+    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
   };
 }

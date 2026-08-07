@@ -15,6 +15,7 @@ import {
   preflightRejectedApproaches as preflightHelper,
   SessionNameLatch,
   getPassiveFeedback as getPassiveFeedbackHelper,
+  PresentIdempotencyRegistry,
 } from "./tool-helpers.js";
 import { handleLogReasoning } from "./tools/log-reasoning.js";
 import { handleExportSession } from "./tools/export-session.js";
@@ -914,7 +915,13 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
 
   // X4 — passive-feedback drain lives in tool-helpers.ts. The wrapper
   // closes over the per-server store so call sites stay terse.
-  const getPassiveFeedback = () => getPassiveFeedbackHelper(store);
+  const getPassiveFeedback = (excludeIds?: string[]) => getPassiveFeedbackHelper(store, excludeIds);
+
+  // N2 (#226) — per-server registry backing the present_* short-window
+  // content-hash de-dup. Instance-scoped so a fresh server (each stdio
+  // connection, each test) starts with an empty window and one connection's
+  // reservations never leak into another's.
+  const presentIdempotency = new PresentIdempotencyRegistry();
 
   // --- Call Tool ---
   let firstToolCall = true;
@@ -999,6 +1006,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         preflightRejectedApproaches,
         autoNameSession,
         getPassiveFeedback,
+        beginPresentIdempotency: (toolName: string, contentHash: string) =>
+          presentIdempotency.begin(store, toolName, contentHash),
       },
       state: {
         get checkFeedbackPollCount() { return checkFeedbackPollCount; },

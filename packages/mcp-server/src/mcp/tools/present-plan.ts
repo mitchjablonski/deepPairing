@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -26,6 +26,10 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226) — short-window de-dup for an identical, still-draft present_plan.
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+
   const id = `art_${nanoid(10)}`;
   const content = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
   // #160 — plans were a scanner GAP: step descriptions/reasoning (and visuals
@@ -33,14 +37,21 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   // pasted key hides. #162 — the scan runs INSIDE createArtifact now (parity
   // with addComment); matches PERSIST on the artifact (labels+location only —
   // never the value) and we read them back for the broadcast below.
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "plan",
-    title,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "plan",
+      title,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   await ctx.store.recordPlanReview(id);
   // AA6.3 — trace before broadcast so the breadcrumb is populated on

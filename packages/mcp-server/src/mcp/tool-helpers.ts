@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
 import type { TeamPreference, Comment } from "@deeppairing/shared";
+import type { ToolResult } from "./tools/types.js";
 import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
@@ -324,15 +326,166 @@ export function isObligationBearingComment(c: Comment): boolean {
  * is the same swallow class the supersede fix closed, one level down: it applies
  * to EVERY tool return that appends passive feedback (present_*, withdraw,
  * revise retract/obsolete, log_reasoning) after a carry.
+ *
+ * N2 (#226 scope 6) — `excludeIds` suppresses specific comments from the ECHOED
+ * text while STILL acknowledging them, stacked ON TOP of the N1 skip. It exists
+ * because an answered question is NO LONGER obligation-bearing (answeredBy-
+ * CommentId is set → isObligationBearingComment false), so it becomes a plain
+ * drainable comment: answer_question passes the just-answered comment id here so
+ * its own reply doesn't splice the human's question back as "[Human feedback]: -
+ * <the question>" (a lie — that text is not new feedback). We still acknowledge
+ * the excluded id so it doesn't linger unacknowledged and re-drain later.
  */
-export async function getPassiveFeedback(store: IStore): Promise<string> {
+export async function getPassiveFeedback(store: IStore, excludeIds: string[] = []): Promise<string> {
   const comments = await store.getUnacknowledgedComments();
   if (comments.length === 0) return "";
+  // N1 (#225) — never drain/ack obligation-bearing comments (questions /
+  // suggested edits); leave them for check_feedback's rich lane.
   const drainable = comments.filter((c) => !isObligationBearingComment(c));
   if (drainable.length === 0) return "";
+  // Acknowledge ALL drainable comments (including N2-excluded ones — they have
+  // now been seen/handled) so nothing re-surfaces on a later unrelated drain.
   await store.acknowledgeComments(drainable.map((c) => c.id));
-  const formatted = drainable.map((c) => `- ${c.content}`).join("\n");
+  // N2 (#226 scope 6) — keep excluded comments out of the visible echo.
+  const exclude = new Set(excludeIds);
+  const shown = drainable.filter((c) => !exclude.has(c.id));
+  if (shown.length === 0) return "";
+  const formatted = shown.map((c) => `- ${c.content}`).join("\n");
   return `\n\n[Human feedback]: ${formatted}`;
+}
+
+/**
+ * N2 (#226 scope 1) — short-window content-hash de-duplication for the
+ * present_* tools. Two IDENTICAL calls in quick succession (an agent-side retry
+ * wrapper re-sending, a double-fire) used to mint two draft artifacts — a twin
+ * on the human's review queue for the same content. This registry catches that:
+ * a matching (tool + content-hash) presentation seen within `windowMs`, whose
+ * prior artifact is STILL a draft, returns the existing artifact instead of a
+ * twin.
+ *
+ * Deliberately status-scoped: a re-present AFTER the human rejected (or the
+ * artifact was superseded/withdrawn) is a LEGITIMATE fresh proposal and MUST
+ * mint — the freshlyRejected re-propose flow depends on it. So a hit only
+ * short-circuits while the prior artifact is `draft`; any other status falls
+ * through to mint.
+ *
+ * Concurrency-safe: for a fresh key the get→reserve pair below has no `await`
+ * between them, so two concurrent identical calls can never both become the
+ * "owner". The second awaits the owner's in-flight promise, then checks the
+ * committed artifact's live status.
+ */
+type PresentSettled = { artifactId: string } | null;
+
+interface PresentEntry {
+  at: number;
+  promise: Promise<PresentSettled>;
+  resolve: (v: PresentSettled) => void;
+}
+
+export interface PresentIdempotencyBegin {
+  /** A live duplicate draft exists — return the dedup response, don't mint. */
+  duplicate?: { artifactId: string; type: string };
+  /** Caller owns creation: call after a SUCCESSFUL createArtifact. */
+  commit?: (artifactId: string) => void;
+  /** Caller owns creation but createArtifact threw — release the reservation
+   *  so an honest retry can mint (nothing was created, so it's not a dup). */
+  abort?: () => void;
+}
+
+export class PresentIdempotencyRegistry {
+  private readonly entries = new Map<string, PresentEntry>();
+
+  constructor(
+    private readonly windowMs = 30_000,
+    private readonly now: () => number = () => Date.now(),
+  ) {}
+
+  async begin(store: IStore, toolName: string, contentHash: string): Promise<PresentIdempotencyBegin> {
+    const key = `${toolName} ${contentHash}`;
+    const now = this.now();
+    const existing = this.entries.get(key);
+    if (existing && now - existing.at < this.windowMs) {
+      // A recent identical presentation is in flight or just landed. Wait for
+      // the owner to settle (handles the concurrent double-fire), then verify
+      // the committed artifact is STILL a draft before de-duplicating.
+      const settled = await existing.promise;
+      if (settled) {
+        const art = (await store.getArtifacts()).find((a) => a.id === settled.artifactId);
+        if (art && art.status === "draft") {
+          return { duplicate: { artifactId: art.id, type: art.type } };
+        }
+      }
+      // Owner failed, or the prior artifact is no longer a draft (rejected /
+      // superseded / withdrawn) → a re-present is legitimate: fall through and
+      // mint, replacing the stale reservation below.
+    }
+    // Reserve as the owner. No await between the get above and this set for a
+    // fresh key, so the reservation is atomic w.r.t. concurrent callers.
+    let resolve!: (v: PresentSettled) => void;
+    const promise = new Promise<PresentSettled>((r) => {
+      resolve = r;
+    });
+    this.entries.set(key, { at: now, promise, resolve });
+    let done = false;
+    return {
+      commit: (artifactId: string) => {
+        if (done) return;
+        done = true;
+        resolve({ artifactId });
+      },
+      abort: () => {
+        if (done) return;
+        done = true;
+        resolve(null);
+        // Only evict if we're still the current reservation for this key.
+        if (this.entries.get(key)?.promise === promise) this.entries.delete(key);
+      },
+    };
+  }
+}
+
+/**
+ * N2 — canonical content hash of a present_* call's raw arguments. Hashing the
+ * agent-supplied ARGS (not the post-processed artifact content) sidesteps the
+ * internally-generated ids — a decision's fresh `dec_`/`art_` nanoid would make
+ * two identical calls' stored content differ — so two byte-identical calls hash
+ * the same. Stable key ordering makes it order-insensitive.
+ */
+export function hashPresentArgs(args: unknown): string {
+  return createHash("sha256").update(stableStringify(args)).digest("hex");
+}
+
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") {
+    const s = JSON.stringify(v);
+    return s === undefined ? "null" : s;
+  }
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const obj = v as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
+/**
+ * N2 — the success response returned in place of minting a twin. Generic across
+ * every present_* tool: it names the existing artifact id (so the agent can
+ * withdraw/revise it) and states plainly that no duplicate was created.
+ */
+export function buildDedupResponse(dup: { artifactId: string; type: string }, port: number): ToolResult {
+  const at = Number.isFinite(port) && port > 0 ? ` at localhost:${port}` : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          `Already presented — returning the existing ${dup.type} artifact (${dup.artifactId}). ` +
+          `An identical ${dup.type} was presented moments ago and is still awaiting review${at}; ` +
+          `no duplicate was created. Call check_feedback for the human's response, or ` +
+          `revise_artifact / withdraw_artifact on ${dup.artifactId} if it needs changing.`,
+      },
+    ],
+    structuredContent: { artifactId: dup.artifactId, deduplicated: true },
+  };
 }
 
 /**

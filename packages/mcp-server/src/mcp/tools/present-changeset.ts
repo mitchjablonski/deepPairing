@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentChangesetInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -28,6 +28,10 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
   const pre = await ctx.helpers.preflightRejectedApproaches("present_changeset", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226) — short-window de-dup for an identical, still-draft changeset.
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+
   const id = `art_${nanoid(10)}`;
   const content = {
     ...(summary ? { summary } : {}),
@@ -38,14 +42,21 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
   // present_* tools): a diff hunk is a high-risk surface for a pasted key.
   // Matches persist on the artifact (labels + location only, never the value);
   // read them back for the fire-and-forget broadcast below.
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "changeset",
-    title,
-    content,
-    relatedArtifactIds: args?.relatedFindings,
-    feature: args?.feature,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "changeset",
+      title,
+      content,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — trace before broadcast so the breadcrumb paints populated (see
   // present-findings.ts for the full rationale).

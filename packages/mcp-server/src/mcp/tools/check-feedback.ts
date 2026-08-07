@@ -161,7 +161,27 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // never has to guess (field report: hallucinated "5173"). Null when the port
   // isn't known so we never emit a bogus URL; the key is then omitted (optional
   // per repo convention — all new structured fields are optional).
-  const companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : undefined;
+  let companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : undefined;
+
+  // N2 (#226 scope 5) — self-heal companion-URL note. If the daemon idle-shut
+  // and respawned on a NEW port during this call's store access (TIME_WAIT),
+  // the DaemonClient re-adopted it transparently — but any URL the agent
+  // already gave the human now points at the dead port. Reflect the LIVE port
+  // in companionUrl and, once per port change, return a prose nudge so the
+  // agent corrects it. Drain-once: whichever return path executes calls this.
+  // Optional store methods → no-op for the in-process FileStore.
+  const portRecoveryNote = (): string => {
+    const livePort = store.getLivePort?.();
+    if (typeof livePort === "number" && livePort > 0) {
+      companionUrl = `http://localhost:${livePort}`;
+    }
+    const notice = store.consumePortChangeNotice?.() ?? null;
+    if (!notice) return "";
+    return (
+      `\n\n⚠️ The daemon restarted on a new port — the companion UI is now at ${companionUrl} ` +
+      `(was http://localhost:${notice.previousPort}). If you already gave the human the old URL, correct it: send them ${companionUrl}.`
+    );
+  };
 
   // BB3 — `waitFor` scopes which feedback signal counts as "ready".
   // The agent can pin its poll to the artifact it just presented
@@ -290,10 +310,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // while unacknowledged comments (or render failures) exist. Fall through to
     // the reporting path.
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
+      const portNote = portRecoveryNote();
       return {
         content: [{
           type: "text",
-          text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll — no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).`,
+          text: `Still waiting on '${waitForScope}'. Nothing arrived during the 30s poll — no comments, and nothing matching that scope. Call check_feedback again with the same waitFor (or waitFor='any' to also wake on other artifact-status changes).${portNote}`,
         }],
         structuredContent: {
           status: "waiting",
@@ -889,6 +910,10 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // G1 (#198b) — a pending human request is something to act on (serve it).
     pendingRequests.length > 0;
   const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
+  // N2 (#226 scope 5) — reflect any mid-call daemon self-heal to a new port in
+  // companionUrl (below) and capture the one-line prose nudge for the text.
+  // No-op (empty string, companionUrl unchanged) unless the port actually moved.
+  const portNote = portRecoveryNote();
   const structuredContent = {
     status,
     // M3 — busy-poll dedup: the full suggestedAction can run long on busy polls
@@ -958,13 +983,13 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const [preamble] = parts;
   if (parts.length === 1 && preamble !== undefined) {
     return {
-      content: [{ type: "text", text: preamble }],
+      content: [{ type: "text", text: `${preamble}${portNote}` }],
       structuredContent,
     };
   }
 
   return {
-    content: [{ type: "text", text: parts.join("\n\n") }],
+    content: [{ type: "text", text: `${parts.join("\n\n")}${portNote}` }],
     structuredContent,
   };
 }

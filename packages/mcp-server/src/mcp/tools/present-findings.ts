@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentFindingsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentFindings(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -25,6 +25,11 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
   if (!pre.ok) return pre.response;
 
+  // N2 (#226) — short-window de-dup: an identical present_findings still in
+  // draft returns the existing artifact instead of minting a twin.
+  const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
+  if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.port);
+
   // V4 — non-blocking secret-shape scan. Flags vendor-prefixed API
   // keys + PEM blocks the agent may have pasted into evidence
   // snippets, detail text, or recommendations. Doesn't redact (the
@@ -41,14 +46,21 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
     openQuestions: validated.data.openQuestions ?? [],
   };
   const id = `art_${nanoid(10)}`;
-  const artifact = await ctx.store.createArtifact({
-    id,
-    type: "research",
-    title: args?.title ?? "Research Findings",
-    content,
-    // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
-    feature: args?.feature,
-  });
+  let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
+  try {
+    artifact = await ctx.store.createArtifact({
+      id,
+      type: "research",
+      title: args?.title ?? "Research Findings",
+      content,
+      // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
+      feature: args?.feature,
+    });
+  } catch (e) {
+    dedup.abort?.();
+    throw e;
+  }
+  dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
   // AA6.3 — persist + broadcast the trace BEFORE artifact_created so the
   // companion UI can render the breadcrumb populated on first paint
