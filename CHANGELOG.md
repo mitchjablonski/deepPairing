@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.1.31 — 2026-08-07
+
+The lived-in release. Every prior round was a dry-run — careful, hermetic, imagined. Then the
+first **organic agent-driven session** actually drove deepPairing through a real piece of work,
+and it found the frictions only lived-in use finds: a decision header that read as noise because
+its key was the whole bloated context, file-kind enums that rejected a synonym, an
+`estimatedChanges` field that refused a sentence, a first-call hint that never fired because the
+session opened on the "wrong" tool, an approval that still nagged for a reply it had already
+given, a middle gear that demanded *both* a spec and a plan for two-file work. This release
+smooths every one — and, on the reliability side, closes the last unproven corner of daemon
+eviction: no daemon dies unproven. **M1+M2** are the ergonomics the dogfood asked for; **M3** is
+the eviction audit that made the port-collision matrix real.
+
+### Added
+- **`present_options` gains a short `title`.** It drives the decision header, becomes the
+  **ledger key** — proven to *strengthen* gate matching versus the old bloated-context key — and
+  supplies the learnings heading. Untitled decisions serialize **byte-identical** to before, so
+  nothing existing shifts (PR #258).
+
+### Changed
+- **The schema meets the agent where it writes.** The three **file-kind enum families now alias
+  to each other** at the single validation choke point, so a synonym no longer rejects;
+  `estimatedChanges` **accepts prose**, not just a structured shape; and `recommendation` is now
+  **optional**. Small ergonomics, each one a friction the first real session hit head-on (PR #258).
+- **The first-call hint fires on whichever tool opens the session.** It was pinned to one entry
+  tool and stayed silent when the session opened elsewhere; now **whichever tool opens the
+  session** carries the hint — with `export_session` **excepted**, so its output stays
+  paste-clean (PR #258).
+- **The reply-owing ledger stops nagging when nothing is owed.** A **pure approval ack** no
+  longer counts as owing a reply, and the **middle gear** — small multi-file work — owes a spec
+  **OR** a plan, not both (PR #258).
+
+### Fixed
+- **No daemon dies unproven — the eviction audit closed the last hole.** The port-collision
+  matrix was executed against **real daemons** (foreign, paused, recycled — all **adopted, never
+  killed**), and the one real hole is closed: the blind **SIGKILL escalation now verifies the
+  target's process START-TIME is unchanged** before signaling, so a recycled-alive pid is
+  **refused with a forensic log** rather than killed — proven with a real innocent process
+  surviving. Every kill path now logs **pid + port + projectRoot + reason** before any signal
+  (PR #257).
+
 ## v0.1.30 — 2026-08-06
 
 The truthful-install release. Whichever way deepPairing reaches you — a source clone, the
