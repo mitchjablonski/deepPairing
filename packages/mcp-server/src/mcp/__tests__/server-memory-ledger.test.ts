@@ -401,8 +401,14 @@ describe("MCP Tool Handlers — memory + ledger", () => {
     // local rejected-approaches list still updates (so preflight still
     // fires for THIS project) but the cross-project ledger doesn't see
     // the entry — which is the intended default.
-    beforeEach(() => {
+    beforeEach(async () => {
       store.setGlobalLedgerPublish(true);
+      // #220 M1.5 — the first-call hint now rides the FIRST tool call whichever
+      // tool it is, including recall. These tests inspect recall's OWN ledger
+      // output (source filtering, SEED suppression), so burn the once-only latch
+      // with a throwaway call first — otherwise the appended onboarding hint
+      // (which carries its own 🌱 SEED / philosophy block) pollutes the assertions.
+      await callTool("recall", { query: "__burn_first_call_latch__", mode: "any" });
     });
 
     it("mode='any' surfaces philosophy ledger entries by concept", async () => {

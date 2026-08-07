@@ -20,6 +20,8 @@ interface SessionState {
     decisionId: string;
     artifactId: string;
     context: string;
+    /** M1.1 — optional short fork-naming title (preferred for headings). */
+    title?: string;
     options: any[];
     response?: { optionId: string; reasoning?: string };
     createdAt: string;
@@ -219,7 +221,8 @@ function formatPrDescription(state: SessionState): string {
     sections.push("### Decisions\n");
     for (const d of resolved) {
       const option = d.options.find((o: any) => o.id === d.response?.optionId);
-      sections.push(`- **${d.context}**: ${option?.title ?? d.response?.optionId}`);
+      // M1.1 — prefer the short fork title; fall back to context (pre-M1).
+      sections.push(`- **${d.title?.trim() || d.context}**: ${option?.title ?? d.response?.optionId}`);
       if (d.response?.reasoning) {
         sections.push(`  - *Reasoning*: ${d.response.reasoning}`);
       }
@@ -651,7 +654,10 @@ function getSessionTitle(state: SessionState): string {
   // headline of "what shipped". Prefer the first NON-rejected source; fall
   // through to a neutral session id rather than to a rejected one.
   const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
-  if (firstDecision) return firstDecision.context;
+  // M1.1 — prefer the SHORT title over the full-paragraph context so the
+  // learnings/ADR heading names the fork instead of dumping the background
+  // (the dogfood's title-bloat). Absent title → context, as before.
+  if (firstDecision) return firstDecision.title?.trim() || firstDecision.context;
   const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
   if (firstResearch) return firstResearch.title;
   return "Session " + state.sessionId;

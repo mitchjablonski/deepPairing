@@ -50,6 +50,9 @@ export const DecisionRequestEventSchema = z.object({
   type: z.literal("decision_request"),
   decisionId: z.string(),
   context: z.string(),
+  /** M1.1 — optional short fork-naming question (the card header). Absent →
+   *  the card falls back to rendering `context` as the header, as before. */
+  title: z.string().optional(),
   // Reuse the canonical option schema (decision.ts) instead of a drifted inline
   // copy — the inline one was missing `concept`, so DecisionCard's
   // `option.concept` reads didn't type-check (Z5 noted both the wire/event and

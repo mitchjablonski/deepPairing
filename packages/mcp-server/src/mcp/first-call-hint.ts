@@ -49,7 +49,7 @@ const PROTOCOL_PREAMBLE = [
   "  2. present_findings — after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
   "  3. check_feedback — poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options — each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
-  "  5. present_spec, then present_plan — non-trivial features (spec before the multi-file plan). LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
+  "  5. present_spec and/or present_plan — for small multi-file work (one changeset, no architectural decision beyond the options card) present just ONE: spec when the WHAT needs agreement, plan when the HOW/sequence does. Stack BOTH (spec before the plan) only for genuinely large features. LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
   "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning — no separate debrief). Don't stream a log_reasoning card per step — name concepts in the debrief.",
   "  7. present_debrief — END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread — the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again — let your pair review in the UI.",
@@ -567,6 +567,21 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     }
 
     const followUpIds = new Set(followUps.map((c: any) => c.id));
+    // #220 M1.6 — a top-level, non-question human comment on an artifact whose
+    // APPROVAL VERDICT STANDS is an ACK ("ship it"), not a reply the agent owes.
+    // The dogfood flagged two bare approval acks as "comments without an agent
+    // reply" and trapped the agent chasing non-existent obligations. Gate
+    // NARROWLY: exclude only comments whose target artifact is currently
+    // approved. This does NOT weaken genuine owing signals — a SUBSTANTIVE
+    // comment that continues the discussion arrives as a follow-up (parentCommentId
+    // → an agent comment) and is caught by the ↳ follow-up lane above regardless
+    // of approval status; a comment on a still-open (draft/pending) artifact still
+    // owes here. Only the top-level ack accompanying an approval drops out.
+    const approvedArtifactIds = new Set(
+      (fullState.artifacts ?? [])
+        .filter((a: any) => a.status === "approved")
+        .map((a: any) => a.id),
+    );
     const plainCommentsNeedingMirror = allComments.filter(
       (c: any) =>
         c.author === "human" &&
@@ -574,7 +589,8 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
         !c.answeredByCommentId &&
         !followUpIds.has(c.id) &&
         c.target?.artifactId &&
-        c.target.artifactId !== "__session__",
+        c.target.artifactId !== "__session__" &&
+        !approvedArtifactIds.has(c.target.artifactId),
     );
     if (plainCommentsNeedingMirror.length > 0) {
       blockingParts.push(

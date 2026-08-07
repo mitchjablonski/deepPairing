@@ -104,6 +104,16 @@ Two rhythms, and they're different:
   optional design + tasks. "Think together before building."
 - **`present_plan`** — before multi-file changes. Steps with before/after
   previews, motivated by findings / requirements.
+- **The middle gear — spec OR plan, not both, for small multi-file work.** Not
+  every feature earns the full spec→plan stack. Rule of thumb: a feature ONE
+  changeset can carry, with no architectural decision beyond the options card,
+  owes just ONE of them — pick **spec** when the *what* needs agreement (are we
+  building the right thing?), **plan** when the *how / sequence* needs agreement
+  (is this the right order of changes?). Stack BOTH only for genuinely large
+  features where the what AND the how each warrant their own review. (Either one
+  still escalates the closing debrief — that doesn't change.) The dogfood stacked
+  spec→plan→changeset→debrief on a ~30-line, three-file feature: four review
+  surfaces for a change that needed one.
 - **`update_plan_progress`** — WHILE EXECUTING an approved plan, mark each
   step `in_progress` when you start it and `done` (or `skipped`, with a
   `statusNote` saying why) when you finish. The companion UI renders a live

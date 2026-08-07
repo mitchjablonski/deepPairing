@@ -600,7 +600,18 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
           <span className={`text-2xs text-text-muted ${artifactId ? "" : "ml-auto"}`}>↑↓ navigate · Enter selects highlighted</span>
         )}
       </div>
-      <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
+      {/* M1.1 — when the agent named the fork with a short `title`, lead with it
+          as the card's question heading and demote the full `context` to
+          secondary background prose. Absent title → render context as the
+          primary text exactly as before. */}
+      {event.title ? (
+        <>
+          <h3 className="text-base font-semibold text-text-primary mb-2">{event.title}</h3>
+          <SimpleMarkdown text={event.context} className="text-sm text-text-secondary mb-4 space-y-2" />
+        </>
+      ) : (
+        <SimpleMarkdown text={event.context} className="text-sm text-text-primary mb-4 space-y-2" />
+      )}
 
       {/* F8 (M4) — keyboard-select confirm bar (mirrors the footer's). */}
       {armedSelect && (
@@ -828,6 +839,9 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
           type: "decision_request",
           decisionId: effectiveDecisionId,
           context: dc.context,
+          // M1.1 — the short fork-naming title (when present) drives the card
+          // header; context becomes the secondary background prose.
+          ...(dc.title ? { title: dc.title } : {}),
           options: dc.options,
         }}
         decisionId={effectiveDecisionId}

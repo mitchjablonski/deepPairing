@@ -938,3 +938,134 @@ describe("#195 L1 — targeted hint for trivial scalar omissions (no example dum
     expect(store.getArtifacts()).toHaveLength(0);
   });
 });
+
+// ===========================================================================
+// #220 M1 — the ergonomics the dogfood asked for. Each pins the dogfood's
+// exact friction as the acceptance test.
+// ===========================================================================
+
+describe("#220 M1.1 — present_options short `title`", () => {
+  const twoOptions = [
+    { id: "a", title: "Inline tags", description: "denormalized", pros: ["simple"], cons: ["scan cost"], effort: "low", risk: "low", recommendation: true },
+    { id: "b", title: "Sidecar file", description: "out of band", pros: ["separable"], cons: ["drift"], effort: "medium", risk: "medium", recommendation: false },
+  ];
+  const bloatedContext =
+    "How should tags live on disk? Your store is a bare Todo[] with a blind `as Todo[]` cast and no version envelope, so this choice is effectively permanent for existing files. Which fits how you actually use this CLI?";
+
+  it("when present, `title` becomes the decision artifact title (not the bloated context)", async () => {
+    const { isError } = await call("present_options", {
+      title: "Which storage format for tags?",
+      context: bloatedContext,
+      options: twoOptions,
+    });
+    expect(isError).toBeFalsy();
+    const art = store.getArtifacts()[0];
+    expect(art.title).toBe("Which storage format for tags?");
+    const content = art.content as { title?: string; context: string };
+    expect(content.title).toBe("Which storage format for tags?");
+    // The full background is preserved in context.
+    expect(content.context).toBe(bloatedContext);
+  });
+
+  it("absent `title` behaves byte-identically to today (artifact title === context)", async () => {
+    const { isError } = await call("present_options", {
+      context: bloatedContext,
+      options: twoOptions,
+    });
+    expect(isError).toBeFalsy();
+    const art = store.getArtifacts()[0];
+    expect(art.title).toBe(bloatedContext);
+    // No `title` key lands on disk when absent.
+    expect((art.content as Record<string, unknown>).title).toBeUndefined();
+  });
+
+  it("a too-long title is rejected (it must stay a header, not a paragraph)", async () => {
+    const { isError, text } = await call("present_options", {
+      title: "x".repeat(120),
+      context: bloatedContext,
+      options: twoOptions,
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+});
+
+describe("#220 M1.2 — file-kind enum aliases", () => {
+  it("changeset ACCEPTS the code_change family (`modify`) and stores canonical `modified`", async () => {
+    // The dogfood's exact reject: a changeset file typed `modify`.
+    const { isError } = await call("present_changeset", {
+      title: "Move TTL refresh into middleware",
+      summary: "centralize",
+      files: [
+        { path: "auth/mw.ts", changeType: "modify", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 1 }] }] },
+        { path: "auth/new.ts", changeType: "create", hunks: [{ lines: [{ kind: "add", content: "y", newLine: 1 }] }] },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { files: Array<{ changeType: string }> };
+    expect(content.files.map((f) => f.changeType)).toEqual(["modified", "added"]);
+  });
+
+  it("code_change ACCEPTS the changeset family (`modified`) and stores canonical `modify`", async () => {
+    const { isError } = await call("present_code_change", {
+      filePath: "src/cli.ts",
+      changeType: "modified",
+      before: "a",
+      after: "b",
+      reasoning: "r",
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { changeType: string };
+    expect(content.changeType).toBe("modify");
+  });
+
+  it("changeset given its OWN canonical family stays byte-identical", async () => {
+    const { isError } = await call("present_changeset", {
+      title: "t",
+      files: [{ path: "a.ts", changeType: "deleted", hunks: [{ lines: [{ kind: "del", content: "z", oldLine: 1 }] }] }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { files: Array<{ changeType: string }> };
+    expect(content.files[0].changeType).toBe("deleted");
+  });
+});
+
+describe("#220 M1.3 — plan estimatedChanges accepts number OR string", () => {
+  it("a prose estimatedChanges is accepted and stored verbatim (the dogfood passed a sentence)", async () => {
+    const { isError } = await call("present_plan", {
+      title: "Add tags",
+      estimatedChanges: "a handful across the CLI + store",
+      steps: [{ description: "wire the flag", reasoning: "..." }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { estimatedChanges: unknown };
+    expect(content.estimatedChanges).toBe("a handful across the CLI + store");
+  });
+
+  it("a numeric estimatedChanges still works (unchanged)", async () => {
+    const { isError } = await call("present_plan", {
+      title: "Add tags",
+      estimatedChanges: 3,
+      steps: [{ description: "wire the flag", reasoning: "..." }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { estimatedChanges: unknown };
+    expect(content.estimatedChanges).toBe(3);
+  });
+});
+
+describe("#220 M1.4 — per-option recommendation is optional", () => {
+  it("options with NO recommendation on any arm are accepted (a genuinely open call)", async () => {
+    const { isError } = await call("present_options", {
+      title: "Which order?",
+      context: "no clear winner",
+      options: [
+        { id: "a", title: "First", description: "x", pros: ["p"], cons: ["c"], effort: "low", risk: "low" },
+        { id: "b", title: "Second", description: "y", pros: ["p"], cons: ["c"], effort: "low", risk: "low" },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    expect(store.getArtifacts()).toHaveLength(1);
+  });
+});

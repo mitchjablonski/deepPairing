@@ -918,27 +918,23 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
 
   // --- Call Tool ---
   let firstToolCall = true;
-  // Tools that carry the first-call hint (the write/present tools). Defined in
-  // the factory scope so the latch is consumed only when one of THESE is called
-  // — a leading read (recall/check_feedback) must not burn the first-call hint
-  // before the agent's first present_* gets it (the protocol preamble itself
-  // tells the agent to `recall` first).
-  const HINT_TOOLS: ReadonlySet<string> = new Set([
-    "present_findings",
-    "present_options",
-    "present_spec",
-    "present_plan",
-    "present_code_change",
-    "present_changeset",
-    "present_debrief",
-    "present_explainer",
-    "log_reasoning",
-    "revise_artifact",
-    "withdraw_artifact",
-    "post_pr_review",
-    "answer_question",
-    "update_plan_progress",
+  // M1.5 — the first-call hint now fires on the FIRST tool call of the session,
+  // WHICHEVER tool it is. Pre-M1 it was gated to the write/present tools, so an
+  // agent whose happy-path opener is `recall` (mode='any') — exactly what the
+  // protocol preamble tells it to do first — never saw the companion-URL /
+  // protocol block on call #1 (the dogfood friction). Now a leading
+  // recall/check_feedback carries it.
+  //
+  // The ONE exception is `export_session`: it returns markdown the human grabs
+  // and pastes elsewhere, so splicing an onboarding block into that reply was
+  // "the worst offender" the original gate (Y2) called out. It stays excluded —
+  // and, crucially, does NOT burn the latch — so if a session somehow opens with
+  // an export, the FIRST non-export call still gets the full hint. Defined in the
+  // factory scope so the latch closes over it.
+  const HINT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
+    "export_session",
   ]);
+  const carriesFirstCallHint = (name: string) => !HINT_EXCLUDED_TOOLS.has(name);
   // X4 — session-name latch encapsulates the once-only "rename the session
   // to the first artifact's title" behavior the closure used to handle.
   const sessionNameLatch = new SessionNameLatch(store);
@@ -970,7 +966,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     // therefore keeps the latch armed, so the full protocol still rides the
     // first SUCCESSFUL call instead of being lost to a malformed opener.
     // buildFirstCallHint is a pure read, so rebuilding it on a retry is safe.
-    if (firstToolCall && HINT_TOOLS.has(name)) {
+    if (firstToolCall && carriesFirstCallHint(name)) {
       // X4 — full assembly lives in mcp/first-call-hint.ts; the BLOCKING +
       // CONTEXTUAL tiering, the HINT_BUDGET_CHARS cap, and the recall
       // pointer all moved with it. The handler here just dispatches.
@@ -1111,27 +1107,21 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       result = formatHandlerError(name, err);
     }
 
-    // Y2 — gate firstCallHint to write tools only. Pre-Y2 the hint
-    // appended to EVERY tool's first response, including reads. That meant:
-    // - First call is `recall` (mode=philosophy) → result + duplicated
-    //   philosophy ledger spliced in underneath itself.
-    // - First call is `export_session` → markdown the user wants to grab,
-    //   contaminated with "[First use this session]" + rejected-approach
-    //   lists they don't want in the export.
-    // - First call is `check_feedback` → polling preamble buried under a
-    //   wall of context the agent already had on session start.
-    //
-    // The hint is meant for tools that WRITE (the agent is about to
-    // create artifacts; rejected approaches matter). Read-only and
-    // pull-style tools shouldn't carry it.
+    // M1.5 — deliver firstCallHint on the FIRST tool call of the session,
+    // whichever tool it is (see HINT_EXCLUDED_TOOLS above). Pre-M1 (Y2) this was
+    // gated to write tools, which dropped the hint entirely when the agent's
+    // opener was the protocol-recommended `recall` — the dogfood friction. The
+    // one carve-out is `export_session` (excluded above): its markdown is the
+    // user's grab-and-paste artifact and must stay clean. The hint rides as a
+    // SEPARATE content block, so a lenient client renders both the reply and the
+    // ambient onboarding while a strict parser can still read content[0] as the
+    // tool reply.
     // AA6.1 — answer_question writes comments and motivates exactly the
     // rejected-approach context the hint carries (the agent might
     // re-introduce a stance in its answer text). III12 — dropped
     // request_horizon_check from this allowlist when the tool itself
     // was removed; the horizon-check workflow now flows through
     // answer_question / addComment which are already covered.
-    // HINT_TOOLS is defined in the factory scope above (the latch is consumed
-    // only on these tools, so a leading read doesn't drop the hint).
     // II12 — was: `first.text = first.text + firstCallHint` (splice the
     // hint into the same text field as the tool result). Strict MCP
     // clients that parse tool result content[0].text as the tool's reply
@@ -1150,7 +1140,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     // do without paragraphs of distraction.
     if (
       firstCallHint &&
-      HINT_TOOLS.has(name) &&
+      carriesFirstCallHint(name) &&
       result?.content &&
       Array.isArray(result.content)
     ) {

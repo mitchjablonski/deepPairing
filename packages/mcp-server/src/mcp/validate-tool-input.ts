@@ -711,6 +711,58 @@ function detectTruncatedCall(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// M1.2 — FILE-KIND ENUM ALIASES.
+//
+// The same file operation is spelled three ways across the write tools:
+//   - code_change + plan file_map: create / modify / delete
+//   - changeset:                   added  / modified / deleted
+// An agent that carried one family to the other tool got a hard schema reject
+// (the dogfood: a changeset file typed `modify`, the code_change family). We
+// normalize HERE — the validation choke point — so each field ACCEPTS both
+// families but stores its OWN canonical spelling. Stored values are therefore
+// byte-identical to today (UI/delivery/export goldens unchanged); only the
+// previously-rejected cross-family input now succeeds. The advertised tool
+// schemas keep their canonical 3-value enums (the agent is taught one spelling;
+// the alias is a lenient safety net), so no advertised-schema snapshot moves.
+const TO_CODE_FILE_KIND: Record<string, "create" | "modify" | "delete"> = {
+  added: "create", modified: "modify", deleted: "delete",
+};
+const TO_CHANGESET_FILE_KIND: Record<string, "modified" | "added" | "deleted"> = {
+  create: "added", modify: "modified", delete: "deleted",
+};
+/** Map an alias to canonical; pass everything else (already-canonical values,
+ *  non-strings, junk) through untouched so the target enum still validates it. */
+function aliasFileKind(v: unknown, map: Record<string, string>): unknown {
+  return typeof v === "string" && map[v] ? map[v] : v;
+}
+/** Normalize the `changeType` on each element of an args file array (changeset
+ *  files / plan-step FileChange lists), returning a NEW array so args is not
+ *  mutated. Non-array / non-object elements pass through unchanged. */
+function aliasFileArray(files: unknown, map: Record<string, string>): unknown {
+  if (!Array.isArray(files)) return files;
+  return files.map((f) =>
+    f && typeof f === "object" && "changeType" in (f as object)
+      ? { ...(f as Record<string, unknown>), changeType: aliasFileKind((f as Record<string, unknown>).changeType, map) }
+      : f,
+  );
+}
+/** Normalize plan visuals: a `file_map` visual carries files[] whose per-entry
+ *  key is `change` (not `changeType`). Returns a new array; other visual kinds
+ *  and non-file_map shapes pass through untouched. */
+function aliasPlanVisuals(visuals: unknown): unknown {
+  if (!Array.isArray(visuals)) return visuals;
+  return visuals.map((v) => {
+    if (!v || typeof v !== "object" || !Array.isArray((v as Record<string, unknown>).files)) return v;
+    const files = ((v as Record<string, unknown>).files as unknown[]).map((f) =>
+      f && typeof f === "object" && "change" in (f as object)
+        ? { ...(f as Record<string, unknown>), change: aliasFileKind((f as Record<string, unknown>).change, TO_CODE_FILE_KIND) }
+        : f,
+    );
+    return { ...(v as Record<string, unknown>), files };
+  });
+}
+
 // Per-tool input adapters: pull the relevant args fields, run the matching
 // content schema. The schemas live in @deeppairing/shared and are already
 // the source of truth for what the daemon stores.
@@ -736,6 +788,10 @@ export function validatePresentFindingsInput(args: any): ValidationResult<z.infe
 // stable option-scoped id when omitted).
 const PresentOptionsInputSchema = z.object({
   context: z.string().min(1),
+  // M1.1 — optional short question naming the fork. Trimmed + capped so it
+  // stays a header, not a paragraph (the full background lives in `context`).
+  title: z.string().trim().min(1).max(80).optional()
+    .describe("A short question naming the fork, e.g. 'Which storage format for tags?' — the full background stays in context. Becomes the card header + the decision/session title."),
   options: z.array(DecisionOptionBaseSchema.extend({
     id: z.string().min(1).describe("Stable id — discussion threads anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on an option survives a tune"),
     title: z.string().min(1),
@@ -781,9 +837,18 @@ export function validatePresentPlanInput(args: any): ValidationResult<z.infer<ty
     return { ok: false, error: formatValidationError("present_plan", titleParse.error, EXAMPLE_PLAN) };
   }
   const contentParse = PlanContentSchema.safeParse({
-    steps: args?.steps,
+    // M1.2 — a plan step's structured FileChange list uses the code family too;
+    // accept the changeset family and normalize both step files and file_map
+    // visuals to create/modify/delete.
+    steps: Array.isArray(args?.steps)
+      ? args.steps.map((s: unknown) =>
+          s && typeof s === "object" && "files" in (s as object)
+            ? { ...(s as Record<string, unknown>), files: aliasFileArray((s as Record<string, unknown>).files, TO_CODE_FILE_KIND) }
+            : s,
+        )
+      : args?.steps,
     estimatedChanges: args?.estimatedChanges,
-    visuals: args?.visuals,
+    visuals: aliasPlanVisuals(args?.visuals),
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_plan", contentParse.error, EXAMPLE_PLAN) };
@@ -794,7 +859,8 @@ export function validatePresentPlanInput(args: any): ValidationResult<z.infer<ty
 export function validatePresentCodeChangeInput(args: any): ValidationResult<z.infer<typeof CodeChangeContentSchema>> {
   const result = CodeChangeContentSchema.safeParse({
     filePath: args?.filePath,
-    changeType: args?.changeType,
+    // M1.2 — accept the changeset family (added/modified/deleted) too.
+    changeType: aliasFileKind(args?.changeType, TO_CODE_FILE_KIND),
     before: args?.before ?? "",
     after: args?.after ?? "",
     reasoning: args?.reasoning,
@@ -814,7 +880,8 @@ export function validatePresentChangesetInput(args: any): ValidationResult<z.inf
   }
   const contentParse = ChangesetContentSchema.safeParse({
     summary: args?.summary,
-    files: args?.files,
+    // M1.2 — accept the code_change family (create/modify/delete) on each file.
+    files: aliasFileArray(args?.files, TO_CHANGESET_FILE_KIND),
     risks: args?.risks,
     // reviewState is HUMAN-driven (set via the review route), never taken from
     // agent input — deliberately not read here.

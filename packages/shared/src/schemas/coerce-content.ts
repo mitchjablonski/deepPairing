@@ -174,7 +174,12 @@ export function coercePlanContent(raw: unknown): PlanContent {
   const c = obj(raw);
   const out: PlanContent = {
     steps: arr(c.steps).map(coercePlanStep),
-    estimatedChanges: num(c.estimatedChanges),
+    // M1.3 — estimatedChanges is number|string. Preserve a non-empty string
+    // verbatim (agents pass prose here); otherwise coerce to a number.
+    estimatedChanges:
+      typeof c.estimatedChanges === "string" && c.estimatedChanges.trim()
+        ? c.estimatedChanges
+        : num(c.estimatedChanges),
   };
   if (Array.isArray(c.visuals)) {
     out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
@@ -319,6 +324,10 @@ export function coerceDecisionContent(raw: unknown): DecisionContent {
     options: arr(c.options).map(coerceOption),
     decisionId: str(c.decisionId),
   };
+  // M1.1 — keep the short title only when it's a non-empty string; an absent
+  // title leaves `out.title` unset so every downstream reader falls back to
+  // context byte-identically to pre-M1.
+  if (typeof c.title === "string" && c.title.trim()) out.title = c.title.trim();
   const stakes = optOneOf(c.stakes, LMH);
   if (stakes) out.stakes = stakes;
   return out;

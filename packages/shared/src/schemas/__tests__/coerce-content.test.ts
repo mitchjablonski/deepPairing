@@ -51,6 +51,13 @@ describe("coercePlanContent", () => {
     expect(p.steps[0]).toEqual({ description: "run tests", reasoning: "verify" });
     expect(p.estimatedChanges).toBe(2);
   });
+  it("#220 M1.3 — preserves a prose estimatedChanges string verbatim", () => {
+    const p = coercePlanContent({ steps: [], estimatedChanges: "a handful across the CLI + store" });
+    expect(p.estimatedChanges).toBe("a handful across the CLI + store");
+  });
+  it("#220 M1.3 — a blank string falls back to a number (0)", () => {
+    expect(coercePlanContent({ estimatedChanges: "   " }).estimatedChanges).toBe(0);
+  });
   it("preserves UI-only condition/branches (present_plan accepts them; schema doesn't model them)", () => {
     const p = coercePlanContent({
       steps: [{ description: "maybe", reasoning: "r", condition: "if tests fail", branches: [{ description: "fix", reasoning: "why", files: ["a.ts"] }] }],
@@ -159,6 +166,15 @@ describe("coerceDecisionContent", () => {
   it("drops an empty concept (name '') but keeps a real one", () => {
     expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "" } }] }).options[0]!.concept).toBeUndefined();
     expect(coerceDecisionContent({ options: [{ id: "o", concept: { name: "DI" } }] }).options[0]!.concept).toEqual({ name: "DI" });
+  });
+  it("#220 M1.1 — keeps a non-empty title, trimmed; drops a blank/absent one", () => {
+    expect(coerceDecisionContent({ context: "c", decisionId: "x", title: "  Which format?  " }).title).toBe("Which format?");
+    expect(coerceDecisionContent({ context: "c", decisionId: "x", title: "   " }).title).toBeUndefined();
+    expect(coerceDecisionContent({ context: "c", decisionId: "x" }).title).toBeUndefined();
+  });
+  it("#220 M1.4 — an option with no recommendation coerces to false (absent = not recommended)", () => {
+    const d = coerceDecisionContent({ options: [{ id: "o", title: "A", description: "d" }] });
+    expect(d.options[0]!.recommendation).toBe(false);
   });
 
   it("DV1 — coerces per-option visuals, keeping an agent-provided id", () => {

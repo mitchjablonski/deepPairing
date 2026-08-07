@@ -920,10 +920,15 @@ export function createHttpRoutes(
         // Concept key priority mirrors the non-decision path: (1) the
         // HUMAN-named concept from the reject prompt (F3 — the whole point of
         // the field; earlier this branch discarded it), then (2) the card's
-        // context/question.
-        const content = artifact.content as { context?: string } | null;
+        // M1.1 SHORT title (the fork-naming question — a far tighter framing key
+        // than the full-paragraph context), then (3) the context/question.
+        // BACKCOMPAT: on a pre-M1 decision (no content.title) this collapses to
+        // `humanConcept?.trim() || context || undefined` — byte-identical to
+        // before, so no EXISTING ledger entry is re-keyed and the #195
+        // one-framing-entry semantics are untouched.
+        const content = artifact.content as { context?: string; title?: string } | null;
         const context = content?.context?.trim() || artifact.title;
-        const concept = humanConcept?.trim() || context || undefined;
+        const concept = humanConcept?.trim() || content?.title?.trim() || context || undefined;
         await store.recordRejectedApproach({
           description: artifact.title,
           reason: feedback?.trim() || undefined,

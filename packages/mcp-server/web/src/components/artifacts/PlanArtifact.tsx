@@ -153,7 +153,8 @@ function PlanStepPreview({ step, artifactId, stepIndex }: { step: PlanStep; arti
 
 export function PlanArtifact({ artifact }: PlanArtifactProps) {
   // Coercion boundary: `content.steps` is a guaranteed array and
-  // `estimatedChanges` a number, so the renderer can trust the shape.
+  // `estimatedChanges` is a number OR a string (M1.3), so the renderer can
+  // trust the shape and branch on the type below.
   const content = coercePlanContent(artifact.content);
   // Local PlanStep adds the UI-only condition/branches the coercer preserves.
   const steps = content.steps as unknown as PlanStep[];
@@ -234,9 +235,16 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
               Implementation Steps ({steps.length})
             </h4>
-            {content.estimatedChanges > 0 && (
+            {/* M1.3 — estimatedChanges is number|string. A number renders as
+                "~N file changes"; a non-empty string (agents pass prose) renders
+                verbatim. Empty/zero renders nothing. */}
+            {(typeof content.estimatedChanges === "number"
+              ? content.estimatedChanges > 0
+              : typeof content.estimatedChanges === "string" && content.estimatedChanges.trim().length > 0) && (
               <span className="text-xs text-text-muted">
-                ~{content.estimatedChanges} file changes
+                {typeof content.estimatedChanges === "number"
+                  ? `~${content.estimatedChanges} file changes`
+                  : content.estimatedChanges}
               </span>
             )}
           </div>

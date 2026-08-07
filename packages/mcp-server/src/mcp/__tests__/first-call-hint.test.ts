@@ -58,7 +58,10 @@ describe("first-call hint — always-on protocol preamble", () => {
 
   it("still leads with the happy-path choreography (visuals augment, don't replace it)", async () => {
     const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).toMatch(/present_spec, then present_plan/);
+    // M2 (#220) — step 5 now teaches the middle gear: spec and/or plan (one for
+    // small multi-file work, both only for large features).
+    expect(hint).toMatch(/present_spec and\/or present_plan/);
+    expect(hint).toMatch(/present just ONE: spec when the WHAT/);
     expect(hint).toMatch(/check_feedback/);
     expect(hint).toMatch(/present_code_change/);
   });

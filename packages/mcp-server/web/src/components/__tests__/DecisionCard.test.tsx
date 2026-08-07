@@ -173,6 +173,26 @@ describe("DecisionCard — tolerates options missing pros/cons", () => {
   });
 });
 
+describe("DecisionCard — #220 M1.1 short title header", () => {
+  it("leads with the short title as a heading and keeps the full context as background", () => {
+    const bloated =
+      "How should tags live on disk? Your store is a bare Todo[] with a blind cast and no version envelope, so this choice is effectively permanent.";
+    const withTitle = { ...event, title: "Which storage format for tags?", context: bloated };
+    render(<DecisionCard event={withTitle as any} decisionId="dec_abc" artifactId="art1" />);
+    // The short title renders as an <h3> heading.
+    const heading = screen.getByRole("heading", { name: "Which storage format for tags?" });
+    expect(heading).toBeInTheDocument();
+    // The full background is still present (as secondary prose).
+    expect(screen.getByText(/effectively permanent/)).toBeInTheDocument();
+  });
+
+  it("with NO title, renders context as before (no heading injected)", () => {
+    render(<DecisionCard event={event} decisionId="dec_abc" artifactId="art1" />);
+    expect(screen.queryByRole("heading", { name: "Which cache?" })).not.toBeInTheDocument();
+    expect(screen.getByText("Which cache?")).toBeInTheDocument();
+  });
+});
+
 describe("DecisionCard — draft state", () => {
   it("renders every option with its title", () => {
     render(<DecisionCard event={event} />);

@@ -23,6 +23,9 @@ export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
 export const DecisionRequestSchema = z.object({
   decisionId: z.string(),
   context: z.string(),
+  /** M1.1 — optional short question naming the fork (the card header). Full
+   *  background stays in `context`. Absent → context is used as before. */
+  title: z.string().optional(),
   options: z.array(DecisionOptionSchema).min(2).max(4),
   /**
    * How consequential is this decision? Agent sets this on architecturally

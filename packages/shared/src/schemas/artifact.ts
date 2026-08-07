@@ -179,6 +179,15 @@ export const DecisionOptionContentSchema = DecisionOptionBaseSchema;
 
 export const DecisionContentSchema = z.object({
   context: z.string(),
+  /**
+   * M1.1 — a SHORT question naming the fork ("Which storage format for tags?").
+   * When present it is the card header + the artifact/session title + the
+   * learnings-export heading + the whole-card-reject ledger key, while `context`
+   * keeps the full background. OPTIONAL and backcompat: an absent title behaves
+   * byte-identically to today (context is used everywhere it was). Capped/
+   * trimmed at the tool-input boundary; lenient here for old artifacts.
+   */
+  title: z.string().optional(),
   options: z.array(DecisionOptionContentSchema),
   decisionId: z.string(),
   /** How consequential this decision is. Only "high" triggers prediction capture. */

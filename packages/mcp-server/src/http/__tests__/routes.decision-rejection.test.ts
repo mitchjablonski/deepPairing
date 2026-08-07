@@ -253,3 +253,55 @@ describe("#169 'None of these fit' send-back → per-option concept entries (F2)
     expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
   });
 });
+
+describe("#220 M1.1 — whole-card reject prefers the short title as the ledger key", () => {
+  const TITLE = "Which storage format for tags?";
+  async function createTitledDecision(): Promise<string> {
+    const art = await store.createArtifact({
+      id: "art_dec_titled",
+      type: "decision",
+      title: TITLE, // M1.1 — artifact title is the SHORT title now
+      content: { context: CONTEXT, title: TITLE, options: OPTIONS, decisionId: "dec_titled" },
+    } as any);
+    return art.id;
+  }
+
+  it("keys the framing entry on the TITLE, not the full-paragraph context", async () => {
+    const id = await createTitledDecision();
+    await reject(id, "wrong question — tags don't belong on disk at all");
+    const rejected = store.getSessionMemory().rejectedApproaches;
+    expect(rejected).toHaveLength(1);
+    // concept prefers title over context (no human concept named).
+    expect(rejected[0].concept).toBe(TITLE);
+    // description is the artifact title (also the short title).
+    expect(rejected[0].description).toBe(TITLE);
+  });
+
+  it("a human-named concept STILL wins over the title", async () => {
+    const id = await createTitledDecision();
+    await reject(id, "premature — ship inline first", "premature schema versioning");
+    const rejected = store.getSessionMemory().rejectedApproaches;
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].concept).toBe("premature schema versioning");
+  });
+
+  it("BACKCOMPAT — an untitled (pre-M1) decision keys on context, byte-identical to today", async () => {
+    // No content.title → the key collapses to the pre-M1 `humanConcept || context`.
+    const id = await createDecisionArtifact(); // untitled (context === title)
+    await reject(id, "wrong question");
+    const rejected = store.getSessionMemory().rejectedApproaches;
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].concept).toBe(CONTEXT);
+    expect(rejected[0].description).toBe(CONTEXT);
+  });
+
+  it("still records exactly ONE framing entry (the #195 semantics are unchanged)", async () => {
+    const id = await createTitledDecision();
+    await reject(id, "wrong question");
+    const writes = broadcasts.filter((b) => b.type === "ledger_write" && b.kind === "rejected");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].concept).toBe(TITLE);
+    // NOT one entry per option.
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(1);
+  });
+});
