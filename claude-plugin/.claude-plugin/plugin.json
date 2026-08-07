@@ -1,7 +1,7 @@
 {
   "name": "deeppairing",
   "displayName": "deepPairing",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "description": "Pair with Claude Code instead of reviewing its output after the fact. Findings, options, specs, and plans arrive as structured artifacts you approve in a local web UI before code lands; reject an approach once and a gate stops Claude from re-proposing it.",
   "author": {
     "name": "deepPairing"
