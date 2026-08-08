@@ -279,7 +279,30 @@ export function MermaidDiagram({
   }
 
   if (svg == null) {
-    return <div className="text-2xs text-text-muted py-3 text-center">Rendering diagram…</div>;
+    // #231 (round-10 UX #2) — mermaid's bundle lazy-loads + lays out on first
+    // open, a 4-6s gap that used to show a bare "Rendering diagram…" line. A
+    // diagram-SHAPED shimmer skeleton reads as "a diagram is coming" (not a
+    // stall) and holds the layout so the card doesn't jump when the SVG lands.
+    // Same bordered "well" as the rendered diagram; .animate-shimmer is
+    // theme-aware (surface CSS vars) and static under prefers-reduced-motion.
+    return (
+      <div
+        className="dp-mermaid-skeleton bg-surface-primary border border-border-default rounded-md p-4"
+        role="status"
+        aria-label="Rendering diagram…"
+      >
+        <span className="sr-only">Rendering diagram…</span>
+        {/* A loose flowchart silhouette: three node blocks joined by edges. */}
+        <div className="flex flex-col items-center gap-3" aria-hidden="true">
+          <div className="animate-shimmer rounded-md h-8 w-2/5" />
+          <div className="animate-shimmer rounded h-4 w-px min-h-[16px]" />
+          <div className="flex items-start justify-center gap-8 w-full">
+            <div className="animate-shimmer rounded-md h-8 w-1/3" />
+            <div className="animate-shimmer rounded-md h-8 w-1/3" />
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

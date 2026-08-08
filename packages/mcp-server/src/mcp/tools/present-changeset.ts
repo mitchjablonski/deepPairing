@@ -31,6 +31,9 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
   // N2 (#226) — short-window de-dup for an identical, still-draft changeset.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
   const content = {
@@ -84,7 +87,7 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
       type: "text",
       text:
         `Changeset "${artifact.title}" presented for review (${id}) — ${fileCount} file${fileCount === 1 ? "" : "s"}. ` +
-        `The human reviews each file (and can comment across files) at localhost:${ctx.port}. ` +
+        `The human reviews each file (and can comment across files) at localhost:${reviewPort}. ` +
         `Call check_feedback for their per-file review state, comments, and verdict. ` +
         `When the feature wraps, end with present_debrief.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],

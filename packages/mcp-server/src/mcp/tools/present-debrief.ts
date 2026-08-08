@@ -41,6 +41,9 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   // (same begin/commit/abort pattern as the other 7 present_* tools).
   const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
   const content = {
@@ -124,7 +127,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
       text:
         `Debrief "${artifact.title}" presented for review (${id}) — ${sectionCount} section${sectionCount === 1 ? "" : "s"}` +
         `${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. ` +
-        `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. ` +
+        `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. ` +
         `Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };

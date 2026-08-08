@@ -262,9 +262,22 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
   const parts: string[] = [];
 
-  // Track consecutive empty polls for escalation
+  // O3 (#231) — ONE post-wake snapshot of the store lanes the rest of the poll
+  // reads. Pre-O3 the handler re-fetched each of these 2-6× per poll; in prod
+  // (DaemonClient) every read is an un-memoized HTTP round-trip (getFullState
+  // re-serializes the whole session each time). Between here and the drains
+  // below, check_feedback performs NO artifact/comment/decision MUTATION — it
+  // only ACKNOWLEDGES, which never changes membership nor any field these reads
+  // surface (getUnacknowledgedComments is captured pre-ack; carryover keys on
+  // answeredByCommentId, not `acknowledged`) — so a single snapshot is
+  // byte-identical to the old repeated reads. Pinned by
+  // check-feedback-golden-parity.test.ts; measured by
+  // check-feedback-read-amplification.test.ts. `getFullState` is captured lazily
+  // at its first use below so the scoped early-return path never pays for it.
   const newComments = await store.getUnacknowledgedComments();
   const newResolved = await store.getResolvedDecisions();
+  const postWakeArtifacts = await store.getArtifacts();
+  const postWakeRenderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
   const hasNewFeedback = newComments.length > 0 || newResolved.length > 0;
   if (hasNewFeedback) {
     ctx.state.checkFeedbackPollCount = 0;
@@ -282,11 +295,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // a focused "still waiting" status instead of dumping out-of-scope
   // chatter at the agent.
   if (waitForScope !== "any") {
-    const allArtsPostWake = await store.getArtifacts();
-    const decidedPlansPostWake = allArtsPostWake.filter(
+    // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
+    const decidedPlansPostWake = postWakeArtifacts.filter(
       (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
     );
-    const decidedAnyPostWake = allArtsPostWake.filter(
+    const decidedAnyPostWake = postWakeArtifacts.filter(
       (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected",
     );
     // GH#152 — same scopeHasSignal mapping as the pre-poll gate: any new
@@ -304,7 +317,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     });
     // #176 — a render failure that woke this poll must also fall through to the
     // reporting path, never be stranded by a narrow scope's early-return.
-    const newRenderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
+    // O3 — reuse the post-wake render-failure snapshot (was a redundant read).
+    const newRenderFailures = postWakeRenderFailures;
     // Belt-and-suspenders: even if some future scope logic forgets comments,
     // NEVER early-return (and strand human input with a comments:[] payload)
     // while unacknowledged comments (or render failures) exist. Fall through to
@@ -334,12 +348,15 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   }
 
   // --- Session status preamble ---
-  const allArtifacts = await store.getArtifacts();
+  // O3 — reuse the post-wake snapshots (were redundant getArtifacts /
+  // getUnacknowledgedComments reads; allComments == the same pre-ack set).
+  const allArtifacts = postWakeArtifacts;
   const totalArtifacts = allArtifacts.length;
   const approvedCount = allArtifacts.filter((a) => a.status === "approved").length;
   const pendingCount = allArtifacts.filter((a) => a.status === "draft" && (PENDING_DRAFT_TYPES as readonly string[]).includes(a.type)).length;
-  const allComments = await store.getUnacknowledgedComments();
+  const allComments = newComments;
   const totalComments = allComments.length;
+  // O3 — read autonomy ONCE; the engagement-hint block below reuses this.
   const autonomyLabel = await store.getAutonomyLevel();
 
   // M2 — unanswered human questions in THIS poll (artifact-scoped questions the
@@ -382,16 +399,24 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
 
+  // O3 (#231) — ONE getFullState for the whole poll. Pre-O3 this was called 3×
+  // (pendingRequests, hasUnansweredQuestions, carryover), each re-serializing the
+  // entire session in prod. All three consumers key on immutable fields
+  // (requests, comment content, answeredByCommentId), so one best-effort snapshot
+  // is byte-identical. `null` on failure → each consumer keeps its own fallback.
+  let fullState: Awaited<ReturnType<typeof store.getFullState>> | null = null;
+  try {
+    fullState = await store.getFullState();
+  } catch {
+    // Non-fatal — full state is best-effort; each consumer degrades below.
+  }
+
   // G1 (#198b) — pending (unserved) human-initiated requests. Best-effort read
   // off full state so it works for BOTH FileStore (direct) and DaemonClient
   // (its /state includes `requests`); an old store without the key yields [].
-  let pendingRequests: Request[] = [];
-  try {
-    const full = await store.getFullState();
-    pendingRequests = (full.requests ?? []).filter((r) => !r.servedByArtifactId);
-  } catch {
-    // Non-fatal — requests are best-effort; the rest of the poll proceeds.
-  }
+  const pendingRequests: Request[] = fullState
+    ? (fullState.requests ?? []).filter((r) => !r.servedByArtifactId)
+    : [];
 
   // Find oldest pending artifact age
   let oldestPendingAge = "";
@@ -463,13 +488,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // no separate debrief owed, so no nag. Same predicate the Stop hook applies
   // (debrief-gate.ts). This subsumes the old hasCodeWork + !hasDebrief gate.
   const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
-  let hasUnansweredQuestions = openQuestionCount > 0;
-  try {
-    const full = await store.getFullState();
-    hasUnansweredQuestions = collectUnansweredQuestions(full.comments ?? []).length > 0;
-  } catch {
-    // Best-effort — fall back to this-poll's unacknowledged count.
-  }
+  // O3 — reuse the single fullState snapshot; fall back to this-poll's
+  // unacknowledged count when full state was unavailable.
+  const hasUnansweredQuestions = fullState
+    ? collectUnansweredQuestions(fullState.comments ?? []).length > 0
+    : openQuestionCount > 0;
   const owesDebrief =
     pendingArts.length === 0 &&
     freshlyRejected.length === 0 &&
@@ -534,7 +557,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const questionLines: string[] = [];
     const suggestionLines: string[] = [];
     const otherLines: string[] = [];
-    const artsForTargets = await store.getArtifacts();
+    // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
+    const artsForTargets = postWakeArtifacts;
     // #188 (PAYDOWN) — the per-lane delivery branches (suggestion state-machine,
     // del-side removed line, cross-file anchors, questionIndex, requirementId,
     // optionId, sectionId/grain, region, followUp) now live ONCE in
@@ -595,8 +619,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // documented; cross-*project* questions are out of scope.
   const structuredCarryover: Array<Record<string, unknown>> = [];
   try {
-    const full = await store.getFullState();
-    const carryover = collectUnansweredQuestions(full.comments ?? []);
+    // O3 — reuse the single fullState snapshot (was a 3rd getFullState). When it
+    // was unavailable, carryover is skipped exactly as the old catch did.
+    const carryover = fullState ? collectUnansweredQuestions(fullState.comments ?? []) : [];
     // Don't double-report a comment already delivered in THIS poll — questions
     // (structuredQuestions) AND directives/comments (structuredComments, which
     // includes the __session__ directive drain). Belt-and-suspenders alongside
@@ -681,7 +706,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   }
 
   // Resolved decisions (acknowledge so they don't repeat)
-  const resolved = await store.getResolvedDecisions();
+  // O3 — reuse the post-wake resolved-decisions snapshot (newResolved); no
+  // acknowledge ran between the snapshot and here, so it is the same set.
+  const resolved = newResolved;
   if (resolved.length > 0) {
     await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
     const formattedDecisions: string[] = [];
@@ -750,7 +777,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
 
   // Plan review verdicts
   const pendingPlans = await store.getPendingPlanReviews();
-  const planArtifacts = (await store.getArtifacts()).filter((a) => a.type === "plan");
+  // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
+  const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
   const reviewedPlans: string[] = [];
   // B3 — only verdicts NOT yet counted flip structuredContent.status to
   // 'feedback'; the prose below still repeats every verdict (pre-existing
@@ -801,7 +829,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // acknowledge (drain), mirroring the status-change path above. NO source /
   // secret ever rides here: the store redacted a secret-shaped error/title
   // before persisting. Old stores without the drain simply yield [].
-  const renderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
+  // O3 — reuse the post-wake render-failure snapshot (was a redundant read); no
+  // acknowledge ran between the snapshot and here.
+  const renderFailures = postWakeRenderFailures;
   const structuredRenderFailures = renderFailures.map((f) => ({
     artifactId: f.artifactId,
     visualId: f.visualId,
@@ -822,7 +852,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   }
 
   // Check for draft artifacts still awaiting human review
-  const draftArtifacts = (await store.getArtifacts()).filter(
+  // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
+  const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
   );
   if (draftArtifacts.length > 0) {
@@ -859,7 +890,8 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // first-call hint (first-call-hint.ts), sharing AUTONOMY_POLICY_LINE with
   // this block so the two surfaces can't drift. Do not "fix" this by echoing
   // the level for supervised.
-  const autonomy = await store.getAutonomyLevel();
+  // O3 — reuse the autonomy level read once above (was a redundant read).
+  const autonomy = autonomyLabel;
   if (autonomy !== "supervised") {
     parts.push(`Human autonomy preference: ${autonomy}. ${
       autonomy === "balanced"

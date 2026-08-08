@@ -8075,6 +8075,10 @@ var ERROR_CODES = {
   forbidden_host: "forbidden_host",
   /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
   artifact_not_in_session: "artifact_not_in_session",
+  /** O3 (#231) — a stale tab tried to REVERSE an already-final human verdict
+   *  (approved↔rejected↔revised). The route refuses with 409 + the current
+   *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
+  verdict_already_final: "verdict_already_final",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
@@ -25644,6 +25648,23 @@ function detectAndRecordGateEscape(args) {
   return true;
 }
 
+// src/store/verdict-guard.ts
+var HUMAN_VERDICT_REASONS = /* @__PURE__ */ new Set([
+  "ui_approve_button",
+  "ui_revise_button",
+  "ui_reject_button",
+  "ui_decision_resolve",
+  "ui_bulk_accept"
+]);
+var TERMINAL_VERDICT_STATES = /* @__PURE__ */ new Set([
+  "approved",
+  "revised",
+  "rejected"
+]);
+function isCrossTerminalVerdictFlip(from, to, reason) {
+  return HUMAN_VERDICT_REASONS.has(reason) && TERMINAL_VERDICT_STATES.has(from) && TERMINAL_VERDICT_STATES.has(to) && from !== to;
+}
+
 // src/store/file-store.ts
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
   "explainer",
@@ -26073,6 +26094,12 @@ var FileStore = class _FileStore {
   updateArtifactStatus(artifactId, status, reason = "unspecified") {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
+      if (isCrossTerminalVerdictFlip(art.status, status, reason)) {
+        console.error(
+          `[deepPairing] refused cross-tab verdict flip on ${artifactId}: ${art.status} \u2192 ${status} (reason=${reason}). A human verdict is already final; the stale tab keeps its current status. Reopen is not a supported gesture.`
+        );
+        return;
+      }
       const wasDraft = art.status === "draft";
       const now = (/* @__PURE__ */ new Date()).toISOString();
       const fromStatus = art.status;
@@ -28490,6 +28517,23 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
           message: "This artifact belongs to a different session than the one this tab is bound to."
         },
         404
+      );
+    }
+    if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
+      const at = target.updatedAt;
+      log2(
+        `[status] REFUSED cross-tab verdict flip on ${artifactId}: ${target.status} \u2192 ${status} (reason=${reason}) \u2014 verdict already final at ${at}`
+      );
+      broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
+      return c.json(
+        {
+          error: "verdict_already_final",
+          code: "verdict_already_final",
+          currentStatus: target.status,
+          at,
+          message: `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
+        },
+        409
       );
     }
     await store.updateArtifactStatus(artifactId, status, reason);

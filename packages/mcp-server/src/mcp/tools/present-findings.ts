@@ -29,6 +29,9 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   // draft returns the existing artifact instead of minting a twin.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   // V4 — non-blocking secret-shape scan. Flags vendor-prefixed API
   // keys + PEM blocks the agent may have pasted into evidence
@@ -85,7 +88,7 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   const elicitAction = await ctx.helpers.tryElicit(
     `Findings: "${artifact.title}"\n\n` +
     `Accept to approve these findings.\n` +
-    `Decline to review in detail at http://localhost:${ctx.port}`,
+    `Decline to review in detail at http://localhost:${reviewPort}`,
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   if (elicitAction === "approve") {
@@ -97,6 +100,6 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   }
 
   return {
-    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${ctx.port}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

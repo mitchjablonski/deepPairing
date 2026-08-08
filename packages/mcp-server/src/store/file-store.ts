@@ -13,6 +13,7 @@ import { scanForSecrets, scanContentForSecrets } from "../secret-scan.js";
 import { listSessions, searchAll, listAllDecisions, groupByFeature, normalizeFeatureId } from "./session-scan.js";
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
+import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -596,6 +597,22 @@ export class FileStore implements IStore {
   ): void {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
+      // O3 (#231) — cross-tab last-wins verdict guard (backstop). The HTTP
+      // verdict route pre-checks this and returns a 409, but guard it here too
+      // so NO path (a future caller, the daemon-internal route) can silently
+      // reverse an already-final human verdict: refuse a human verdict flip from
+      // one terminal verdict state to a DIFFERENT one (approved↔rejected↔revised).
+      // Agent lifecycle transitions (supersede/retract/obsolete/revise/elicit)
+      // carry non-human reasons and are never guarded; draft→terminal and
+      // same-verdict re-asserts pass through untouched. See verdict-guard.ts.
+      if (isCrossTerminalVerdictFlip(art.status, status, reason)) {
+        console.error(
+          `[deepPairing] refused cross-tab verdict flip on ${artifactId}: ` +
+          `${art.status} → ${status} (reason=${reason}). A human verdict is already ` +
+          `final; the stale tab keeps its current status. Reopen is not a supported gesture.`,
+        );
+        return;
+      }
       const wasDraft = art.status === "draft";
       const now = new Date().toISOString();
       const fromStatus = art.status;

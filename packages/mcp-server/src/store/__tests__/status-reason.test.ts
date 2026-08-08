@@ -75,9 +75,15 @@ describe("FileStore.updateArtifactStatus carries a reason tag (U7)", () => {
 
   it("does NOT alarm on any non-sentinel reason", () => {
     const { store, id } = withArtifact();
+    // O3 (#231) — two INDEPENDENT draft→verdict transitions. (This used to flip
+    // the same artifact approved→rejected, which is now a guarded cross-tab
+    // verdict reversal that legitimately console.errors — a different alarm than
+    // the comment_side_effect sentinel this test is about. Using separate
+    // artifacts keeps the original intent: a normal non-sentinel reason is silent.)
+    store.createArtifact({ id: "art_2", type: "plan", title: "T2", content: { steps: [] } });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     store.updateArtifactStatus(id, "approved", "ui_approve_button");
-    store.updateArtifactStatus(id, "rejected", "ui_reject_button");
+    store.updateArtifactStatus("art_2", "rejected", "ui_reject_button");
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });

@@ -7,6 +7,7 @@ import path from "node:path";
 import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
+import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
   readFeatureOverrides,
@@ -815,6 +816,35 @@ export function createHttpRoutes(
         { error: "artifact_not_in_session", code: "artifact_not_in_session",
           message: "This artifact belongs to a different session than the one this tab is bound to." },
         404,
+      );
+    }
+
+    // O3 (#231) — cross-tab last-wins verdict guard. A stale second tab (opened
+    // before the verdict, still rendering the draft footer) can POST a DIFFERENT
+    // terminal verdict onto an already-final one — silently reversing the human's
+    // real decision. Refuse it with a 409 carrying the current truth, and
+    // re-broadcast the REAL status so the stale tab refreshes to it (its footer
+    // collapses to the passive verdict chip). Draft→terminal and same-verdict
+    // re-asserts are unaffected; the store backstops this too. See verdict-guard.ts.
+    if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
+      const at = target.updatedAt;
+      log(
+        `[status] REFUSED cross-tab verdict flip on ${artifactId}: ` +
+        `${target.status} → ${status} (reason=${reason}) — verdict already final at ${at}`,
+      );
+      // Refresh the stale tab to the TRUE status (not the attempted one).
+      broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
+      return c.json(
+        {
+          error: "verdict_already_final",
+          code: "verdict_already_final",
+          currentStatus: target.status,
+          at,
+          message:
+            `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. ` +
+            `A finalized verdict can't be reversed — this tab has been refreshed to the current state.`,
+        },
+        409,
       );
     }
 

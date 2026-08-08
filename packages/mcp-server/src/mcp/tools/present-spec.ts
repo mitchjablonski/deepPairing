@@ -23,6 +23,9 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
   // N2 (#226) — short-window de-dup for an identical, still-draft present_spec.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
   const content = {
@@ -74,7 +77,7 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
   const elicitAction = await ctx.helpers.tryElicit(
     `Spec: "${artifact.title}"\n\n` +
     `Accept to approve these requirements as-is.\n` +
-    `Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${ctx.port}`,
+    `Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${reviewPort}`,
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   // Steer re-posts toward revise_artifact when a live spec with a similar title
@@ -91,6 +94,6 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
   }
 
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${ctx.port}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

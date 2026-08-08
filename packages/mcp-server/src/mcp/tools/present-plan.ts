@@ -29,6 +29,10 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   // N2 (#226) — short-window de-dup for an identical, still-draft present_plan.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — the LIVE bound port, matching buildDedupResponse. After a
+  // TIME_WAIT idle-respawn the daemon may be on a new port; ctx.port is the
+  // spawn-time value, so the human-facing review URL must use getLivePort.
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
   const content = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
@@ -74,7 +78,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   const elicitAction = await ctx.helpers.tryElicit(
     `Plan: "${args?.title}" (${args?.steps?.length ?? 0} steps)\n\n` +
     `Accept to approve this plan.\n` +
-    `Decline to review steps in detail at http://localhost:${ctx.port}`,
+    `Decline to review steps in detail at http://localhost:${reviewPort}`,
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   // Steer re-posts toward revise_artifact: if a live plan with a similar title
@@ -92,6 +96,6 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   }
 
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${ctx.port}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }
