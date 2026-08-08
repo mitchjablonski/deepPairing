@@ -1067,6 +1067,9 @@ async function openDebrief(page: import("@playwright/test").Page): Promise<void>
   // Open the summary block's grain composer so its scoped thread is scanned too.
   await page.getByRole("button", { name: "Comment on What we built" }).click();
   await page.getByLabel("Comment on What we built").waitFor({ timeout: 15000 });
+  // O2 (#230) — "The walk" is collapsed behind a disclosure now; expand it so the
+  // walk's sections (and their token-rich evidence) mount and get scanned.
+  await page.getByTestId("debrief-walk-toggle").click();
   // Token-rich evidence highlights async (shiki) — wait for a colored span so the
   // syntax palette is actually measured, not plain uncolored text.
   await page.waitForSelector(
