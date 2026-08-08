@@ -54,6 +54,9 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // once the first twin lands) can't defeat the match.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   // V4 — code-change before/after snippets are the highest-risk
   // surface for leaked vendor-prefixed API keys; a refactor near
@@ -154,7 +157,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     const elicitAction = await ctx.helpers.tryElicit(
       `Apply ${changeType} to ${filePath}?\n\n` +
       `Accept to approve this change.\n` +
-      `Decline to review the diff at http://localhost:${ctx.port}`,
+      `Decline to review the diff at http://localhost:${reviewPort}`,
     );
     if (elicitAction === "approve") {
       await ctx.store.updateArtifactStatus(id, "approved");
@@ -166,6 +169,6 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   }
 
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

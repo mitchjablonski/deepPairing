@@ -28770,6 +28770,10 @@ var ERROR_CODES = {
   forbidden_host: "forbidden_host",
   /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
   artifact_not_in_session: "artifact_not_in_session",
+  /** O3 (#231) — a stale tab tried to REVERSE an already-final human verdict
+   *  (approved↔rejected↔revised). The route refuses with 409 + the current
+   *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
+  verdict_already_final: "verdict_already_final",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
@@ -30493,6 +30497,7 @@ async function handlePresentFindings(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const content = {
     summary: validated.data.summary,
     findings: validated.data.findings,
@@ -30532,7 +30537,7 @@ async function handlePresentFindings(ctx, args) {
     `Findings: "${artifact.title}"
 
 Accept to approve these findings.
-Decline to review in detail at http://localhost:${ctx.port}`
+Decline to review in detail at http://localhost:${reviewPort}`
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   if (elicitAction === "approve") {
@@ -30543,7 +30548,7 @@ Decline to review in detail at http://localhost:${ctx.port}`
     };
   }
   return {
-    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${ctx.port}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -30575,6 +30580,7 @@ async function handlePresentOptions(ctx, args) {
       typeof dupDecisionId === "string" ? { decisionId: dupDecisionId } : void 0
     );
   }
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
   const content = { context, ...title ? { title } : {}, options: proposedOptions, decisionId, stakes };
@@ -30627,7 +30633,7 @@ async function handlePresentOptions(ctx, args) {
     stakes
   });
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId }
   };
 }
@@ -30797,6 +30803,8 @@ async function handleCheckFeedback(ctx, args) {
   const parts = [];
   const newComments = await store.getUnacknowledgedComments();
   const newResolved = await store.getResolvedDecisions();
+  const postWakeArtifacts = await store.getArtifacts();
+  const postWakeRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
   const hasNewFeedback = newComments.length > 0 || newResolved.length > 0;
   if (hasNewFeedback) {
     ctx.state.checkFeedbackPollCount = 0;
@@ -30804,11 +30812,10 @@ async function handleCheckFeedback(ctx, args) {
     ctx.state.checkFeedbackPollCount++;
   }
   if (waitForScope !== "any") {
-    const allArtsPostWake = await store.getArtifacts();
-    const decidedPlansPostWake = allArtsPostWake.filter(
+    const decidedPlansPostWake = postWakeArtifacts.filter(
       (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected")
     );
-    const decidedAnyPostWake = allArtsPostWake.filter(
+    const decidedAnyPostWake = postWakeArtifacts.filter(
       (a) => a.status === "approved" || a.status === "revised" || a.status === "rejected"
     );
     const scopeSatisfied = scopeHasSignal(waitForScope, {
@@ -30817,7 +30824,7 @@ async function handleCheckFeedback(ctx, args) {
       decidedPlans: decidedPlansPostWake.length,
       decidedAny: decidedAnyPostWake.length
     });
-    const newRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
+    const newRenderFailures = postWakeRenderFailures;
     if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
       const portNote2 = portRecoveryNote();
       return {
@@ -30841,11 +30848,11 @@ async function handleCheckFeedback(ctx, args) {
       };
     }
   }
-  const allArtifacts = await store.getArtifacts();
+  const allArtifacts = postWakeArtifacts;
   const totalArtifacts = allArtifacts.length;
   const approvedCount = allArtifacts.filter((a) => a.status === "approved").length;
   const pendingCount = allArtifacts.filter((a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type)).length;
-  const allComments = await store.getUnacknowledgedComments();
+  const allComments = newComments;
   const totalComments = allComments.length;
   const autonomyLabel = await store.getAutonomyLevel();
   const openQuestionCount = allComments.filter(
@@ -30863,12 +30870,12 @@ async function handleCheckFeedback(ctx, args) {
     ["code_change", "spec", "research", "decision", "changeset", "debrief", "explainer"].includes(a.type) && !ctx.state.reportedRejectedVerdicts.has(a.id)
   );
   for (const a of freshlyRejected) ctx.state.reportedRejectedVerdicts.add(a.id);
-  let pendingRequests = [];
+  let fullState = null;
   try {
-    const full = await store.getFullState();
-    pendingRequests = (full.requests ?? []).filter((r) => !r.servedByArtifactId);
+    fullState = await store.getFullState();
   } catch {
   }
+  const pendingRequests = fullState ? (fullState.requests ?? []).filter((r) => !r.servedByArtifactId) : [];
   let oldestPendingAge = "";
   const pendingArts = allArtifacts.filter((a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type));
   const [oldestPending] = pendingArts;
@@ -30902,12 +30909,7 @@ async function handleCheckFeedback(ctx, args) {
     suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
   }
   const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
-  let hasUnansweredQuestions = openQuestionCount > 0;
-  try {
-    const full = await store.getFullState();
-    hasUnansweredQuestions = collectUnansweredQuestions(full.comments ?? []).length > 0;
-  } catch {
-  }
+  const hasUnansweredQuestions = fullState ? collectUnansweredQuestions(fullState.comments ?? []).length > 0 : openQuestionCount > 0;
   const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && shapeOwesDebrief;
   if (owesDebrief) {
     suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
@@ -30948,7 +30950,7 @@ Adjust your approach based on this guidance.`);
     const questionLines = [];
     const suggestionLines = [];
     const otherLines = [];
-    const artsForTargets = await store.getArtifacts();
+    const artsForTargets = postWakeArtifacts;
     let anyFollowUp = false;
     for (const c of artifactCommentsSorted) {
       const delivery = deliverComment(c, artsForTargets);
@@ -30988,8 +30990,7 @@ ${otherLines.join("\n")}`);
   }
   const structuredCarryover = [];
   try {
-    const full = await store.getFullState();
-    const carryover = collectUnansweredQuestions(full.comments ?? []);
+    const carryover = fullState ? collectUnansweredQuestions(fullState.comments ?? []) : [];
     const deliveredIds = /* @__PURE__ */ new Set();
     for (const q of structuredQuestions) {
       const id = q.commentId ?? q.id;
@@ -31046,7 +31047,7 @@ The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do 
 ${lines.join("\n")}`
     );
   }
-  const resolved = await store.getResolvedDecisions();
+  const resolved = newResolved;
   if (resolved.length > 0) {
     await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
     const formattedDecisions = [];
@@ -31092,7 +31093,7 @@ ${lines.join("\n")}`
 ${formattedDecisions.join("\n")}`);
   }
   const pendingPlans = await store.getPendingPlanReviews();
-  const planArtifacts = (await store.getArtifacts()).filter((a) => a.type === "plan");
+  const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
   const reviewedPlans = [];
   let freshPlanVerdicts = 0;
   for (const a of planArtifacts) {
@@ -31123,7 +31124,7 @@ ${reviewedPlans.join("\n")}`);
     parts.push(`Human review verdicts (${changed.length}) \u2014 resolved BY ID:
 ${lines.join("\n")}`);
   }
-  const renderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
+  const renderFailures = postWakeRenderFailures;
   const structuredRenderFailures = renderFailures.map((f) => ({
     artifactId: f.artifactId,
     visualId: f.visualId,
@@ -31144,7 +31145,7 @@ ${lines.join("\n")}
 Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     );
   }
-  const draftArtifacts = (await store.getArtifacts()).filter(
+  const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
   if (draftArtifacts.length > 0) {
@@ -31159,7 +31160,7 @@ The human is reviewing in the companion UI. Call check_feedback again to pick up
   if (pendingPlans.length > 0) {
     parts.push(`\u23F3 WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);
   }
-  const autonomy = await store.getAutonomyLevel();
+  const autonomy = autonomyLabel;
   if (autonomy !== "supervised") {
     parts.push(`Human autonomy preference: ${autonomy}. ${autonomy === "balanced" ? AUTONOMY_POLICY_LINE.balanced : AUTONOMY_POLICY_LINE.autonomous}`);
   }
@@ -31868,6 +31869,7 @@ async function handlePresentSpec(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
   const content = {
     objective,
@@ -31910,7 +31912,7 @@ async function handlePresentSpec(ctx, args) {
     `Spec: "${artifact.title}"
 
 Accept to approve these requirements as-is.
-Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${ctx.port}`
+Decline to review requirements and acceptance criteria in the companion UI at http://localhost:${reviewPort}`
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "spec", title, id);
@@ -31923,7 +31925,7 @@ Decline to review requirements and acceptance criteria in the companion UI at ht
     };
   }
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${ctx.port}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -31947,6 +31949,7 @@ async function handlePresentPlan(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
   const content = { steps: planSteps, estimatedChanges, ...visuals ? { visuals } : {} };
   let artifact;
@@ -31983,7 +31986,7 @@ async function handlePresentPlan(ctx, args) {
     `Plan: "${args?.title}" (${args?.steps?.length ?? 0} steps)
 
 Accept to approve this plan.
-Decline to review steps in detail at http://localhost:${ctx.port}`
+Decline to review steps in detail at http://localhost:${reviewPort}`
   );
   const traceSummary = formatPreflightTraceSummary(pre.trace);
   const nudge = await revisionNudge(ctx.store, "plan", title, id);
@@ -31997,7 +32000,7 @@ Decline to review steps in detail at http://localhost:${ctx.port}`
     };
   }
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${ctx.port}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -32027,6 +32030,7 @@ async function handlePresentCodeChange(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const content = { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept };
   const id = `art_${nanoid3(10)}`;
   let artifact;
@@ -32074,7 +32078,7 @@ async function handlePresentCodeChange(ctx, args) {
       `Apply ${changeType} to ${filePath}?
 
 Accept to approve this change.
-Decline to review the diff at http://localhost:${ctx.port}`
+Decline to review the diff at http://localhost:${reviewPort}`
     );
     if (elicitAction === "approve") {
       await ctx.store.updateArtifactStatus(id, "approved");
@@ -32085,7 +32089,7 @@ Decline to review the diff at http://localhost:${ctx.port}`
     }
   }
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${ctx.port}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -32100,6 +32104,7 @@ async function handlePresentChangeset(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
   const content = {
     ...summary ? { summary } : {},
@@ -32141,7 +32146,7 @@ async function handlePresentChangeset(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${ctx.port}. Call check_feedback for their per-file review state, comments, and verdict. When the feature wraps, end with present_debrief.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. When the feature wraps, end with present_debrief.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -32162,6 +32167,7 @@ async function handlePresentDebrief(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
   const content = {
     summary,
@@ -32218,7 +32224,7 @@ async function handlePresentDebrief(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -32237,6 +32243,7 @@ async function handlePresentExplainer(ctx, args) {
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
   const id = `art_${nanoid3(10)}`;
   const content = {
     title,
@@ -32282,7 +32289,7 @@ async function handlePresentExplainer(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }

@@ -53,6 +53,9 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
       typeof dupDecisionId === "string" ? { decisionId: dupDecisionId } : undefined,
     );
   }
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
   const decisionId = `dec_${nanoid(10)}`;
@@ -124,7 +127,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // dec_ stays too — the decision-resolve flow keys on it — and it's mirrored
   // in structuredContent so strict clients don't prose-parse.
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${ctx.port}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId },
   };
 }

@@ -40,6 +40,10 @@ export const ERROR_CODES = {
   forbidden_host: "forbidden_host",
   /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
   artifact_not_in_session: "artifact_not_in_session",
+  /** O3 (#231) — a stale tab tried to REVERSE an already-final human verdict
+   *  (approved↔rejected↔revised). The route refuses with 409 + the current
+   *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
+  verdict_already_final: "verdict_already_final",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */

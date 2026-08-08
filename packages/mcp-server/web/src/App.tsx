@@ -504,6 +504,15 @@ function App() {
             title="Command palette — search + quick actions (⌘K)"
             aria-label="Open the command palette"
           >
+            {/* #231 (round-10 UX #3) — a magnifier ICON, always visible, so the
+                affordance reads as "search" at narrow widths (the ~900px VS Code
+                webview) where the "Search" label is hidden — matching the sibling
+                nav buttons above instead of a lone faint ⌘K glyph. Order stays
+                icon → ⌘K → "Search" so the label still reads "⌘K Search". */}
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="5" cy="5" r="3.25" />
+              <path d="M7.6 7.6 10.5 10.5" />
+            </svg>
             <kbd className="font-mono bg-surface-elevated px-1 rounded text-[9px]">⌘K</kbd>
             <span className="hidden min-[1100px]:inline">Search</span>
           </button>

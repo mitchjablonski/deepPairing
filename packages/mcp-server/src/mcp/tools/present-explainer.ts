@@ -37,6 +37,9 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
   // N2 (#226) — short-window de-dup for an identical, still-draft explainer.
   const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
+  // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
+  // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
+  const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
   const content = {
@@ -100,7 +103,7 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
       type: "text",
       text:
         `Explainer "${artifact.title}" presented for review (${id}) — a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. ` +
-        `The human reads it in order and can ask ANYTHING in the thread at localhost:${ctx.port}. ` +
+        `The human reads it in order and can ask ANYTHING in the thread at localhost:${reviewPort}. ` +
         `Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };

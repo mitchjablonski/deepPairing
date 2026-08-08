@@ -127,7 +127,10 @@ export function coerceResearchContent(raw: unknown): ResearchContent {
 /** files: string[] OR FileChange[] — keep whichever valid shape is present. */
 function coerceFiles(v: unknown): (string | Record<string, unknown>)[] | undefined {
   if (!Array.isArray(v)) return undefined;
-  return v.every((x) => typeof x === "string") ? (v as string[]) : (v.filter(isObj) as any);
+  // O3 (#231) — `isObj` is a `v is Record<string, unknown>` type guard, so the
+  // filtered array is already `Record<string, unknown>[]` (a valid member of the
+  // return union) — no `as any` needed.
+  return v.every((x) => typeof x === "string") ? (v as string[]) : v.filter(isObj);
 }
 
 function coercePlanStep(v: unknown): PlanStep {

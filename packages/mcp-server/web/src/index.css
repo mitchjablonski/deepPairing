@@ -246,6 +246,14 @@ html {
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
 }
+/* prefers-reduced-motion: a STEADY placeholder fill (no sweep) — the skeleton
+   still holds the layout + reads as "loading", without the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer {
+    animation: none;
+    background: var(--color-surface-elevated);
+  }
+}
 
 /* Scroll shadows for scrollable panels */
 .scroll-shadow {
