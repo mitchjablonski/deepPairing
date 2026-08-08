@@ -135,6 +135,26 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     expect(debrief).toMatch(/single-file, no-decision surgical fix closes with its own self-summarizing present_code_change/);
   });
 
+  it("#229 O1 — SKILL.md AND the assembled hint teach the risk-adaptive LOW-RISK-FEATURE class (with the floor kept absolute)", async () => {
+    const skill = readSkill();
+    const hint = await assembleAllHints();
+    // The three-class, RISK-keyed framing (replaces the old size-only framing).
+    expect(skill).toMatch(/Ceremony scales with RISK, not size/);
+    expect(hint).toMatch(/Ceremony scales with RISK, not size/);
+    // The new class itself — the centerpiece phrase, pinned in both surfaces so a
+    // future prose-trim can't silently drop the risk-adaptive middle.
+    expect(skill).toMatch(/Low-risk feature/);
+    expect(hint).toMatch(/LOW-RISK FEATURE/);
+    // Its defining predicate: multi-file work, NO guardrail path, MAY skip the
+    // synchronous pre-work gates.
+    expect(skill).toMatch(/skip[\s\S]*present_findings[\s\S]*spec\/plan gate/);
+    expect(hint).toMatch(/skip the synchronous pre-work gates \(present_findings and the spec\/plan gate\)/);
+    // The FLOOR stays absolute in BOTH surfaces — the license trims pre-work
+    // ceremony, never the changeset review of the code itself.
+    expect(skill).toMatch(/floor is absolute at every class/i);
+    expect(hint).toMatch(/THE FLOOR IS ABSOLUTE at every class/);
+  });
+
   it("NEITHER SKILL.md NOR the assembled hint contains a stale per-edit mandate", async () => {
     const skill = readSkill();
     const hint = await assembleAllHints();

@@ -27,6 +27,17 @@
  * The floor is untouched: code is ALWAYS presented for review before it lands,
  * at every size — this predicate governs only the SEPARATE closing debrief.
  *
+ * O1 (#229) — the GUIDANCE taxonomy is {trivial | low-risk-feature | escalated},
+ * keying ceremony on RISK not size. This PREDICATE deliberately does NOT gain a
+ * low-risk-feature branch: a low-risk feature is multi-file work (a changeset, or
+ * 2+ code_changes), which already lands in ESCALATED here — it still owes exactly
+ * ONE debrief. What the low-risk-feature class changes is the PRE-WORK ceremony
+ * the agent runs (it MAY skip present_findings + the spec/plan gate — see the
+ * SKILL.md cadence section and the first-call hint), never the debrief obligation
+ * or the changeset review floor. So this gate is unchanged: a changeset still owes
+ * a debrief. Only TRIVIAL (single live single-file code_change, no ceremony) is
+ * carved out below.
+ *
  * LIVE vs closed (F2): the count is over LIVE artifacts, not raw types.
  *   - CODE (code_change/changeset): a superseded/retracted/obsolete artifact is
  *     off the table, so a trivial fix that got ONE tweak (v1 superseded by v2)

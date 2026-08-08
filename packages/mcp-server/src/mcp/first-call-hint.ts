@@ -69,6 +69,16 @@ const PROTOCOL_PREAMBLE = [
   // L2 — close-the-loop headline: the two highest-value rules, up top where they
   // won't lose the reading lottery to the visuals paragraph below.
   "Close the loop — two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead — no separate debrief).",
+  // O1 (#229) — ceremony scales with RISK, not size. Three classes, always-on so
+  // the risk-adaptive floor reaches the model on its FIRST artifact regardless of
+  // the autonomy/detail dials. The FLOOR (present_changeset before code lands) is
+  // absolute in every class — the low-risk-feature license trims PRE-WORK
+  // ceremony only, never the review of the code or the closing debrief.
+  "Ceremony scales with RISK, not size — three classes:",
+  "  • TRIVIAL — a single-file, no-decision surgical fix: skip straight to the self-summarizing present_code_change that presents it for review AND closes it; no findings, no separate debrief.",
+  "  • LOW-RISK FEATURE — multi-file/multi-step work that touches NO guardrail path (migrations, CI/workflows, secrets, auth, infra), carries NO stakes:'high' decision, and has no genuine architectural fork: you MAY skip the synchronous pre-work gates (present_findings and the spec/plan gate) and go build. Still KEEP: real-time present_options the moment a genuine decision arises, the present_changeset review surface (NEVER skipped — the floor), and exactly ONE present_debrief. Net: ~2 touchpoints (a decision if one comes up + the debrief) instead of 4-5.",
+  "  • ESCALATED — anything touching a guardrail path, any stakes:'high' decision, or a genuine architectural fork: the full arc — findings → options → spec/plan → changeset → debrief. (The preflight gate escalates guardrail-path edits regardless.)",
+  "THE FLOOR IS ABSOLUTE at every class: code is presented for review before it lands — the present_changeset is that surface, always. The low-risk-feature license trims PRE-WORK ceremony, never the review of the code and never the debrief.",
   "Happy path, in order:",
   "  1. recall (mode='any') — check prior stances/decisions before proposing.",
   "  2. present_findings — after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
@@ -142,7 +152,7 @@ const AUTONOMY_HINT_BALANCED = [
   `\n🎚 Autonomy: BALANCED — the human set this dial, and it applies from your FIRST artifact, not just later turns. ${AUTONOMY_POLICY_LINE.balanced}`,
   "  - For simple or mechanical tasks (typo fixes, renames, small obvious changes): skip present_findings and go straight to the work.",
   "  - Reserve present_options for genuine architectural tradeoffs — not routine implementation choices with one reasonable answer.",
-  "  - Substantial work (new features, multi-file or risky changes) still gets the full sequence: findings → options → spec/plan.",
+  "  - Substantial work — a stakes:'high' decision, a guardrail path, or a genuine architectural fork — still gets the full sequence: findings → options → spec/plan. A low-risk multi-file feature that touches none of those is the LOW-RISK-FEATURE class (see the three ceremony classes above): it MAY skip those pre-work gates and go build, while still keeping the changeset review surface and one debrief.",
   "  - FLOOR (unchanged): code must be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes, and end the feature with present_debrief (a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead); this dial trims findings/options, never the review record.",
 ].join("\n");
 //
