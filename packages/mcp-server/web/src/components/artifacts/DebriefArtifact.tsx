@@ -10,6 +10,7 @@ import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
 import { OpenQuestionSection } from "./OpenQuestionSection";
 import { useWriteLock } from "../../hooks/useWriteLock";
+import { WalkMeThroughButton, buildWalkMeThroughRequest } from "../WalkMeThrough";
 
 /**
  * #190 — the end-of-feature DEBRIEF renderer (the comprehension surface).
@@ -188,6 +189,21 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
   const deferred = content.deferred ?? [];
   const openQuestions = content.openQuestions ?? [];
 
+  // O2 (#230) — progressive disclosure. DebriefArtifact already front-loads
+  // needs-your-eyes + summary (the 30-second view); the ordered "walk" used to
+  // render fully expanded below them, forcing the skimmer to scroll past every
+  // section. It now collapses behind a single disclosure so one artifact serves
+  // both the skimmer and the deep-diver — needs-your-eyes + summary stay ALWAYS
+  // visible above it. A section carrying a live grain thread defaults the walk
+  // EXPANDED so an unresolved comment is never hidden; an explicit toggle still
+  // wins either way (walkOpen === null means "use the thread-derived default").
+  const walkHasThread = useMemo(
+    () => sections.some((_, i) => comments.some((c) => c.target.sectionId === `debrief:${i}`)),
+    [sections, comments],
+  );
+  const [walkOpen, setWalkOpen] = useState<boolean | null>(null);
+  const walkExpanded = walkOpen ?? walkHasThread;
+
   return (
     <div className="space-y-4">
       {/* #193 E2 (usability M4) — "Needs your eyes" renders ABOVE the fold, before
@@ -216,9 +232,20 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                       <span className="text-text-muted">Why: </span>
                       {item.why}
                     </div>
-                    {item.artifactRef && (
-                      <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {item.artifactRef && (
+                        <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
+                      )}
+                      <WalkMeThroughButton
+                        requestText={buildWalkMeThroughRequest({
+                          kind: "needs-eyes",
+                          what: item.what,
+                          why: item.why,
+                          hasArtifactRef: !!item.artifactRef,
+                        })}
+                        ariaLabel={item.what || `needs-your-eyes item ${i + 1}`}
+                      />
+                    </div>
                     <BlockGrain
                       artifactId={artifact.id}
                       sectionId={`debrief:needs-your-eyes:${i}`}
@@ -245,13 +272,29 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
         <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
       </DebriefBlock>
 
-      {/* The ordered walk of what changed. */}
+      {/* The ordered walk of what changed — collapsed behind a disclosure (O2).
+          Skimmers keep needs-your-eyes + summary above; deep readers are one
+          click away. Auto-expanded when a section holds a live comment thread. */}
       {sections.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-            The walk ({sections.length})
-          </h4>
-          {sections.map((section, i) => {
+          <button
+            type="button"
+            onClick={() => setWalkOpen((v) => !(v ?? walkHasThread))}
+            aria-expanded={walkExpanded}
+            data-testid="debrief-walk-toggle"
+            className="flex items-center gap-1.5 text-xs font-semibold text-text-muted uppercase tracking-wide
+                       hover:text-accent-blue focus-visible:text-accent-blue focus-visible:outline-none
+                       focus-visible:ring-1 focus-visible:ring-accent-blue rounded transition-colors"
+          >
+            <span aria-hidden="true" className={`transition-transform ${walkExpanded ? "rotate-90" : ""}`}>▸</span>
+            <span>
+              {walkExpanded ? "The walk" : "Full walk-through"} ({sections.length} section{sections.length === 1 ? "" : "s"})
+            </span>
+            {!walkExpanded && walkHasThread && (
+              <span className="text-2xs text-accent-blue normal-case font-medium tracking-normal">· has your comments</span>
+            )}
+          </button>
+          {walkExpanded && sections.map((section, i) => {
             const sectionId = `debrief:${i}`;
             const grain = comments.filter((c) => c.target.sectionId === sectionId);
             return (

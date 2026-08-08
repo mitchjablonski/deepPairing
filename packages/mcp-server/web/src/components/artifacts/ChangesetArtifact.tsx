@@ -22,6 +22,7 @@ import {
 import { OpenInEditorLink } from "../OpenInEditor";
 import { LineGutter, LineComposer, type LineMode } from "../LineComments";
 import { SuggestionLineFeedback } from "../SuggestionLineFeedback";
+import { WalkMeThroughButton, buildWalkMeThroughRequest } from "../WalkMeThrough";
 
 /**
  * #171 / #175 — ChangesetArtifact: a change spanning 2+ files reviewed as ONE
@@ -772,6 +773,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 <span className={`font-bold text-2xs ${changeMark[f.changeType].cls}`}>{changeMark[f.changeType].letter}</span>
                 <span className="text-text-primary">{f.path}</span>
                 <OpenInEditorLink filePath={f.path} line={1} />
+                <WalkMeThroughButton
+                  requestText={buildWalkMeThroughRequest({ kind: "file", filePath: f.path })}
+                  ariaLabel={`how ${f.path} works`}
+                />
                 {renderDispositionControls(f)}
               </div>
               {renderNeedsBox(f, false)}
@@ -853,6 +858,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   <span className={`font-bold text-2xs ${changeMark[activeFile.changeType].cls}`}>{changeMark[activeFile.changeType].letter}</span>
                   <span className="text-text-primary">{activeFile.path}</span>
                   <OpenInEditorLink filePath={activeFile.path} line={1} />
+                  <WalkMeThroughButton
+                    requestText={buildWalkMeThroughRequest({ kind: "file", filePath: activeFile.path })}
+                    ariaLabel={`how ${activeFile.path} works`}
+                  />
                   {(() => {
                     const s = fileStats(activeFile);
                     return (

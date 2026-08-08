@@ -43,11 +43,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("DebriefArtifact — renders every block", () => {
-  it("renders summary, a section (concept + evidence), decisionsMade, needsYourEyes, and deferred", () => {
+  it("renders summary, a section (concept + evidence), decisionsMade, needsYourEyes, and deferred", async () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);
 
     // Summary narrative.
     expect(screen.getByText(/moved the sliding-window session-TTL refresh/i)).toBeInTheDocument();
+    // O2 (#230) — "The walk" is collapsed behind a disclosure; expand it to read
+    // its sections (the summary + needs-your-eyes stay above, always visible).
+    await userEvent.click(screen.getByTestId("debrief-walk-toggle"));
     // Section title + body.
     expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
     // Concept (ConceptBadge) — the learning lever.
@@ -160,10 +163,14 @@ describe("DebriefArtifact — #207 (I2) write-axis lock", () => {
   const retracted = { ...debriefArtifact, status: "retracted" as const };
   const approved = { ...debriefArtifact, status: "approved" as const };
 
-  it("RETRACTED: withholds EVERY composer — ask-anything, per-block grain, per-item grain, open-questions", () => {
+  it("RETRACTED: withholds EVERY composer — ask-anything, per-block grain, per-item grain, open-questions", async () => {
     useArtifactStore.getState().reset();
     useArtifactStore.getState().addArtifact(retracted);
     render(<DebriefArtifact artifact={retracted} />);
+    // Expand the walk (O2 disclosure) so the section grain-affordance count below
+    // is measured with the sections in the DOM — a retracted walk still renders
+    // its sections read-only (no grain composers), which is the point.
+    await userEvent.click(screen.getByTestId("debrief-walk-toggle"));
 
     // Ask-anything composer gone (its labelled textarea is withheld read-only).
     expect(screen.queryByLabelText("Comment on this debrief")).not.toBeInTheDocument();
@@ -247,6 +254,75 @@ describe("DebriefArtifact — #193 E2 lifecycle", () => {
       expect(statusCall).toBeTruthy();
       expect(statusCall[1].body).toContain('"status":"rejected"');
       expect(statusCall[1].body).not.toContain('"concept"');
+    });
+  });
+});
+
+describe("DebriefArtifact — progressive disclosure of 'The walk' (O2 #230)", () => {
+  it("collapses the walk by default; needs-your-eyes + summary stay above the fold", () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    // The disclosure toggle is present, labelled with the section count…
+    const toggle = screen.getByTestId("debrief-walk-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent(/Full walk-through \(2 sections\)/i);
+    // …but the walk's section content is NOT rendered while collapsed.
+    expect(screen.queryByText("Centralized the TTL refresh in middleware")).not.toBeInTheDocument();
+    // The 30-second view stays visible: needs-your-eyes + summary.
+    expect(screen.getByText("Needs your eyes")).toBeInTheDocument();
+    expect(screen.getByText("What we built")).toBeInTheDocument();
+  });
+
+  it("expands on click and collapses again", async () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const toggle = screen.getByTestId("debrief-walk-toggle");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Centralized the TTL refresh in middleware")).not.toBeInTheDocument();
+  });
+
+  it("a section carrying a live comment thread starts EXPANDED (unresolved comment never hidden)", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(debriefArtifact);
+    useArtifactStore.setState({
+      comments: {
+        [debriefArtifact.id]: [
+          {
+            id: "gc_walk",
+            sessionId: "s",
+            author: "human",
+            content: "WALK-SECTION-THREAD",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            parentCommentId: null,
+            target: { artifactId: debriefArtifact.id, sectionId: "debrief:0" },
+          } as any,
+        ],
+      },
+    } as any);
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    // Auto-expanded: the section (and its live thread) is on screen without a click.
+    expect(screen.getByTestId("debrief-walk-toggle")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
+    expect(screen.getByText("WALK-SECTION-THREAD")).toBeInTheDocument();
+  });
+});
+
+describe("DebriefArtifact — 'Walk me through this' on a needs-your-eyes item (O2 #230)", () => {
+  it("emits a scoped explain request naming the flagged item", async () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const item = screen.getByTestId("debrief-needs-eyes");
+    await userEvent.click(within(item).getByTestId("walk-me-through"));
+    await waitFor(() => {
+      const calls = (globalThis.fetch as any).mock.calls.filter(([u]: any[]) =>
+        String(u).includes("/api/requests"),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      const body = JSON.parse(calls[calls.length - 1][1].body);
+      expect(body.intent).toBe("explain");
+      expect(body.text).toContain("The expiry check in the middleware diff");
+      expect(body.text).toContain("present_explainer");
     });
   });
 });
