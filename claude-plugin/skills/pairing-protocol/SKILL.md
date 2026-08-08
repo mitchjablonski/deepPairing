@@ -62,15 +62,35 @@ Two rhythms, and they're different:
   per-edit cards the human skims and forgets. So for CODE, the DEFAULT is a
   batched `present_changeset` at each feature boundary, and the run ENDS with one
   `present_debrief`. Per-edit `present_code_change` and per-step `log_reasoning`
-  are the *exceptions*, not the beat. **Ceremony scales with task size:** the one
-  case that skips the closing debrief is a single-file, no-decision, surgical fix
-  — that self-summarizing `present_code_change` IS the comprehension surface, so
-  it owes no separate debrief. Everything larger — 2+ files, any real decision, a
-  spec or plan — owes the debrief; and a change touching guardrail paths
-  (migrations, CI, secrets) deserves the full arc too — use your judgment (the
-  preflight gate will escalate the edit itself regardless). The review floor never
-  scales away:
-  code is presented for review before it lands at every size.
+  are the *exceptions*, not the beat.
+
+**Ceremony scales with RISK, not size — three classes.** The apparatus that wraps
+the work flexes with how much is at stake; the review of the code itself never
+flexes.
+
+- **Trivial** — a single-file, no-decision, surgical fix. Skip straight to the
+  self-summarizing `present_code_change` that both presents the change for review
+  AND closes the task; no findings, no separate debrief.
+- **Low-risk feature** — multi-file / multi-step work that touches NO guardrail
+  path (migrations, CI/workflows, secrets, auth, infra), carries NO
+  `stakes: "high"` decision, and has no genuine architectural fork. You MAY skip
+  the synchronous pre-work gates — `present_findings` and the spec/plan gate — and
+  go build. You still KEEP: real-time `present_options` the moment a genuine
+  decision arises, the `present_changeset` review surface (NEVER skipped — the
+  floor), and exactly ONE `present_debrief`. Net: ~2 touchpoints (a decision if one
+  comes up + the debrief) instead of 4-5. This is the risk-adaptive default — don't
+  make a low-risk refactor file a change request through the full review board.
+- **Escalated** — anything touching a guardrail path, any `stakes: "high"`
+  decision, or a genuine architectural fork. The full arc: findings → options →
+  spec/plan → changeset → debrief. Use your judgment on borderline cases (the
+  preflight gate escalates guardrail-path edits itself regardless).
+
+**The floor is absolute at every class:** code is presented for review before it
+lands — the `present_changeset` is that surface, always. The low-risk-feature
+license trims PRE-WORK ceremony (findings, spec/plan); it never trims the review
+of the code itself, and it never drops the debrief. (The trivial carve-out is the
+one case that closes without a *separate* debrief — its self-summarizing
+`present_code_change` IS the comprehension surface.)
 - **Tag every artifact with its `feature`.** When your work spans more than one
   run — a milestone, a multi-session feature — pass the same `feature` tag on
   every `present_*` you make (findings, options, plan, spec, code changes,
@@ -204,6 +224,15 @@ Two rhythms, and they're different:
   `present_debrief`: the debrief digests a change YOU just made, the explainer
   explains code as it already is. Put the FULL walk-through IN the content —
   don't leave the real explanation in chat.
+  - **Scoped "walk me through this" requests (the drill-in pull).** When
+    `check_feedback` delivers an explain-intent request the human raised by
+    clicking "walk me through this" on a specific changeset hunk or a
+    needs-your-eyes item, it carries that file/hunk context. Serve it with a
+    `present_explainer` SCOPED to exactly that hunk/item — a focused walk of just
+    those lines and what they do, anchored to that Evidence — NOT a whole-codebase
+    tour. Pass `servedRequestId` so it links back to the request and clears. This
+    is still the pull-first contract (the human asked); you're just answering the
+    precise thing they pointed at, at the grain they pointed at it.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
   that cadence got zero engagement, and concept-naming now lives in the debrief's
   `sections[].concepts`. Reach for `log_reasoning` only for a genuinely
