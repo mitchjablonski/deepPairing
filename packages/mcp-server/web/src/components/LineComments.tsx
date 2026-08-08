@@ -60,7 +60,12 @@ export function LineGutter({
             // (keyboard: tabbing to either gutter button reveals both), and on
             // this button's own keyboard focus — so it stays fully reachable
             // without a mouse, just not always painted.
-            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 bg-accent-violet-strong text-white hover:bg-accent-violet-strong-hover"
+            // Touch fallback (review LOW): a coarse pointer has no hover and
+            // rarely fires focus-visible on tap, so opacity-0 would leave the
+            // affordance findable only by memory. `[@media(hover:none)]` keeps it
+            // faintly visible (opacity-25) where hover doesn't exist; pointer-fine
+            // is unaffected and keeps the opacity-0 hover-reveal.
+            : "opacity-0 [@media(hover:none)]:opacity-25 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 bg-accent-violet-strong text-white hover:bg-accent-violet-strong-hover"
         }`}
         title="Ask the agent about this line"
         aria-label="Ask a question about this line"
@@ -72,9 +77,11 @@ export function LineGutter({
         className={`w-6 h-6 flex items-center justify-center rounded text-[10px] transition-all ${
           commentActive || commentCount > 0
             // A line WITH comments keeps its solid count badge ALWAYS visible —
-            // only the empty "+" add-affordance hides at rest (O2 #230).
+            // only the empty "+" add-affordance hides at rest (O2 #230). The
+            // coarse-pointer fallback (opacity-25 on touch, where hover/
+            // focus-visible don't fire) keeps the empty add findable on tap.
             ? "bg-accent-blue-strong text-white"
-            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue-strong"
+            : "opacity-0 [@media(hover:none)]:opacity-25 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 bg-accent-blue/80 text-white hover:bg-accent-blue-strong"
         }`}
         title="Add comment on this line"
         aria-label="Add a comment on this line"

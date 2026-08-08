@@ -53,6 +53,11 @@ describe("CommentableCode", () => {
     }
     // Keyboard path intact: the affordance is still focusable (not tabindex=-1).
     expect(askBtn).not.toHaveAttribute("tabindex", "-1");
+    // Touch fallback (review LOW): a coarse pointer keeps the gutter faintly
+    // visible (opacity-25) since hover/focus-visible rarely fire on tap.
+    for (const btn of [askBtn, commentBtn]) {
+      expect(btn.className).toContain("[@media(hover:none)]:opacity-25");
+    }
   });
 
   it("O2 (#230) — a line WITH a comment keeps its solid count indicator (only the empty add hides)", () => {
