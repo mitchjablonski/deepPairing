@@ -710,3 +710,35 @@ describe("ChangesetArtifact — comments still thread (#171 regression guard)", 
     expect(screen.getByText("CROSS-FILE COMMENT")).toBeInTheDocument();
   });
 });
+
+describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", () => {
+  it("emits a well-formed scoped explain request naming the active file", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    // The active file is the first (auth/middleware.ts). File-by-file is the
+    // default view → exactly one walk-me-through button on screen.
+    const btn = screen.getByTestId("walk-me-through");
+    await userEvent.click(btn);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/requests"),
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/requests"));
+    const body = JSON.parse(calls[calls.length - 1][1].body);
+    expect(body.intent).toBe("explain");
+    expect(body.text).toContain("auth/middleware.ts");
+    expect(body.text).toContain("present_explainer");
+  });
+
+  it("offers the affordance for every file in review-all mode", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /Review all/i }));
+    // One per file (3 files).
+    expect(screen.getAllByTestId("walk-me-through")).toHaveLength(3);
+  });
+});

@@ -38,6 +38,44 @@ describe("CommentableCode", () => {
     expect(commentButtons).toHaveLength(3);
   });
 
+  it("O2 (#230) — the empty add-affordance is hidden at rest, revealed on row hover/focus", () => {
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
+    const askBtn = screen.getAllByRole("button", { name: /ask a question about this line/i })[0]!;
+    const commentBtn = screen.getAllByRole("button", { name: /add a comment on this line/i })[0]!;
+    // Hidden at rest…
+    expect(askBtn.className).toContain("opacity-0");
+    expect(commentBtn.className).toContain("opacity-0");
+    // …revealed on row hover, row focus-within (keyboard), and own keyboard focus.
+    for (const btn of [askBtn, commentBtn]) {
+      expect(btn.className).toContain("group-hover:opacity-100");
+      expect(btn.className).toContain("group-focus-within:opacity-100");
+      expect(btn.className).toContain("focus-visible:opacity-100");
+    }
+    // Keyboard path intact: the affordance is still focusable (not tabindex=-1).
+    expect(askBtn).not.toHaveAttribute("tabindex", "-1");
+    // Touch fallback (review LOW): a coarse pointer keeps the gutter faintly
+    // visible (opacity-25) since hover/focus-visible rarely fire on tap.
+    for (const btn of [askBtn, commentBtn]) {
+      expect(btn.className).toContain("[@media(hover:none)]:opacity-25");
+    }
+  });
+
+  it("O2 (#230) — a line WITH a comment keeps its solid count indicator (only the empty add hides)", () => {
+    const commentsByLine = new Map<number, any[]>([
+      [2, [{ id: "c1", author: "human", content: "note", target: { artifactId: "art_x", lineStart: 2, filePath: "a.ts" }, createdAt: "2026-01-01T00:00:00.000Z", parentCommentId: null }]],
+    ]);
+    render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={commentsByLine} />);
+    const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+    // Line 2's button shows the count "1" and stays solid (no opacity-0).
+    const withComment = commentBtns.find((b) => b.textContent === "1")!;
+    expect(withComment).toBeTruthy();
+    expect(withComment.className).not.toContain("opacity-0");
+    expect(withComment.className).toContain("bg-accent-blue-strong");
+    // An empty line's button is still the hidden-at-rest add-affordance.
+    const empty = commentBtns.find((b) => b.textContent === "+")!;
+    expect(empty.className).toContain("opacity-0");
+  });
+
   it("clicking + opens Comment mode with the inline input", async () => {
     render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" />);
     const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
