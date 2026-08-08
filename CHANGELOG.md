@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.1.33 — 2026-08-08
+
+The middle-ground release. deepPairing went live, and the first review after shipping found the
+thing every methodology eventually meets: the **pragmatic middle the market actually runs on**.
+The floor had one gear — full ceremony for everything — but real work isn't all high-stakes. So
+this release makes **ceremony scale with risk, not just size**: a low-risk feature can go build
+without the synchronous pre-work gates, while every genuine decision, the change-review surface,
+and the closing debrief stay exactly where they were. It also **deepens comprehension** — a
+one-click "walk me through this" and a debrief that reveals its depth only when you ask — and
+**hardens verdict integrity** so a stale tab can never quietly reverse a settled call. Plus the
+directory card that finally lands. The O-batch is three: **O1** finds the middle, **O2** reaches
+for comprehension, **O3** hardens the truth.
+
+### Added
+- **Ceremony now scales with risk, not just size — the risk-adaptive floor.** A new
+  **LOW-RISK-FEATURE class** in the cadence guidance: multi-file work with **no guardrail path, no
+  high-stakes decision, and no architectural fork** may **skip the synchronous pre-work gates**
+  (findings + spec/plan) and go build. The real-time gates on **genuine decisions** stay, the
+  **`present_changeset` review surface is never skipped** — the floor stays absolute — and **one
+  closing debrief** still lands. A low-risk feature now costs **~2 human touchpoints instead of
+  4-5**. Ships with the customer-language **directory card copy** ("Review what Claude Code is
+  about to change on a rich visual surface — inline comments, evidence, and a gate that remembers
+  the approaches you rejected") and **walk-me-through drill-in guidance** (PR #264).
+- **Comprehension gets an initial call-to-action — "🧭 Walk me through this."** A one-click
+  affordance on **changeset files** and **debrief needs-your-eyes items** that asks Claude for a
+  **scoped explainer** — the explainer finally has a front door (PR #265).
+
+### Changed
+- **The debrief reveals its depth only when you ask — progressive disclosure.** The walk-through
+  **collapses behind a toggle**, so the 30-second reader sees **needs-your-eyes + summary first**
+  and the deep reader is **one click away**; a section with a **live comment stays open**. The
+  **per-line comment gutter** now reveals on **hover/focus** instead of always competing with the
+  code (PR #265).
+
+### Fixed
+- **A stale tab can no longer silently reverse a settled verdict — the cross-tab verdict guard.**
+  Reversing an already **approved/rejected** artifact from a stale tab gets a **409 and refreshes
+  to the truth** instead of quietly overwriting it. Plus **read-amplification halved on the hot
+  poll** (`check_feedback`: 18→10 store reads, **byte-identical output**), **`present_*` review
+  URLs survive a daemon port move**, a **mermaid render skeleton**, and a **visible narrow-width
+  search affordance** (PR #266).
+
 ## v0.1.32 — 2026-08-07
 
 The unswallowable release. An adversarial agent went hunting for the edges — the places where

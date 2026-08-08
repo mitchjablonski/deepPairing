@@ -1,7 +1,7 @@
 {
   "name": "deeppairing",
   "displayName": "deepPairing",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "description": "Review what Claude Code is about to change on a rich visual surface — inline comments, evidence, and a gate that remembers the approaches you rejected.",
   "author": {
     "name": "deepPairing"
