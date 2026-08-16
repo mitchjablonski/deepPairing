@@ -1,5 +1,5 @@
 import type { ToolContext, ToolResult } from "./types.js";
-import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES } from "./types.js";
+import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
@@ -714,8 +714,25 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const formattedDecisions: string[] = [];
     for (const d of resolved) {
       const option = d.options.find((o) => o.id === d.response?.optionId);
+      // P3 — the DECISION LABEL for every human-facing key this block mints.
+      // M1.1 gave present_options a short fork-naming `title` and made it the
+      // artifact/card/session heading, but this block kept keying on the full
+      // `context` PARAGRAPH — so the ledger (and export-learnings) showed
+      // "<three-line background paragraph>: Redis" where every other surface
+      // showed "Cache backend: Redis". Same label everywhere now.
+      //
+      // BACKWARD COMPAT (load-bearing): this changes only what NEW entries
+      // RECORD, never what the preflight gate MATCHES ON. The gate's surface
+      // lane splits a rejection description on its first colon and matches the
+      // POST-colon noun (findRejectedApproachMatch → `specificNoun`), which is
+      // the option title under BOTH the old and the new key; the concept lane
+      // keys on option.concept.name (untouched here). So an OLD long-format
+      // entry keeps blocking exactly as before, and a new short-format entry
+      // blocks the same proposals. Pinned in
+      // check-feedback-decision-title.test.ts.
+      const decisionLabel = d.title?.trim() || d.context;
       if (option) {
-        const approvedDescription = `${d.context}: ${option.title}`;
+        const approvedDescription = `${decisionLabel}: ${option.title}`;
         // AA1 — concept.name (from Y5) is the cross-project ledger key.
         // Pre-AA1 we passed option.description here, which is prose
         // and broke compounding (every project minted unique long
@@ -755,14 +772,14 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
             : "";
           const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
           await recordRejectedOption(store, broadcast, {
-            context: d.context,
+            context: decisionLabel,
             option: rej,
             reason: rejectReason,
             sourceArtifactId: d.artifactId,
           });
         }
       }
-      formattedDecisions.push(`- Decision "${d.context}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
@@ -856,20 +873,75 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
   );
-  if (draftArtifacts.length > 0) {
-    // #158 — a draft the secret scanner flagged carries the warning inline so
-    // the agent knows the human is reviewing something that may contain a
-    // pasted credential. Labels only (e.g. "AWS access key id") — never the
-    // matched value.
-    const waiting = draftArtifacts
-      .map((a) => `"${a.title}" (${a.type}${a.secretWarnings?.length ? " — ⚠ possible secret detected" : ""})`)
-      .join(", ");
-    parts.push(`⏳ WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
+  // P3 — split the nag by WHAT THE HUMAN OWES. An EXPLAINER is read-only: its
+  // footer is an ACKNOWLEDGE bar ("Got it" / "Ask more" — see
+  // ArtifactStatusActions' acknowledgeMode), there is no Reject and no
+  // Request-changes, so nothing about it is "awaiting your verdict". Listing it
+  // under ⏳ WAITING made the agent (and the human reading the transcript)
+  // treat a walk-through it was ASKED for as a blocking review obligation.
+  // Explainer is the ONLY acknowledge-only type today: debrief and research
+  // keep the full verdict triad (the debrief only suppresses the reject-concept
+  // LEDGER write, not the verdict), so they stay in the WAITING line.
+  const verdictDrafts = draftArtifacts.filter(
+    (a) => !(ACKNOWLEDGE_ONLY_DRAFT_TYPES as readonly string[]).includes(a.type),
+  );
+  const readOnlyDrafts = draftArtifacts.filter(
+    (a) => (ACKNOWLEDGE_ONLY_DRAFT_TYPES as readonly string[]).includes(a.type),
+  );
+  // #158 — a draft the secret scanner flagged carries the warning inline so
+  // the agent knows the human is reviewing something that may contain a
+  // pasted credential. Labels only (e.g. "AWS access key id") — never the
+  // matched value.
+  const nameDraft = (a: Artifact): string =>
+    `"${a.title}" (${a.type}${a.secretWarnings?.length ? " — ⚠ possible secret detected" : ""})`;
+  if (verdictDrafts.length > 0) {
+    const waiting = verdictDrafts.map(nameDraft).join(", ");
+    parts.push(`⏳ WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
+  }
+  if (readOnlyDrafts.length > 0) {
+    const toRead = readOnlyDrafts.map(nameDraft).join(", ");
+    parts.push(`📖 TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}\nThese await no verdict — they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`);
   }
 
-  const pendingDec = await store.getPendingDecisions();
+  // P3 — the pending-decision nag, made non-self-contradicting. A round-11
+  // dogfood payload reported a decision SELECTION and "⏳ WAITING: 1
+  // decision(s) pending" in the same breath, which reads as the SAME decision
+  // being both resolved and pending. Two things caused that read, both fixed
+  // here:
+  //   (a) the line was ANONYMOUS — a count with no names — so a genuinely
+  //       DIFFERENT still-open decision (a re-ask, or an option set the human
+  //       never picked from) was indistinguishable from the one just
+  //       delivered. It now NAMES each pending decision (short M1.1 title when
+  //       present, else the context, bounded) with its dec_ id.
+  //   (b) the orphan class: getPendingDecisions excludes records whose artifact
+  //       is superseded/retracted/rejected/obsolete, but NOT `approved` — so a
+  //       decision record left response-less while its artifact reached a
+  //       terminal state by any other path (the /api/decisions no-record
+  //       fallback, a straight Approve on the card) nagged FOREVER. Filter both
+  //       the just-delivered ids and any record whose backing artifact is no
+  //       longer open, so a delivered selection can never also be counted
+  //       pending.
+  // `resolved` is this poll's delivered set (drained + acknowledged above).
+  const deliveredDecisionIds = new Set(resolved.map((d) => d.decisionId));
+  const openArtifactIds = new Set(
+    postWakeArtifacts.filter((a) => a.status === "draft" || a.status === "reviewing").map((a) => a.id),
+  );
+  const pendingDec = (await store.getPendingDecisions()).filter(
+    (d) =>
+      !deliveredDecisionIds.has(d.decisionId) &&
+      // A record whose artifact this session doesn't carry at all stays pending
+      // (mirrors the store's own "unknown ids stay pending" stance).
+      (!postWakeArtifacts.some((a) => a.id === d.artifactId) || openArtifactIds.has(d.artifactId)),
+  );
   if (pendingDec.length > 0) {
-    parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
+    const named = pendingDec
+      .map((d) => {
+        const label = d.title?.trim() || d.context;
+        const short = label.length > 80 ? `${label.slice(0, 79)}…` : label;
+        return `"${short}" (${d.decisionId})`;
+      })
+      .join(", ");
+    parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
   }
   if (pendingPlans.length > 0) {
     parts.push(`⏳ WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);

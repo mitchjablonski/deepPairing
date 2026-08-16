@@ -27394,6 +27394,7 @@ var AUTONOMY_POLICY_LINE = {
 // src/mcp/tools/types.ts
 var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"];
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
+var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"];
 
 // src/mcp/tools/check-feedback-delivery.ts
 function removedLineContent(art, filePath, oldLine) {
@@ -30633,7 +30634,7 @@ async function handlePresentOptions(ctx, args) {
     stakes
   });
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId }
   };
 }
@@ -31053,8 +31054,9 @@ ${lines.join("\n")}`
     const formattedDecisions = [];
     for (const d of resolved) {
       const option = d.options.find((o) => o.id === d.response?.optionId);
+      const decisionLabel = d.title?.trim() || d.context;
       if (option) {
-        const approvedDescription = `${d.context}: ${option.title}`;
+        const approvedDescription = `${decisionLabel}: ${option.title}`;
         const approvedConcept = option.concept?.name ?? option.description ?? void 0;
         await store.recordApprovedPattern({
           description: approvedDescription,
@@ -31072,14 +31074,14 @@ ${lines.join("\n")}`
           const pickContext = d.response?.reasoning ? ` \u2014 picked "${option.title}": ${d.response.reasoning}` : "";
           const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
           await recordRejectedOption(store, broadcast, {
-            context: d.context,
+            context: decisionLabel,
             option: rej,
             reason: rejectReason,
             sourceArtifactId: d.artifactId
           });
         }
       }
-      formattedDecisions.push(`- Decision "${d.context}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
@@ -31148,14 +31150,39 @@ Fix the Mermaid source and re-present the affected visual (revise_artifact).`
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
-  if (draftArtifacts.length > 0) {
-    const waiting = draftArtifacts.map((a) => `"${a.title}" (${a.type}${a.secretWarnings?.length ? " \u2014 \u26A0 possible secret detected" : ""})`).join(", ");
-    parts.push(`\u23F3 WAITING: ${draftArtifacts.length} artifact(s) still under review: ${waiting}
+  const verdictDrafts = draftArtifacts.filter(
+    (a) => !ACKNOWLEDGE_ONLY_DRAFT_TYPES.includes(a.type)
+  );
+  const readOnlyDrafts = draftArtifacts.filter(
+    (a) => ACKNOWLEDGE_ONLY_DRAFT_TYPES.includes(a.type)
+  );
+  const nameDraft = (a) => `"${a.title}" (${a.type}${a.secretWarnings?.length ? " \u2014 \u26A0 possible secret detected" : ""})`;
+  if (verdictDrafts.length > 0) {
+    const waiting = verdictDrafts.map(nameDraft).join(", ");
+    parts.push(`\u23F3 WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}
 The human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
   }
-  const pendingDec = await store.getPendingDecisions();
+  if (readOnlyDrafts.length > 0) {
+    const toRead = readOnlyDrafts.map(nameDraft).join(", ");
+    parts.push(`\u{1F4D6} TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}
+These await no verdict \u2014 they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`);
+  }
+  const deliveredDecisionIds = new Set(resolved.map((d) => d.decisionId));
+  const openArtifactIds = new Set(
+    postWakeArtifacts.filter((a) => a.status === "draft" || a.status === "reviewing").map((a) => a.id)
+  );
+  const pendingDec = (await store.getPendingDecisions()).filter(
+    (d) => !deliveredDecisionIds.has(d.decisionId) && // A record whose artifact this session doesn't carry at all stays pending
+    // (mirrors the store's own "unknown ids stay pending" stance).
+    (!postWakeArtifacts.some((a) => a.id === d.artifactId) || openArtifactIds.has(d.artifactId))
+  );
   if (pendingDec.length > 0) {
-    parts.push(`\u23F3 WAITING: ${pendingDec.length} decision(s) pending. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
+    const named = pendingDec.map((d) => {
+      const label = d.title?.trim() || d.context;
+      const short = label.length > 80 ? `${label.slice(0, 79)}\u2026` : label;
+      return `"${short}" (${d.decisionId})`;
+    }).join(", ");
+    parts.push(`\u23F3 WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
   }
   if (pendingPlans.length > 0) {
     parts.push(`\u23F3 WAITING: ${pendingPlans.length} plan review(s) pending. The human will review in the companion UI. Call check_feedback again to pick up their verdict.`);

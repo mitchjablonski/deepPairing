@@ -24,7 +24,7 @@ import {
 } from "../store/global-store.js";
 import { recordRejectedOptionConcept } from "../store/rejected-option-recorder.js";
 import type { LedgerRejectionBroadcast } from "../store/rejected-option-recorder.js";
-import type { DecisionOption } from "@deeppairing/shared";
+import type { Artifact, DecisionOption } from "@deeppairing/shared";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
@@ -735,14 +735,49 @@ export function createHttpRoutes(
     // the artifact already carries (X6), and in that case the store had nothing
     // to advance — so the route is the belt that still leaves the artifact honest.
     let targetArtifactId = decision?.artifactId;
+    let fallbackArtifact: Artifact | undefined;
     if (!targetArtifactId) {
       const artifacts = await store.getArtifacts();
-      const art = artifacts.find(
+      fallbackArtifact = artifacts.find(
         (a) =>
           a.type === "decision" &&
           ((a.content as any)?.decisionId === decisionId || a.id === decisionId),
       );
-      targetArtifactId = art?.id;
+      targetArtifactId = fallbackArtifact?.id;
+    }
+    // P3 — the no-record fallback's SILENT SUCCESS. updateArtifactStatus carries
+    // the O3 verdict guard as a store-authoritative backstop: on an artifact
+    // already at a DIFFERENT terminal verdict (rejected/revised — e.g. a stale
+    // tab still showing the option list after the human rejected the whole
+    // framing in another tab) it logs and `return`s without writing, while this
+    // route went on to broadcast `decision_resolved` and answer 200
+    // {status:"resolved"} — reporting a resolution that never landed. Pre-check
+    // the same predicate the verdict route uses and answer 409
+    // verdict_already_final instead, re-broadcasting the REAL status so the
+    // stale tab refreshes. Only the fallback branch needs this: with a record,
+    // store.resolveDecision owns the (identically guarded) advance and this
+    // route writes no status at all.
+    if (targetArtifactId && !decision && fallbackArtifact) {
+      if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
+        const at = fallbackArtifact.updatedAt;
+        log(
+          `[decision] REFUSED resolve on ${targetArtifactId}: ` +
+          `${fallbackArtifact.status} → approved (reason=ui_decision_resolve) — verdict already final at ${at}`,
+        );
+        broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+        return c.json(
+          {
+            error: "verdict_already_final",
+            code: "verdict_already_final",
+            currentStatus: fallbackArtifact.status,
+            at,
+            message:
+              `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. ` +
+              `A finalized verdict can't be reversed — this tab has been refreshed to the current state.`,
+          },
+          409,
+        );
+      }
     }
     if (targetArtifactId) {
       if (!decision) {

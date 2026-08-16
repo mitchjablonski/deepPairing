@@ -36,6 +36,21 @@ export type ToolResult = {
 export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"] as const;
 /** Draft types listed in the WAITING block (decisions get their own line). */
 export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"] as const;
+/**
+ * P3 — the ACKNOWLEDGE-ONLY subset of WAITING_DRAFT_TYPES: read-only artifacts
+ * whose companion-UI footer is an acknowledge bar ("Got it" / "Ask more" —
+ * ArtifactStatusActions' `acknowledgeMode`), with NO Reject and NO
+ * Request-changes. Nothing here proposes an approach, so nothing here awaits a
+ * VERDICT; check_feedback lists these under a distinct "📖 TO READ" line
+ * instead of the "⏳ WAITING … under review" nag.
+ *
+ * EXPLAINER ONLY, deliberately: the debrief and research surfaces keep the full
+ * verdict triad (the debrief merely suppresses the reject-CONCEPT ledger write,
+ * which is a ledger concern, not a verdict one). Add a type here only when its
+ * UI footer actually drops the verdict triad — the parity is pinned in
+ * check-feedback-readonly-nag.test.ts.
+ */
+export const ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"] as const;
 
 export interface ToolHelpers {
   /** MCP elicitation with graceful fallback. */

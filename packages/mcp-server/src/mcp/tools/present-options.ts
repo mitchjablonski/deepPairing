@@ -126,8 +126,16 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // decision had no id to pass (withdraw_artifact/revise_artifact take art_).
   // dec_ stays too — the decision-resolve flow keys on it — and it's mirrored
   // in structuredContent so strict clients don't prose-parse.
+  //
+  // P3 — finish M1.1's HALF-landing. The success text echoed the whole
+  // `context` paragraph as the decision's name (`args?.context` — the raw
+  // pre-validation arg at that), so the agent's transcript carried a paragraph
+  // where the card, the session heading and the ledger all show the short
+  // fork-naming title. Use the SAME label the artifact stores (`artifactTitle`
+  // = title ?? context): byte-identical for a title-less call, short and
+  // quotable when a title exists.
   return {
-    content: [{ type: "text", text: `Decision "${args?.context}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId },
   };
 }

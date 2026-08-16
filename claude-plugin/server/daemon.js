@@ -28467,12 +28467,32 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       );
     }
     let targetArtifactId = decision?.artifactId;
+    let fallbackArtifact;
     if (!targetArtifactId) {
       const artifacts = await store.getArtifacts();
-      const art = artifacts.find(
+      fallbackArtifact = artifacts.find(
         (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
       );
-      targetArtifactId = art?.id;
+      targetArtifactId = fallbackArtifact?.id;
+    }
+    if (targetArtifactId && !decision && fallbackArtifact) {
+      if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
+        const at = fallbackArtifact.updatedAt;
+        log2(
+          `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
+        );
+        broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+        return c.json(
+          {
+            error: "verdict_already_final",
+            code: "verdict_already_final",
+            currentStatus: fallbackArtifact.status,
+            at,
+            message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
+          },
+          409
+        );
+      }
     }
     if (targetArtifactId) {
       if (!decision) {
