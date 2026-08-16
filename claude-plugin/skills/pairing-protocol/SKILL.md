@@ -77,13 +77,17 @@ flexes.
   the synchronous pre-work gates — `present_findings` and the spec/plan gate — and
   go build. You still KEEP: real-time `present_options` the moment a genuine
   decision arises, the `present_changeset` review surface (NEVER skipped — the
-  floor), and exactly ONE `present_debrief`. Net: ~2 touchpoints (a decision if one
-  comes up + the debrief) instead of 4-5. This is the risk-adaptive default — don't
+  floor), and exactly ONE `present_debrief`. Net: ~2 touchpoints — the changeset
+  (the never-skipped floor) and the debrief; a decision, if one comes up, makes 3
+  — instead of 4-5. This is the risk-adaptive default — don't
   make a low-risk refactor file a change request through the full review board.
 - **Escalated** — anything touching a guardrail path, any `stakes: "high"`
   decision, or a genuine architectural fork. The full arc: findings → options →
-  spec/plan → changeset → debrief. Use your judgment on borderline cases (the
-  preflight gate escalates guardrail-path edits itself regardless).
+  spec/plan → changeset → debrief. Use your judgment on borderline cases — and
+  the preflight hook is the backstop underneath that judgment: a `Write`/`Edit`
+  to a guardrail path with NO findings, options, spec, or plan live in the
+  session pauses for your pair to confirm (see **Guardrails** below for exactly
+  when it fires and when it stays quiet).
 
 **The floor is absolute at every class:** code is presented for review before it
 lands — the `present_changeset` is that surface, always. The low-risk-feature
@@ -183,8 +187,9 @@ one case that closes without a *separate* debrief — its self-summarizing
   miniature) into its `reasoning`, and no separate `present_debrief` is owed. The
   moment the work escalates (a second file, a real decision, a spec or plan, or
   the human asks for more) — or your judgment says a change touching guardrail
-  paths (migrations, CI, secrets) warrants it (the preflight gate escalates the
-  edit itself regardless) — you're back to the full arc
+  paths (migrations, CI, secrets) warrants it (and if your judgment says
+  otherwise, the preflight backstop will pause that write and ask — see
+  **Guardrails**) — you're back to the full arc
   — batch into a `present_changeset` and end with one `present_debrief`.
 - **`present_debrief`** — **END EVERY feature or autonomous run with exactly
   ONE** — with a single size carve-out: a **single-file, no-decision, surgical
@@ -193,7 +198,8 @@ one case that closes without a *separate* debrief — its self-summarizing
   owed. ANYTHING larger — 2+ files, a real decision, a spec or plan, or the
   human asking for more — owes the full arc, ending in exactly ONE debrief; a
   change touching guardrail paths (migrations, CI, secrets) deserves it too —
-  use your judgment (the preflight gate escalates the edit itself regardless).
+  use your judgment (and see **Guardrails** for the preflight backstop that
+  catches the call when your judgment goes the other way).
   (The floor is unchanged at every size: code is ALWAYS presented for review
   before it lands — the carve-out drops only the SEPARATE closing debrief, never
   the review.) This is the primary comprehension surface (the thesis's 80% case):
@@ -224,15 +230,18 @@ one case that closes without a *separate* debrief — its self-summarizing
   `present_debrief`: the debrief digests a change YOU just made, the explainer
   explains code as it already is. Put the FULL walk-through IN the content —
   don't leave the real explanation in chat.
-  - **Scoped "walk me through this" requests (the drill-in pull).** When
-    `check_feedback` delivers an explain-intent request the human raised by
-    clicking "walk me through this" on a specific changeset hunk or a
-    needs-your-eyes item, it carries that file/hunk context. Serve it with a
-    `present_explainer` SCOPED to exactly that hunk/item — a focused walk of just
-    those lines and what they do, anchored to that Evidence — NOT a whole-codebase
-    tour. Pass `servedRequestId` so it links back to the request and clears. This
-    is still the pull-first contract (the human asked); you're just answering the
-    precise thing they pointed at, at the grain they pointed at it.
+  - **Scoped explain-intent requests (the drill-in pull).** When
+    `check_feedback` delivers an **explain-intent request raised from the UI's
+    Explain / walk-me-through affordance** — the human pointed at a specific
+    changeset hunk, a file, or a needs-your-eyes item — it carries that scope.
+    Read the scope the request gives you (the file/hunk/item it names), and
+    serve it with a `present_explainer` SCOPED to exactly that hunk/file/item —
+    a focused walk of just those lines and what they do, anchored to that
+    Evidence — NOT a whole-codebase tour. Identify the affordance by the
+    request's explain INTENT, never by the button's label (the label is UI copy
+    and moves). Pass `servedRequestId` so it links back to the request and
+    clears. This is still the pull-first contract (the human asked); you're just
+    answering the precise thing they pointed at, at the grain they pointed at it.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
   that cadence got zero engagement, and concept-naming now lives in the debrief's
   `sections[].concepts`. Reach for `log_reasoning` only for a genuinely
@@ -279,7 +288,11 @@ one case that closes without a *separate* debrief — its self-summarizing
   - `mode: "ledger"` — cross-project digest (counts, top cited stances,
     seeded entries).
   - `mode: "any"` — union of philosophy + sessions. Default when you're not
-    sure.
+    sure. It **requires a `query`** (so does `mode: "sessions"`) — pass the
+    concept you're about to propose, e.g.
+    `recall(mode: "any", query: "rate limiting")`. A bare
+    `recall(mode: "any")` errors; to browse the whole ledger instead, use
+    `mode: "philosophy"` with an empty query.
 - **`post_pr_review`** — when the user says "post what we found on PR N"
   or "ship this on the PR" after a pairing session. The PR is a *surface
   to share what you paired on*, not a code-review pass run from the
@@ -372,9 +385,36 @@ the case for reconsidering.
 
 ## Guardrails
 
-Project guardrails (migrations, `.github/workflows/`, `Dockerfile`, `.env`)
-are detected by filesystem. Even when autonomy is "autonomous", escalate
-to supervised for changes touching these paths.
+Project guardrails are detected by filesystem, at the project root, in four
+classes: **migrations** (`migrations/`, `db/migrate/`, `prisma/migrations/`,
+`supabase/migrations/`), **workflows** (`.github/workflows/`),
+**infrastructure** (`Dockerfile`, `docker-compose.yml`, `infrastructure/`,
+`terraform/`, `k8s/`, `kubernetes/`, `helm/`), and **secrets** (`.env`,
+`.env.local`, `.env.production`, `config/secrets.yml`). Even when autonomy is
+"autonomous", escalate to supervised for changes touching these paths — that's
+the Escalated class, and it's on you to recognize it.
+
+**The preflight backstop** is the safety net under that judgment call — and it
+does exactly this, no more:
+
+- **When it fires.** A `Write`/`Edit`/`MultiEdit` whose target path is under one
+  of those four classes, at a moment when NO `research` (findings), `decision`
+  (options), `spec`, or `plan` artifact is live in the session. It returns
+  `permissionDecision: "ask"` — a prompt naming the class and the path, which
+  your pair can confirm or decline.
+- **When it stays quiet.** If the escalated arc is already in flight — a live
+  findings, options, spec, or plan — the write passes silently. Doing the
+  ceremony is exactly how you avoid the prompt. It also asks at most **once per
+  guardrail class per 30 minutes**, so a long arc isn't interrupted repeatedly,
+  and it never fires for a non-guardrail path.
+- **What it is not.** It never `deny`s, it never blocks the edit outright, and
+  any error — including an unreadable session store — passes the edit through
+  (fail-open). It is local-only: it reads this project's `.deeppairing/` and
+  writes nothing else. So it is a backstop for a *misclassified* edit, not a
+  substitute for classifying correctly, and definitely not a security boundary.
+
+A superseded/retracted/obsolete/**rejected** spec doesn't count as live — if
+your pair turned the proposal down, the backstop will still ask.
 
 ## Don't
 

@@ -123,3 +123,60 @@ export function sessionOwesDebrief(
   const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
   return !trivial;
 }
+
+// ---------------------------------------------------------------------------
+// P1 (round-11) — the PRE-WORK ceremony predicate: the other half of the same
+// vocabulary.
+//
+// `sessionOwesDebrief` above governs the CLOSING obligation. This one governs
+// the OPENING one: "is the escalated arc actually in flight right now?" It is
+// consumed by the preflight PreToolUse hook's GUARDRAIL BACKSTOP
+// (cli/preflight-hook-core.ts), which pauses a write to a guardrail path ONLY
+// when the agent skipped the pre-work ceremony entirely. Living here keeps both
+// gates' liveness rules in one file, and keeps this module import-free so the
+// hook (which runs under plain `node` out of .deeppairing/hooks/) can pull it in
+// without dragging @deeppairing/shared along.
+//
+// NOTE the deliberate divergence from CEREMONY_TYPES above: the debrief gate
+// EXCLUDES `research` (findings alone is investigation, not feature-shaped work,
+// so it must not escalate a trivial fix into owing a debrief). The PRE-WORK set
+// INCLUDES it — present_findings IS the opening move of the escalated arc
+// ("findings → options → spec/plan"), and an agent that presented
+// evidence-anchored findings before touching a migration demonstrably did NOT
+// skip the ceremony. Two sets, two questions; the divergence is intentional.
+//
+// `changeset`/`code_change` are deliberately NOT ceremony here: the changeset is
+// the review FLOOR that comes AFTER the edit lands on disk, so it can never be
+// in flight at PreToolUse time — counting it would make the backstop
+// unfireable in exactly the sessions it exists for.
+/** Pre-work ceremony artifact types — the escalated arc's opening moves. */
+export const PRE_WORK_CEREMONY_TYPES = ["research", "decision", "spec", "plan"] as const;
+/** Statuses under which a ceremony artifact no longer counts as "in flight".
+ *  The same liveness rule the debrief gate applies to a debrief: a superseded
+ *  one has a live v(N+1) counting in its place; retracted/obsolete were taken
+ *  back; REJECTED means the human refused the proposal — which is precisely a
+ *  case the backstop SHOULD still ask about. */
+const CEREMONY_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
+
+/**
+ * True when the session shows a LIVE pre-work ceremony artifact — i.e. the
+ * escalated arc IS in flight, so a guardrail-path edit is a legitimate part of
+ * it and the backstop must stay silent.
+ *
+ * @param artifacts — every artifact in the session (any status).
+ * @param isRecent — recency guard the caller supplies. The hook uses one working
+ *   arc (8h) so a long implementation run after an approved spec is never
+ *   re-asked, while YESTERDAY's spec cannot license today's unceremonious
+ *   migration.
+ */
+export function sessionHasLivePreWorkCeremony(
+  artifacts: DebriefGateArtifact[],
+  isRecent: (a: DebriefGateArtifact) => boolean = () => true,
+): boolean {
+  return artifacts.some(
+    (a) =>
+      (PRE_WORK_CEREMONY_TYPES as readonly string[]).includes(a?.type ?? "") &&
+      !CEREMONY_DEAD_STATUSES.includes(a?.status ?? "") &&
+      isRecent(a),
+  );
+}

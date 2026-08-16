@@ -11,7 +11,9 @@
  *
  * Contract, identical to the init-path script:
  *   - only Edit/Write/MultiEdit are considered; anything else exits 0;
- *   - a cheap ledger pre-check skips the matcher when nothing is seeded;
+ *   - a cheap ledger pre-check skips the matcher when nothing is seeded AND the
+ *     path can't be a guardrail path (P1 — the guardrail backstop has no ledger
+ *     to be seeded, so it needs its own zero-I/O prefilter here);
  *   - a match surfaces to the HUMAN as permissionDecision "ask" (recoverable
  *     pairing) rather than a hard deny — raw file content is noisier than the
  *     agent's prose, and an already-approved change must not be auto-blocked;
@@ -19,7 +21,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { evaluatePreflightHook } from "./preflight-hook-core.js";
+import { evaluatePreflightHook, looksLikeGuardrailPath } from "./preflight-hook-core.js";
 
 function recordFire(root: string, reason: string): void {
   try {
@@ -74,7 +76,12 @@ process.stdin.on("end", () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot)) {
+    // P1 — the fast path now has TWO reasons to keep going: a seeded ledger
+    // (the rejected-approach matcher) OR a path that could be a guardrail (the
+    // backstop). looksLikeGuardrailPath is a single regex test against the
+    // file path — no I/O — so a non-guardrail edit in a ledger-free project
+    // still exits here, exactly as before.
+    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
       process.exit(0); // nothing to match against — skip the matcher
     }
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });

@@ -13,6 +13,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cliInvocation } from "../cli-invocation.js";
+// P1 — the guardrail backstop's zero-I/O prefilter. The generated hook script is
+// self-contained and cannot import at runtime, so we INTERPOLATE this literal
+// into its source at generation time: the init-path copy and the plugin-bundled
+// copy share one definition by construction, not by hand-maintenance.
+import { GUARDRAIL_PATH_PREFILTER } from "./preflight-hook-core.js";
 
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
@@ -730,6 +735,9 @@ function preflightHookScript(coreUrl: string): string {
 // matching raw file content is noisier than the agent's reasoning prose, and a
 // change the human already approved in the UI must not be auto-blocked when
 // applied. "ask" keeps the human in the loop (pairing) and is recoverable.
+// P1 — it ALSO runs the guardrail backstop: a write to a guardrail path
+// (migrations, .github/workflows, infra, .env) with no live pre-work ceremony in
+// the session asks the human too. Same "ask", never "deny", still fail-open.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -764,6 +772,20 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// P1 — the GUARDRAIL BACKSTOP's zero-I/O prefilter. The regex literal below is
+// INTERPOLATED from preflight-hook-core's GUARDRAIL_PATH_PREFILTER at generation
+// time, so this copy can never drift from the plugin-bundled one. The backstop
+// has no ledger to be seeded, so the ledger fast-path above would otherwise hide
+// it entirely; a guardrail-looking path is the second reason to keep going.
+const GUARDRAIL_PATH_PREFILTER = ${String(GUARDRAIL_PATH_PREFILTER)};
+function looksLikeGuardrailPath(toolInput) {
+  try {
+    const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+    if (typeof fp !== "string" || !fp) return false;
+    return GUARDRAIL_PATH_PREFILTER.test(fp.replace(/\\\\/g, "/"));
+  } catch { return false; }
+}
+
 let input = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { input += d; });
@@ -776,7 +798,7 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot)) {
+    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
       process.exit(0); // nothing to match against — skip the matcher import
     }
     const mod = await import(CORE_URL);

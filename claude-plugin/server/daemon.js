@@ -5096,6 +5096,47 @@ import fs2 from "node:fs";
 import os from "node:os";
 import path2 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
+
+// src/mcp/preflight-validator.ts
+var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "but",
+  "not",
+  "use",
+  "with",
+  "from",
+  "into",
+  "onto",
+  "that",
+  "this",
+  "than",
+  "then",
+  "via",
+  "per",
+  "our",
+  "your",
+  "its"
+]);
+function stemToken(raw2) {
+  const t = raw2.toLowerCase();
+  if (t.length <= 4) return t;
+  if (t.endsWith("ing") && t.length >= 6) return t.slice(0, -3);
+  if (t.endsWith("ed") && t.length >= 5) return t.slice(0, -2);
+  if (t.endsWith("s") && !t.endsWith("ss") && t.length >= 5) return t.slice(0, -1);
+  return t;
+}
+function meaningfulTokens(s) {
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken);
+}
+
+// src/cli/preflight-hook-core.ts
+var CEREMONY_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
+var GUARDRAIL_ASK_TTL_MS = 30 * 60 * 1e3;
+var GUARDRAIL_PATH_PREFILTER = /(^|\/)(\.github\/workflows|migrations|db\/migrate|prisma\/migrations|supabase\/migrations|Dockerfile|docker-compose|infrastructure|terraform|k8s|kubernetes|helm|\.env|config\/secrets)(\/|\.|$)/;
+
+// src/cli/setup-tasks.ts
 function scopeFiles(projectRoot2) {
   return [
     { scope: "user", path: path2.join(os.homedir(), ".claude", "settings.json") },
@@ -5523,6 +5564,9 @@ function preflightHookScript(coreUrl) {
 // matching raw file content is noisier than the agent's reasoning prose, and a
 // change the human already approved in the UI must not be auto-blocked when
 // applied. "ask" keeps the human in the loop (pairing) and is recoverable.
+// P1 \u2014 it ALSO runs the guardrail backstop: a write to a guardrail path
+// (migrations, .github/workflows, infra, .env) with no live pre-work ceremony in
+// the session asks the human too. Same "ask", never "deny", still fail-open.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -5557,6 +5601,20 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// P1 \u2014 the GUARDRAIL BACKSTOP's zero-I/O prefilter. The regex literal below is
+// INTERPOLATED from preflight-hook-core's GUARDRAIL_PATH_PREFILTER at generation
+// time, so this copy can never drift from the plugin-bundled one. The backstop
+// has no ledger to be seeded, so the ledger fast-path above would otherwise hide
+// it entirely; a guardrail-looking path is the second reason to keep going.
+const GUARDRAIL_PATH_PREFILTER = ${String(GUARDRAIL_PATH_PREFILTER)};
+function looksLikeGuardrailPath(toolInput) {
+  try {
+    const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+    if (typeof fp !== "string" || !fp) return false;
+    return GUARDRAIL_PATH_PREFILTER.test(fp.replace(/\\\\/g, "/"));
+  } catch { return false; }
+}
+
 let input = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { input += d; });
@@ -5569,7 +5627,7 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot)) {
+    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
       process.exit(0); // nothing to match against \u2014 skip the matcher import
     }
     const mod = await import(CORE_URL);
@@ -25563,42 +25621,6 @@ function ledgerDigest(projectRoot2) {
 // src/store/preflight-residual.ts
 import fs9 from "node:fs";
 import path8 from "node:path";
-
-// src/mcp/preflight-validator.ts
-var SHORT_STOPWORDS = /* @__PURE__ */ new Set([
-  "the",
-  "and",
-  "for",
-  "but",
-  "not",
-  "use",
-  "with",
-  "from",
-  "into",
-  "onto",
-  "that",
-  "this",
-  "than",
-  "then",
-  "via",
-  "per",
-  "our",
-  "your",
-  "its"
-]);
-function stemToken(raw2) {
-  const t = raw2.toLowerCase();
-  if (t.length <= 4) return t;
-  if (t.endsWith("ing") && t.length >= 6) return t.slice(0, -3);
-  if (t.endsWith("ed") && t.length >= 5) return t.slice(0, -2);
-  if (t.endsWith("s") && !t.endsWith("ss") && t.length >= 5) return t.slice(0, -1);
-  return t;
-}
-function meaningfulTokens(s) {
-  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken);
-}
-
-// src/store/preflight-residual.ts
 var RESIDUAL_CAP = 100;
 function residualPath(projectRoot2) {
   return path8.join(projectRoot2, ".deeppairing", "preflight-residual.json");
