@@ -711,14 +711,20 @@ describe("ChangesetArtifact — comments still thread (#171 regression guard)", 
   });
 });
 
-describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", () => {
+describe("ChangesetArtifact — the 'Explain this' affordance (O2 #230, P2 truth-up)", () => {
+  /** The most recent /api/requests POST body. */
+  function lastRequestBody(): any {
+    const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/requests"));
+    return JSON.parse(calls[calls.length - 1][1].body);
+  }
+
   it("emits a well-formed scoped explain request naming the active file", async () => {
     const art = changeset({ reviewState: {} });
     seed(art);
     render(<ChangesetArtifact artifact={art} />);
     // The active file is the first (auth/middleware.ts). File-by-file is the
-    // default view → exactly one walk-me-through button on screen.
-    const btn = screen.getByTestId("walk-me-through");
+    // default view → one FILE-grain button in its header.
+    const btn = screen.getByTestId("walk-me-through-file");
     await userEvent.click(btn);
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -726,11 +732,13 @@ describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", ()
         expect.objectContaining({ method: "POST" }),
       ),
     );
-    const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/requests"));
-    const body = JSON.parse(calls[calls.length - 1][1].body);
+    const body = lastRequestBody();
     expect(body.intent).toBe("explain");
     expect(body.text).toContain("auth/middleware.ts");
     expect(body.text).toContain("present_explainer");
+    // P2 fix 3 — the scope also travels as data.
+    expect(body.source).toBe("walk_me_through");
+    expect(body.scope).toEqual({ filePath: "auth/middleware.ts", artifactId: "art_cs" });
   });
 
   it("offers the affordance for every file in review-all mode", async () => {
@@ -738,7 +746,67 @@ describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", ()
     seed(art);
     render(<ChangesetArtifact artifact={art} />);
     await userEvent.click(screen.getByRole("button", { name: /Review all/i }));
-    // One per file (3 files).
-    expect(screen.getAllByTestId("walk-me-through")).toHaveLength(3);
+    // One FILE-grain button per file (3 files) — plus a hunk-grain one per hunk.
+    expect(screen.getAllByTestId("walk-me-through-file")).toHaveLength(3);
+  });
+
+  /**
+   * P2 fix 1 (round-11 MED) — the HUNK grain had ZERO production call sites: the
+   * guidance promised "scope to exactly that hunk", every live button emitted
+   * {kind:"file"}, and five rendered hunk headers held no button at all. This
+   * pins the fix — a hunk header emits a HUNK-scoped request whose line range
+   * matches the hunk's actual lines.
+   */
+  it("a HUNK header emits a hunk-scoped request carrying the hunk's real line range", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    const hunkBtns = screen.getAllByTestId("walk-me-through-hunk");
+    expect(hunkBtns).toHaveLength(1); // the active file has one hunk
+    expect(hunkBtns[0]).toHaveTextContent("Explain this hunk");
+    await userEvent.click(hunkBtns[0]!);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/requests"),
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    const body = lastRequestBody();
+    // The fixture hunk's new-side lines are 25, 26, 27.
+    expect(body.scope).toEqual({
+      filePath: "auth/middleware.ts",
+      lineStart: 25,
+      lineEnd: 27,
+      artifactId: "art_cs",
+    });
+    expect(body.text).toContain("25–27");
+    expect(body.text).toMatch(/not a whole-file tour/i);
+    expect(body.source).toBe("walk_me_through");
+  });
+
+  it("every rendered hunk header carries the hunk affordance (review-all: 3 hunks)", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /Review all/i }));
+    expect(screen.getAllByTestId("walk-me-through-hunk")).toHaveLength(3);
+  });
+
+  it("withholds the hunk affordance when the agent supplied no line numbers (never a bogus range)", () => {
+    const art = changeset({
+      reviewState: {},
+      files: [
+        {
+          path: "a.ts",
+          changeType: "modified",
+          hunks: [{ header: "@@ -1 +1 @@", lines: [{ kind: "ctx", content: "no numbers here" }] }],
+        },
+      ],
+    });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    expect(screen.queryByTestId("walk-me-through-hunk")).not.toBeInTheDocument();
+    // The file-grain affordance still stands.
+    expect(screen.getByTestId("walk-me-through-file")).toBeInTheDocument();
   });
 });

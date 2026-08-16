@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { suggestionSummary, isLateCommentableStatus } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
@@ -1124,7 +1124,7 @@ export class FileStore implements IStore {
   // --- G1 (#198b) — human-initiated requests ------------------------------
   /** Persist a human-composed request. `notifyFeedbackWaiters` wakes a live
    *  agent's check_feedback long-poll exactly like a new human comment does. */
-  addRequest(params: { text: string; intent: RequestIntent }): Request {
+  addRequest(params: { text: string; intent: RequestIntent; source?: RequestSource; scope?: RequestScope }): Request {
     // #204 (code lens F1) — scan the request's free text at the single choke-point
     // every request creator converges on (mirroring the #160 comment scan). A
     // request is HUMAN-authored text that flows into agent context via
@@ -1142,6 +1142,12 @@ export class FileStore implements IStore {
       // stored JSON for clean requests stays byte-identical, and old persisted
       // requests without the field load unchanged).
       ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
+      // P2 (round-11 MED 3) — the request's PROVENANCE + SCOPE as data. Spread
+      // so both keys are simply ABSENT on a plain composer request: stored JSON
+      // for every pre-P2-shaped request stays byte-identical, and old persisted
+      // requests without them load unchanged.
+      ...(params.source ? { source: params.source } : {}),
+      ...(params.scope && Object.keys(params.scope).length > 0 ? { scope: params.scope } : {}),
     };
     this.requests.push(request);
     this.scheduleFlush();

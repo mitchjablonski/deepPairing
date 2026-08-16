@@ -120,3 +120,61 @@ describe("#198b check_feedback surfaces pending human requests", () => {
     expect(reloaded.getPendingRequests()[0]!.text).toBe("the migration");
   });
 });
+
+/**
+ * P2 (round-11 MED 3) — the request's SCOPE reaches the agent as DATA, not only
+ * inside the human-readable text. Round 11 found a walk-me-through request was
+ * byte-indistinguishable from a hand-typed composer request, so copy drift could
+ * silently degrade "explain this hunk" into a whole-codebase tour and nothing
+ * told the agent which artifact to link. The prose stays PRIMARY; this is the
+ * additive channel.
+ */
+describe("P2 — check_feedback delivers a request's source + scope", () => {
+  it("renders the scope on the delivered line AND mirrors it in structuredContent", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    store.addRequest({
+      text: "Walk me through the change to auth/middleware.ts at lines 25–27",
+      intent: "explain",
+      source: "walk_me_through",
+      scope: { artifactId: "art_cs", filePath: "auth/middleware.ts", lineStart: 25, lineEnd: 27 },
+    });
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/SCOPE \(from the UI, authoritative\)/);
+    expect(text).toMatch(/auth\/middleware\.ts:25-27/);
+    expect(text).toMatch(/artifact art_cs/);
+    const sc = res.structuredContent as {
+      requests?: Array<{ id: string; source?: string; scope?: Record<string, unknown> }>;
+    };
+    expect(sc.requests![0]!.source).toBe("walk_me_through");
+    expect(sc.requests![0]!.scope).toEqual({
+      artifactId: "art_cs",
+      filePath: "auth/middleware.ts",
+      lineStart: 25,
+      lineEnd: 27,
+    });
+  });
+
+  it("an item-anchored scope (needs-your-eyes) delivers the artifact + the item ref", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    store.addRequest({
+      text: 'Walk me through "the expiry check"',
+      intent: "explain",
+      source: "walk_me_through",
+      scope: { artifactId: "art_cs", itemRef: "debrief:needs-your-eyes:0" },
+    });
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/artifact art_cs · debrief:needs-your-eyes:0/);
+  });
+
+  it("BACK-COMPAT: an unscoped (pre-P2) request delivers exactly as before — no SCOPE line, no new keys", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    store.addRequest({ text: "the auth middleware", intent: "explain" });
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = res.content[0]!.text as string;
+    expect(text).not.toMatch(/SCOPE \(from the UI/);
+    const sc = res.structuredContent as { requests?: Array<Record<string, unknown>> };
+    expect(Object.keys(sc.requests![0]!).sort()).toEqual(["id", "intent", "text"]);
+  });
+});

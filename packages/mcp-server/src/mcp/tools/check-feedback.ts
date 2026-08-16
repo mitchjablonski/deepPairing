@@ -1,7 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Request } from "@deeppairing/shared";
-import { deliverComment, commentSecretNote, requestSecretNote } from "./check-feedback-delivery.js";
+import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
@@ -698,7 +698,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // poll like a WAITING line until served.
   if (pendingRequests.length > 0) {
     const lines = pendingRequests.map(
-      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
+      (r) => `- 📨 REQUEST [${r.id}] — ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}${requestScopeNote(r)}\n    → Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`,
     );
     parts.push(
       `📨 Human requests (${pendingRequests.length}) — the human ASKED for ${pendingRequests.length === 1 ? "this" : "these"}. Serve with the matching present_* tool (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}`,
@@ -1085,7 +1085,19 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // so the healthy poll payload's top-level key set stays byte-for-byte (same
     // contract lock as renderFailures/unansweredCarryover above).
     ...(pendingRequests.length > 0
-      ? { requests: pendingRequests.map((r) => ({ id: r.id, text: r.text, intent: r.intent })) }
+      ? {
+          requests: pendingRequests.map((r) => ({
+            id: r.id,
+            text: r.text,
+            intent: r.intent,
+            // P2 — the UI-supplied provenance + scope ride the SAME only-when-present
+            // spread discipline as the keys above: a plain composer request's entry
+            // stays byte-identical, while a walk-me-through request carries the exact
+            // file/line/artifact the explainer must be scoped (and linked) to.
+            ...(r.source ? { source: r.source } : {}),
+            ...(r.scope ? { scope: r.scope } : {}),
+          })),
+        }
       : {}),
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.

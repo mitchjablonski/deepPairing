@@ -145,7 +145,7 @@ for (const theme of ["dark", "light"] as const) {
     await page.click('[data-artifact-item="cs_o2"]');
     await page.waitForSelector('[data-artifact-id="cs_o2"]', { timeout: 15000 });
     // The affordance renders in the active file header.
-    await page.getByTestId("walk-me-through").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-walk-grain]").first().waitFor({ timeout: 15000 });
     await shot(page, `changeset-walk-affordance-${theme}.png`);
     // Hover a diff row to reveal the comment gutter, then capture.
     const row = page.locator('[data-comment-anchor^="line:auth/middleware.ts"]').first();
@@ -163,7 +163,7 @@ for (const theme of ["dark", "light"] as const) {
     const toggle = page.getByTestId("debrief-walk-toggle");
     await toggle.waitFor({ timeout: 15000 });
     await page.getByTestId("debrief-needs-eyes").first().waitFor({ timeout: 15000 });
-    await page.getByTestId("walk-me-through").first().waitFor({ timeout: 15000 });
+    await page.locator("[data-walk-grain]").first().waitFor({ timeout: 15000 });
     await shot(page, `debrief-collapsed-${theme}.png`);
     // Expand it.
     await toggle.click();
@@ -184,7 +184,7 @@ async function open900(page: import("@playwright/test").Page, id: string) {
 test("O2 changeset — affordance at 900px (dark)", async ({ browser }) => {
   const { context, page } = await newPage(browser, "dark", 900);
   await open900(page, "cs_o2");
-  await page.getByTestId("walk-me-through").first().waitFor({ timeout: 15000 });
+  await page.locator("[data-walk-grain]").first().waitFor({ timeout: 15000 });
   await shot(page, "changeset-walk-affordance-900px.png");
   await context.close();
 });

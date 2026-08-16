@@ -10,7 +10,7 @@ import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
 import { OpenQuestionSection } from "./OpenQuestionSection";
 import { useWriteLock } from "../../hooks/useWriteLock";
-import { WalkMeThroughButton, buildWalkMeThroughRequest } from "../WalkMeThrough";
+import { WalkMeThroughButton } from "../WalkMeThrough";
 
 /**
  * #190 — the end-of-feature DEBRIEF renderer (the comprehension surface).
@@ -236,14 +236,21 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
                       {item.artifactRef && (
                         <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
                       )}
+                      {/* P2 fix 2 (round-11 MED) — the REF TRAVELS. O2 passed a
+                          BOOLEAN `hasArtifactRef`, so the emitted text claimed
+                          "scoped to the linked artifact" while the id itself never
+                          left the browser. Pass the ref (plus the debrief and the
+                          per-item anchor) and the button puts it in both the prose
+                          and the structured scope. */}
                       <WalkMeThroughButton
-                        requestText={buildWalkMeThroughRequest({
+                        target={{
                           kind: "needs-eyes",
                           what: item.what,
                           why: item.why,
-                          hasArtifactRef: !!item.artifactRef,
-                        })}
-                        ariaLabel={item.what || `needs-your-eyes item ${i + 1}`}
+                          artifactRef: item.artifactRef,
+                          artifactId: artifact.id,
+                          itemRef: `debrief:needs-your-eyes:${i}`,
+                        }}
                       />
                     </div>
                     <BlockGrain
@@ -275,6 +282,13 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
       {/* The ordered walk of what changed — collapsed behind a disclosure (O2).
           Skimmers keep needs-your-eyes + summary above; deep readers are one
           click away. Auto-expanded when a section holds a live comment thread. */}
+      {/* P2 fix 5 (round-11 MED) — the disclosure toggle below used to be
+          BYTE-IDENTICAL to the static section headings ("WHAT WE BUILT"): same
+          size, weight, muted color, uppercase, default cursor — so a skimmer read
+          "FULL WALK-THROUGH (3 SECTIONS)" as an empty section and never clicked
+          it. It now reads as a CONTROL: bordered pill on the surface, a chevron
+          that rotates, hover background, sentence case (no heading mimicry),
+          pointer cursor. */}
       {sections.length > 0 && (
         <div className="space-y-3">
           <button
@@ -282,16 +296,23 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
             onClick={() => setWalkOpen((v) => !(v ?? walkHasThread))}
             aria-expanded={walkExpanded}
             data-testid="debrief-walk-toggle"
-            className="flex items-center gap-1.5 text-xs font-semibold text-text-muted uppercase tracking-wide
-                       hover:text-accent-blue focus-visible:text-accent-blue focus-visible:outline-none
-                       focus-visible:ring-1 focus-visible:ring-accent-blue rounded transition-colors"
+            className="group inline-flex items-center gap-1.5 cursor-pointer rounded-md border border-border-default
+                       bg-surface-elevated px-2.5 py-1 text-xs font-medium text-text-secondary
+                       hover:bg-surface-hover hover:text-accent-blue hover:border-accent-blue/50
+                       focus-visible:text-accent-blue focus-visible:outline-none
+                       focus-visible:ring-1 focus-visible:ring-accent-blue transition-colors"
           >
-            <span aria-hidden="true" className={`transition-transform ${walkExpanded ? "rotate-90" : ""}`}>▸</span>
+            <span
+              aria-hidden="true"
+              className={`text-text-muted transition-transform group-hover:text-accent-blue ${walkExpanded ? "rotate-90" : ""}`}
+            >
+              ▸
+            </span>
             <span>
-              {walkExpanded ? "The walk" : "Full walk-through"} ({sections.length} section{sections.length === 1 ? "" : "s"})
+              {walkExpanded ? "Hide the walk" : "Show the full walk-through"} ({sections.length} section{sections.length === 1 ? "" : "s"})
             </span>
             {!walkExpanded && walkHasThread && (
-              <span className="text-2xs text-accent-blue normal-case font-medium tracking-normal">· has your comments</span>
+              <span className="text-2xs text-accent-blue font-medium">· has your comments</span>
             )}
           </button>
           {walkExpanded && sections.map((section, i) => {

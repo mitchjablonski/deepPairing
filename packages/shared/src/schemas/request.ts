@@ -21,6 +21,38 @@ import { SecretWarningSchema } from "./artifact.js";
 export const RequestIntentSchema = z.enum(["explain", "plan", "status"]);
 export type RequestIntent = z.infer<typeof RequestIntentSchema>;
 
+/**
+ * P2 (round-11 MED 3) — WHERE the request came from. Pre-P2 a one-click
+ * "Explain this file" request was byte-indistinguishable from a hand-typed
+ * composer request: the scope lived only in the emitted PROSE, so copy drift
+ * silently degraded a hunk-scoped ask into a whole-codebase tour and the agent
+ * had nothing structured to auto-link `relatedArtifactIds` from. Optional for
+ * backward compatibility — an old stored request without it loads unchanged,
+ * and absent means "composer" (the only pre-P2 producer).
+ */
+export const RequestSourceSchema = z.enum(["composer", "walk_me_through"]);
+export type RequestSource = z.infer<typeof RequestSourceSchema>;
+
+/**
+ * P2 (round-11 MED 3) — the request's scope as DATA, not prose. Every field is
+ * optional (a scope may name only an artifact, only a file, or a file + line
+ * range) and the whole object is optional on a request. The human-readable
+ * `text` stays the PRIMARY instruction — this is additive structure the agent
+ * can trust when the prose and the data disagree.
+ */
+export const RequestScopeSchema = z.object({
+  /** The artifact the request was fired from (or the artifact it points at). */
+  artifactId: z.string().optional(),
+  /** Repo-relative path the ask is scoped to. */
+  filePath: z.string().optional(),
+  /** 1-based inclusive line range (hunk grain) — new-side numbers when present. */
+  lineStart: z.number().int().positive().optional(),
+  lineEnd: z.number().int().positive().optional(),
+  /** A within-artifact anchor (e.g. "debrief:needs-your-eyes:2"). */
+  itemRef: z.string().optional(),
+});
+export type RequestScope = z.infer<typeof RequestScopeSchema>;
+
 export const RequestSchema = z.object({
   id: z.string(),
   /** The human's free text (the fill-in for the preset, e.g. "the auth middleware"). */
@@ -48,6 +80,18 @@ export const RequestSchema = z.object({
    * request without it loads unchanged.
    */
   secretWarnings: z.array(SecretWarningSchema).optional(),
+  /**
+   * P2 — which surface produced this request ("composer" = the free-text
+   * composer, "walk_me_through" = a one-click Explain-this affordance). Optional
+   * (back-compat): absent = composer.
+   */
+  source: RequestSourceSchema.optional(),
+  /**
+   * P2 — the request's scope as structured data (artifact / file / line range /
+   * item anchor). Optional (back-compat): absent = unscoped, exactly like every
+   * pre-P2 request.
+   */
+  scope: RequestScopeSchema.optional(),
 });
 export type Request = z.infer<typeof RequestSchema>;
 
@@ -63,4 +107,25 @@ export function describeRequestIntent(intent: RequestIntent): string {
     case "status":
       return "a status summary (present_debrief-style)";
   }
+}
+
+/**
+ * P2 — render a request's structured scope as one compact clause, shared so the
+ * check_feedback delivery line and any future surface describe it identically.
+ * Returns "" when the scope names nothing (so an unscoped/legacy request's
+ * delivered text stays byte-identical to pre-P2).
+ */
+export function describeRequestScope(scope: RequestScope | undefined): string {
+  if (!scope) return "";
+  const parts: string[] = [];
+  if (scope.filePath) {
+    const range =
+      scope.lineStart != null
+        ? `:${scope.lineStart}${scope.lineEnd != null && scope.lineEnd !== scope.lineStart ? `-${scope.lineEnd}` : ""}`
+        : "";
+    parts.push(`${scope.filePath}${range}`);
+  }
+  if (scope.artifactId) parts.push(`artifact ${scope.artifactId}`);
+  if (scope.itemRef) parts.push(scope.itemRef);
+  return parts.join(" · ");
 }

@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -575,7 +575,14 @@ export interface IStore {
    * public routes straight onto the daemon's FileStore, and the agent surfaces
    * read pending requests off `getFullState().requests`).
    */
-  addRequest?(params: { text: string; intent: RequestIntent }): MaybePromise<Request>;
+  addRequest?(params: {
+    text: string;
+    intent: RequestIntent;
+    /** P2 — which surface produced it ("walk_me_through" = a one-click Explain-this). */
+    source?: RequestSource;
+    /** P2 — the ask's scope as data (artifact / file / line range / item anchor). */
+    scope?: RequestScope;
+  }): MaybePromise<Request>;
   getRequests?(): MaybePromise<Request[]>;
   getPendingRequests?(): MaybePromise<Request[]>;
   /** Returns whether a request with that id existed and was linked — the caller

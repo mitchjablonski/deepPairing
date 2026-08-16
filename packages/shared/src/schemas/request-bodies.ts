@@ -17,7 +17,7 @@
  */
 import { z } from "zod";
 import { CommentSuggestionSchema, SuggestionCounterSchema } from "./comment.js";
-import { RequestIntentSchema } from "./request.js";
+import { RequestIntentSchema, RequestScopeSchema, RequestSourceSchema } from "./request.js";
 
 // G1 (#198b) — POST /api/requests. The human INITIATES a request to the agent
 // from the composer. `text` is the free-text fill-in; `intent` is one of the
@@ -26,6 +26,13 @@ import { RequestIntentSchema } from "./request.js";
 export const CreateRequestBodySchema = z.object({
   text: z.string().min(1).max(2000),
   intent: RequestIntentSchema,
+  // P2 (round-11 MED 3) — scope as DATA. A one-click "Explain this hunk" now
+  // sends WHERE it was fired from alongside the prose, so the ask can't degrade
+  // into a whole-codebase tour when the copy drifts. Both optional: an older
+  // client (or the plain composer) omits them and the route behaves exactly as
+  // before.
+  source: RequestSourceSchema.optional(),
+  scope: RequestScopeSchema.optional(),
 });
 export type CreateRequestBody = z.infer<typeof CreateRequestBodySchema>;
 
