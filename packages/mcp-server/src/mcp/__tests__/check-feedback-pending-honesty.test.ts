@@ -69,11 +69,14 @@ describe("P3 — a delivered selection is never also counted pending", () => {
     // no-record HTTP fallback advanced it): the artifact is terminal, but the
     // decision record never got a response.
     store.updateArtifactStatus(art.id, "approved", "ui_approve_button");
-    expect(store.getPendingDecisions()).toHaveLength(1); // the store still lists it…
+    // The STORE drops it at the source now (`approved` joined the closed set —
+    // see list-all-decisions.test.ts for the store/session-scan parity pin)…
+    expect(store.getPendingDecisions()).toHaveLength(0);
 
     const res = await callTool("check_feedback");
-    // …but check_feedback no longer nags about a decision the human can no
-    // longer act on.
+    // …and check_feedback doesn't nag about a decision the human can no longer
+    // act on. check_feedback's own filter stays as belt-and-braces: it would
+    // drop this row even if a store (or a stale daemon read) still returned it.
     expect(res.text).not.toContain("decision(s) pending");
   });
 

@@ -375,9 +375,29 @@ export function findRejectedApproachMatch(
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
-      // Whole rejection description present as a phrase in either direction
+      // Whole rejection description present as a phrase in the PROPOSAL
       // (word-bounded, so a short stance can't match a fragment of a word).
-      if (containsAsPhrase(p, rejNormalized) || containsAsPhrase(rejNormalized, p)) {
+      if (containsAsPhrase(p, rejNormalized)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      // REVERSE direction — the proposal appears INSIDE the rejection. P3: this
+      // used the WHOLE description as the haystack, which made the lane
+      // sensitive to how much BACKGROUND a key happened to carry rather than to
+      // what was actually rejected. Two false-block classes fell out of that,
+      // and they are the same bug from both ends:
+      //   - a LONG key ("<background paragraph>: Redis" — the pre-P3 decision
+      //     format) blocked ANY short proposal appearing anywhere in that
+      //     paragraph, including the option the human CHOSE;
+      //   - a SHORT key ("Cache backend: Redis") blocks a later option TITLED
+      //     with the generic fork words in the category prefix ("Cache
+      //     backend", "Error handling").
+      // The category prefix is not the stance. Match the reverse direction
+      // against the SPECIFIC NOUN only — identical to the whole description
+      // when there is no colon, so colon-less keys (artifact titles, the
+      // human-named reject concept, team prefs) are untouched. "redis" still
+      // blocks under a "redis for caching" key; a prefix word no longer blocks
+      // anything on its own.
+      if (containsAsPhrase(specificNoun, p)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       // Specific noun of the rejection (post-colon), as a whole word.

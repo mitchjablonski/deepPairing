@@ -721,14 +721,23 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       // "<three-line background paragraph>: Redis" where every other surface
       // showed "Cache backend: Redis". Same label everywhere now.
       //
-      // BACKWARD COMPAT (load-bearing): this changes only what NEW entries
-      // RECORD, never what the preflight gate MATCHES ON. The gate's surface
-      // lane splits a rejection description on its first colon and matches the
-      // POST-colon noun (findRejectedApproachMatch → `specificNoun`), which is
-      // the option title under BOTH the old and the new key; the concept lane
-      // keys on option.concept.name (untouched here). So an OLD long-format
-      // entry keeps blocking exactly as before, and a new short-format entry
-      // blocks the same proposals. Pinned in
+      // BACKWARD COMPAT (load-bearing, and stated precisely because the first
+      // cut of this comment overclaimed): this changes what NEW entries RECORD.
+      // The BLOCKING lanes that carry the moat are key-length-invariant —
+      //   - the post-colon `specificNoun` lane (findRejectedApproachMatch) sees
+      //     the option title under BOTH the old paragraph-prefixed key and the
+      //     new title-prefixed one, so a re-proposal of a rejected option
+      //     blocks identically either way; and
+      //   - the concept lane keys on option.concept.name, untouched here, so
+      //     the paraphrase catch is unaffected.
+      // The one lane that DID read the whole description — the reverse-phrase
+      // check — was prefix-sensitive in both directions (a long key blocked any
+      // short proposal appearing in the background paragraph, INCLUDING the
+      // chosen winner; a short key would block a later option titled with the
+      // generic fork words). It is now scoped to `specificNoun` too
+      // (preflight-validator.ts), which removes both false-block classes and
+      // makes this key change genuinely behavior-neutral for legitimate
+      // proposals. Divergence cases pinned in
       // check-feedback-decision-title.test.ts.
       const decisionLabel = d.title?.trim() || d.context;
       if (option) {

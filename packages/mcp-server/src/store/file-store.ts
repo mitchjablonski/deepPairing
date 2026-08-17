@@ -1260,12 +1260,27 @@ export class FileStore implements IStore {
   }
 
   /** An artifact whose review can never resolve normally any more — it was
-   *  superseded by a newer version, retracted, rejected, or marked obsolete.
-   *  A pending decision/plan-review record pointing at such an artifact is an
-   *  orphan and must NOT keep reporting as "waiting" (it would block
-   *  check_feedback forever). A record with no backing artifact is left as-is
-   *  (artifacts are never deleted in production; only their status changes), so
-   *  unknown ids stay pending rather than vanishing. */
+   *  superseded by a newer version, retracted, rejected, marked obsolete, or
+   *  (P3) already APPROVED. A pending decision/plan-review record pointing at
+   *  such an artifact is an orphan and must NOT keep reporting as "waiting" (it
+   *  would block check_feedback forever). A record with no backing artifact is
+   *  left as-is (artifacts are never deleted in production; only their status
+   *  changes), so unknown ids stay pending rather than vanishing.
+   *
+   *  P3 — `approved` was the omission, and it was live in three surfaces: the
+   *  check_feedback WAITING nag, the project decisions modal's permanent amber
+   *  "Awaiting your decision", and the Features open-items count. A record only
+   *  reaches this branch UNRESOLVED (getPendingDecisions/getPendingPlanReviews
+   *  filter on `!response` / `!verdict` first), and the normal paths always
+   *  write the resolution: resolveDecision records the response in the SAME
+   *  call that advances the artifact to approved, and the /status route calls
+   *  resolvePlanReview alongside every non-obsolete verdict. So nothing
+   *  legitimately-open is dropped here — only genuine orphans, whose artifact
+   *  went terminal by another path (the /api/decisions no-record fallback, a
+   *  straight Approve on the card) and which the human can no longer act on.
+   *  MIRRORED by CLOSED_ARTIFACT_STATUSES in session-scan.ts — THE TWO MUST
+   *  AGREE (session-scan is store-less so it can't reuse this private method);
+   *  the parity is pinned in list-all-decisions.test.ts. */
   private isArtifactClosed(artifactId: string): boolean {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art) return false;
@@ -1273,7 +1288,8 @@ export class FileStore implements IStore {
       art.status === "superseded" ||
       art.status === "retracted" ||
       art.status === "rejected" ||
-      art.status === "obsolete"
+      art.status === "obsolete" ||
+      art.status === "approved"
     );
   }
 
@@ -1493,6 +1509,17 @@ export class FileStore implements IStore {
 
     const prefs = this.readPreferences();
     const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+    // Dedupe on the EXACT description. P3 note (deliberate, not an oversight):
+    // this means a pre-P3 decision key ("<background paragraph>: Redis") and its
+    // post-P3 equivalent ("Cache backend: Redis") can coexist as two rows for
+    // the same stance in a long-lived project. That is the conservative choice —
+    // deduping on the post-colon noun instead would silently MERGE genuinely
+    // different stances that happen to share a noun ("Deploy: Railway" vs
+    // "Logging: Railway"), and merging is lossy where a duplicate is only
+    // cosmetic. The gate is unaffected either way: both rows match the same
+    // proposals (same specificNoun, same concept), so the extra row costs a
+    // little display/near-miss noise, never a wrong block. If the duplicate ever
+    // bothers a user, `deeppairing philosophy remove <concept>` drops it.
     const existing = rejected.find((r) => r.description === description);
     if (existing) {
       // Enrich incrementally — each new signal (reason, concept, source) is

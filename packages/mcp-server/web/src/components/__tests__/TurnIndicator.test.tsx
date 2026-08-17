@@ -141,21 +141,36 @@ describe("TurnIndicator — UX1: a draft code_change is 'your turn' (matches Pen
   });
 });
 
-describe("#192 (usability H1) — 'Your turn' never dangles for changeset/debrief/explainer", () => {
+describe("#192 (usability H1) — 'Your turn' never dangles for changeset/debrief", () => {
   // Screenshot-proven defect: with ONLY a draft changeset/debrief/explainer
   // pending, the summary rendered "Your turn —" with nothing after the dash
   // while the tab badge said 3. Fails on revert (the summary text would be a
   // bare "Your turn —").
-  it("shows the three nouns, not a dangling dash, when only the new types are pending", () => {
+  //
+  // P3 — the EXPLAINER left the "your turn" set entirely: it is acknowledge-only
+  // ("Got it" / "Ask more" — no verdict), so it is not work owed and must not
+  // appear in this summary or lift the badge. The dangling-dash guard still
+  // holds for the types that ARE owed.
+  it("shows the owed nouns, not a dangling dash, when only the new types are pending", () => {
     seedConnected();
     seedArtifact({ id: "cs", type: "changeset", status: "draft" });
     seedArtifact({ id: "db", type: "debrief", status: "draft" });
     seedArtifact({ id: "ex", type: "explainer", status: "draft" });
     render(<TurnIndicator />);
     const pill = screen.getByRole("button", { name: /your turn/i });
-    expect(pill).toHaveTextContent("Your turn — 1 changeset, 1 debrief, 1 explainer");
+    expect(pill).toHaveTextContent("Your turn — 1 changeset, 1 debrief");
+    expect(pill.textContent ?? "").not.toMatch(/explainer/i);
     // Guard against the exact regression: the visible summary must not end at the dash.
     expect(pill.textContent ?? "").not.toMatch(/Your turn\s*—\s*$/);
+  });
+
+  it("P3 — an explainer-ONLY session is not 'your turn' at all", () => {
+    seedConnected();
+    seedArtifact({ id: "ex", type: "explainer", status: "draft" });
+    render(<TurnIndicator />);
+    // No "Your turn" pill: the human owes a READ, not a verdict, and the
+    // check_feedback payload says so too ("TO READ", 0 pending).
+    expect(screen.queryByRole("button", { name: /your turn/i })).not.toBeInTheDocument();
   });
 });
 

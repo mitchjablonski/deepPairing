@@ -27392,7 +27392,7 @@ var AUTONOMY_POLICY_LINE = {
 };
 
 // src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"];
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"];
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
 var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"];
 
@@ -28217,7 +28217,10 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
-      if (containsAsPhrase(p, rejNormalized) || containsAsPhrase(rejNormalized, p)) {
+      if (containsAsPhrase(p, rejNormalized)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      if (containsAsPhrase(specificNoun, p)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {

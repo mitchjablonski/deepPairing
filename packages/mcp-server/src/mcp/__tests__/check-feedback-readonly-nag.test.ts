@@ -13,6 +13,14 @@
  * that nothing awaits a verdict. Everything else stays put — the DEBRIEF and
  * RESEARCH surfaces keep the full verdict triad (the debrief only suppresses
  * the reject-CONCEPT ledger write), so they are NOT acknowledge-only.
+ *
+ * …and the line has to be TRUE, which the first cut of it wasn't: the same
+ * payload still reported status "waiting" with the explainer in `pending`, and
+ * the tool sat in the 30s long-poll on it — "don't block on these" while
+ * blocking on exactly these. So the explainer also LEFT the pending set
+ * (PENDING_DRAFT_TYPES + the daemon badge + the web banner's REVIEWABLE_TYPES,
+ * all pinned equal). It owes the human a READ, not a verdict; "📖 TO READ" is
+ * now its ONLY mention in the payload.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
@@ -41,10 +49,12 @@ function stirTheQueue(): void {
 }
 
 describe("P3 — the acknowledge-only set", () => {
-  it("is a strict subset of the WAITING/PENDING draft types", () => {
+  it("is REPORTED (WAITING types) but never COUNTED (pending types)", () => {
     for (const t of ACKNOWLEDGE_ONLY_DRAFT_TYPES) {
+      // Reported: it still reaches the agent, under the TO READ line…
       expect(WAITING_DRAFT_TYPES as readonly string[]).toContain(t);
-      expect(PENDING_DRAFT_TYPES as readonly string[]).toContain(t);
+      // …but it is not work owed, so it never counts as pending / holds a poll.
+      expect(PENDING_DRAFT_TYPES as readonly string[]).not.toContain(t);
     }
     // EXPLAINER only — adding a type here means its UI footer dropped the
     // verdict triad. Debrief/research keep it, so they must NOT be listed.
@@ -63,6 +73,25 @@ describe("P3 — a draft explainer is 'to read', not 'under review'", () => {
     expect(res.text).toContain("await no verdict");
     // The verdict nag is absent entirely — nothing here awaits one.
     expect(res.text).not.toContain("artifact(s) still under review");
+  });
+
+  it("THE HONESTY PIN: an explainer-only poll is not 'waiting', doesn't long-poll, and counts 0 pending", async () => {
+    await presentExplainer();
+    // NOTE: no stirTheQueue() here — that's the point. Pre-fix the explainer sat
+    // in PENDING_DRAFT_TYPES, so this call entered the 30s long-poll while the
+    // very same payload told the agent not to block on it.
+    const t0 = Date.now();
+    const res = await callTool("check_feedback");
+    expect(Date.now() - t0).toBeLessThan(1000);
+
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(sc.status).not.toBe("waiting");
+    expect(sc.pendingArtifacts).toEqual([]);
+    // The preamble's count agrees…
+    expect(res.text).toContain("(0 approved, 0 pending)");
+    // …and TO READ is the ONLY mention of the walk-through.
+    expect(res.text).toContain("📖 TO READ");
+    expect(res.text).not.toContain("⏳ WAITING");
   });
 
   it("keeps a verdict-bearing draft in ⏳ WAITING while the explainer sits in TO READ", async () => {

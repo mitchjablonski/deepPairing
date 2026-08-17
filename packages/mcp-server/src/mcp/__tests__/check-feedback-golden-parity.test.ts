@@ -633,14 +633,19 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
     render_failures: { prose: "2af7667132a1640f6544a8af05ce2d17268cb943bf6aeec20394ff51ccc5388b", struct: "741a170e295d6aad143c82a15af79f9663b6e0b96d8f2070dbbca58393d26e14" },
     scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "3fdcaf7107f306723a8d731c2c0484a09a172aa22cc4473fd4998950df2d47ce" },
     debrief_grain_and_ask_anything: { prose: "d3436c950b83aca46b9f494ef58bde9ffbffd40a29b29e9efb6177c57b42bf85", struct: "72dee06f32b6e37afd6ecba2b88ee7b88ae1aae3dec1147532456c64c9e795e0" },
-    // P3 — DELIBERATE prose re-pin (STRUCT UNCHANGED). A draft EXPLAINER is
-    // acknowledge-only (its UI footer is "Got it"/"Ask more" — no verdict), so
-    // it no longer rides the "⏳ WAITING: N artifact(s) still under review" nag;
-    // it now gets its own "📖 TO READ" line that says outright that nothing
-    // awaits a verdict. This is the ONLY scenario carrying a draft explainer,
-    // and the structuredContent (pendingArtifacts et al.) is untouched — the
-    // split is a prose-honesty change, not a shape change.
-    explainer_grain_and_ask_anything: { prose: "158d06747e12f4381aee8e061200f8aa4f1fe62f8a4a4881cf8dbca38d18d480", struct: "c8fac43ec0b49ec6c34c443b9d9b5d8d442019b142a21b68b1eacd66c53a4b92" },
+    // P3 — DELIBERATE re-pin, PROSE **and** STRUCT. A draft EXPLAINER is
+    // acknowledge-only (its UI footer is "Got it"/"Ask more" — no verdict), so:
+    //   - PROSE: it left the "⏳ WAITING: N artifact(s) still under review" nag
+    //     for its own "📖 TO READ" line, and the preamble's pending tally drops
+    //     it (0 pending, not 1).
+    //   - STRUCT: it left PENDING_DRAFT_TYPES entirely, so `pendingArtifacts` no
+    //     longer carries it and `status` is no longer "waiting" on its account.
+    //     Reporting it as pending while telling the agent not to block on it was
+    //     the contradiction this batch is fixing; the same removal lands on the
+    //     daemon badge + the web banner (parity-pinned in create-daemon.test.ts
+    //     and lib/__tests__/pending.test.ts).
+    // This is the ONLY golden scenario carrying a draft explainer.
+    explainer_grain_and_ask_anything: { prose: "4e6c031e5320cf138c5588e86516b1855fc6e9025c81ed5d01791d0b7d17e0f8", struct: "d86c3654dffb80f7b596d5d7b32df7a7501283c755236a44065e5ff17ee1affe" },
     debrief_per_item_grain: { prose: "bb0995c0e54d14c13fd6e1d5fdf1b70fa740b86391f55926ae577dc659ba322a", struct: "c9ab6cc8a184bf7242d296f379f4952036472f27fd3393b4ec7da9e28e9c110b" },
   };
 

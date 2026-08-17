@@ -31,23 +31,37 @@ export type ToolResult = {
 /**
  * F1 — the draft artifact types that make check_feedback WAIT for the human and
  * count toward "pending". These MUST stay in sync across the long-poll gate,
- * the pendingCount tally, and the suggestedAction branch (see check-feedback.ts).
+ * the pendingCount tally, and the suggestedAction branch (see check-feedback.ts)
+ * — and across the daemon badge (create-daemon's PENDING_REVIEWABLE) and the web
+ * banner (lib/pending.ts REVIEWABLE_TYPES), pinned equal by a parity test.
+ *
+ * P3 — `explainer` LEFT this set. It is acknowledge-only (below), so counting it
+ * as pending made every surface contradict the payload that carried it: an
+ * explainer-only poll reported status "waiting" with pending=1, sat in the 30s
+ * long-poll, and told the agent not to block on the very thing it was blocking
+ * on. A read-only walk-through is not work owed. It is still delivered — the
+ * "📖 TO READ" line (WAITING_DRAFT_TYPES) is now its ONLY mention — and its
+ * comments/questions still flow back normally.
  */
-export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"] as const;
-/** Draft types listed in the WAITING block (decisions get their own line). */
+export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"] as const;
+/** Draft types listed in the WAITING block (decisions get their own line).
+ *  Deliberately a SUPERSET of PENDING_DRAFT_TYPES on the acknowledge-only types:
+ *  an explainer is reported (under "📖 TO READ") without being counted pending. */
 export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"] as const;
 /**
- * P3 — the ACKNOWLEDGE-ONLY subset of WAITING_DRAFT_TYPES: read-only artifacts
- * whose companion-UI footer is an acknowledge bar ("Got it" / "Ask more" —
- * ArtifactStatusActions' `acknowledgeMode`), with NO Reject and NO
- * Request-changes. Nothing here proposes an approach, so nothing here awaits a
- * VERDICT; check_feedback lists these under a distinct "📖 TO READ" line
- * instead of the "⏳ WAITING … under review" nag.
+ * P3 — the ACKNOWLEDGE-ONLY draft types: read-only artifacts whose companion-UI
+ * footer is an acknowledge bar ("Got it" / "Ask more" — ArtifactStatusActions'
+ * `acknowledgeMode`), with NO Reject and NO Request-changes. Nothing here
+ * proposes an approach, so nothing here awaits a VERDICT: check_feedback lists
+ * these under a distinct "📖 TO READ" line instead of the "⏳ WAITING … under
+ * review" nag, they do NOT count toward pending, and they never hold the
+ * long-poll open.
  *
  * EXPLAINER ONLY, deliberately: the debrief and research surfaces keep the full
  * verdict triad (the debrief merely suppresses the reject-CONCEPT ledger write,
  * which is a ledger concern, not a verdict one). Add a type here only when its
- * UI footer actually drops the verdict triad — the parity is pinned in
+ * UI footer actually drops the verdict triad — and when you do, drop it from
+ * PENDING_DRAFT_TYPES + the daemon/web mirrors in the same commit. Pinned in
  * check-feedback-readonly-nag.test.ts.
  */
 export const ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"] as const;

@@ -25033,7 +25033,8 @@ var CLOSED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
   "superseded",
   "retracted",
   "rejected",
-  "obsolete"
+  "obsolete",
+  "approved"
 ]);
 function isClosedArtifactStatus(status) {
   return status !== void 0 && CLOSED_ARTIFACT_STATUSES.has(status);
@@ -26556,16 +26557,31 @@ var FileStore = class _FileStore {
     return this.decisions.get(decisionId)?.response ?? null;
   }
   /** An artifact whose review can never resolve normally any more — it was
-   *  superseded by a newer version, retracted, rejected, or marked obsolete.
-   *  A pending decision/plan-review record pointing at such an artifact is an
-   *  orphan and must NOT keep reporting as "waiting" (it would block
-   *  check_feedback forever). A record with no backing artifact is left as-is
-   *  (artifacts are never deleted in production; only their status changes), so
-   *  unknown ids stay pending rather than vanishing. */
+   *  superseded by a newer version, retracted, rejected, marked obsolete, or
+   *  (P3) already APPROVED. A pending decision/plan-review record pointing at
+   *  such an artifact is an orphan and must NOT keep reporting as "waiting" (it
+   *  would block check_feedback forever). A record with no backing artifact is
+   *  left as-is (artifacts are never deleted in production; only their status
+   *  changes), so unknown ids stay pending rather than vanishing.
+   *
+   *  P3 — `approved` was the omission, and it was live in three surfaces: the
+   *  check_feedback WAITING nag, the project decisions modal's permanent amber
+   *  "Awaiting your decision", and the Features open-items count. A record only
+   *  reaches this branch UNRESOLVED (getPendingDecisions/getPendingPlanReviews
+   *  filter on `!response` / `!verdict` first), and the normal paths always
+   *  write the resolution: resolveDecision records the response in the SAME
+   *  call that advances the artifact to approved, and the /status route calls
+   *  resolvePlanReview alongside every non-obsolete verdict. So nothing
+   *  legitimately-open is dropped here — only genuine orphans, whose artifact
+   *  went terminal by another path (the /api/decisions no-record fallback, a
+   *  straight Approve on the card) and which the human can no longer act on.
+   *  MIRRORED by CLOSED_ARTIFACT_STATUSES in session-scan.ts — THE TWO MUST
+   *  AGREE (session-scan is store-less so it can't reuse this private method);
+   *  the parity is pinned in list-all-decisions.test.ts. */
   isArtifactClosed(artifactId) {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art) return false;
-    return art.status === "superseded" || art.status === "retracted" || art.status === "rejected" || art.status === "obsolete";
+    return art.status === "superseded" || art.status === "retracted" || art.status === "rejected" || art.status === "obsolete" || art.status === "approved";
   }
   getPendingDecisions() {
     return Array.from(this.decisions.values()).filter(
@@ -30647,7 +30663,7 @@ function createDaemon(deps) {
     }
   );
   app.route("/", publicRoutes);
-  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"]);
+  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"]);
   function computeDaemonPendingCount() {
     let n = 0;
     for (const store of sessions.values()) {

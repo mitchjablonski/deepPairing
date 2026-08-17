@@ -481,6 +481,78 @@ describe("FileStore.listAllDecisions", () => {
       expect(decisions.find((x) => x.decisionId === "d_obs")!.closedUnresolved).toBe(true);
     });
 
+    // P3 — THE ORPHAN CLASS. `approved` was missing from BOTH closed-status
+    // sets, so a record left response-less while its artifact reached a
+    // terminal verdict by another path (the /api/decisions no-record fallback,
+    // a straight Approve on the card) kept reporting as pending in the store
+    // AND rendered a permanent amber "Awaiting your decision" in the decisions
+    // modal / Features open-items count.
+    it("an UNRESOLVED decision whose artifact is APPROVED is closed, not awaiting", () => {
+      const store = seedDecision("s_orphan", {
+        decisionId: "d_orphan", artifactId: "a1", context: "Which cache?", title: "Cache backend",
+      });
+      // The card was approved without an option pick — the record stays open.
+      store.updateArtifactStatus("a1", "approved", "ui_approve_button");
+      store.forceFlush();
+
+      // (1) the STORE stops listing it pending…
+      expect(store.getPendingDecisions().map((d) => d.decisionId)).not.toContain("d_orphan");
+      // (2) …and the store-less scan agrees (the two sets must stay in sync),
+      //     which is what the decisions modal's "awaiting" predicate reads.
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      const d = decisions.find((x) => x.decisionId === "d_orphan")!;
+      expect(d.resolved).toBe(false);
+      expect(d.closedUnresolved).toBe(true);
+      expect(d.closedStatus).toBe("approved");
+      store.dispose();
+    });
+
+    it("a NORMALLY-resolved decision is untouched by the approved rule (still resolved, not closed)", () => {
+      // The everyday path: resolveDecision writes the response AND advances the
+      // artifact to approved in one call, so the response wins and the row keeps
+      // its chosen-option rendering.
+      const store = seedDecision("s_norm", {
+        decisionId: "d_norm", artifactId: "a1", context: "Which cache?",
+        resolveWith: { optionId: "o1", reasoning: "fastest" },
+      });
+      expect(store.getArtifacts().find((a) => a.id === "a1")!.status).toBe("approved");
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      const d = decisions.find((x) => x.decisionId === "d_norm")!;
+      expect(d.resolved).toBe(true);
+      expect(d.closedUnresolved).toBeUndefined();
+      expect(d.chosenOptionTitle).toBe("Redis");
+      store.dispose();
+    });
+
+    it("PARITY: the store's closed set and session-scan's CLOSED_ARTIFACT_STATUSES agree", () => {
+      // isArtifactClosed is private and CLOSED_ARTIFACT_STATUSES is module-local,
+      // so pin the behavior they share: for EVERY terminal status, an unresolved
+      // record drops out of BOTH the store's pending list and the scan's awaiting
+      // bucket — and for a still-open status it stays in both.
+      const closed = ["superseded", "retracted", "rejected", "obsolete", "approved"] as const;
+      const store = new FileStore(tmpDir, "s_parity");
+      closed.forEach((status, i) => {
+        const id = `p${i}`;
+        store.createArtifact({ id, type: "decision", title: status, content: {} });
+        store.recordDecisionRequest({ decisionId: `d_${id}`, artifactId: id, context: status, options: OPTS });
+        store.updateArtifactStatus(id, status, "agent_retract");
+      });
+      // A control that must stay OPEN in both.
+      store.createArtifact({ id: "p_open", type: "decision", title: "open", content: {} });
+      store.recordDecisionRequest({ decisionId: "d_p_open", artifactId: "p_open", context: "open", options: OPTS });
+      store.forceFlush();
+
+      const pending = new Set(store.getPendingDecisions().map((d) => d.decisionId));
+      const { decisions } = FileStore.listAllDecisions(tmpDir);
+      for (let i = 0; i < closed.length; i++) {
+        expect(pending.has(`d_p${i}`)).toBe(false);
+        expect(decisions.find((x) => x.decisionId === `d_p${i}`)!.closedUnresolved).toBe(true);
+      }
+      expect(pending.has("d_p_open")).toBe(true);
+      expect(decisions.find((x) => x.decisionId === "d_p_open")!.closedUnresolved).toBeUndefined();
+      store.dispose();
+    });
+
     it("read-side belt: an OLD resolved-but-DRAFT record still reads resolved (no migration)", () => {
       // Pre-J1 the store left a resolved decision's artifact in draft. Simulate
       // that persisted shape via a live source (a hand-built record with a

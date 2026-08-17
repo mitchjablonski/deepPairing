@@ -7,7 +7,7 @@ const com = (over: any) =>
   ({ id: "c", sessionId: "s", target: { artifactId: "a" }, parentCommentId: null, author: "human", content: "x", acknowledged: false, createdAt: "2026-01-01T00:00:00.000Z", ...over }) as any;
 
 describe("computePending — single source of truth for 'waiting on human'", () => {
-  it("counts every draft reviewable artifact (incl. #190 debrief + explainer) but not reasoning", () => {
+  it("counts every draft reviewable artifact (incl. #190 debrief) but not reasoning or an explainer", () => {
     const artifacts = [
       art({ id: "r", type: "research", status: "draft" }),
       art({ id: "p", type: "plan", status: "draft" }),
@@ -16,24 +16,27 @@ describe("computePending — single source of truth for 'waiting on human'", () 
       art({ id: "spec", type: "spec", status: "draft" }),
       art({ id: "cs", type: "changeset", status: "draft" }), // #175 — a draft changeset awaits review
       art({ id: "db", type: "debrief", status: "draft" }), // #190 A1 — draft review surface
-      art({ id: "ex", type: "explainer", status: "draft" }), // #190 A2 — draft review surface
+      art({ id: "ex", type: "explainer", status: "draft" }), // P3 — acknowledge-only, NOT pending
       art({ id: "reason", type: "reasoning", status: "draft" }), // excluded (agent narration)
     ];
     const { drafts, total } = computePending(artifacts, {});
-    expect(drafts.map((a) => a.id).sort()).toEqual(["cc", "cs", "d", "db", "ex", "p", "r", "spec"]);
-    expect(total).toBe(8);
+    expect(drafts.map((a) => a.id).sort()).toEqual(["cc", "cs", "d", "db", "p", "r", "spec"]);
+    expect(total).toBe(7);
   });
 
-  // #190 — a draft debrief/explainer renders the full Approve/Request-changes/
-  // Reject triad and counts server-side; pre-fix REVIEWABLE_TYPES omitted BOTH,
-  // so the in-app PendingBanner never lit for them (same class as the #175
-  // changeset omission). These pin the predicate directly.
-  it("treats a draft debrief and a draft explainer as awaiting review (#190)", () => {
+  // #190 — a draft debrief renders the full Approve/Request-changes/Reject triad
+  // and counts server-side; pre-fix REVIEWABLE_TYPES omitted it, so the in-app
+  // PendingBanner never lit for it (same class as the #175 changeset omission).
+  // P3 — the EXPLAINER is the counterpart correction: it is acknowledge-only
+  // ("Got it" / "Ask more" — no verdict), so a "waiting on you" badge lit on it
+  // overstated the obligation. It is delivered to the agent under check_feedback's
+  // "TO READ" line instead of being counted pending anywhere.
+  it("treats a draft debrief as awaiting review (#190) but NOT a draft explainer (P3)", () => {
     expect(isDraftAwaitingReview(art({ type: "debrief", status: "draft" }))).toBe(true);
-    expect(isDraftAwaitingReview(art({ type: "explainer", status: "draft" }))).toBe(true);
-    // Parity self-check within the web boundary: the reviewable set carries both.
+    expect(isDraftAwaitingReview(art({ type: "explainer", status: "draft" }))).toBe(false);
+    // Parity self-check within the web boundary.
     expect(REVIEWABLE_TYPES.has("debrief")).toBe(true);
-    expect(REVIEWABLE_TYPES.has("explainer")).toBe(true);
+    expect(REVIEWABLE_TYPES.has("explainer")).toBe(false);
     // reasoning stays excluded (agent narration, no review cycle).
     expect(REVIEWABLE_TYPES.has("reasoning")).toBe(false);
   });
@@ -126,13 +129,15 @@ describe("#192 — summarizeTurnParts (every reviewable type produces a non-empt
     }
   });
 
-  it("counts changeset + debrief + explainer (the omitted three) rather than dropping them", () => {
+  it("counts changeset + debrief (the omitted two) rather than dropping them, and never an explainer", () => {
     const parts = summarizeTurnParts([
       art({ id: "cs", type: "changeset", status: "draft" }),
       art({ id: "db", type: "debrief", status: "draft" }),
+      // P3 — an explainer is not "your turn" work; it must not appear in the
+      // summary (and must not resurrect the dangling-dash bug on its own).
       art({ id: "ex", type: "explainer", status: "draft" }),
     ]);
-    expect(parts).toEqual(["1 changeset", "1 debrief", "1 explainer"]);
+    expect(parts).toEqual(["1 changeset", "1 debrief"]);
   });
 
   it("pluralizes and groups research+spec into 'findings'", () => {

@@ -23,12 +23,16 @@ import type { Artifact, Comment } from "@deeppairing/shared";
  *  `changeset` joins the set: a draft changeset genuinely awaits your review, so
  *  the `n` key and the changeset's own post-verdict auto-advance treat it as
  *  pending (it matches the server's PENDING_DRAFT_TYPES). #190 — `debrief` (A1)
- *  and `explainer` (A2) are review surfaces too: each renders the full
- *  Approve/Request-changes/Reject triad and is a draft awaiting the human, so it
- *  must nudge the PendingBanner just like the server counts it. This set must
- *  stay equal to the server's PENDING_DRAFT_TYPES (minus `reasoning`) — pinned by
- *  a parity test so the next artifact type can't silently miss it. */
-export const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief", "explainer"]);
+ *  is a review surface too: it renders the full Approve/Request-changes/Reject
+ *  triad and is a draft awaiting the human, so it must nudge the PendingBanner
+ *  just like the server counts it. P3 — `explainer` LEFT the set (it briefly
+ *  joined in #190 alongside debrief): it is the ONE acknowledge-only surface
+ *  ("Got it" / "Ask more" — no Reject, no Request-changes), so it owes the human
+ *  a READ, not a verdict, and a "waiting on you" badge lit on it overstated the
+ *  obligation. This set must stay equal to the server's PENDING_DRAFT_TYPES
+ *  (minus `reasoning`) — pinned by a parity test so the next artifact type can't
+ *  silently miss it. */
+export const REVIEWABLE_TYPES = new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"]);
 
 export function isDraftAwaitingReview(a: Artifact): boolean {
   return a.status === "draft" && REVIEWABLE_TYPES.has(a.type);
@@ -51,7 +55,9 @@ export const TURN_PART_BUCKETS: ReadonlyArray<{ types: readonly string[]; noun: 
   { types: ["changeset"], noun: "changeset" },
   { types: ["plan"], noun: "plan" },
   { types: ["debrief"], noun: "debrief" },
-  { types: ["explainer"], noun: "explainer" },
+  // P3 — no `explainer` bucket: an explainer is not "your turn" work (see
+  // REVIEWABLE_TYPES). The parity test pins flatMap(types) === REVIEWABLE_TYPES,
+  // so re-adding it to one without the other fails loudly.
 ];
 
 /**

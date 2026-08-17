@@ -12,13 +12,31 @@
  *
  * THE BACKWARD-COMPAT INVARIANT (the reason this test exists): the rejection
  * `description` is ALSO the session-ledger key the preflight rejected-approach
- * gate matches on. Changing what NEW entries record must not change what the
- * gate MATCHES ON — an OLD long-format entry already on disk has to keep
- * blocking exactly as before, and a NEW short-format entry has to block the
- * same re-proposal. The matcher splits a description on its first colon and
- * matches the POST-colon noun (the option title), which is identical under both
- * formats — that's the property pinned below, at the unit level AND end-to-end
- * through a real present_options call.
+ * gate matches on, so an OLD long-format entry already on disk must keep
+ * blocking a re-proposal, and a NEW short-format entry must block the same one.
+ *
+ * Stated PRECISELY (the first cut of this docstring overclaimed "identical
+ * under both formats", and the adversarial review executed the counterexamples):
+ * `findRejectedApproachMatch` runs THREE surface checks, not one.
+ *   - forward phrase (proposal contains the whole description) and the
+ *     post-colon `specificNoun` lane are key-length-invariant: the option title
+ *     is the post-colon noun under BOTH formats, so a genuine re-proposal of a
+ *     rejected option blocks either way. This is the moat lane.
+ *   - the REVERSE phrase lane read the WHOLE description as its haystack, which
+ *     made it sensitive to the category PREFIX rather than to the stance:
+ *       (a) an old paragraph-prefixed key spuriously blocked any short proposal
+ *           appearing in that background paragraph — including the option the
+ *           human CHOSE;
+ *       (b) a new title-prefixed key would spuriously block a later option
+ *           TITLED with the generic fork words ("Cache backend", "Error
+ *           handling").
+ *     P3 scopes that lane to `specificNoun` too (preflight-validator.ts),
+ *     killing both classes and making the key change genuinely behavior-neutral
+ *     for legitimate proposals. A colon-less key (artifact title, human-named
+ *     reject concept) is untouched — specificNoun === the description there.
+ *
+ * The divergence cases (a)-(d) are pinned explicitly below, at the unit level
+ * AND end-to-end through real present_options calls.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
@@ -120,19 +138,56 @@ describe("P3 — the pick records the short label in BOTH ledger keys", () => {
 describe("P3 — BACKWARD COMPAT: the gate matches old- and new-format keys alike", () => {
   const OLD_FORMAT = `${CONTEXT}: In-process LRU`;
   const NEW_FORMAT = `${TITLE}: In-process LRU`;
+  const AT = "2026-01-01T00:00:00.000Z";
+  const hit = (proposals: string[], description: string, concept?: string) =>
+    findRejectedApproachMatch(proposals, [{ description, rejectedAt: AT, ...(concept ? { concept } : {}) }]);
 
-  it("unit: both formats match the same proposal via the post-colon noun", () => {
+  it("(c) THE MOAT LANE: a re-proposal of the rejected option blocks under BOTH formats", () => {
     const proposals = ["Let's keep it in an In-process LRU instead"];
-    const oldHit = findRejectedApproachMatch(proposals, [
-      { description: OLD_FORMAT, rejectedAt: "2026-01-01T00:00:00.000Z" },
-    ]);
-    const newHit = findRejectedApproachMatch(proposals, [
-      { description: NEW_FORMAT, rejectedAt: "2026-01-01T00:00:00.000Z" },
-    ]);
+    const oldHit = hit(proposals, OLD_FORMAT);
+    const newHit = hit(proposals, NEW_FORMAT);
     expect(oldHit?.via).toBe("surface");
     expect(newHit?.via).toBe("surface");
-    // Same matched proposal — the format change is invisible to the matcher.
+    // Same matched proposal — the post-colon noun is the option title either way.
     expect(oldHit?.proposal).toBe(newHit?.proposal);
+    // …and the bare option title alone blocks under both.
+    expect(hit(["In-process LRU"], OLD_FORMAT)).not.toBeNull();
+    expect(hit(["In-process LRU"], NEW_FORMAT)).not.toBeNull();
+  });
+
+  it("(d) the CONCEPT lane (paraphrase catch) is untouched by the key format", () => {
+    // A paraphrase that shares NO surface phrase with either description still
+    // blocks via the option's own concept — the lane the moat rests on.
+    const paraphrase = ["Cache the sessions in the node heap with an lru per process"];
+    expect(hit(paraphrase, OLD_FORMAT, "in-process lru session cache")?.via).toBe("concept");
+    expect(hit(paraphrase, NEW_FORMAT, "in-process lru session cache")?.via).toBe("concept");
+  });
+
+  it("(b) an OLD paragraph-prefixed key no longer blocks the option the human CHOSE", () => {
+    // The pre-P3 reverse-phrase lane used the WHOLE description as haystack, so
+    // any short proposal appearing in the background paragraph matched — the
+    // WINNER included. CONTEXT mentions "Postgres"; proposing it must pass.
+    expect(hit(["Postgres"], OLD_FORMAT)).toBeNull();
+    expect(hit(["the team"], OLD_FORMAT)).toBeNull();
+    // The stance itself still blocks — this is a precision fix, not a recall loss.
+    expect(hit(["In-process LRU"], OLD_FORMAT)).not.toBeNull();
+  });
+
+  it("(a) a NEW title-prefixed key does not block a later option TITLED with the fork words", () => {
+    // "Cache backend: In-process LRU" must not block a later fork whose option
+    // is literally titled "Cache backend" / whose prefix words recur.
+    expect(hit(["Cache backend"], NEW_FORMAT)).toBeNull();
+    expect(hit(["Error handling"], "Error handling: try/catch everywhere")).toBeNull();
+    // …while the post-colon stance still blocks.
+    expect(hit(["try/catch everywhere"], "Error handling: try/catch everywhere")).not.toBeNull();
+  });
+
+  it("a colon-less key (artifact title / human-named concept) is completely unchanged", () => {
+    // specificNoun === the whole description here, so every lane behaves as
+    // before: exact phrase blocks in both directions, unrelated prose passes.
+    expect(hit(["we should add a redis cache"], "redis cache")).not.toBeNull();
+    expect(hit(["redis"], "redis cache")).not.toBeNull(); // reverse lane, still live
+    expect(hit(["a postgres index"], "redis cache")).toBeNull();
   });
 
   it("end-to-end: an OLD long-format ledger entry still BLOCKS a re-proposal", async () => {
