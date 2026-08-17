@@ -1,5 +1,5 @@
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
-import { suggestionSummary } from "@deeppairing/shared";
+import { suggestionSummary, describeRequestScope } from "@deeppairing/shared";
 
 /**
  * #188 (PAYDOWN) — the per-comment DELIVERY loop of check_feedback, extracted
@@ -60,6 +60,25 @@ export function commentSecretNote(c: Comment): string {
  */
 export function requestSecretNote(r: Pick<Request, "secretWarnings">): string {
   return r.secretWarnings?.length ? " ⚠ possible secret in this request" : "";
+}
+
+/**
+ * P2 (round-11 MED 3) — a request fired from a one-click "Explain this
+ * file/hunk" affordance carries its SCOPE as structured data, not only inside
+ * the human-readable text. Render it as one explicit clause on the delivered
+ * line so the agent is told WHAT to scope the explainer to (and what to link
+ * `relatedArtifactIds` at) even if the prose drifts. Returns "" for an unscoped
+ * request — every pre-P2 request's delivered line stays byte-identical.
+ */
+export function requestScopeNote(r: Pick<Request, "scope" | "source">): string {
+  // P2 review F4 — "authoritative" is a claim about PROVENANCE, so gate it on
+  // provenance: only a one-click walk-me-through request has a scope the UI
+  // computed. A composer request cannot carry one today, but the invariant was
+  // unenforced — a future writer of `scope` would inherit the authority claim
+  // for free.
+  if (r.source !== "walk_me_through") return "";
+  const scope = describeRequestScope(r.scope);
+  return scope ? `\n    → SCOPE (from the UI, authoritative): ${scope} — keep the explainer to exactly this.` : "";
 }
 
 type CommentRegion =

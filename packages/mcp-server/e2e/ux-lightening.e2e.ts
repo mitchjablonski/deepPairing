@@ -167,10 +167,13 @@ test("#212 (J4) — the header slims: no standalone Ledger button; ⌘K Search i
   // carries "Open the Ledger" (the Diagnostics entry only mounts when opened).
   await expect(page.getByRole("button", { name: /open the ledger/i })).toHaveCount(0);
   // The single, clearly-labelled palette affordance remains (discoverability
-  // for non-keyboard users): "⌘K Search", opening the command palette.
+  // for non-keyboard users), opening the command palette. P2 (round-11 UX #7)
+  // reordered it to "Search ⌘K": the WORD leads (it now survives at EVERY
+  // width, where it used to vanish below 1100px) and the shortcut trails it as
+  // the hint it is. Both parts must still be present.
   const palette = page.getByRole("button", { name: /open the command palette/i });
   await expect(palette).toBeVisible();
-  await expect(palette).toHaveText(/⌘K\s*Search/);
+  await expect(palette).toHaveText(/Search\s*⌘K/);
   // And the Ledger is still reachable — the Diagnostics (⋯) entry opens it.
   await page.getByRole("button", { name: /open diagnostics menu/i }).click();
   const ledgerEntry = page.getByRole("button", { name: /open the ledger/i });

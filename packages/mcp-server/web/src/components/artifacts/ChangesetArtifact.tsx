@@ -22,7 +22,7 @@ import {
 import { OpenInEditorLink } from "../OpenInEditor";
 import { LineGutter, LineComposer, type LineMode } from "../LineComments";
 import { SuggestionLineFeedback } from "../SuggestionLineFeedback";
-import { WalkMeThroughButton, buildWalkMeThroughRequest } from "../WalkMeThrough";
+import { WalkMeThroughButton, hunkLineRange } from "../WalkMeThrough";
 
 /**
  * #171 / #175 — ChangesetArtifact: a change spanning 2+ files reviewed as ONE
@@ -61,6 +61,25 @@ const changeMark: Record<ChangesetFile["changeType"], { letter: string; cls: str
   added: { letter: "A", cls: "text-accent-green", label: "added" },
   deleted: { letter: "D", cls: "text-accent-red", label: "deleted" },
 };
+
+/**
+ * P2 review F3 — the file path in the one-row header, WITHOUT losing the
+ * filename. A plain `truncate` ellipsizes from the right, so P2's single-row fix
+ * turned a deep path into "packages/mcp-server/src…" — the file actually being
+ * reviewed became invisible without hovering. Split the path: the DIRECTORY
+ * ellipsizes (it is the disposable half), the BASENAME never shrinks.
+ */
+function FilePathLabel({ path }: { path: string }) {
+  const cut = path.lastIndexOf("/");
+  const dir = cut >= 0 ? path.slice(0, cut + 1) : "";
+  const base = cut >= 0 ? path.slice(cut + 1) : path;
+  return (
+    <span className="flex min-w-0 items-baseline" title={path} data-testid="changeset-file-path">
+      {dir && <span className="min-w-0 truncate text-text-muted">{dir}</span>}
+      <span className="shrink-0 text-text-primary" data-testid="changeset-file-basename">{base}</span>
+    </span>
+  );
+}
 
 /** Derive a file's add/del tally from its hunks when the agent didn't supply
  *  `stats` (all new fields optional). */
@@ -508,13 +527,38 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         {file.hunks.length === 0 && (
           <div className="px-3 py-2 text-2xs text-text-muted italic">No diff hunks for this file.</div>
         )}
-        {file.hunks.map((hunk, hi) => (
+        {file.hunks.map((hunk, hi) => {
+          // P2 fix 1 (round-11 MED) — the HUNK grain, finally reachable. The
+          // guidance has promised "scope to exactly that hunk … not a whole-file
+          // tour" since O2, but every live call site emitted {kind:"file"} — the
+          // hunk branch had zero production callers. The hunk header is the one
+          // place a reader is already looking at a single hunk, so the affordance
+          // lives there, carrying the hunk's REAL line range (derived from its
+          // line numbers; withheld when the agent supplied none).
+          const range = hunkLineRange(hunk);
+          const hunkHeaderBar = (hunk.header || range) && (
+            <div className="flex items-start gap-2 font-mono text-2xs text-accent-cyan bg-surface-code px-3 py-1 border-y border-border-subtle">
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{hunk.header}</span>
+              {range && (
+                <WalkMeThroughButton
+                  compact
+                  target={{
+                    kind: "hunk",
+                    filePath: file.path,
+                    artifactId: artifact.id,
+                    // P2 review F1 — a DELETED file's path is gone from the
+                    // working tree entirely; the ask has to say so.
+                    ...(file.changeType === "deleted" ? { fileRemoved: true } : {}),
+                    ...range,
+                  }}
+                  className="-my-0.5"
+                />
+              )}
+            </div>
+          );
+          return (
           <div key={hi}>
-            {hunk.header && (
-              <div className="font-mono text-2xs text-accent-cyan bg-surface-code px-3 py-1 border-y border-border-subtle whitespace-pre-wrap break-words">
-                {hunk.header}
-              </div>
-            )}
+            {hunkHeaderBar}
             {hunk.lines.map((line, li) => {
               const newLine = line.newLine ?? null;
               const oldLine = line.oldLine ?? null;
@@ -604,7 +648,8 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               );
             })}
           </div>
-        ))}
+          );
+        })}
       </div>
     );
   };
@@ -769,15 +814,20 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         <div className="space-y-3">
           {files.map((f, i) => (
             <div key={`${f.path}-${i}`} data-changeset-file={i} className="border border-border-subtle rounded overflow-hidden bg-surface-primary">
-              <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary flex-wrap">
-                <span className={`font-bold text-2xs ${changeMark[f.changeType].cls}`}>{changeMark[f.changeType].letter}</span>
-                <span className="text-text-primary">{f.path}</span>
+              {/* P2 (round-11 UX) — the file-path row does NOT wrap at review
+                  widths: the DIRECTORY truncates (the basename always survives —
+                  review F3) so the actions stay on ONE 41px line instead of
+                  pushing the header to a second row on a deep path. Below
+                  1100px — where the row genuinely cannot hold path + stats +
+                  three actions — it wraps again rather than overlapping. */}
+              <div className="flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
+                <span className={`font-bold text-2xs shrink-0 ${changeMark[f.changeType].cls}`}>{changeMark[f.changeType].letter}</span>
+                <FilePathLabel path={f.path} />
                 <OpenInEditorLink filePath={f.path} line={1} />
-                <WalkMeThroughButton
-                  requestText={buildWalkMeThroughRequest({ kind: "file", filePath: f.path })}
-                  ariaLabel={`how ${f.path} works`}
-                />
-                {renderDispositionControls(f)}
+                <span className="ml-auto flex items-center gap-2 shrink-0">
+                  <WalkMeThroughButton target={{ kind: "file", filePath: f.path, artifactId: artifact.id }} />
+                  {renderDispositionControls(f)}
+                </span>
               </div>
               {renderNeedsBox(f, false)}
               {renderLookRightConfirm(f)}
@@ -854,24 +904,26 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           <div className="min-w-0 border border-border-subtle rounded overflow-hidden bg-surface-primary" data-changeset-file={clampedIdx}>
             {activeFile ? (
               <>
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary flex-wrap">
-                  <span className={`font-bold text-2xs ${changeMark[activeFile.changeType].cls}`}>{changeMark[activeFile.changeType].letter}</span>
-                  <span className="text-text-primary">{activeFile.path}</span>
+                {/* P2 (round-11 UX) — see the review-all header above: one line
+                    at review widths (directory truncates, basename survives),
+                    wrapping only below 1100px. */}
+                <div className="flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
+                  <span className={`font-bold text-2xs shrink-0 ${changeMark[activeFile.changeType].cls}`}>{changeMark[activeFile.changeType].letter}</span>
+                  <FilePathLabel path={activeFile.path} />
                   <OpenInEditorLink filePath={activeFile.path} line={1} />
-                  <WalkMeThroughButton
-                    requestText={buildWalkMeThroughRequest({ kind: "file", filePath: activeFile.path })}
-                    ariaLabel={`how ${activeFile.path} works`}
-                  />
-                  {(() => {
-                    const s = fileStats(activeFile);
-                    return (
-                      <span className="text-2xs text-text-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
-                        <span className="text-accent-green">+{s.additions}</span>{" "}
-                        <span className="text-accent-red">−{s.deletions}</span>
-                      </span>
-                    );
-                  })()}
-                  {renderDispositionControls(activeFile)}
+                  <span className="ml-auto flex items-center gap-2 shrink-0">
+                    {(() => {
+                      const s = fileStats(activeFile);
+                      return (
+                        <span className="text-2xs text-text-muted" style={{ fontVariantNumeric: "tabular-nums" }}>
+                          <span className="text-accent-green">+{s.additions}</span>{" "}
+                          <span className="text-accent-red">−{s.deletions}</span>
+                        </span>
+                      );
+                    })()}
+                    <WalkMeThroughButton target={{ kind: "file", filePath: activeFile.path, artifactId: artifact.id }} />
+                    {renderDispositionControls(activeFile)}
+                  </span>
                 </div>
                 {/* Keyboard hint strip */}
                 {reviewActive && (

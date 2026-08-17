@@ -1,8 +1,9 @@
 import type { IStore } from "../store/store-interface.js";
+import type { RequestScope, RequestSource } from "@deeppairing/shared";
 import { getGlobalStore } from "../store/global-store.js";
 import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 import { PENDING_DRAFT_TYPES } from "./tools/types.js";
-import { requestSecretNote } from "./tools/check-feedback-delivery.js";
+import { requestSecretNote, requestScopeNote } from "./tools/check-feedback-delivery.js";
 import { cliInvocation } from "../cli-invocation.js";
 
 /** N2 (#226 scope 4) — age in ms of the OLDEST pending draft, or null if no
@@ -588,13 +589,21 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     // check_feedback ordering: requests rank after unanswered questions). These
     // persist across runs like questions, so a request the human composed while
     // the agent was gone surfaces on this run's FIRST call.
-    const pendingRequests = ((fullState as { requests?: Array<{ id: string; text: string; intent: string; servedByArtifactId?: string; secretWarnings?: Array<{ pattern: string; label: string }> }> }).requests ?? [])
+    const pendingRequests = ((fullState as { requests?: Array<{ id: string; text: string; intent: string; servedByArtifactId?: string; secretWarnings?: Array<{ pattern: string; label: string }>; source?: RequestSource; scope?: RequestScope }> }).requests ?? [])
       .filter((r) => !r.servedByArtifactId);
     if (pendingRequests.length > 0) {
       // #204 (code lens F1) — append the same TEXT-ONLY secret marker the
       // check_feedback request line carries, so a credential pasted into the
       // composer while the agent was gone is flagged on this run's FIRST call.
-      const lines = pendingRequests.map((r) => `  • ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"${requestSecretNote(r)}`);
+      // P2 review F5 — the 120-char truncation ate exactly the part that makes a
+      // walk-me-through request safe to serve (the line range, "not a whole-file
+      // tour") on any deep path — and THIS is the surface the no-agent-live toast
+      // advertises ("queued… when the session resumes"). Append the same scope
+      // clause check_feedback delivers, AFTER the slice, so truncating the prose
+      // can never truncate the scope.
+      const lines = pendingRequests.map(
+        (r) => `  • ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"${requestSecretNote(r)}${requestScopeNote(r)}`,
+      );
       blockingParts.push(
         `\n📨 ${pendingRequests.length} pending human request${pendingRequests.length === 1 ? "" : "s"} — the human ASKED you to do ${pendingRequests.length === 1 ? "this" : "these"} (explain→present_explainer, plan→present_plan/present_spec, status→present_debrief):\n${lines.join("\n")}\n` +
         `Serve each with the matching present_* tool, passing servedRequestId so it links back and clears.`,

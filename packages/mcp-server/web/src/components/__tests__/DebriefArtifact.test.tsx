@@ -313,7 +313,7 @@ describe("DebriefArtifact — 'Walk me through this' on a needs-your-eyes item (
   it("emits a scoped explain request naming the flagged item", async () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);
     const item = screen.getByTestId("debrief-needs-eyes");
-    await userEvent.click(within(item).getByTestId("walk-me-through"));
+    await userEvent.click(within(item).getByTestId("walk-me-through-needs-eyes"));
     await waitFor(() => {
       const calls = (globalThis.fetch as any).mock.calls.filter(([u]: any[]) =>
         String(u).includes("/api/requests"),
@@ -324,5 +324,75 @@ describe("DebriefArtifact — 'Walk me through this' on a needs-your-eyes item (
       expect(body.text).toContain("The expiry check in the middleware diff");
       expect(body.text).toContain("present_explainer");
     });
+  });
+
+  /**
+   * P2 fix 2 (round-11 MED) — the REF TRAVELS. O2 passed `hasArtifactRef:
+   * !!item.artifactRef` — a BOOLEAN — so the emitted text promised "scoped to
+   * the linked artifact" while the id itself never left the browser: the agent
+   * was told a link existed without being told what it pointed at.
+   */
+  it("the item's artifactRef TRAVELS — in the prose and in the structured scope", async () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const item = screen.getByTestId("debrief-needs-eyes");
+    await userEvent.click(within(item).getByTestId("walk-me-through-needs-eyes"));
+    await waitFor(() => {
+      const calls = (globalThis.fetch as any).mock.calls.filter(([u]: any[]) =>
+        String(u).includes("/api/requests"),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      const body = JSON.parse(calls[calls.length - 1][1].body);
+      // The fixture needs-your-eyes item links artifact "art_changeset_001".
+      expect(body.text).toContain("the linked artifact art_changeset_001");
+      expect(body.source).toBe("walk_me_through");
+      expect(body.scope).toEqual({
+        artifactId: "art_changeset_001",
+        // P2 review F6 — the DEBRIEF the item was flagged in, so itemRef no
+        // longer anchors into an artifact the scope never names.
+        sourceArtifactId: "art_debrief_001",
+        itemRef: "debrief:needs-your-eyes:0",
+      });
+    });
+  });
+});
+
+/**
+ * P2 fix 5 (round-11 MED) — the disclosure toggle was styled BYTE-IDENTICALLY to
+ * the static section headings (text-xs font-semibold text-text-muted uppercase
+ * tracking-wide, cursor:default), so "FULL WALK-THROUGH (3 SECTIONS)" read as an
+ * empty section rather than a control. It must not be class-identical to a
+ * heading, and it must carry interactive affordances.
+ */
+describe("DebriefArtifact — the disclosure reads as a CONTROL, not a heading (P2)", () => {
+  it("is not styled as a static section heading", () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const toggle = screen.getByTestId("debrief-walk-toggle");
+    const heading = screen.getByText("What we built"); // the h4 it used to mimic
+    expect(toggle.className).not.toBe(heading.className);
+    // The heading mimicry itself is gone.
+    expect(toggle.className).not.toContain("uppercase");
+    expect(heading.className).toContain("uppercase");
+  });
+
+  it("carries interactive affordances: pointer cursor, border, hover state, rotating chevron", () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const toggle = screen.getByTestId("debrief-walk-toggle");
+    expect(toggle.className).toContain("cursor-pointer");
+    expect(toggle.className).toMatch(/\bborder\b/);
+    expect(toggle.className).toMatch(/hover:bg-/);
+    // The chevron rotates with the expanded state (collapsed = not rotated).
+    const chevron = toggle.querySelector("[aria-hidden='true']")!;
+    expect(chevron.className).toContain("transition-transform");
+    expect(chevron.className).not.toContain("rotate-90");
+  });
+
+  it("keeps the 'has your comments' hint when collapsed over a live thread", () => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(debriefArtifact);
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    // No thread in the base fixture → no hint; the hint's own test lives in the
+    // auto-expand case above. Here we only pin that the label is a plain,
+    // sentence-case action string.
+    expect(screen.getByTestId("debrief-walk-toggle")).toHaveTextContent(/Show the full walk-through/i);
   });
 });

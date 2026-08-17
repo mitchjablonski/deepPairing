@@ -428,7 +428,14 @@ export function createHttpRoutes(
     if (!store.addRequest) {
       return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
     }
-    const request = await store.addRequest({ text: parsed.data.text, intent: parsed.data.intent });
+    // P2 — carry the optional source/scope through (absent on a plain composer
+    // POST, so the stored shape is unchanged for every pre-P2 client).
+    const request = await store.addRequest({
+      text: parsed.data.text,
+      intent: parsed.data.intent,
+      ...(parsed.data.source ? { source: parsed.data.source } : {}),
+      ...(parsed.data.scope ? { scope: parsed.data.scope } : {}),
+    });
     broadcast({ type: "request_added", request }, sid);
     return c.json({ request });
   });

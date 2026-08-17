@@ -267,7 +267,12 @@ export {
 export {
   RequestIntentSchema,
   RequestSchema,
+  RequestSourceSchema,
+  RequestScopeSchema,
   describeRequestIntent,
+  describeRequestScope,
   type RequestIntent,
   type Request,
+  type RequestSource,
+  type RequestScope,
 } from "./schemas/request.js";

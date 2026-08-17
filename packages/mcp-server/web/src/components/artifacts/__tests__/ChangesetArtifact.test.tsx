@@ -711,14 +711,20 @@ describe("ChangesetArtifact — comments still thread (#171 regression guard)", 
   });
 });
 
-describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", () => {
+describe("ChangesetArtifact — the 'Explain this' affordance (O2 #230, P2 truth-up)", () => {
+  /** The most recent /api/requests POST body. */
+  function lastRequestBody(): any {
+    const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/requests"));
+    return JSON.parse(calls[calls.length - 1][1].body);
+  }
+
   it("emits a well-formed scoped explain request naming the active file", async () => {
     const art = changeset({ reviewState: {} });
     seed(art);
     render(<ChangesetArtifact artifact={art} />);
     // The active file is the first (auth/middleware.ts). File-by-file is the
-    // default view → exactly one walk-me-through button on screen.
-    const btn = screen.getByTestId("walk-me-through");
+    // default view → one FILE-grain button in its header.
+    const btn = screen.getByTestId("walk-me-through-file");
     await userEvent.click(btn);
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -726,11 +732,13 @@ describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", ()
         expect.objectContaining({ method: "POST" }),
       ),
     );
-    const calls = (fetch as any).mock.calls.filter(([u]: any[]) => String(u).includes("/api/requests"));
-    const body = JSON.parse(calls[calls.length - 1][1].body);
+    const body = lastRequestBody();
     expect(body.intent).toBe("explain");
     expect(body.text).toContain("auth/middleware.ts");
     expect(body.text).toContain("present_explainer");
+    // P2 fix 3 — the scope also travels as data.
+    expect(body.source).toBe("walk_me_through");
+    expect(body.scope).toEqual({ filePath: "auth/middleware.ts", artifactId: "art_cs" });
   });
 
   it("offers the affordance for every file in review-all mode", async () => {
@@ -738,7 +746,139 @@ describe("ChangesetArtifact — 'Walk me through this' affordance (O2 #230)", ()
     seed(art);
     render(<ChangesetArtifact artifact={art} />);
     await userEvent.click(screen.getByRole("button", { name: /Review all/i }));
-    // One per file (3 files).
-    expect(screen.getAllByTestId("walk-me-through")).toHaveLength(3);
+    // One FILE-grain button per file (3 files) — plus a hunk-grain one per hunk.
+    expect(screen.getAllByTestId("walk-me-through-file")).toHaveLength(3);
+  });
+
+  /**
+   * P2 fix 1 (round-11 MED) — the HUNK grain had ZERO production call sites: the
+   * guidance promised "scope to exactly that hunk", every live button emitted
+   * {kind:"file"}, and five rendered hunk headers held no button at all. This
+   * pins the fix — a hunk header emits a HUNK-scoped request whose line range
+   * matches the hunk's actual lines.
+   */
+  it("a HUNK header emits a hunk-scoped request carrying the hunk's real line range", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    const hunkBtns = screen.getAllByTestId("walk-me-through-hunk");
+    expect(hunkBtns).toHaveLength(1); // the active file has one hunk
+    expect(hunkBtns[0]).toHaveTextContent("Explain this hunk");
+    await userEvent.click(hunkBtns[0]!);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/requests"),
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    const body = lastRequestBody();
+    // The fixture hunk's new-side lines are 25, 26, 27.
+    expect(body.scope).toEqual({
+      filePath: "auth/middleware.ts",
+      lineStart: 25,
+      lineEnd: 27,
+      side: "new",
+      oldStart: 26,
+      oldEnd: 26,
+      removedLineCount: 1,
+      artifactId: "art_cs",
+    });
+    expect(body.text).toContain("25–27");
+    expect(body.text).toMatch(/not a whole-file tour/i);
+    expect(body.source).toBe("walk_me_through");
+    // P2 review F1/F2 — the fixture hunk is MIXED (one del at old 26), so the
+    // side is explicit and the removed line rides along.
+    expect(body.scope.side).toBe("new");
+    expect(body.scope.oldStart).toBe(26);
+    expect(body.text).toContain("also removes 1 line (PRE-change line 26)");
+  });
+
+  /**
+   * P2 review F1 (merge-blocker) — a pure-deletion hunk in a DELETED file used to
+   * emit bare old-side numbers under an "authoritative" clause: the agent opens
+   * the path at those lines in the working tree, where the file no longer exists.
+   */
+  it("a DELETED file's hunk emits side:old + fileRemoved and says the lines are gone", async () => {
+    const art = changeset({
+      reviewState: {},
+      files: [
+        {
+          path: "auth/legacy-session.ts",
+          changeType: "deleted",
+          hunks: [{
+            header: "@@ -8,2 +0,0 @@",
+            lines: [
+              { kind: "del", content: "export function legacyTouch() {}", oldLine: 8 },
+              { kind: "del", content: "// superseded by getAndTouch", oldLine: 9 },
+            ],
+          }],
+        },
+      ],
+    });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByTestId("walk-me-through-hunk"));
+    await waitFor(() => expect((fetch as any).mock.calls.length).toBeGreaterThan(0));
+    const body = lastRequestBody();
+    expect(body.scope).toEqual({
+      filePath: "auth/legacy-session.ts",
+      lineStart: 8,
+      lineEnd: 9,
+      side: "old",
+      removedLineCount: 2,
+      fileRemoved: true,
+      artifactId: "art_cs",
+    });
+    expect(body.text).toMatch(/NO LONGER EXIST in the working tree/);
+    expect(body.text).toContain("which this changeset DELETES");
+  });
+
+  /**
+   * P2 review F3 — the one-row header fix must not eat the FILENAME: `truncate`
+   * ellipsizes from the right, so a deep path rendered as "packages/…src…" with
+   * the file under review invisible. The directory is the disposable half.
+   */
+  it("the header keeps the BASENAME whole and truncates only the directory", () => {
+    const deep = "packages/mcp-server/src/mcp/tools/check-feedback-delivery.ts";
+    const art = changeset({
+      reviewState: {},
+      files: [{ path: deep, changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 3 }] }] }],
+    });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    const basename = screen.getByTestId("changeset-file-basename");
+    expect(basename).toHaveTextContent("check-feedback-delivery.ts");
+    // The basename never shrinks; the directory carries the truncation.
+    expect(basename.className).toContain("shrink-0");
+    expect(basename.className).not.toContain("truncate");
+    const label = screen.getByTestId("changeset-file-path");
+    expect(label).toHaveAttribute("title", deep);
+    expect(label.firstElementChild!.className).toContain("truncate");
+  });
+
+  it("every rendered hunk header carries the hunk affordance (review-all: 3 hunks)", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /Review all/i }));
+    expect(screen.getAllByTestId("walk-me-through-hunk")).toHaveLength(3);
+  });
+
+  it("withholds the hunk affordance when the agent supplied no line numbers (never a bogus range)", () => {
+    const art = changeset({
+      reviewState: {},
+      files: [
+        {
+          path: "a.ts",
+          changeType: "modified",
+          hunks: [{ header: "@@ -1 +1 @@", lines: [{ kind: "ctx", content: "no numbers here" }] }],
+        },
+      ],
+    });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    expect(screen.queryByTestId("walk-me-through-hunk")).not.toBeInTheDocument();
+    // The file-grain affordance still stands.
+    expect(screen.getByTestId("walk-me-through-file")).toBeInTheDocument();
   });
 });

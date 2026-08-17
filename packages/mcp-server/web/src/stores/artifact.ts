@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent } from "@deeppairing/shared";
+import type { Artifact, Comment, ArtifactStatus, CommentSuggestion, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { apiBase, sessionHeaders, safeFetch, ApiError, isForeignSession } from "../lib/api";
 import { useReplayStore } from "./replay";
 import { isDraftAwaitingReview } from "../lib/pending";
@@ -322,7 +322,16 @@ export interface ArtifactState {
    */
   requests: Request[];
   setRequests: (requests: Request[]) => void;
-  submitRequest: (text: string, intent: RequestIntent) => Promise<Request>;
+  /**
+   * P2 — `origin` carries the request's PROVENANCE + SCOPE as data (the
+   * one-click "Explain this file/hunk" affordances fill it; the free-text
+   * composer omits it and the POST body is byte-identical to pre-P2).
+   */
+  submitRequest: (
+    text: string,
+    intent: RequestIntent,
+    origin?: { source?: RequestSource; scope?: RequestScope },
+  ) => Promise<Request>;
   applyRequestServed: (requestId: string, artifactId: string) => void;
 
   /** F6 — the session that owns an artifact (merged stores carry foreign artifacts). */
@@ -669,23 +678,31 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       requests: state.requests.map((r) => (r.id === requestId ? { ...r, servedByArtifactId: artifactId } : r)),
     })),
 
-  submitRequest: async (text, intent) => {
+  submitRequest: async (text, intent, origin) => {
     assertNotReplay("Sending a request");
     // Optimistic: show the request immediately (it also arrives over the
     // request_added WS broadcast; reconcile swaps the provisional for the
     // server-id'd record, and addRequest-by-id dedupe collapses the echo).
+    // P2 — spread source/scope only when the caller supplied them, so a plain
+    // composer request's optimistic record AND its POST body stay exactly as
+    // they were pre-P2 (the server treats both fields as optional too).
+    const originFields = {
+      ...(origin?.source ? { source: origin.source } : {}),
+      ...(origin?.scope && Object.keys(origin.scope).length > 0 ? { scope: origin.scope } : {}),
+    };
     const provisional: Request = {
       id: `local_req_${Date.now().toString(36)}`,
       text,
       intent,
       createdAt: new Date().toISOString(),
+      ...originFields,
     };
     set((state) => ({ requests: [...state.requests, provisional] }));
     try {
       const res = await safeFetch(`${apiBase()}/api/requests`, {
         method: "POST",
         headers: sessionHeaders(),
-        body: JSON.stringify({ text, intent }),
+        body: JSON.stringify({ text, intent, ...originFields }),
       });
       let serverRequest: Request | null = null;
       try { serverRequest = (await res.json())?.request ?? null; } catch { /* keep provisional */ }

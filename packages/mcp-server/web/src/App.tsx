@@ -498,23 +498,31 @@ function App() {
               Restoring the always-visible affordance also de-orphans the "·"
               separator above, which used to dangle before the settings gear when
               the button disappeared. */}
+          {/* P2 (round-11 UX #7) — round 10 asked for a LABELED, higher-contrast
+              search at narrow widths; #231 only made the icon always-visible and
+              left the label at `hidden min-[1100px]:inline` with the same muted
+              contrast, so at the ~900px VS Code webview it still read as a faint
+              glyph pair rather than an affordance. The label now shows at EVERY
+              width and the whole control carries a border + secondary (not muted)
+              text — the one search door in the app, legible in the webview. */}
           <button
             onClick={() => setShowPalette(true)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border-default text-2xs text-text-secondary hover:text-text-primary hover:border-accent-blue hover:bg-surface-hover transition-colors"
             title="Command palette — search + quick actions (⌘K)"
             aria-label="Open the command palette"
           >
             {/* #231 (round-10 UX #3) — a magnifier ICON, always visible, so the
                 affordance reads as "search" at narrow widths (the ~900px VS Code
-                webview) where the "Search" label is hidden — matching the sibling
-                nav buttons above instead of a lone faint ⌘K glyph. Order stays
-                icon → ⌘K → "Search" so the label still reads "⌘K Search". */}
+                webview) — matching the sibling nav buttons above instead of a lone
+                faint ⌘K glyph. P2 — order is now icon → "Search" → ⌘K: the WORD
+                leads (it survives at every width) and the shortcut trails it as
+                the hint it is. */}
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="5" cy="5" r="3.25" />
               <path d="M7.6 7.6 10.5 10.5" />
             </svg>
+            <span data-testid="search-label">Search</span>
             <kbd className="font-mono bg-surface-elevated px-1 rounded text-[9px]">⌘K</kbd>
-            <span className="hidden min-[1100px]:inline">Search</span>
           </button>
           <button
             onClick={() => setShowSettings(true)}
