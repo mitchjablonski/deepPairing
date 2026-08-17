@@ -70,7 +70,13 @@ export function requestSecretNote(r: Pick<Request, "secretWarnings">): string {
  * `relatedArtifactIds` at) even if the prose drifts. Returns "" for an unscoped
  * request — every pre-P2 request's delivered line stays byte-identical.
  */
-export function requestScopeNote(r: Pick<Request, "scope">): string {
+export function requestScopeNote(r: Pick<Request, "scope" | "source">): string {
+  // P2 review F4 — "authoritative" is a claim about PROVENANCE, so gate it on
+  // provenance: only a one-click walk-me-through request has a scope the UI
+  // computed. A composer request cannot carry one today, but the invariant was
+  // unenforced — a future writer of `scope` would inherit the authority claim
+  // for free.
+  if (r.source !== "walk_me_through") return "";
   const scope = describeRequestScope(r.scope);
   return scope ? `\n    → SCOPE (from the UI, authoritative): ${scope} — keep the explainer to exactly this.` : "";
 }

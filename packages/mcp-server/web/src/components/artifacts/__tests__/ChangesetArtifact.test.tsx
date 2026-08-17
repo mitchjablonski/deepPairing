@@ -777,11 +777,83 @@ describe("ChangesetArtifact — the 'Explain this' affordance (O2 #230, P2 truth
       filePath: "auth/middleware.ts",
       lineStart: 25,
       lineEnd: 27,
+      side: "new",
+      oldStart: 26,
+      oldEnd: 26,
+      removedLineCount: 1,
       artifactId: "art_cs",
     });
     expect(body.text).toContain("25–27");
     expect(body.text).toMatch(/not a whole-file tour/i);
     expect(body.source).toBe("walk_me_through");
+    // P2 review F1/F2 — the fixture hunk is MIXED (one del at old 26), so the
+    // side is explicit and the removed line rides along.
+    expect(body.scope.side).toBe("new");
+    expect(body.scope.oldStart).toBe(26);
+    expect(body.text).toContain("also removes 1 line (PRE-change line 26)");
+  });
+
+  /**
+   * P2 review F1 (merge-blocker) — a pure-deletion hunk in a DELETED file used to
+   * emit bare old-side numbers under an "authoritative" clause: the agent opens
+   * the path at those lines in the working tree, where the file no longer exists.
+   */
+  it("a DELETED file's hunk emits side:old + fileRemoved and says the lines are gone", async () => {
+    const art = changeset({
+      reviewState: {},
+      files: [
+        {
+          path: "auth/legacy-session.ts",
+          changeType: "deleted",
+          hunks: [{
+            header: "@@ -8,2 +0,0 @@",
+            lines: [
+              { kind: "del", content: "export function legacyTouch() {}", oldLine: 8 },
+              { kind: "del", content: "// superseded by getAndTouch", oldLine: 9 },
+            ],
+          }],
+        },
+      ],
+    });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByTestId("walk-me-through-hunk"));
+    await waitFor(() => expect((fetch as any).mock.calls.length).toBeGreaterThan(0));
+    const body = lastRequestBody();
+    expect(body.scope).toEqual({
+      filePath: "auth/legacy-session.ts",
+      lineStart: 8,
+      lineEnd: 9,
+      side: "old",
+      removedLineCount: 2,
+      fileRemoved: true,
+      artifactId: "art_cs",
+    });
+    expect(body.text).toMatch(/NO LONGER EXIST in the working tree/);
+    expect(body.text).toContain("which this changeset DELETES");
+  });
+
+  /**
+   * P2 review F3 — the one-row header fix must not eat the FILENAME: `truncate`
+   * ellipsizes from the right, so a deep path rendered as "packages/…src…" with
+   * the file under review invisible. The directory is the disposable half.
+   */
+  it("the header keeps the BASENAME whole and truncates only the directory", () => {
+    const deep = "packages/mcp-server/src/mcp/tools/check-feedback-delivery.ts";
+    const art = changeset({
+      reviewState: {},
+      files: [{ path: deep, changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 3 }] }] }],
+    });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    const basename = screen.getByTestId("changeset-file-basename");
+    expect(basename).toHaveTextContent("check-feedback-delivery.ts");
+    // The basename never shrinks; the directory carries the truncation.
+    expect(basename.className).toContain("shrink-0");
+    expect(basename.className).not.toContain("truncate");
+    const label = screen.getByTestId("changeset-file-path");
+    expect(label).toHaveAttribute("title", deep);
+    expect(label.firstElementChild!.className).toContain("truncate");
   });
 
   it("every rendered hunk header carries the hunk affordance (review-all: 3 hunks)", async () => {

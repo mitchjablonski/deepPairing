@@ -101,6 +101,46 @@ describe("G1 (#198b) Request schema", () => {
     );
   });
 
+  /**
+   * P2 review F1/F2/F6 — a diff has two coordinate systems and only the new-side
+   * one matches the working tree. The rendered clause must never let an old-side
+   * range pass as something the agent can open on disk.
+   */
+  it("F1 — an OLD-side range renders with the lines-are-gone warning", () => {
+    const s = describeRequestScope({ filePath: "a.ts", lineStart: 8, lineEnd: 9, side: "old" });
+    expect(s).toContain("a.ts:8-9");
+    expect(s).toMatch(/PRE-change lines/);
+    expect(s).toMatch(/no longer exist in the working tree/);
+    expect(s).toMatch(/read them from the changeset diff/);
+  });
+
+  it("F1 — a DELETED file says the path itself is gone", () => {
+    const s = describeRequestScope({ filePath: "a.ts", lineStart: 8, lineEnd: 9, side: "old", fileRemoved: true });
+    expect(s).toMatch(/this file was DELETED in this changeset/);
+  });
+
+  it("F2 — a mixed hunk names the removed lines that fall outside the new-side range", () => {
+    const s = describeRequestScope({
+      filePath: "a.ts", lineStart: 10, lineEnd: 11, side: "new", oldStart: 11, oldEnd: 14, removedLineCount: 4,
+    });
+    expect(s).toContain("a.ts:10-11");
+    expect(s).toContain("plus 4 lines removed (pre-change 11-14)");
+    // The new-side range carries no pre-change warning — it IS the working tree.
+    expect(s).not.toMatch(/no longer exist/);
+  });
+
+  it("F1 — a plain new-side range stays exactly as before (no added noise)", () => {
+    expect(describeRequestScope({ filePath: "a.ts", lineStart: 4, lineEnd: 6, side: "new" })).toBe("a.ts:4-6");
+  });
+
+  it("F6 — the artifact the ask was FLAGGED IN rides beside the one it points at", () => {
+    expect(
+      describeRequestScope({ artifactId: "cs_1", sourceArtifactId: "debrief_1", itemRef: "debrief:needs-your-eyes:2" }),
+    ).toBe("artifact cs_1 (flagged in debrief_1) · debrief:needs-your-eyes:2");
+    // Source alone (no target) still names an artifact rather than dropping it.
+    expect(describeRequestScope({ sourceArtifactId: "debrief_1" })).toBe("artifact debrief_1");
+  });
+
   it("describeRequestIntent names the fulfilling tool per intent", () => {
     expect(describeRequestIntent("explain")).toMatch(/present_explainer/);
     expect(describeRequestIntent("plan")).toMatch(/present_plan/);

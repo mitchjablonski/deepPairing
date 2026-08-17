@@ -139,7 +139,7 @@ test.afterAll(async () => {
 // The daemon + first hydration can be slow on WSL /mnt/c (9P latency); the
 // assertions here are about layout, not timing, so a retry keeps a cold-start
 // straggler from reading as a regression.
-test.describe.configure({ retries: 2 });
+test.describe.configure({ retries: 2, timeout: 90_000 });
 
 const CAPTURE = !!process.env.CAPTURE_P2;
 
@@ -173,12 +173,21 @@ for (const theme of ["dark", "light"] as const) {
       expect(await hunkBtns.count()).toBe(2);
       await expect(hunkBtns.first()).toHaveText(/Explain this hunk/);
       // …and the file grain still stands, labeled honestly.
-      await expect(page.locator('[data-walk-grain="file"]').first()).toHaveText(/Explain this file/);
+      await expect(page.locator('[data-walk-grain="file"]').first()).toHaveText(/Explain this file's changes/);
 
-      // 2. the file-path header stays ONE row on a deep path (round-11: 67px).
+      // P2 review F3 — the one-row header must not eat the FILENAME: the
+      // directory ellipsizes, the basename survives at every width.
+      const basename = page.getByTestId("changeset-file-basename").first();
+      await expect(basename).toHaveText("check-feedback-delivery.ts");
+      expect((await basename.boundingBox())!.width).toBeGreaterThan(20);
+
+      // 2. the file-path header stays ONE row on a deep path at review widths
+      //    (round-11 measured 67px vs 41px at 1440). Below 1100px the row
+      //    genuinely cannot hold path + stats + three actions, so it wraps
+      //    again — deliberately, rather than overlapping them.
       const header = page.locator(`[data-artifact-id="cs_p2"] .font-mono`, { hasText: DEEP }).first();
       const box = await header.boundingBox();
-      expect(box!.height).toBeLessThanOrEqual(48);
+      if (width >= 1100) expect(box!.height).toBeLessThanOrEqual(48);
 
       // 3. the button reads as an action, not file metadata (UI font, not mono).
       const fileBtn = page.locator('[data-walk-grain="file"]').first();

@@ -62,6 +62,25 @@ const changeMark: Record<ChangesetFile["changeType"], { letter: string; cls: str
   deleted: { letter: "D", cls: "text-accent-red", label: "deleted" },
 };
 
+/**
+ * P2 review F3 — the file path in the one-row header, WITHOUT losing the
+ * filename. A plain `truncate` ellipsizes from the right, so P2's single-row fix
+ * turned a deep path into "packages/mcp-server/src…" — the file actually being
+ * reviewed became invisible without hovering. Split the path: the DIRECTORY
+ * ellipsizes (it is the disposable half), the BASENAME never shrinks.
+ */
+function FilePathLabel({ path }: { path: string }) {
+  const cut = path.lastIndexOf("/");
+  const dir = cut >= 0 ? path.slice(0, cut + 1) : "";
+  const base = cut >= 0 ? path.slice(cut + 1) : path;
+  return (
+    <span className="flex min-w-0 items-baseline" title={path} data-testid="changeset-file-path">
+      {dir && <span className="min-w-0 truncate text-text-muted">{dir}</span>}
+      <span className="shrink-0 text-text-primary" data-testid="changeset-file-basename">{base}</span>
+    </span>
+  );
+}
+
 /** Derive a file's add/del tally from its hunks when the agent didn't supply
  *  `stats` (all new fields optional). */
 function fileStats(file: ChangesetFile): { additions: number; deletions: number } {
@@ -526,9 +545,11 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   target={{
                     kind: "hunk",
                     filePath: file.path,
-                    lineStart: range.lineStart,
-                    lineEnd: range.lineEnd,
                     artifactId: artifact.id,
+                    // P2 review F1 — a DELETED file's path is gone from the
+                    // working tree entirely; the ask has to say so.
+                    ...(file.changeType === "deleted" ? { fileRemoved: true } : {}),
+                    ...range,
                   }}
                   className="-my-0.5"
                 />
@@ -793,12 +814,15 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         <div className="space-y-3">
           {files.map((f, i) => (
             <div key={`${f.path}-${i}`} data-changeset-file={i} className="border border-border-subtle rounded overflow-hidden bg-surface-primary">
-              {/* P2 (round-11 UX) — NO `flex-wrap` on the file-path row: the
-                  path truncates (min-w-0) so the actions stay on ONE 41px line
-                  instead of pushing the header to a second row on a deep path. */}
-              <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
+              {/* P2 (round-11 UX) — the file-path row does NOT wrap at review
+                  widths: the DIRECTORY truncates (the basename always survives —
+                  review F3) so the actions stay on ONE 41px line instead of
+                  pushing the header to a second row on a deep path. Below
+                  1100px — where the row genuinely cannot hold path + stats +
+                  three actions — it wraps again rather than overlapping. */}
+              <div className="flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
                 <span className={`font-bold text-2xs shrink-0 ${changeMark[f.changeType].cls}`}>{changeMark[f.changeType].letter}</span>
-                <span className="text-text-primary min-w-0 truncate" title={f.path}>{f.path}</span>
+                <FilePathLabel path={f.path} />
                 <OpenInEditorLink filePath={f.path} line={1} />
                 <span className="ml-auto flex items-center gap-2 shrink-0">
                   <WalkMeThroughButton target={{ kind: "file", filePath: f.path, artifactId: artifact.id }} />
@@ -880,11 +904,12 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           <div className="min-w-0 border border-border-subtle rounded overflow-hidden bg-surface-primary" data-changeset-file={clampedIdx}>
             {activeFile ? (
               <>
-                {/* P2 (round-11 UX) — see the review-all header above: one line,
-                    path truncates, actions right-aligned and wrap-proof. */}
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
+                {/* P2 (round-11 UX) — see the review-all header above: one line
+                    at review widths (directory truncates, basename survives),
+                    wrapping only below 1100px. */}
+                <div className="flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
                   <span className={`font-bold text-2xs shrink-0 ${changeMark[activeFile.changeType].cls}`}>{changeMark[activeFile.changeType].letter}</span>
-                  <span className="text-text-primary min-w-0 truncate" title={activeFile.path}>{activeFile.path}</span>
+                  <FilePathLabel path={activeFile.path} />
                   <OpenInEditorLink filePath={activeFile.path} line={1} />
                   <span className="ml-auto flex items-center gap-2 shrink-0">
                     {(() => {

@@ -507,7 +507,7 @@ function App() {
               text — the one search door in the app, legible in the webview. */}
           <button
             onClick={() => setShowPalette(true)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border-subtle text-2xs text-text-secondary hover:text-text-primary hover:border-border-default hover:bg-surface-hover transition-colors"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border-default text-2xs text-text-secondary hover:text-text-primary hover:border-accent-blue hover:bg-surface-hover transition-colors"
             title="Command palette — search + quick actions (⌘K)"
             aria-label="Open the command palette"
           >

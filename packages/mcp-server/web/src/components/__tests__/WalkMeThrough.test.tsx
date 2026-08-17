@@ -55,16 +55,22 @@ afterEach(() => {
 });
 
 describe("buildWalkMeThroughRequest", () => {
-  it("file scope names the file + asks for a present_explainer scoped to it", () => {
+  it("file scope asks about THIS FILE'S CHANGES, never a whole-file tour", () => {
     const t = buildWalkMeThroughRequest({ kind: "file", filePath: "auth/middleware.ts" });
     expect(t).toContain("auth/middleware.ts");
     expect(t).toContain("present_explainer");
     expect(t.toLowerCase()).toContain("walk me through");
-    expect(t).toContain("scoped to this file");
+    // P2 review (judgment call) — the button lives in a CHANGESET file header,
+    // so "how <path> works … how the pieces fit together" licensed a tour of a
+    // 2000-line file of which six lines changed: the round-10 failure, re-entered
+    // through the file door.
+    expect(t).toContain("changes to auth/middleware.ts in this changeset");
+    expect(t).toContain("scoped to this file's changes");
+    expect(t).not.toMatch(/how auth\/middleware\.ts works/);
   });
 
   it("hunk scope carries the line range + forbids the whole-file tour", () => {
-    const t = buildWalkMeThroughRequest({ kind: "hunk", filePath: "a.ts", lineStart: 24, lineEnd: 30 });
+    const t = buildWalkMeThroughRequest({ kind: "hunk", filePath: "a.ts", lineStart: 24, lineEnd: 30, side: "new" });
     expect(t).toContain("a.ts");
     expect(t).toContain("24–30");
     expect(t).toContain("present_explainer");
@@ -94,6 +100,55 @@ describe("buildWalkMeThroughRequest", () => {
   });
 });
 
+/**
+ * P2 review F1/F2 — a diff has TWO coordinate systems and only one of them
+ * matches the file on disk. Handing the agent a bare range under an
+ * "authoritative" clause is how it opens the working tree at pre-change numbers
+ * and confidently explains unrelated code.
+ */
+describe("P2 review F1/F2 — old-side and mixed hunks say so, in prose AND data", () => {
+  const delOnly = { kind: "hunk", filePath: "a.ts", lineStart: 8, lineEnd: 9, side: "old", removedLineCount: 2 } as const;
+
+  it("F1 pure deletion: side=old + the lines-are-gone warning in the text", () => {
+    const t = buildWalkMeThroughRequest(delOnly);
+    expect(t).toContain("2 lines removed from a.ts");
+    expect(t).toContain("PRE-change lines 8–9");
+    expect(t).toMatch(/NO LONGER EXIST in the working tree/);
+    expect(t).toMatch(/read them from the changeset diff, not from disk/);
+    expect(buildWalkMeThroughScope(delOnly)).toEqual({
+      filePath: "a.ts", lineStart: 8, lineEnd: 9, side: "old", removedLineCount: 2,
+    });
+  });
+
+  it("F1 DELETED file: the ask names the removal of the file itself", () => {
+    const t = buildWalkMeThroughRequest({ ...delOnly, fileRemoved: true });
+    expect(t).toContain("a.ts, which this changeset DELETES");
+    expect(t).toContain("(nor does the file)");
+    expect(buildWalkMeThroughScope({ ...delOnly, fileRemoved: true }).fileRemoved).toBe(true);
+  });
+
+  it("F1 add-only hunk stays side:new and says the numbers are post-change", () => {
+    const t = buildWalkMeThroughRequest({ kind: "hunk", filePath: "a.ts", lineStart: 4, lineEnd: 6, side: "new" });
+    expect(t).toContain("(post-change line numbers)");
+    expect(t).not.toMatch(/NO LONGER EXIST/);
+    expect(buildWalkMeThroughScope({ kind: "hunk", filePath: "a.ts", lineStart: 4, lineEnd: 6, side: "new" }).side).toBe("new");
+  });
+
+  it("F2 mixed hunk: the removed lines are named, though they fall outside the new-side range", () => {
+    const mixed = {
+      kind: "hunk", filePath: "a.ts", lineStart: 10, lineEnd: 11, side: "new",
+      oldStart: 11, oldEnd: 14, removedLineCount: 4,
+    } as const;
+    const t = buildWalkMeThroughRequest(mixed);
+    expect(t).toContain("at lines 10–11");
+    expect(t).toContain("also removes 4 lines (PRE-change lines 11–14)");
+    expect(t).toMatch(/read those from the diff and cover them too/);
+    expect(buildWalkMeThroughScope(mixed)).toEqual({
+      filePath: "a.ts", lineStart: 10, lineEnd: 11, side: "new", oldStart: 11, oldEnd: 14, removedLineCount: 4,
+    });
+  });
+});
+
 describe("buildWalkMeThroughScope — P2 fix 3 (scope as DATA, not prose)", () => {
   it("file → filePath (+ the artifact it was fired from)", () => {
     expect(buildWalkMeThroughScope({ kind: "file", filePath: "a.ts", artifactId: "cs_1" })).toEqual({
@@ -102,13 +157,18 @@ describe("buildWalkMeThroughScope — P2 fix 3 (scope as DATA, not prose)", () =
     });
   });
 
-  it("hunk → filePath + the real line range", () => {
+  it("hunk → filePath + the real line range + the side", () => {
     expect(
-      buildWalkMeThroughScope({ kind: "hunk", filePath: "a.ts", lineStart: 24, lineEnd: 30, artifactId: "cs_1" }),
-    ).toEqual({ filePath: "a.ts", lineStart: 24, lineEnd: 30, artifactId: "cs_1" });
+      buildWalkMeThroughScope({ kind: "hunk", filePath: "a.ts", lineStart: 24, lineEnd: 30, side: "new", artifactId: "cs_1" }),
+    ).toEqual({ filePath: "a.ts", lineStart: 24, lineEnd: 30, side: "new", artifactId: "cs_1" });
   });
 
-  it("needs-eyes → the LINKED artifact (not the debrief) + the item anchor", () => {
+  /**
+   * P2 review F6 — the item scopes to what it POINTS AT, but `itemRef` anchors
+   * into the DEBRIEF: dropping the debrief id left the anchor pointing into an
+   * artifact the scope never named.
+   */
+  it("needs-eyes → the LINKED artifact, the item anchor, AND the debrief it was flagged in", () => {
     expect(
       buildWalkMeThroughScope({
         kind: "needs-eyes",
@@ -117,7 +177,18 @@ describe("buildWalkMeThroughScope — P2 fix 3 (scope as DATA, not prose)", () =
         artifactId: "debrief_1",
         itemRef: "debrief:needs-your-eyes:2",
       }),
-    ).toEqual({ artifactId: "cs_42", itemRef: "debrief:needs-your-eyes:2" });
+    ).toEqual({ artifactId: "cs_42", sourceArtifactId: "debrief_1", itemRef: "debrief:needs-your-eyes:2" });
+    // The prose names both too.
+    const t = buildWalkMeThroughRequest({
+      kind: "needs-eyes", what: "X", artifactRef: "cs_42", artifactId: "debrief_1",
+    });
+    expect(t).toContain("the linked artifact cs_42 (flagged for me in debrief debrief_1)");
+  });
+
+  it("needs-eyes with NO linked artifact scopes to the debrief itself (no phantom sourceArtifactId)", () => {
+    expect(
+      buildWalkMeThroughScope({ kind: "needs-eyes", what: "X", artifactId: "debrief_1", itemRef: "debrief:needs-your-eyes:0" }),
+    ).toEqual({ artifactId: "debrief_1", itemRef: "debrief:needs-your-eyes:0" });
   });
 
   it("omits what it doesn't know (no invented fields)", () => {
@@ -126,8 +197,8 @@ describe("buildWalkMeThroughScope — P2 fix 3 (scope as DATA, not prose)", () =
   });
 });
 
-describe("hunkLineRange — P2 fix 1", () => {
-  it("uses the NEW-side numbers when the hunk has any", () => {
+describe("hunkLineRange — P2 fix 1 (+ review F1/F2/F7)", () => {
+  it("uses the NEW-side numbers when the hunk has any, and marks the side", () => {
     expect(
       hunkLineRange({
         lines: [
@@ -138,25 +209,51 @@ describe("hunkLineRange — P2 fix 1", () => {
           { kind: "ctx", content: "", oldLine: 27, newLine: 28 },
         ],
       }),
-    ).toEqual({ lineStart: 25, lineEnd: 28 });
+      // F2 — the one deleted line rides as the pre-change envelope.
+    ).toEqual({ lineStart: 25, lineEnd: 28, side: "new", oldStart: 26, oldEnd: 26, removedLineCount: 1 });
   });
 
-  it("falls back to OLD-side numbers for a pure-deletion hunk", () => {
+  it("F2 — a mostly-deletion hunk carries the removed envelope the new range excludes", () => {
+    expect(
+      hunkLineRange({
+        lines: [
+          { kind: "ctx", content: "", oldLine: 10, newLine: 10 },
+          { kind: "del", content: "", oldLine: 11 },
+          { kind: "del", content: "", oldLine: 12 },
+          { kind: "del", content: "", oldLine: 13 },
+          { kind: "del", content: "", oldLine: 14 },
+          { kind: "ctx", content: "", oldLine: 15, newLine: 11 },
+        ],
+      }),
+    ).toEqual({ lineStart: 10, lineEnd: 11, side: "new", oldStart: 11, oldEnd: 14, removedLineCount: 4 });
+  });
+
+  it("F1 — a pure-deletion hunk returns OLD-side numbers, explicitly marked", () => {
     expect(
       hunkLineRange({ lines: [{ kind: "del", content: "", oldLine: 8 }, { kind: "del", content: "", oldLine: 9 }] }),
-    ).toEqual({ lineStart: 8, lineEnd: 9 });
+    ).toEqual({ lineStart: 8, lineEnd: 9, side: "old", removedLineCount: 2 });
   });
 
   it("returns null when the agent supplied no line numbers (affordance withheld, never a bogus range)", () => {
     expect(hunkLineRange({ lines: [{ kind: "ctx", content: "x" }] })).toBeNull();
     expect(hunkLineRange({ lines: [] })).toBeNull();
   });
+
+  it("F7 — non-positive / non-integer numbers are not line numbers: withheld, never a 0-range 400", () => {
+    expect(hunkLineRange({ lines: [{ kind: "add", content: "", newLine: 0 }] })).toBeNull();
+    expect(hunkLineRange({ lines: [{ kind: "del", content: "", oldLine: -3 }] })).toBeNull();
+    expect(hunkLineRange({ lines: [{ kind: "add", content: "", newLine: 1.5 }] })).toBeNull();
+    // A real number alongside a junk one still yields the real range.
+    expect(
+      hunkLineRange({ lines: [{ kind: "add", content: "", newLine: 0 }, { kind: "add", content: "", newLine: 7 }] }),
+    ).toEqual({ lineStart: 7, lineEnd: 7, side: "new" });
+  });
 });
 
 describe("walkMeThroughLabel — P2 fix 4 (honest, per-grain label)", () => {
   it("names the grain instead of the ambiguous 'Walk me through this'", () => {
-    expect(walkMeThroughLabel({ kind: "file", filePath: "a.ts" })).toBe("Explain this file");
-    expect(walkMeThroughLabel({ kind: "hunk", filePath: "a.ts", lineStart: 1, lineEnd: 2 })).toBe("Explain this hunk");
+    expect(walkMeThroughLabel({ kind: "file", filePath: "a.ts" })).toBe("Explain this file's changes");
+    expect(walkMeThroughLabel({ kind: "hunk", filePath: "a.ts", lineStart: 1, lineEnd: 2, side: "new" })).toBe("Explain this hunk");
     expect(walkMeThroughLabel({ kind: "needs-eyes", what: "X" })).toBe("Explain this");
   });
 });
@@ -184,7 +281,7 @@ describe("WalkMeThroughButton", () => {
   it("hunk grain emits kind:hunk with the line range in BOTH the text and the scope", async () => {
     render(
       <WalkMeThroughButton
-        target={{ kind: "hunk", filePath: "auth/middleware.ts", lineStart: 25, lineEnd: 28, artifactId: "cs_1" }}
+        target={{ kind: "hunk", filePath: "auth/middleware.ts", lineStart: 25, lineEnd: 28, side: "new", artifactId: "cs_1" }}
       />,
     );
     const btn = screen.getByTestId("walk-me-through-hunk");
@@ -194,7 +291,7 @@ describe("WalkMeThroughButton", () => {
     await waitFor(() => expect((fetch as any).mock.calls.length).toBeGreaterThan(0));
     const body = lastRequestPost();
     expect(body.text).toContain("25–28");
-    expect(body.scope).toEqual({ filePath: "auth/middleware.ts", lineStart: 25, lineEnd: 28, artifactId: "cs_1" });
+    expect(body.scope).toEqual({ filePath: "auth/middleware.ts", lineStart: 25, lineEnd: 28, side: "new", artifactId: "cs_1" });
   });
 
   it("the sent confirmation NAMES THE DESTINATION (round-11 UX MED)", async () => {

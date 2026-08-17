@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
+import { buildFirstCallHint } from "../first-call-hint.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 /**
@@ -166,6 +167,94 @@ describe("P2 — check_feedback delivers a request's source + scope", () => {
     const res = await handleCheckFeedback(makeCtx(store), {});
     const text = res.content[0]!.text as string;
     expect(text).toMatch(/artifact art_cs · debrief:needs-your-eyes:0/);
+  });
+
+  /**
+   * P2 review F4 — "authoritative" is a claim about PROVENANCE. Only the
+   * one-click affordance computes a scope; gating the clause on the scope's mere
+   * presence would hand that authority to any future writer of the field.
+   */
+  it("F4: a scope on a NON-walk_me_through request never earns the authoritative clause", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    store.addRequest({
+      text: "explain the auth middleware",
+      intent: "explain",
+      source: "composer",
+      scope: { filePath: "auth/middleware.ts", lineStart: 25, lineEnd: 27 },
+    });
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = res.content[0]!.text as string;
+    expect(text).not.toMatch(/SCOPE \(from the UI/);
+    // The data still rides in structuredContent — it is the PROSE authority
+    // claim that is gated, not the field.
+    const sc = res.structuredContent as { requests?: Array<{ source?: string; scope?: unknown }> };
+    expect(sc.requests![0]!.source).toBe("composer");
+    expect(sc.requests![0]!.scope).toBeDefined();
+  });
+
+  it("F1/F2: an old-side and a mixed hunk deliver their diff-coordinate warnings", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    store.addRequest({
+      text: "Walk me through the 2 lines removed from a.ts",
+      intent: "explain",
+      source: "walk_me_through",
+      scope: { filePath: "a.ts", lineStart: 8, lineEnd: 9, side: "old", removedLineCount: 2, fileRemoved: true },
+    });
+    store.addRequest({
+      text: "Walk me through the change to b.ts",
+      intent: "explain",
+      source: "walk_me_through",
+      scope: { filePath: "b.ts", lineStart: 10, lineEnd: 11, side: "new", oldStart: 11, oldEnd: 14, removedLineCount: 4 },
+    });
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = res.content[0]!.text as string;
+    expect(text).toMatch(/a\.ts:8-9 · PRE-change lines/);
+    expect(text).toMatch(/this file was DELETED in this changeset/);
+    expect(text).toMatch(/b\.ts:10-11 · plus 4 lines removed \(pre-change 11-14\)/);
+  });
+
+  /**
+   * P2 review F5 — the first-call obligations inventory truncates a request's
+   * text at 120 chars, which on any deep path ate exactly the part that makes a
+   * walk-me-through safe to serve (the line range, "not a whole-file tour") —
+   * and this is the surface the no-agent-live toast advertises ("queued… when
+   * the session resumes"). The scope clause is appended AFTER the slice.
+   */
+  it("F5: the RESUME surface (first-call hint) keeps the scope even when the text is truncated", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    const longText =
+      "Walk me through the change to packages/mcp-server/src/mcp/tools/check-feedback-delivery.ts at lines 25–27 " +
+      "(post-change line numbers) — respond with a present_explainer scoped to this hunk: what it does and why. " +
+      "Scope to exactly this hunk, not a whole-file tour.";
+    expect(longText.length).toBeGreaterThan(120);
+    store.addRequest({
+      text: longText,
+      intent: "explain",
+      source: "walk_me_through",
+      scope: {
+        filePath: "packages/mcp-server/src/mcp/tools/check-feedback-delivery.ts",
+        lineStart: 25,
+        lineEnd: 27,
+        side: "new",
+        artifactId: "art_cs",
+      },
+    });
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/pending human request/);
+    // The prose IS truncated…
+    expect(hint).not.toContain("not a whole-file tour");
+    // …but the scope survives it, which is the whole point.
+    expect(hint).toMatch(/SCOPE \(from the UI, authoritative\)/);
+    expect(hint).toMatch(/check-feedback-delivery\.ts:25-27/);
+    expect(hint).toMatch(/artifact art_cs/);
+  });
+
+  it("F5: an unscoped request's hint line is unchanged (no empty scope clause)", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s1"));
+    store.addRequest({ text: "explain the router", intent: "explain" });
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/pending human request/);
+    expect(hint).not.toMatch(/SCOPE \(from the UI/);
   });
 
   it("BACK-COMPAT: an unscoped (pre-P2) request delivers exactly as before — no SCOPE line, no new keys", async () => {

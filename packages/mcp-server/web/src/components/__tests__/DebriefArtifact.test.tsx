@@ -345,7 +345,13 @@ describe("DebriefArtifact — 'Walk me through this' on a needs-your-eyes item (
       // The fixture needs-your-eyes item links artifact "art_changeset_001".
       expect(body.text).toContain("the linked artifact art_changeset_001");
       expect(body.source).toBe("walk_me_through");
-      expect(body.scope).toEqual({ artifactId: "art_changeset_001", itemRef: "debrief:needs-your-eyes:0" });
+      expect(body.scope).toEqual({
+        artifactId: "art_changeset_001",
+        // P2 review F6 — the DEBRIEF the item was flagged in, so itemRef no
+        // longer anchors into an artifact the scope never names.
+        sourceArtifactId: "art_debrief_001",
+        itemRef: "debrief:needs-your-eyes:0",
+      });
     });
   });
 });

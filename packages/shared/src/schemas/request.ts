@@ -45,11 +45,42 @@ export const RequestScopeSchema = z.object({
   artifactId: z.string().optional(),
   /** Repo-relative path the ask is scoped to. */
   filePath: z.string().optional(),
-  /** 1-based inclusive line range (hunk grain) — new-side numbers when present. */
+  /** 1-based inclusive line range (hunk grain). Read WITH `side`. */
   lineStart: z.number().int().positive().optional(),
   lineEnd: z.number().int().positive().optional(),
+  /**
+   * P2 review F1 — WHICH SIDE of the diff `lineStart`/`lineEnd` are numbered on.
+   * "new" = post-change lines, which are what the working tree holds (the safe
+   * default; absent means "new"). "old" = PRE-change lines, emitted only for a
+   * pure-deletion hunk: those lines NO LONGER EXIST in the file, so an agent
+   * that opens the path at that range reads unrelated code and confidently
+   * explains the wrong thing. Never leave the side implicit for an old-side
+   * range.
+   */
+  side: z.enum(["new", "old"]).optional(),
+  /**
+   * P2 review F2 — a MIXED hunk's deletions. `lineStart`/`lineEnd` cover the
+   * new-side lines, which by construction exclude every removed line, so a hunk
+   * that is mostly deletions would deliver a range that omits exactly what the
+   * human clicked on. These carry the removed lines' PRE-change envelope so the
+   * agent knows to read them from the diff.
+   */
+  oldStart: z.number().int().positive().optional(),
+  oldEnd: z.number().int().positive().optional(),
+  /** How many lines the hunk removes (drives the "+ N lines removed" clause). */
+  removedLineCount: z.number().int().positive().optional(),
+  /** P2 review F1 — the file itself is DELETED in this changeset: the path is
+   *  gone from the working tree and only the diff holds it. */
+  fileRemoved: z.boolean().optional(),
   /** A within-artifact anchor (e.g. "debrief:needs-your-eyes:2"). */
   itemRef: z.string().optional(),
+  /**
+   * P2 review F6 — where the ask was FIRED FROM, when that differs from what it
+   * points AT. A debrief's needs-your-eyes item scopes to the artifact it links
+   * (`artifactId`), but `itemRef` anchors into the DEBRIEF — without this the
+   * anchor names a position in an artifact the scope never identifies.
+   */
+  sourceArtifactId: z.string().optional(),
 });
 export type RequestScope = z.infer<typeof RequestScopeSchema>;
 
@@ -124,8 +155,33 @@ export function describeRequestScope(scope: RequestScope | undefined): string {
         ? `:${scope.lineStart}${scope.lineEnd != null && scope.lineEnd !== scope.lineStart ? `-${scope.lineEnd}` : ""}`
         : "";
     parts.push(`${scope.filePath}${range}`);
+    // P2 review F1 — an OLD-side range must never travel bare: the agent's
+    // natural move is to open the path at those numbers in the WORKING TREE,
+    // which after the change holds different code. Say so in the same breath.
+    if (scope.side === "old" && scope.lineStart != null) {
+      parts.push(
+        "PRE-change lines — this hunk is a pure deletion, so those lines no longer exist in the working tree; read them from the changeset diff, not the file",
+      );
+    }
+    // P2 review F2 — a mixed hunk's removed lines fall OUTSIDE the new-side
+    // range by construction; name them explicitly or they go unexplained.
+    if (scope.side !== "old" && scope.oldStart != null) {
+      const removed =
+        scope.removedLineCount != null
+          ? `${scope.removedLineCount} line${scope.removedLineCount === 1 ? "" : "s"}`
+          : "lines";
+      const oldRange = `${scope.oldStart}${scope.oldEnd != null && scope.oldEnd !== scope.oldStart ? `-${scope.oldEnd}` : ""}`;
+      parts.push(`plus ${removed} removed (pre-change ${oldRange}) — read those from the diff`);
+    }
+    if (scope.fileRemoved) {
+      parts.push("this file was DELETED in this changeset — it is gone from the working tree; read it from the diff");
+    }
   }
-  if (scope.artifactId) parts.push(`artifact ${scope.artifactId}`);
+  if (scope.artifactId) {
+    parts.push(`artifact ${scope.artifactId}${scope.sourceArtifactId ? ` (flagged in ${scope.sourceArtifactId})` : ""}`);
+  } else if (scope.sourceArtifactId) {
+    parts.push(`artifact ${scope.sourceArtifactId}`);
+  }
   if (scope.itemRef) parts.push(scope.itemRef);
   return parts.join(" · ");
 }

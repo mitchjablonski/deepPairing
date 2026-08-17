@@ -38,9 +38,27 @@ import { noAgentLive } from "../lib/liveness";
 /** What a click is scoped to. One target type per grain — the button derives the
  *  text, the structured scope, the label and the accessible name from it, so no
  *  call site can pair a "this hunk" label with a whole-file ask. */
+/** A hunk's line envelope, WITH the side its numbers belong to (P2 review F1/F2). */
+export type HunkRange = {
+  lineStart: number;
+  lineEnd: number;
+  /** "new" = post-change (what the working tree holds); "old" = PRE-change. */
+  side: "new" | "old";
+  /** A mixed hunk's removed lines (pre-change numbers) — outside the new range. */
+  oldStart?: number;
+  oldEnd?: number;
+  removedLineCount?: number;
+};
+
 export type WalkTarget =
   | { kind: "file"; filePath: string; artifactId?: string }
-  | { kind: "hunk"; filePath: string; lineStart: number; lineEnd: number; artifactId?: string }
+  | ({
+      kind: "hunk";
+      filePath: string;
+      artifactId?: string;
+      /** The file is DELETED in this changeset — the path is gone from the tree. */
+      fileRemoved?: boolean;
+    } & HunkRange)
   | {
       kind: "needs-eyes";
       what: string;
@@ -59,21 +77,59 @@ export type WalkTarget =
  *  present_explainer scoped to the given target. */
 export function buildWalkMeThroughRequest(target: WalkTarget): string {
   if (target.kind === "file") {
+    // P2 review (judgment call) — this button lives in a CHANGESET file header,
+    // so "how <path> works … how the pieces fit together" licensed a tour of a
+    // 2000-line file of which six lines changed: the round-10 whole-file-tour
+    // failure, re-entered through the file door. The ask is now THIS FILE'S
+    // CHANGES (the scope stays the file — the surrounding code is context, not
+    // the subject).
     return (
-      `Walk me through how ${target.filePath} works — respond with a present_explainer ` +
-      `scoped to this file: what it does, how the pieces fit together, and anything I should watch for.`
+      `Walk me through the changes to ${target.filePath} in this changeset — respond with a present_explainer ` +
+      `scoped to this file's changes: what they do, how they fit with the rest of the file, and anything I should ` +
+      `watch for. Explain the CHANGES; read the rest of the file only as much as you need to explain them.`
     );
   }
   if (target.kind === "hunk") {
+    const removed = target.removedLineCount ?? 0;
+    // P2 review F1 — a PURE-DELETION hunk carries PRE-change numbers. Handing
+    // the agent "lines 8–9" of a path it can open post-change is how it reads
+    // unrelated code and confidently explains the wrong thing.
+    if (target.side === "old") {
+      const what = target.fileRemoved
+        ? `${target.filePath}, which this changeset DELETES`
+        : `${target.filePath}`;
+      return (
+        `Walk me through the ${removed > 0 ? `${removed} line${removed === 1 ? "" : "s"} removed` : "removal"} from ${what} ` +
+        `— PRE-change lines ${target.lineStart}–${target.lineEnd}. Those lines NO LONGER EXIST in the working tree` +
+        `${target.fileRemoved ? " (nor does the file)" : ""}, so read them from the changeset diff, not from disk. ` +
+        `Respond with a present_explainer scoped to this hunk: what was removed and why it mattered. ` +
+        `Scope to exactly this hunk, not a whole-file tour.`
+      );
+    }
+    // P2 review F2 — the removed lines of a mixed hunk are outside the range.
+    const oldEnd = target.oldEnd ?? target.oldStart;
+    const oldRange =
+      target.oldStart != null && oldEnd !== target.oldStart
+        ? `PRE-change lines ${target.oldStart}–${oldEnd}`
+        : `PRE-change line ${target.oldStart}`;
+    const removedClause =
+      target.oldStart != null
+        ? ` This hunk also removes ${removed > 0 ? `${removed} line${removed === 1 ? "" : "s"}` : "lines"} ` +
+          `(${oldRange}) that are gone from the working tree — read those from the diff and cover them too.`
+        : "";
     return (
       `Walk me through the change to ${target.filePath} at lines ${target.lineStart}–${target.lineEnd} ` +
-      `— respond with a present_explainer scoped to this hunk: what it does and why. ` +
-      `Scope to exactly this hunk, not a whole-file tour.`
+      `(post-change line numbers) — respond with a present_explainer scoped to this hunk: what it does and why.` +
+      `${removedClause} Scope to exactly this hunk, not a whole-file tour.`
     );
   }
   // P2 fix 2 — the ref TRAVELS: name the artifact id in the text (and in the
   // scope data below), instead of the old boolean that only said one exists.
-  const scopeTarget = target.artifactRef ? `the linked artifact ${target.artifactRef}` : "this";
+  // P2 review F6 — when the item points at another artifact, name BOTH: the
+  // target it scopes to AND the debrief the item was flagged in (which is what
+  // `itemRef` anchors into — an anchor whose artifact the ask never named).
+  const flaggedIn = target.artifactId ? ` (flagged for me in debrief ${target.artifactId})` : "";
+  const scopeTarget = target.artifactRef ? `the linked artifact ${target.artifactRef}${flaggedIn}` : "this";
   const whyClause = target.why ? ` (${target.why})` : "";
   return (
     `Walk me through "${target.what}"${whyClause} — respond with a present_explainer scoped to ${scopeTarget}: ` +
@@ -93,14 +149,24 @@ export function buildWalkMeThroughScope(target: WalkTarget): RequestScope {
       filePath: target.filePath,
       lineStart: target.lineStart,
       lineEnd: target.lineEnd,
+      // P2 review F1/F2 — the side is ALWAYS explicit for a hunk, and a mixed
+      // hunk's removals ride along; a bare range would be read as post-change.
+      side: target.side,
+      ...(target.oldStart != null ? { oldStart: target.oldStart } : {}),
+      ...(target.oldEnd != null ? { oldEnd: target.oldEnd } : {}),
+      ...(target.removedLineCount != null ? { removedLineCount: target.removedLineCount } : {}),
+      ...(target.fileRemoved ? { fileRemoved: true } : {}),
       ...(target.artifactId ? { artifactId: target.artifactId } : {}),
     };
   }
-  // The item POINTS AT artifactRef; that (not the debrief it was flagged in) is
-  // what the explainer should be scoped to when present.
+  // The item POINTS AT artifactRef; that is what the explainer scopes to. P2
+  // review F6 — the debrief it was flagged IN rides as `sourceArtifactId`, so
+  // `itemRef` no longer anchors into an artifact the scope never names.
   const artifactId = target.artifactRef ?? target.artifactId;
+  const sourceArtifactId = target.artifactRef && target.artifactId ? target.artifactId : undefined;
   return {
     ...(artifactId ? { artifactId } : {}),
+    ...(sourceArtifactId ? { sourceArtifactId } : {}),
     ...(target.itemRef ? { itemRef: target.itemRef } : {}),
   };
 }
@@ -109,15 +175,21 @@ export function buildWalkMeThroughScope(target: WalkTarget): RequestScope {
  *  the SCOPE ambiguous (hunk? file? the whole changeset?); the label now names
  *  exactly what the click will explain. */
 export function walkMeThroughLabel(target: WalkTarget): string {
-  if (target.kind === "file") return "Explain this file";
+  // P2 review (judgment call) — "Explain this file" invited (and the prose
+  // licensed) a whole-file tour from a CHANGESET header. The label names what
+  // is actually being asked about: this file's changes.
+  if (target.kind === "file") return "Explain this file's changes";
   if (target.kind === "hunk") return "Explain this hunk";
   return "Explain this";
 }
 
 /** The accessible name — the surrounding context, spelled out for screen readers. */
 export function walkMeThroughAria(target: WalkTarget): string {
-  if (target.kind === "file") return `how ${target.filePath} works`;
-  if (target.kind === "hunk") return `the change to ${target.filePath} at lines ${target.lineStart} to ${target.lineEnd}`;
+  if (target.kind === "file") return `the changes to ${target.filePath} in this changeset`;
+  if (target.kind === "hunk") {
+    const sideWord = target.side === "old" ? "pre-change lines" : "lines";
+    return `the change to ${target.filePath} at ${sideWord} ${target.lineStart} to ${target.lineEnd}`;
+  }
   return target.what || "this flagged item";
 }
 
@@ -130,16 +202,49 @@ export function walkMeThroughAria(target: WalkTarget): string {
  * agent supplied no line numbers at all — the caller then withholds the hunk
  * affordance rather than emitting a bogus range.
  */
-export function hunkLineRange(hunk: Pick<ChangesetHunk, "lines">): { lineStart: number; lineEnd: number } | null {
+export function hunkLineRange(hunk: Pick<ChangesetHunk, "lines">): HunkRange | null {
   const news: number[] = [];
   const olds: number[] = [];
+  const removed: number[] = [];
+  let removedLineCount = 0;
   for (const l of hunk.lines ?? []) {
-    if (typeof l.newLine === "number") news.push(l.newLine);
-    if (typeof l.oldLine === "number") olds.push(l.oldLine);
+    // P2 review F7 — a non-positive number is not a line number. Collecting it
+    // produced a {0,0} range that the (positive-constrained) scope schema then
+    // rejected at the boundary, surfacing as a generic error toast. Filter here
+    // and fall through to the existing withhold-the-affordance discipline.
+    const isNum = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
+    if (isNum(l.newLine)) news.push(l.newLine);
+    if (isNum(l.oldLine)) olds.push(l.oldLine);
+    if (l.kind === "del") {
+      removedLineCount++;
+      if (isNum(l.oldLine)) removed.push(l.oldLine);
+    }
   }
-  const nums = news.length > 0 ? news : olds;
-  if (nums.length === 0) return null;
-  return { lineStart: Math.min(...nums), lineEnd: Math.max(...nums) };
+  if (news.length > 0) {
+    const range: HunkRange = { lineStart: Math.min(...news), lineEnd: Math.max(...news), side: "new" };
+    // P2 review F2 — the removed lines of a MIXED hunk sit outside the new-side
+    // range by construction (a deleted line has no new number), so a hunk that
+    // is mostly deletions would deliver a range covering only the context lines
+    // that survived. Carry the removals' pre-change envelope alongside.
+    if (removed.length > 0) {
+      range.oldStart = Math.min(...removed);
+      range.oldEnd = Math.max(...removed);
+      range.removedLineCount = removedLineCount;
+    }
+    return range;
+  }
+  // P2 review F1 — a PURE-DELETION hunk has only old-side numbers. They are
+  // still worth sending (they are what the diff shows), but the side must be
+  // explicit: the lines are gone from the working tree.
+  if (olds.length > 0) {
+    return {
+      lineStart: Math.min(...olds),
+      lineEnd: Math.max(...olds),
+      side: "old",
+      ...(removedLineCount > 0 ? { removedLineCount } : {}),
+    };
+  }
+  return null;
 }
 
 export function WalkMeThroughButton({
