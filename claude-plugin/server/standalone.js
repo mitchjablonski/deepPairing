@@ -26610,6 +26610,49 @@ function coerceExplainerContent(raw) {
 
 // ../shared/dist/schemas/request.js
 var RequestIntentSchema = external_exports.enum(["explain", "plan", "status"]);
+var RequestSourceSchema = external_exports.enum(["composer", "walk_me_through"]);
+var RequestScopeSchema = external_exports.object({
+  /** The artifact the request was fired from (or the artifact it points at). */
+  artifactId: external_exports.string().optional(),
+  /** Repo-relative path the ask is scoped to. */
+  filePath: external_exports.string().optional(),
+  /** 1-based inclusive line range (hunk grain). Read WITH `side`. */
+  lineStart: external_exports.number().int().positive().optional(),
+  lineEnd: external_exports.number().int().positive().optional(),
+  /**
+   * P2 review F1 — WHICH SIDE of the diff `lineStart`/`lineEnd` are numbered on.
+   * "new" = post-change lines, which are what the working tree holds (the safe
+   * default; absent means "new"). "old" = PRE-change lines, emitted only for a
+   * pure-deletion hunk: those lines NO LONGER EXIST in the file, so an agent
+   * that opens the path at that range reads unrelated code and confidently
+   * explains the wrong thing. Never leave the side implicit for an old-side
+   * range.
+   */
+  side: external_exports.enum(["new", "old"]).optional(),
+  /**
+   * P2 review F2 — a MIXED hunk's deletions. `lineStart`/`lineEnd` cover the
+   * new-side lines, which by construction exclude every removed line, so a hunk
+   * that is mostly deletions would deliver a range that omits exactly what the
+   * human clicked on. These carry the removed lines' PRE-change envelope so the
+   * agent knows to read them from the diff.
+   */
+  oldStart: external_exports.number().int().positive().optional(),
+  oldEnd: external_exports.number().int().positive().optional(),
+  /** How many lines the hunk removes (drives the "+ N lines removed" clause). */
+  removedLineCount: external_exports.number().int().positive().optional(),
+  /** P2 review F1 — the file itself is DELETED in this changeset: the path is
+   *  gone from the working tree and only the diff holds it. */
+  fileRemoved: external_exports.boolean().optional(),
+  /** A within-artifact anchor (e.g. "debrief:needs-your-eyes:2"). */
+  itemRef: external_exports.string().optional(),
+  /**
+   * P2 review F6 — where the ask was FIRED FROM, when that differs from what it
+   * points AT. A debrief's needs-your-eyes item scopes to the artifact it links
+   * (`artifactId`), but `itemRef` anchors into the DEBRIEF — without this the
+   * anchor names a position in an artifact the scope never identifies.
+   */
+  sourceArtifactId: external_exports.string().optional()
+});
 var RequestSchema2 = external_exports.object({
   id: external_exports.string(),
   /** The human's free text (the fill-in for the preset, e.g. "the auth middleware"). */
@@ -26636,7 +26679,19 @@ var RequestSchema2 = external_exports.object({
    * compatibility (project rule: all new fields optional) — an old stored
    * request without it loads unchanged.
    */
-  secretWarnings: external_exports.array(SecretWarningSchema).optional()
+  secretWarnings: external_exports.array(SecretWarningSchema).optional(),
+  /**
+   * P2 — which surface produced this request ("composer" = the free-text
+   * composer, "walk_me_through" = a one-click Explain-this affordance). Optional
+   * (back-compat): absent = composer.
+   */
+  source: RequestSourceSchema.optional(),
+  /**
+   * P2 — the request's scope as structured data (artifact / file / line range /
+   * item anchor). Optional (back-compat): absent = unscoped, exactly like every
+   * pre-P2 request.
+   */
+  scope: RequestScopeSchema.optional()
 });
 function describeRequestIntent(intent) {
   switch (intent) {
@@ -26648,11 +26703,46 @@ function describeRequestIntent(intent) {
       return "a status summary (present_debrief-style)";
   }
 }
+function describeRequestScope(scope) {
+  if (!scope)
+    return "";
+  const parts = [];
+  if (scope.filePath) {
+    const range = scope.lineStart != null ? `:${scope.lineStart}${scope.lineEnd != null && scope.lineEnd !== scope.lineStart ? `-${scope.lineEnd}` : ""}` : "";
+    parts.push(`${scope.filePath}${range}`);
+    if (scope.side === "old" && scope.lineStart != null) {
+      parts.push("PRE-change lines \u2014 this hunk is a pure deletion, so those lines no longer exist in the working tree; read them from the changeset diff, not the file");
+    }
+    if (scope.side !== "old" && scope.oldStart != null) {
+      const removed = scope.removedLineCount != null ? `${scope.removedLineCount} line${scope.removedLineCount === 1 ? "" : "s"}` : "lines";
+      const oldRange = `${scope.oldStart}${scope.oldEnd != null && scope.oldEnd !== scope.oldStart ? `-${scope.oldEnd}` : ""}`;
+      parts.push(`plus ${removed} removed (pre-change ${oldRange}) \u2014 read those from the diff`);
+    }
+    if (scope.fileRemoved) {
+      parts.push("this file was DELETED in this changeset \u2014 it is gone from the working tree; read it from the diff");
+    }
+  }
+  if (scope.artifactId) {
+    parts.push(`artifact ${scope.artifactId}${scope.sourceArtifactId ? ` (flagged in ${scope.sourceArtifactId})` : ""}`);
+  } else if (scope.sourceArtifactId) {
+    parts.push(`artifact ${scope.sourceArtifactId}`);
+  }
+  if (scope.itemRef)
+    parts.push(scope.itemRef);
+  return parts.join(" \xB7 ");
+}
 
 // ../shared/dist/schemas/request-bodies.js
 var CreateRequestBodySchema = external_exports.object({
   text: external_exports.string().min(1).max(2e3),
-  intent: RequestIntentSchema
+  intent: RequestIntentSchema,
+  // P2 (round-11 MED 3) — scope as DATA. A one-click "Explain this hunk" now
+  // sends WHERE it was fired from alongside the prose, so the ask can't degrade
+  // into a whole-codebase tour when the copy drifts. Both optional: an older
+  // client (or the plain composer) omits them and the route behaves exactly as
+  // before.
+  source: RequestSourceSchema.optional(),
+  scope: RequestScopeSchema.optional()
 });
 var CommentBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
@@ -27416,6 +27506,12 @@ function commentSecretNote(c) {
 function requestSecretNote(r) {
   return r.secretWarnings?.length ? " \u26A0 possible secret in this request" : "";
 }
+function requestScopeNote(r) {
+  if (r.source !== "walk_me_through") return "";
+  const scope = describeRequestScope(r.scope);
+  return scope ? `
+    \u2192 SCOPE (from the UI, authoritative): ${scope} \u2014 keep the explainer to exactly this.` : "";
+}
 function describeRegionRef(region) {
   if (!region) return "";
   const labels = (region.labels ?? []).filter((s) => typeof s === "string" && s.length > 0);
@@ -27957,7 +28053,9 @@ Required response per request: call \`revise_artifact\` mode="supersede" on the 
     }
     const pendingRequests = (fullState.requests ?? []).filter((r) => !r.servedByArtifactId);
     if (pendingRequests.length > 0) {
-      const lines = pendingRequests.map((r) => `  \u2022 ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"${requestSecretNote(r)}`);
+      const lines = pendingRequests.map(
+        (r) => `  \u2022 ${r.id} (${r.intent}): "${String(r.text ?? "").slice(0, 120)}"${requestSecretNote(r)}${requestScopeNote(r)}`
+      );
       blockingParts.push(
         `
 \u{1F4E8} ${pendingRequests.length} pending human request${pendingRequests.length === 1 ? "" : "s"} \u2014 the human ASKED you to do ${pendingRequests.length === 1 ? "this" : "these"} (explain\u2192present_explainer, plan\u2192present_plan/present_spec, status\u2192present_debrief):
@@ -31054,7 +31152,7 @@ The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do 
   }
   if (pendingRequests.length > 0) {
     const lines = pendingRequests.map(
-      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}
+      (r) => `- \u{1F4E8} REQUEST [${r.id}] \u2014 ${describeRequestIntent(r.intent)}: ${r.text}${requestSecretNote(r)}${requestScopeNote(r)}
     \u2192 Serve it with the matching present_* tool, passing servedRequestId:"${r.id}" so it links back and clears here.`
     );
     parts.push(
@@ -31281,7 +31379,19 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     // G1 (#198b) — spread `requests` ONLY when the human has an unserved request,
     // so the healthy poll payload's top-level key set stays byte-for-byte (same
     // contract lock as renderFailures/unansweredCarryover above).
-    ...pendingRequests.length > 0 ? { requests: pendingRequests.map((r) => ({ id: r.id, text: r.text, intent: r.intent })) } : {},
+    ...pendingRequests.length > 0 ? {
+      requests: pendingRequests.map((r) => ({
+        id: r.id,
+        text: r.text,
+        intent: r.intent,
+        // P2 — the UI-supplied provenance + scope ride the SAME only-when-present
+        // spread discipline as the keys above: a plain composer request's entry
+        // stays byte-identical, while a walk-me-through request carries the exact
+        // file/line/artifact the explainer must be scoped (and linked) to.
+        ...r.source ? { source: r.source } : {},
+        ...r.scope ? { scope: r.scope } : {}
+      }))
+    } : {},
     // H2-1 — spreads `ledgerHealth` ONLY when the global ledger is frozen;
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField()

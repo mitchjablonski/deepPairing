@@ -23909,6 +23909,49 @@ function coerceExplainerContent(raw2) {
 
 // ../shared/dist/schemas/request.js
 var RequestIntentSchema = external_exports.enum(["explain", "plan", "status"]);
+var RequestSourceSchema = external_exports.enum(["composer", "walk_me_through"]);
+var RequestScopeSchema = external_exports.object({
+  /** The artifact the request was fired from (or the artifact it points at). */
+  artifactId: external_exports.string().optional(),
+  /** Repo-relative path the ask is scoped to. */
+  filePath: external_exports.string().optional(),
+  /** 1-based inclusive line range (hunk grain). Read WITH `side`. */
+  lineStart: external_exports.number().int().positive().optional(),
+  lineEnd: external_exports.number().int().positive().optional(),
+  /**
+   * P2 review F1 — WHICH SIDE of the diff `lineStart`/`lineEnd` are numbered on.
+   * "new" = post-change lines, which are what the working tree holds (the safe
+   * default; absent means "new"). "old" = PRE-change lines, emitted only for a
+   * pure-deletion hunk: those lines NO LONGER EXIST in the file, so an agent
+   * that opens the path at that range reads unrelated code and confidently
+   * explains the wrong thing. Never leave the side implicit for an old-side
+   * range.
+   */
+  side: external_exports.enum(["new", "old"]).optional(),
+  /**
+   * P2 review F2 — a MIXED hunk's deletions. `lineStart`/`lineEnd` cover the
+   * new-side lines, which by construction exclude every removed line, so a hunk
+   * that is mostly deletions would deliver a range that omits exactly what the
+   * human clicked on. These carry the removed lines' PRE-change envelope so the
+   * agent knows to read them from the diff.
+   */
+  oldStart: external_exports.number().int().positive().optional(),
+  oldEnd: external_exports.number().int().positive().optional(),
+  /** How many lines the hunk removes (drives the "+ N lines removed" clause). */
+  removedLineCount: external_exports.number().int().positive().optional(),
+  /** P2 review F1 — the file itself is DELETED in this changeset: the path is
+   *  gone from the working tree and only the diff holds it. */
+  fileRemoved: external_exports.boolean().optional(),
+  /** A within-artifact anchor (e.g. "debrief:needs-your-eyes:2"). */
+  itemRef: external_exports.string().optional(),
+  /**
+   * P2 review F6 — where the ask was FIRED FROM, when that differs from what it
+   * points AT. A debrief's needs-your-eyes item scopes to the artifact it links
+   * (`artifactId`), but `itemRef` anchors into the DEBRIEF — without this the
+   * anchor names a position in an artifact the scope never identifies.
+   */
+  sourceArtifactId: external_exports.string().optional()
+});
 var RequestSchema = external_exports.object({
   id: external_exports.string(),
   /** The human's free text (the fill-in for the preset, e.g. "the auth middleware"). */
@@ -23935,13 +23978,32 @@ var RequestSchema = external_exports.object({
    * compatibility (project rule: all new fields optional) — an old stored
    * request without it loads unchanged.
    */
-  secretWarnings: external_exports.array(SecretWarningSchema).optional()
+  secretWarnings: external_exports.array(SecretWarningSchema).optional(),
+  /**
+   * P2 — which surface produced this request ("composer" = the free-text
+   * composer, "walk_me_through" = a one-click Explain-this affordance). Optional
+   * (back-compat): absent = composer.
+   */
+  source: RequestSourceSchema.optional(),
+  /**
+   * P2 — the request's scope as structured data (artifact / file / line range /
+   * item anchor). Optional (back-compat): absent = unscoped, exactly like every
+   * pre-P2 request.
+   */
+  scope: RequestScopeSchema.optional()
 });
 
 // ../shared/dist/schemas/request-bodies.js
 var CreateRequestBodySchema = external_exports.object({
   text: external_exports.string().min(1).max(2e3),
-  intent: RequestIntentSchema
+  intent: RequestIntentSchema,
+  // P2 (round-11 MED 3) — scope as DATA. A one-click "Explain this hunk" now
+  // sends WHERE it was fired from alongside the prose, so the ask can't degrade
+  // into a whole-codebase tour when the copy drifts. Both optional: an older
+  // client (or the plain composer) omits them and the route behaves exactly as
+  // before.
+  source: RequestSourceSchema.optional(),
+  scope: RequestScopeSchema.optional()
 });
 var CommentBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
@@ -26504,7 +26566,13 @@ var FileStore = class _FileStore {
       // #204 — spread so the field is simply absent on clean requests (back-compat:
       // stored JSON for clean requests stays byte-identical, and old persisted
       // requests without the field load unchanged).
-      ...secretWarnings.length > 0 ? { secretWarnings } : {}
+      ...secretWarnings.length > 0 ? { secretWarnings } : {},
+      // P2 (round-11 MED 3) — the request's PROVENANCE + SCOPE as data. Spread
+      // so both keys are simply ABSENT on a plain composer request: stored JSON
+      // for every pre-P2-shaped request stays byte-identical, and old persisted
+      // requests without them load unchanged.
+      ...params.source ? { source: params.source } : {},
+      ...params.scope && Object.keys(params.scope).length > 0 ? { scope: params.scope } : {}
     };
     this.requests.push(request);
     this.scheduleFlush();
@@ -28308,7 +28376,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!store.addRequest) {
       return c.json({ error: "requests unsupported by this store", code: ERROR_CODES.unsupported }, 409);
     }
-    const request = await store.addRequest({ text: parsed.data.text, intent: parsed.data.intent });
+    const request = await store.addRequest({
+      text: parsed.data.text,
+      intent: parsed.data.intent,
+      ...parsed.data.source ? { source: parsed.data.source } : {},
+      ...parsed.data.scope ? { scope: parsed.data.scope } : {}
+    });
     broadcast({ type: "request_added", request }, sid);
     return c.json({ request });
   });
