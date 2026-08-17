@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.1.34 — 2026-08-17
+
+The kept-promises release. Round 11 went looking for the middle gear v0.1.33 promised and
+**found it real** — a low-risk feature now costs 2 human touchpoints instead of 4-5, measured in
+a live dogfood. Then the same review found the gap that matters more than any new feature: the
+guidance had started **citing things that didn't exist**. It told your pair a guardrail preflight
+would catch an unreviewed migration — there was no such backstop. It offered to walk you through
+a change at hunk grain — the code existed but was never wired, so every answer came back
+file-shaped. Decision titles were retold at paragraph length, orphaned records nagged forever,
+and read-only explainers sat in the pending count they never belonged in. So this release makes
+**every word the product says about itself true**: the backstop the guidance cited now exists,
+the hunk-grain explain the guidance promised now ships, and the counts, titles, and statuses
+stopped lying. The P-batch is three: **P1** builds the missing safety net, **P2** keeps the
+comprehension promise, **P3** makes the protocol's own bookkeeping honest.
+
+### Added
+- **The guardrail backstop — the safety net the guidance promised now exists.** Editing a
+  **guardrail path** (migrations, CI workflows, Dockerfiles/compose/terraform/k8s, `.env` and
+  secrets files — now covering the real-world filename space, not a toy prefix list) with **no
+  findings, options, spec, or plan live** in the project's recent sessions **pauses the edit and
+  asks your pair to confirm**, in the human's voice. It fires **once per class per 30 minutes**
+  — **per FILE** for migrations and secrets, where each file is its own risk — **never blocks
+  outright**, **fails open** on any internal error, and turns off entirely with
+  `DEEPPAIRING_GUARDRAIL_BACKSTOP=off`. It is **not a security boundary**, and the docs now say
+  exactly what it is instead of implying more. Ships with guidance truth-ups: **honest touchpoint
+  arithmetic**, **escalated-only markers on the happy path**, and a **valid recall invocation**
+  (PR #270).
+- **Explain this hunk — the walk-me-through affordance keeps its grain promise.** "🧭 Walk me
+  through this" now offers **per-hunk** drill-in with **real line ranges**, alongside the
+  whole-file view. A **pure-deletion hunk says its lines are pre-change** and must be read from
+  the diff; a **mixed hunk names the removed lines too** — so the agent never reads the wrong side
+  of a change. Scope travels as **structured data** (`source` + `scope` on the request) the agent
+  can **auto-link** rather than re-deriving from prose, and each grain gets an **honest label**
+  ("Explain this hunk" / "Explain this file's changes") (PR #269).
+
+### Changed
+- **The comprehension loop tells you where the answer lands.** The sent toast now **names where
+  the explainer will appear** instead of vanishing silently, the debrief's **walk-through toggle
+  looks like a control** rather than decorative text, the **filename always survives in changeset
+  headers** at any width, and the **narrow-width search** is labeled (PR #269).
+- **Read-only explainers stopped counting as work you owe.** An explainer you only need to read
+  moved to a truthful **"TO READ" line** — it **doesn't long-poll** and **doesn't count as
+  pending**, so the pending count means "your turn" again (PR #268).
+
+### Fixed
+- **Decision titles stay short everywhere.** A decision's title is now trimmed in **success text
+  and the rejection ledger** alike, instead of retelling the whole rationale. The gate's
+  **reverse-phrase lane narrowed to the option noun**, eliminating **over-blocks on generic fork
+  names** with **zero recall loss** on the real rejection matches (PR #268).
+- **Orphaned decisions no longer nag forever.** Approving an artifact now **closes its decision
+  records**, so the **agent transcript, the decisions modal, and the Features count all agree**
+  instead of each reporting a different number. A stale tab resolving a decision on an
+  **already-verdicted artifact** now gets an **honest 409** rather than a silent success
+  (PR #268).
+
 ## v0.1.33 — 2026-08-08
 
 The middle-ground release. deepPairing went live, and the first review after shipping found the
