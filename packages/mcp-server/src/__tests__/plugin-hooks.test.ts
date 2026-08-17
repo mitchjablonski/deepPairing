@@ -102,6 +102,46 @@ describe("plugin hook bundles (smoke)", () => {
     expect(out.trim()).toBe("");
   });
 
+  // P1 (round-11) — the guardrail backstop, on the committed bundle marketplace
+  // users actually execute. Full case matrix (incl. the two-copy agreement) is
+  // in cli/__tests__/guardrail-backstop-parity.test.ts; these two are the smoke.
+  it.skipIf(!bundlesBuilt)("P1 (round-11) — preflight ASKS on a guardrail-path write with no pre-work ceremony", () => {
+    fs.writeFileSync(path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"), "[]");
+    const out = runHook(
+      preflightBundle,
+      JSON.stringify({
+        tool_name: "Write",
+        tool_input: { file_path: path.join(scratch, "migrations/003_drop.sql"), content: "DROP TABLE users;" },
+      }),
+    );
+    const parsed = JSON.parse(out);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask"); // never "deny"
+    const reason = parsed.hookSpecificOutput.permissionDecisionReason;
+    expect(reason).toMatch(/GUARDRAIL_ESCALATION/);
+    // F4 — the prompt is written for the HUMAN first: the decision they own,
+    // then what makes the path load-bearing, then what declining does.
+    expect(reason).toContain("Allow this edit to migrations/003_drop.sql?");
+    expect(reason).toContain("(migrations — hard to reverse)");
+    expect(reason).toContain("Decline to have your pair present it for review first.");
+    // F1 — the mechanism is PROJECT-scoped and the wording says so.
+    expect(reason).toContain("is live in this project's recent sessions");
+  });
+
+  it.skipIf(!bundlesBuilt)("P1 (round-11) — preflight is SILENT on the same write once the escalated arc is in flight", () => {
+    fs.writeFileSync(
+      path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
+      JSON.stringify([{ id: "sp1", type: "spec", status: "approved", createdAt: new Date().toISOString() }]),
+    );
+    const out = runHook(
+      preflightBundle,
+      JSON.stringify({
+        tool_name: "Write",
+        tool_input: { file_path: path.join(scratch, "migrations/003_drop.sql"), content: "DROP TABLE users;" },
+      }),
+    );
+    expect(out.trim()).toBe("");
+  });
+
   it.skipIf(!bundlesBuilt)("stop nags when an unreviewed draft is present", () => {
     fs.writeFileSync(
       path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),

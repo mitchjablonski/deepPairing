@@ -11,7 +11,9 @@
  *
  * Contract, identical to the init-path script:
  *   - only Edit/Write/MultiEdit are considered; anything else exits 0;
- *   - a cheap ledger pre-check skips the matcher when nothing is seeded;
+ *   - a cheap ledger pre-check skips the matcher when nothing is seeded AND the
+ *     path can't be a guardrail path (P1 — the guardrail backstop has no ledger
+ *     to be seeded, so it needs its own zero-I/O prefilter here);
  *   - a match surfaces to the HUMAN as permissionDecision "ask" (recoverable
  *     pairing) rather than a hard deny — raw file content is noisier than the
  *     agent's prose, and an already-approved change must not be auto-blocked;
@@ -19,29 +21,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { evaluatePreflightHook } from "./preflight-hook-core.js";
-
-function recordFire(root: string, reason: string): void {
-  try {
-    const sp = path.join(root, ".deeppairing", "hooks-state.json");
-    let s: { version?: number; fires?: unknown[] } = { version: 1, fires: [] };
-    if (fs.existsSync(sp)) {
-      try {
-        s = JSON.parse(fs.readFileSync(sp, "utf-8"));
-      } catch {
-        /* fresh file */
-      }
-    }
-    const fires = Array.isArray(s.fires) ? s.fires : [];
-    fires.push({ at: new Date().toISOString(), hook: "preflight", reason });
-    s.fires = fires.slice(-50);
-    s.version = 1;
-    fs.mkdirSync(path.dirname(sp), { recursive: true });
-    fs.writeFileSync(sp, JSON.stringify(s));
-  } catch {
-    /* recording must never fail the hook itself */
-  }
-}
+// F11 — one writer for the whole preflight lane: recordHookFire appends the
+// capped `fires` entry AND stamps the guardrail dedup record in a single
+// read-modify-write, in the core, so the two hand-maintained hook copies can't
+// drift on the write shape. (This entry's own recordFire is gone.)
+import { evaluatePreflightHook, looksLikeGuardrailPath, recordHookFire } from "./preflight-hook-core.js";
 
 /** PP1 — cheap pre-check so the common case (no rejections, no team.json) skips
  *  the matcher entirely. Reading the small preferences.json is ms. */
@@ -74,12 +58,17 @@ process.stdin.on("end", () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot)) {
+    // P1 — the fast path now has TWO reasons to keep going: a seeded ledger
+    // (the rejected-approach matcher) OR a path that could be a guardrail (the
+    // backstop). looksLikeGuardrailPath is a single regex test against the
+    // file path — no I/O — so a non-guardrail edit in a ledger-free project
+    // still exits here, exactly as before.
+    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
       process.exit(0); // nothing to match against — skip the matcher
     }
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });
-    if (decision && decision.deny) {
-      recordFire(projectRoot, decision.source || "blocked");
+    if (decision && decision.fire) {
+      recordHookFire(projectRoot, decision);
       process.stdout.write(
         JSON.stringify({
           hookSpecificOutput: {

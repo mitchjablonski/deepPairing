@@ -107,17 +107,36 @@ model assumes:
 
 deepPairing installs two Claude Code hooks, both local-only, network-free, and fail-open:
 
-- **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit. When
-  a proposed change matches an approach you previously rejected, it returns
-  `permissionDecision: "ask"` — a prompt you can approve or decline. It never
-  emits `deny` and never silently blocks. Any error, a missing ledger, or a
+- **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit and
+  can raise a prompt for **two** distinct reasons. Both return
+  `permissionDecision: "ask"` — a prompt you can approve or decline. Neither
+  ever emits `deny` or silently blocks. Any error, a missing ledger, or a
   non-matching edit exits 0 (allow), so a hook fault can never stop your work.
+  - **Rejected approach.** The proposed change matches an approach you
+    previously rejected in this project.
+  - **Guardrail backstop.** The edit targets a guardrail path — a migration
+    directory, CI config (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`,
+    `.circleci/`), infrastructure (`Dockerfile*`, compose files, `terraform/`,
+    `k8s/`, `*.tfvars`), or a secret file (`.env*` other than
+    `.env.example`/`.env.sample`, `config/secrets*`, `config/credentials*`,
+    `config/master.key`) — at a moment when the agent has presented no findings,
+    options, spec, or plan in this project's recent sessions. It asks at most
+    once per guardrail class per 30 minutes (per file for migrations and
+    secrets). If the session store is missing or unreadable it stays silent
+    (fail-open), and it can be switched off entirely with the environment
+    variable `DEEPPAIRING_GUARDRAIL_BACKSTOP=off`, which leaves the
+    rejected-approach prompt untouched. It is a protocol backstop, **not a
+    security boundary** — it cannot stop a determined agent or a direct shell
+    write.
 - **Stop (`server/stop.mjs`)** runs when the agent finishes a turn. It only
   writes an advisory nudge to stderr (e.g. "pending artifacts need review") and
   always exits 0 — it can never trap the agent in a loop or block a stop.
 
-Both hooks read only local JSON under `.deeppairing/`. They make no network
-calls and write no files outside the project's `.deeppairing/` directory.
+Both hooks read only local JSON under `.deeppairing/`. Their only write is
+`.deeppairing/hooks-state.json` — the small advisory log of hook fires the
+companion UI reads, which also carries the guardrail backstop's
+"already asked about this" timestamps. They make no network calls and write no
+files outside the project's `.deeppairing/` directory.
 
 ### The committed server bundle (`claude-plugin/server/`)
 

@@ -84,6 +84,22 @@ const STALE_PHRASES: RegExp[] = [
   /present_code_change BEFORE every Write\/Edit is still required/i,
   /do NOT skip present_options or present_code_change/i,
   /BEFORE every Write\/Edit/i,
+  // P1 (round-11) — the OVER-CLAIMS. Round-11 verified these described a mechanism
+  // that did not exist ("the preflight gate escalates guardrail-path edits
+  // itself regardless" — the hook had zero guardrail logic). The backstop is
+  // built now, but it ASKS, it does not escalate on the agent's behalf, and it
+  // is silent while the arc is in flight. Re-introducing an "…regardless"
+  // formulation would re-open the gap between promise and mechanism.
+  /the preflight gate escalates/i,
+  /escalates the edit itself regardless/i,
+  /escalates guardrail-path edits regardless/i,
+  // P1 — the wrong touchpoint pair. The changeset is the never-skipped floor,
+  // so the real pair is changeset + debrief; a decision makes it 3.
+  /\(a decision if one comes up \+ the debrief\)/i,
+  // P1 F1 — the backstop's liveness scan is PROJECT-wide, so describing it as
+  // session-scoped over-narrows what the mechanism actually does.
+  /is live in the session/i,
+  /live in this session/i,
 ];
 
 describe("#190 — default-mode flip: guidance wording is consistent (drift guard)", () => {
@@ -153,6 +169,104 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     // ceremony, never the changeset review of the code itself.
     expect(skill).toMatch(/floor is absolute at every class/i);
     expect(hint).toMatch(/THE FLOOR IS ABSOLUTE at every class/);
+  });
+
+  it("P1 (round-11) — SKILL.md AND the assembled hint describe the guardrail BACKSTOP exactly as built", async () => {
+    const skill = readSkill();
+    const hint = await assembleAllHints();
+    // The four defining facts of the shipped mechanism, pinned in both surfaces.
+    // Behaviour itself is pinned in cli/__tests__/guardrail-backstop*.test.ts;
+    // these keep the WORDS from drifting away from that behaviour again.
+    // 1. it ASKS (never denies, never blocks).
+    expect(skill).toMatch(/permissionDecision: "ask"/);
+    expect(skill).toMatch(/never `deny`s, it never blocks the edit outright/);
+    expect(hint).toMatch(/pauses the edit and asks your pair to confirm/);
+    expect(hint).toMatch(/never blocks the edit outright/);
+    // 2. the TRIGGER: a guardrail-path write with no live pre-work ceremony.
+    //    F1 — liveness is PROJECT-scoped (readSessionCeremony iterates every
+    //    session dir). Both surfaces must say so; "in the session" is the
+    //    over-narrow claim the review caught and is a STALE_PHRASE below.
+    expect(skill).toMatch(/is live in this project's recent\s*\n?\s*sessions/);
+    expect(hint).toMatch(/while NO findings, options, spec, or plan is live in this project's recent sessions/);
+    // 3. the SILENCE condition — the escalated arc in flight passes, and F2: a
+    //    DRAFT counts immediately (the backstop catches the SKIP, not the
+    //    un-reviewed landing), so the reader can't infer review is required.
+    expect(skill).toMatch(/the write passes silently/);
+    expect(skill).toMatch(/a spec you just presented\s*\n?\s*counts immediately/);
+    expect(skill).toMatch(/catches the SKIP, not the un-reviewed/);
+    expect(hint).toMatch(/stays SILENT once that pre-work arc is in flight/);
+    expect(hint).toMatch(/a spec you JUST presented counts immediately/);
+    // 4. the dedup grain (F3: per class, per FILE for the irreversible classes)
+    //    + fail-open + the F7 opt-out.
+    expect(skill).toMatch(/once per guardrail class per 30 minutes/);
+    expect(skill).toMatch(/\*\*per\n  file\*\* for migrations and secrets/);
+    expect(hint).toMatch(/at most once per guardrail class per 30 minutes \(per FILE for migrations and secrets/);
+    expect(skill).toMatch(/fail-open/);
+    expect(hint).toMatch(/fails open/);
+    expect(skill).toMatch(/DEEPPAIRING_GUARDRAIL_BACKSTOP=off/);
+    // F8 — the staleness window is documented, not folklore.
+    expect(skill).toMatch(/older\s*\n?\s*than ~8 hours no longer counts as live/);
+  });
+
+  it("P1 (round-11) — both surfaces name the corrected touchpoint arithmetic (changeset + debrief, a decision makes 3)", async () => {
+    const skill = readSkill();
+    const hint = await assembleAllHints();
+    expect(skill).toMatch(/the changeset\s*\n?\s*\(the never-skipped floor\) and the debrief; a decision, if one comes up, makes 3/);
+    expect(hint).toMatch(/the changeset \(the never-skipped floor\) and the debrief; a decision, if one comes up, makes 3/);
+  });
+
+  it("P1 (round-11) — the happy-path list marks the ESCALATED-ONLY steps (it agrees with the three classes above it)", async () => {
+    const hint = await assembleAllHints();
+    // The list header says what the list IS…
+    expect(hint).toMatch(/Happy path, in order — this is the ESCALATED arc in full/);
+    // …and the two pre-work gates the other classes skip carry the tag.
+    expect(hint).toMatch(/2\. present_findings — \[ESCALATED ONLY\]/);
+    expect(hint).toMatch(/5\. present_spec and\/or present_plan — \[ESCALATED ONLY\]/);
+  });
+
+  it("P1 (round-11) — the documented step-1 recall invocation is VALID (mode='any' requires a query)", async () => {
+    const hint = await assembleAllHints();
+    const skill = readSkill();
+    const descriptions = await readToolDescriptions();
+    expect(hint).toMatch(/recall \(mode='any', query='<the concept you're about to propose>'\)/);
+    expect(hint).toMatch(/mode='any' REQUIRES a query/);
+    expect(skill).toMatch(/requires a `query`/);
+    expect(descriptions["recall"] ?? "").toMatch(/a bare `recall\(mode='any'\)` errors/);
+    // …and the bare, error-producing form is gone from the guidance.
+    expect(hint).not.toMatch(/recall \(mode='any'\) —/);
+  });
+
+  it("P1 (round-11) — walk-me-through guidance identifies the affordance by INTENT, not by the button label", async () => {
+    const skill = readSkill();
+    const descriptions = await readToolDescriptions();
+    const explainer = descriptions["present_explainer"] ?? "";
+    // Referenced by request source/intent (P2 may relabel the button).
+    expect(skill).toMatch(/explain-intent request raised from the UI's\s*\n?\s*Explain \/ walk-me-through affordance/);
+    expect(explainer).toMatch(/explain-intent request raised from the UI's Explain \/ walk-me-through affordance/);
+    // The grain instruction survives the relabel.
+    expect(skill).toMatch(/SCOPED to exactly that hunk\/file\/item/);
+    expect(explainer).toMatch(/scope the explainer to THAT hunk\/file\/item/);
+    // The hard-coded label is no longer the identifying handle.
+    expect(skill).not.toMatch(/clicking "walk me through this"/);
+    expect(explainer).not.toMatch(/clicking \\?"walk me through this\\?"/);
+    // …and the structured scope the request may carry is described by ROLE, not
+    // by field names (P2 owns the shape), with the artifact link called out.
+    expect(skill).toMatch(/structured \*\*scope\*\*/);
+    expect(skill).toMatch(/link `relatedArtifactIds` from the artifact it names/);
+    expect(explainer).toMatch(/structured scope \(the artifact, file, and line range/);
+  });
+
+  it("P1 F13 — the LIVE TOOL DESCRIPTIONS carry no stale phrasing either (the third guidance surface)", async () => {
+    // The tool descriptions are injected every tool-use turn — the
+    // highest-visibility surface of the three — but the stale-phrase net only
+    // ever swept SKILL.md and the hint. #215 K1 already showed a stale sentence
+    // can survive there alone; this closes the hole for the whole net.
+    const descriptions = await readToolDescriptions();
+    for (const [name, text] of Object.entries(descriptions)) {
+      for (const stale of STALE_PHRASES) {
+        expect(text, `the ${name} tool description contains stale phrasing: ${stale}`).not.toMatch(stale);
+      }
+    }
   });
 
   it("NEITHER SKILL.md NOR the assembled hint contains a stale per-edit mandate", async () => {

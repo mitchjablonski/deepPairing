@@ -5096,6 +5096,11 @@ import fs2 from "node:fs";
 import os from "node:os";
 import path2 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
+
+// src/cli/guardrail-prefilter.ts
+var GUARDRAIL_PATH_PREFILTER = /(^|\/)(\.github\/workflows|\.circleci|\.gitlab-ci|Jenkinsfile|migrations|db\/migrate|prisma\/migrations|supabase\/migrations|alembic\/versions|Dockerfile|docker-compose|compose|infrastructure|terraform|k8s|kubernetes|helm|\.env|config\/secrets|config\/credentials|config\/master\.key)(\/|\.|$)|\.tfvars$/;
+
+// src/cli/setup-tasks.ts
 function scopeFiles(projectRoot2) {
   return [
     { scope: "user", path: path2.join(os.homedir(), ".claude", "settings.json") },
@@ -5523,24 +5528,19 @@ function preflightHookScript(coreUrl) {
 // matching raw file content is noisier than the agent's reasoning prose, and a
 // change the human already approved in the UI must not be auto-blocked when
 // applied. "ask" keeps the human in the loop (pairing) and is recoverable.
+// P1 \u2014 it ALSO runs the guardrail backstop: a write to a guardrail path
+// (migrations, .github/workflows, infra, .env) with no live pre-work ceremony in
+// the session asks the human too. Same "ask", never "deny", still fail-open.
 import fs from "node:fs";
 import path from "node:path";
 
 // Built matcher core, stamped at install time (see resolvePreflightCoreUrl).
 const CORE_URL = ${JSON.stringify(coreUrl)};
 
-function recordFire(projectRoot, reason) {
-  try {
-    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    let s = { version: 1, fires: [] };
-    if (fs.existsSync(sp)) { try { s = JSON.parse(fs.readFileSync(sp, "utf-8")); } catch {} }
-    const fires = Array.isArray(s.fires) ? s.fires : [];
-    fires.push({ at: new Date().toISOString(), hook: "preflight", reason: reason });
-    s.fires = fires.slice(-50);
-    s.version = 1;
-    fs.writeFileSync(sp, JSON.stringify(s));
-  } catch {}
-}
+// F11 \u2014 the fire log + the guardrail dedup stamp are ONE read-modify-write, and
+// they live in the matcher core (mod.recordHookFire) so this generated copy and
+// the plugin-bundled copy cannot drift on the write shape. It's only ever
+// called AFTER the dynamic import, so the fast path above pays nothing for it.
 
 // PP1 \u2014 cheap pre-check so the common case (no rejections seeded, no team.json)
 // skips the ~40ms dynamic import of the matcher core entirely. Reading the small
@@ -5557,6 +5557,20 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// P1 \u2014 the GUARDRAIL BACKSTOP's zero-I/O prefilter. The regex literal below is
+// INTERPOLATED from preflight-hook-core's GUARDRAIL_PATH_PREFILTER at generation
+// time, so this copy can never drift from the plugin-bundled one. The backstop
+// has no ledger to be seeded, so the ledger fast-path above would otherwise hide
+// it entirely; a guardrail-looking path is the second reason to keep going.
+const GUARDRAIL_PATH_PREFILTER = ${String(GUARDRAIL_PATH_PREFILTER)};
+function looksLikeGuardrailPath(toolInput) {
+  try {
+    const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+    if (typeof fp !== "string" || !fp) return false;
+    return GUARDRAIL_PATH_PREFILTER.test(fp.replace(/\\\\/g, "/"));
+  } catch { return false; }
+}
+
 let input = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { input += d; });
@@ -5569,13 +5583,13 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot)) {
+    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
       process.exit(0); // nothing to match against \u2014 skip the matcher import
     }
     const mod = await import(CORE_URL);
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
-    if (decision && decision.deny) {
-      recordFire(projectRoot, decision.source || "blocked");
+    if (decision && decision.fire) {
+      mod.recordHookFire(projectRoot, decision);
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -24737,46 +24751,63 @@ function getGlobalStore() {
 // src/store/project-signals.ts
 import fs6 from "node:fs";
 import path5 from "node:path";
+function isRealDotenv(name) {
+  if (!/^\.env(\.[^/]+)?$/.test(name)) return false;
+  return !/\.(example|sample|template|dist)$/i.test(name);
+}
+var GUARDRAIL_SENSORS = [
+  {
+    category: "migrations",
+    rationale: "Migrations are hard to reverse \u2014 escalate to supervised for changes here.",
+    dirs: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations", "alembic/versions"],
+    file: () => false
+  },
+  {
+    category: "workflows",
+    rationale: "CI workflows affect every future deploy \u2014 escalate for changes here.",
+    dirs: [".github/workflows", ".circleci"],
+    file: (rel) => rel === ".gitlab-ci.yml" || rel === ".gitlab-ci.yaml" || rel === "Jenkinsfile"
+  },
+  {
+    category: "infrastructure",
+    rationale: "Infrastructure changes affect production surfaces \u2014 escalate here.",
+    dirs: ["infrastructure", "terraform", "k8s", "kubernetes", "helm"],
+    file: (rel) => /^Dockerfile([.-][^/]*)?$/.test(rel) || /^(docker-)?compose[^/]*\.ya?ml$/.test(rel) || /^[^/]*\.tfvars(\.json)?$/.test(rel)
+  },
+  {
+    category: "secrets",
+    rationale: "Secret files must never leak into the session or a commit \u2014 escalate here.",
+    dirs: [],
+    file: (rel) => isRealDotenv(rel) || /^config\/secrets[^/]*$/.test(rel) || /^config\/credentials[^/]*$/.test(rel) || rel === "config/master.key"
+  }
+];
+var FILE_SCAN_DIRS = ["", "config"];
 function senseProjectGuardrails(projectRoot2) {
-  const guardrails = [];
-  const exists = (rel) => {
+  const isDir = (rel) => {
     try {
-      return fs6.existsSync(path5.join(projectRoot2, rel));
+      return fs6.statSync(path5.join(projectRoot2, rel)).isDirectory();
     } catch {
       return false;
     }
   };
-  const migrationPaths = ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations"].filter(exists);
-  if (migrationPaths.length > 0) {
-    guardrails.push({
-      category: "migrations",
-      paths: migrationPaths,
-      rationale: "Migrations are hard to reverse \u2014 escalate to supervised for changes here."
-    });
+  const candidates = [];
+  for (const dir of FILE_SCAN_DIRS) {
+    try {
+      for (const name of fs6.readdirSync(path5.join(projectRoot2, dir) || projectRoot2)) {
+        candidates.push(dir ? `${dir}/${name}` : name);
+      }
+    } catch {
+    }
   }
-  const workflowPath = ".github/workflows";
-  if (exists(workflowPath)) {
-    guardrails.push({
-      category: "workflows",
-      paths: [workflowPath],
-      rationale: "CI workflows affect every future deploy \u2014 escalate for changes here."
-    });
-  }
-  const infraPaths = ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", "infrastructure", "terraform", "k8s", "kubernetes", "helm"].filter(exists);
-  if (infraPaths.length > 0) {
-    guardrails.push({
-      category: "infrastructure",
-      paths: infraPaths,
-      rationale: "Infrastructure changes affect production surfaces \u2014 escalate here."
-    });
-  }
-  const secretPaths = [".env", ".env.local", ".env.production", "config/secrets.yml"].filter(exists);
-  if (secretPaths.length > 0) {
-    guardrails.push({
-      category: "secrets",
-      paths: secretPaths,
-      rationale: "Secret files must never leak into the session or a commit \u2014 escalate here."
-    });
+  const guardrails = [];
+  for (const sensor of GUARDRAIL_SENSORS) {
+    const paths = [
+      ...sensor.dirs.filter(isDir),
+      ...candidates.filter((rel) => sensor.file(rel))
+    ];
+    if (paths.length > 0) {
+      guardrails.push({ category: sensor.category, paths, rationale: sensor.rationale });
+    }
   }
   return guardrails;
 }
