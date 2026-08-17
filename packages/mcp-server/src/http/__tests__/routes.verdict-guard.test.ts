@@ -125,3 +125,68 @@ describe("O3 (#231) — HTTP route 409 + refresh", () => {
     expect(store.getArtifacts().find((a) => a.id === "art_dec")?.status).toBe("approved");
   });
 });
+
+/**
+ * P3 — the decision-resolve route's NO-RECORD fallback used to report a
+ * resolution the store had refused. When the daemon's decisions map lacks the
+ * record (X6), the route advances the artifact itself via
+ * updateArtifactStatus(…, "approved", "ui_decision_resolve") — which the O3
+ * store backstop REFUSES (log-only `return`) on an artifact already at a
+ * different terminal verdict. The route nonetheless broadcast
+ * `decision_resolved` and answered 200 {status:"resolved"}: a silent success on
+ * a write that never landed. It now mirrors the verdict route: 409
+ * verdict_already_final + a refresh broadcast of the REAL status.
+ */
+describe("P3 — decision-resolve no-record fallback is honest about a refused write", () => {
+  const seedRecordlessDecision = (status?: "rejected" | "revised") => {
+    store.createArtifact({
+      id: "art_nr",
+      type: "decision",
+      title: "Which hash?",
+      content: { decisionId: "dec_nr", question: "Which hash?", options: [{ id: "opt_a", title: "argon2id" }] },
+    });
+    if (status) store.updateArtifactStatus("art_nr", status, status === "rejected" ? "ui_reject_button" : "ui_revise_button");
+  };
+  const resolve = () =>
+    app.request("/api/decisions/dec_nr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "opt_a", reasoning: "modern" }),
+    });
+
+  it("THE CASE: the whole card was already REJECTED in another tab → 409, no false resolve", async () => {
+    seedRecordlessDecision("rejected");
+    broadcasts.length = 0;
+
+    const res = await resolve();
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("verdict_already_final");
+    expect(body.currentStatus).toBe("rejected");
+
+    // The refused write did not land, and no resolution was announced.
+    expect(store.getArtifacts().find((a) => a.id === "art_nr")?.status).toBe("rejected");
+    expect(broadcasts.find((b) => b.type === "decision_resolved")).toBeUndefined();
+    // The stale tab is refreshed to the TRUE status.
+    expect(broadcasts.find((b) => b.type === "artifact_updated")).toMatchObject({
+      artifactId: "art_nr",
+      status: "rejected",
+    });
+  });
+
+  it("an already-REVISED decision card is refused the same way", async () => {
+    seedRecordlessDecision("revised");
+    const res = await resolve();
+    expect(res.status).toBe(409);
+    expect((await res.json()).currentStatus).toBe("revised");
+  });
+
+  it("draft → resolve still succeeds, and a re-resolve of an approved card is not a 409", async () => {
+    seedRecordlessDecision();
+    expect((await resolve()).status).toBe(200);
+    expect(store.getArtifacts().find((a) => a.id === "art_nr")?.status).toBe("approved");
+    // Same-verdict re-assert (a double-click / retry) stays idempotent.
+    expect((await resolve()).status).toBe(200);
+    expect(store.getArtifacts().find((a) => a.id === "art_nr")?.status).toBe("approved");
+  });
+});

@@ -266,12 +266,21 @@ export interface ProjectDecision {
  * whose backing artifact reached one of these can never resolve, so it is NOT an
  * "awaiting your decision" item. Mirrors FileStore.isArtifactClosed (the two must
  * agree, but session-scan is store-less so it can't reuse the private method).
+ *
+ * P3 — `approved` joins the set on BOTH sides. Without it a response-less record
+ * whose artifact reached a terminal verdict by another path (the /api/decisions
+ * no-record fallback, a straight Approve on the card) rendered a permanent amber
+ * "Awaiting your decision" in the decisions modal and stayed in the Features
+ * open-items count. Only UNRESOLVED records reach this check, and every normal
+ * path writes the resolution alongside the status, so this drops orphans only.
+ * Parity with FileStore.isArtifactClosed is pinned in list-all-decisions.test.ts.
  */
 const CLOSED_ARTIFACT_STATUSES: ReadonlySet<Artifact["status"]> = new Set([
   "superseded",
   "retracted",
   "rejected",
   "obsolete",
+  "approved",
 ]);
 
 function isClosedArtifactStatus(status: Artifact["status"] | undefined): boolean {
@@ -372,8 +381,9 @@ export function listAllDecisions(
       const chosen = dec.response
         ? options.find((o) => o?.id === dec.response!.optionId)
         : undefined;
-      // #153 (S5) / #209 (J1) — an UNRESOLVED decision whose origin artifact is
-      // CLOSED (superseded, retracted, rejected, obsolete) can never resolve, so
+      // #153 (S5) / #209 (J1) / P3 — an UNRESOLVED decision whose origin artifact
+      // is CLOSED (superseded, retracted, rejected, obsolete, approved) can never
+      // resolve, so
       // flag it out of the "awaiting" bucket. Broadened from superseded-only so a
       // retracted decision stops reading as "Awaiting your decision"; carry the
       // terminal status so the view can badge it ("Withdrawn" for retracted).
@@ -1076,10 +1086,12 @@ export function groupByFeature(
     for (const dec of scan.decisions) {
       if (dec.response) continue; // resolved
       const origin = artById.get(dec.artifactId);
-      // closedUnresolved (origin superseded/retracted/rejected/obsolete) can
-      // never resolve — not an actionable open item; skip it (mirrors
+      // closedUnresolved (origin superseded/retracted/rejected/obsolete/approved)
+      // can never resolve — not an actionable open item; skip it (mirrors
       // listAllDecisions' flag). #209 (J1) broadened from superseded-only so a
-      // retracted decision drops out of the Features open-items count too.
+      // retracted decision drops out of the Features open-items count too; P3
+      // added `approved` so an orphaned record whose card was approved by
+      // another path stops inflating the count.
       if (isClosedArtifactStatus(origin?.status)) continue;
       const cid = composite(scan.sessionId, dec.artifactId);
       const groupId = groupIdForArtifact.get(cid);

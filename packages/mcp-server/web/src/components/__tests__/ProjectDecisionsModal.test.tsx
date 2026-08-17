@@ -169,6 +169,23 @@ describe("ProjectDecisionsModal", () => {
     expect(screen.queryByText(/awaiting your decision/i)).not.toBeInTheDocument();
   });
 
+  // P3 — the ORPHAN: an unresolved record whose artifact was APPROVED without an
+  // option pick. It leaves the awaiting bucket server-side (the closed set now
+  // includes `approved`), and it must NOT inherit the "Superseded (never
+  // resolved)" default badge — that would tell a story that didn't happen.
+  it("renders 'Approved (no option picked)' for an approved-origin orphan", async () => {
+    const orphan = {
+      ...UNRESOLVED, decisionId: "d7", context: "Approved before anyone chose",
+      closedUnresolved: true, closedStatus: "approved",
+    };
+    stubDecisions({ decisions: [orphan], failedSessions: [] });
+    render(<ProjectDecisionsModal onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Approved before anyone chose")).toBeInTheDocument());
+    expect(screen.getByText("Approved (no option picked)")).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting your decision/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/superseded/i)).not.toBeInTheDocument();
+  });
+
   // #153 — the recovered-corruption case keeps the honest-partial banner
   // truthful after a session re-open rewrote a fresh valid decisions.json.
   it("words the partial banner for a recovered-from-corruption session and points at the sidecar", async () => {

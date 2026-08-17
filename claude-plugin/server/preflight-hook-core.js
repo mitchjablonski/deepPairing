@@ -148,7 +148,10 @@ function findRejectedApproachMatch(proposalStrings, rejected) {
     for (const proposal of proposalStrings) {
       const p = clean(proposal);
       if (!p) continue;
-      if (containsAsPhrase(p, rejNormalized) || containsAsPhrase(rejNormalized, p)) {
+      if (containsAsPhrase(p, rejNormalized)) {
+        return { proposal, rejected: rej, via: "surface" };
+      }
+      if (containsAsPhrase(specificNoun, p)) {
         return { proposal, rejected: rej, via: "surface" };
       }
       if (containsAsPhrase(p, specificNoun)) {

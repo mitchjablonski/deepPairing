@@ -61,6 +61,13 @@ function closedBadgeLabel(status?: string): string {
       return "Rejected";
     case "obsolete":
       return "Obsolete";
+    // P3 — an APPROVED origin with no option pick: the card was closed by a
+    // plain Approve (or the no-record resolve fallback) rather than by choosing
+    // an option, so the record can never resolve. Named for what happened —
+    // falling through to the `superseded` default would badge it with a story
+    // that didn't happen.
+    case "approved":
+      return "Approved (no option picked)";
     case "superseded":
     default:
       return "Superseded (never resolved)";

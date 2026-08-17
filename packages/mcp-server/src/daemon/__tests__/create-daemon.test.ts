@@ -140,10 +140,15 @@ describe("#175 — daemon pendingCount counts a draft changeset (parity with lib
 // #190 — the two "waiting on you" sets (the daemon's PENDING_REVIEWABLE and the
 // web PendingBanner's REVIEWABLE_TYPES) must stay EQUAL to the MCP server's
 // PENDING_DRAFT_TYPES, or a new artifact type silently misses a nudge surface —
-// exactly the #175 changeset omission, now reproduced for debrief/explainer.
+// exactly the #175 changeset omission, then reproduced for debrief/explainer.
 // This is the class-ending guard: the parity assertion + the behavioral badge
 // pin over EVERY PENDING_DRAFT_TYPE, so the NEXT type added to PENDING_DRAFT_TYPES
 // fails here until it's added to both sets too.
+//
+// P3 — the guard now also runs in the REMOVE direction: `explainer` left all
+// three sets (acknowledge-only — it owes the human a READ, not a verdict), so
+// the explainer case below asserts a badge of ZERO. Removing a type from one set
+// only would fail the equality above.
 describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PENDING_DRAFT_TYPES)", () => {
   it("the web REVIEWABLE_TYPES set equals the server PENDING_DRAFT_TYPES set exactly", () => {
     // `reasoning` is the only draft type deliberately NOT reviewable; it's absent
@@ -165,13 +170,12 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
       .request("/api/daemon-info", { headers: { "X-Project-Hash": projectHashOf(tmpDir) } })
       .then(async (res) => {
         expect(res.status).toBe(200);
-        // Pre-fix (PENDING_REVIEWABLE missing debrief+explainer) this returned
-        // PENDING_DRAFT_TYPES.length - 2.
+        // Pre-fix (PENDING_REVIEWABLE missing debrief) this under-counted.
         expect((await res.json()).pendingCount).toBe(PENDING_DRAFT_TYPES.length);
       });
   });
 
-  it("a draft EXPLAINER is reflected in /api/daemon-info pendingCount (targeted #190 A2 badge)", async () => {
+  it("P3 — a draft EXPLAINER does NOT lift the badge (acknowledge-only, no verdict owed)", async () => {
     const { tmpDir, daemon } = makeDaemon();
     const store = daemon.createSession("s_ex");
     store.createArtifact({
@@ -182,8 +186,17 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
       headers: { "X-Project-Hash": projectHashOf(tmpDir) },
     });
     expect(res.status).toBe(200);
-    // Pre-fix (PENDING_REVIEWABLE omitted "explainer") this returned 0.
-    expect((await res.json()).pendingCount).toBe(1);
+    // #190 A2 briefly counted this as 1; P3 reverts it — a walk-through the
+    // human hasn't read yet is not work owed, and the cross-project "waiting on
+    // you" badge must not claim otherwise. check_feedback still reports it under
+    // its "TO READ" line.
+    expect((await res.json()).pendingCount).toBe(0);
+    // …while a genuine verdict surface in the SAME session still lifts it.
+    store.createArtifact({ id: "db1", type: "debrief", title: "Debrief", content: {} });
+    const res2 = await daemon.app.request("/api/daemon-info", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect((await res2.json()).pendingCount).toBe(1);
   });
 });
 
