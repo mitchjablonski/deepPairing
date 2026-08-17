@@ -156,6 +156,13 @@ the collaboration, not the headline:
   are one click away:** "Not my taste" in the UI scopes the stance down and
   records the correction. (Blocks from a committed **team rule** point you to
   `.deeppairing/team.json` instead.)
+- **A backstop on the paths you can't undo.** The same PreToolUse hook also
+  watches your guardrail paths — migrations, CI config, infrastructure, `.env`
+  and other secret files. If the agent starts writing to one of them without
+  having presented *any* findings, options, spec, or plan first, you get a
+  prompt naming the path and the class before the edit lands. Do the pairing and
+  it never fires; it never hard-blocks, it fails open, and
+  `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` turns it off.
 - **The ledger underneath.** Reject something with a reason and the
   stance is remembered — across every project, at
   `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo sees your

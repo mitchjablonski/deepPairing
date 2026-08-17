@@ -116,8 +116,15 @@ describe("plugin hook bundles (smoke)", () => {
     );
     const parsed = JSON.parse(out);
     expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask"); // never "deny"
-    expect(parsed.hookSpecificOutput.permissionDecisionReason).toMatch(/GUARDRAIL_ESCALATION/);
-    expect(parsed.hookSpecificOutput.permissionDecisionReason).toMatch(/migrations: migrations\/003_drop\.sql/);
+    const reason = parsed.hookSpecificOutput.permissionDecisionReason;
+    expect(reason).toMatch(/GUARDRAIL_ESCALATION/);
+    // F4 — the prompt is written for the HUMAN first: the decision they own,
+    // then what makes the path load-bearing, then what declining does.
+    expect(reason).toContain("Allow this edit to migrations/003_drop.sql?");
+    expect(reason).toContain("(migrations — hard to reverse)");
+    expect(reason).toContain("Decline to have your pair present it for review first.");
+    // F1 — the mechanism is PROJECT-scoped and the wording says so.
+    expect(reason).toContain("is live in this project's recent sessions");
   });
 
   it.skipIf(!bundlesBuilt)("P1 (round-11) — preflight is SILENT on the same write once the escalated arc is in flight", () => {

@@ -113,7 +113,7 @@ describe("evaluatePreflightHook — the platform-level gate", () => {
       toolInput: { file_path: "/src/config.ts", new_string: "export let cfg = {}; // global mutable state singleton" },
       projectRoot: dir,
     });
-    expect(d.deny).toBe(true);
+    expect(d.fire).toBe(true);
     expect(d.source).toBe("session");
     expect(d.reason).toMatch(/REJECTED_APPROACH_BLOCKED/);
   });
@@ -140,7 +140,7 @@ describe("evaluatePreflightHook — the platform-level gate", () => {
       toolInput: { file_path: "/src/util.ts", new_string: "export const add = (a, b) => a + b;" },
       projectRoot: dir,
     });
-    expect(d.deny).toBe(false);
+    expect(d.fire).toBe(false);
   });
 
   it("DENIES on a team 'avoid' rule (source: team)", () => {
@@ -150,19 +150,19 @@ describe("evaluatePreflightHook — the platform-level gate", () => {
       toolInput: { file_path: "/src/Box.tsx", content: "<div style={{}}>uses inline styles here</div>" },
       projectRoot: dir,
     });
-    expect(d.deny).toBe(true);
+    expect(d.fire).toBe(true);
     expect(d.source).toBe("team");
   });
 
-  it("fails open (deny:false) with no ledgers at all", () => {
+  it("fails open (fire:false) with no ledgers at all", () => {
     const d = evaluatePreflightHook({ toolName: "Edit", toolInput: { file_path: "/x.ts", new_string: "anything" }, projectRoot: dir });
-    expect(d.deny).toBe(false);
+    expect(d.fire).toBe(false);
   });
 
-  it("deny:false when the tool_input has no matchable content", () => {
+  it("fire:false when the tool_input has no matchable content", () => {
     writePrefs({ rejectedApproaches: [{ description: "x", concept: "global mutable state" }] });
     const d = evaluatePreflightHook({ toolName: "Edit", toolInput: {}, projectRoot: dir });
-    expect(d.deny).toBe(false);
+    expect(d.fire).toBe(false);
   });
 });
 
@@ -189,6 +189,6 @@ describe("readRejectedApproaches — local-only (no cross-project reach)", () =>
       toolInput: { file_path: "/src/x.ts", new_string: "introduce global mutable state here" },
       projectRoot: dir,
     });
-    expect(d.deny).toBe(false);
+    expect(d.fire).toBe(false);
   });
 });

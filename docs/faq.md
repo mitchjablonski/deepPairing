@@ -19,6 +19,9 @@ hopes the model consults the right context. deepPairing makes the
 rejection a hard gate: the `present_*` tool refuses
 (`REJECTED_APPROACH_BLOCKED`), and a PreToolUse hook catches a *direct*
 edit that tries to skip the protocol and surfaces it for your decision.
+The same hook carries a second prompt class — a *guardrail backstop* that
+asks before a write lands on a migration, CI config, infrastructure, or a
+secret file with no findings/options/spec/plan presented first.
 
 The "ledger is a JSON file" critique is the same critique you could
 level at git ("a tree of text diffs"), `package.json` ("a JSON
@@ -134,9 +137,11 @@ diffs. Two things Plan Mode doesn't do:
   the stance is kept per-repo (and flagged, advisory, cross-project) —
   so you don't re-litigate it next session.
 - **An enforced gate acts on the rejection.** Re-propose a concept you
-  turned down and a `PreToolUse` block stops it *before the edit
+  turned down and a `PreToolUse` prompt stops it *before the edit
   lands*, in the project where you made the call — not a plan you hope
-  the agent still honors.
+  the agent still honors. The same hook backstops your guardrail paths
+  (migrations, CI, infra, secrets): a write there with no findings,
+  options, spec, or plan presented first asks you before it lands.
 
 Plan Mode gets you one gate at the start; deepPairing keeps you in the
 loop at every decision that matters and remembers where you stood.

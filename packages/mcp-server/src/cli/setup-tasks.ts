@@ -16,8 +16,10 @@ import { cliInvocation } from "../cli-invocation.js";
 // P1 — the guardrail backstop's zero-I/O prefilter. The generated hook script is
 // self-contained and cannot import at runtime, so we INTERPOLATE this literal
 // into its source at generation time: the init-path copy and the plugin-bundled
-// copy share one definition by construction, not by hand-maintenance.
-import { GUARDRAIL_PATH_PREFILTER } from "./preflight-hook-core.js";
+// copy share one definition by construction, not by hand-maintenance. F14 — it
+// lives in its own ~20-line module so this file (loaded on every CLI start)
+// doesn't pull the matcher core into the cold start.
+import { GUARDRAIL_PATH_PREFILTER } from "./guardrail-prefilter.js";
 
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
@@ -744,18 +746,10 @@ import path from "node:path";
 // Built matcher core, stamped at install time (see resolvePreflightCoreUrl).
 const CORE_URL = ${JSON.stringify(coreUrl)};
 
-function recordFire(projectRoot, reason) {
-  try {
-    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    let s = { version: 1, fires: [] };
-    if (fs.existsSync(sp)) { try { s = JSON.parse(fs.readFileSync(sp, "utf-8")); } catch {} }
-    const fires = Array.isArray(s.fires) ? s.fires : [];
-    fires.push({ at: new Date().toISOString(), hook: "preflight", reason: reason });
-    s.fires = fires.slice(-50);
-    s.version = 1;
-    fs.writeFileSync(sp, JSON.stringify(s));
-  } catch {}
-}
+// F11 — the fire log + the guardrail dedup stamp are ONE read-modify-write, and
+// they live in the matcher core (mod.recordHookFire) so this generated copy and
+// the plugin-bundled copy cannot drift on the write shape. It's only ever
+// called AFTER the dynamic import, so the fast path above pays nothing for it.
 
 // PP1 — cheap pre-check so the common case (no rejections seeded, no team.json)
 // skips the ~40ms dynamic import of the matcher core entirely. Reading the small
@@ -803,8 +797,8 @@ process.stdin.on("end", async () => {
     }
     const mod = await import(CORE_URL);
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
-    if (decision && decision.deny) {
-      recordFire(projectRoot, decision.source || "blocked");
+    if (decision && decision.fire) {
+      mod.recordHookFire(projectRoot, decision);
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",

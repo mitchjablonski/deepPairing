@@ -155,7 +155,18 @@ export const PRE_WORK_CEREMONY_TYPES = ["research", "decision", "spec", "plan"] 
  *  The same liveness rule the debrief gate applies to a debrief: a superseded
  *  one has a live v(N+1) counting in its place; retracted/obsolete were taken
  *  back; REJECTED means the human refused the proposal — which is precisely a
- *  case the backstop SHOULD still ask about. */
+ *  case the backstop SHOULD still ask about.
+ *
+ *  F2 — note what is NOT in this list: `draft`. A spec the agent presented ten
+ *  seconds ago counts IMMEDIATELY, before any human has looked at it. That is
+ *  deliberate. present_* is non-blocking by design — the agent presents and
+ *  keeps working while the human reviews in the companion UI — so requiring
+ *  `approved` would fire the backstop straight through the review window on
+ *  work that did nothing wrong, which is the nag failure the whole design
+ *  avoids. The backstop's question is "did you SKIP the ceremony?", not "has
+ *  the ceremony been signed off?"; the un-reviewed LANDING is the changeset
+ *  floor's job, not this gate's. It also matches the sibling gate above, whose
+ *  CEREMONY_TYPES escalate on presence regardless of status. */
 const CEREMONY_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
 
 /**

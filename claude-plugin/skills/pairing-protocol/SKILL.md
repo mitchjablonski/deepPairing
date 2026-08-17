@@ -85,9 +85,9 @@ flexes.
   decision, or a genuine architectural fork. The full arc: findings → options →
   spec/plan → changeset → debrief. Use your judgment on borderline cases — and
   the preflight hook is the backstop underneath that judgment: a `Write`/`Edit`
-  to a guardrail path with NO findings, options, spec, or plan live in the
-  session pauses for your pair to confirm (see **Guardrails** below for exactly
-  when it fires and when it stays quiet).
+  to a guardrail path with NO findings, options, spec, or plan live in this
+  project's recent sessions pauses for your pair to confirm (see **Guardrails**
+  below for exactly when it fires and when it stays quiet).
 
 **The floor is absolute at every class:** code is presented for review before it
 lands — the `present_changeset` is that surface, always. The low-risk-feature
@@ -239,8 +239,10 @@ one case that closes without a *separate* debrief — its self-summarizing
     a focused walk of just those lines and what they do, anchored to that
     Evidence — NOT a whole-codebase tour. Identify the affordance by the
     request's explain INTENT, never by the button's label (the label is UI copy
-    and moves). Pass `servedRequestId` so it links back to the request and
-    clears. This is still the pull-first contract (the human asked); you're just
+    and moves). The request may carry a structured **scope** (the artifact,
+    file, and line range the human pointed at) alongside the prose — read it
+    when it's there, and link `relatedArtifactIds` from the artifact it names.
+    Pass `servedRequestId` so it links back to the request and clears. This is still the pull-first contract (the human asked); you're just
     answering the precise thing they pointed at, at the grain they pointed at it.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
   that cadence got zero engagement, and concept-naming now lives in the debrief's
@@ -386,32 +388,49 @@ the case for reconsidering.
 ## Guardrails
 
 Project guardrails are detected by filesystem, at the project root, in four
-classes: **migrations** (`migrations/`, `db/migrate/`, `prisma/migrations/`,
-`supabase/migrations/`), **workflows** (`.github/workflows/`),
-**infrastructure** (`Dockerfile`, `docker-compose.yml`, `infrastructure/`,
-`terraform/`, `k8s/`, `kubernetes/`, `helm/`), and **secrets** (`.env`,
-`.env.local`, `.env.production`, `config/secrets.yml`). Even when autonomy is
-"autonomous", escalate to supervised for changes touching these paths — that's
-the Escalated class, and it's on you to recognize it.
+classes:
+
+- **migrations** — `migrations/`, `db/migrate/`, `prisma/migrations/`,
+  `supabase/migrations/`, `alembic/versions/`
+- **workflows** — `.github/workflows/`, `.circleci/`, `.gitlab-ci.yml`,
+  `Jenkinsfile`
+- **infrastructure** — `Dockerfile*`, `docker-compose*.yml` / `compose*.yaml`,
+  `*.tfvars`, `infrastructure/`, `terraform/`, `k8s/`, `kubernetes/`, `helm/`
+- **secrets** — `.env` and any `.env.*` that isn't a checked-in template
+  (`.env.example` / `.env.sample` are exempt), `config/secrets*`,
+  `config/credentials*`, `config/master.key`
+
+Even when autonomy is "autonomous", escalate to supervised for changes touching
+these paths — that's the Escalated class, and it's on you to recognize it.
 
 **The preflight backstop** is the safety net under that judgment call — and it
 does exactly this, no more:
 
 - **When it fires.** A `Write`/`Edit`/`MultiEdit` whose target path is under one
   of those four classes, at a moment when NO `research` (findings), `decision`
-  (options), `spec`, or `plan` artifact is live in the session. It returns
-  `permissionDecision: "ask"` — a prompt naming the class and the path, which
-  your pair can confirm or decline.
+  (options), `spec`, or `plan` artifact is live in this project's recent
+  sessions. It returns `permissionDecision: "ask"` — a prompt naming the class
+  and the path, which your pair can confirm or decline. (Liveness is scoped to
+  the PROJECT, not to one session: a hook gets no session id, and guessing one
+  would interrupt two agents working the same project. A ceremony artifact older
+  than ~8 hours no longer counts as live.)
 - **When it stays quiet.** If the escalated arc is already in flight — a live
   findings, options, spec, or plan — the write passes silently. Doing the
-  ceremony is exactly how you avoid the prompt. It also asks at most **once per
-  guardrail class per 30 minutes**, so a long arc isn't interrupted repeatedly,
-  and it never fires for a non-guardrail path.
+  ceremony is exactly how you avoid the prompt, and **a spec you just presented
+  counts immediately**: the backstop catches the SKIP, not the un-reviewed
+  landing, so you never have to sit and wait for review before touching the
+  path. It also asks at most **once per guardrail class per 30 minutes** — **per
+  file** for migrations and secrets, where each file is a separately
+  irreversible act — so a long arc isn't interrupted repeatedly, and it never
+  fires for a non-guardrail path.
 - **What it is not.** It never `deny`s, it never blocks the edit outright, and
   any error — including an unreadable session store — passes the edit through
   (fail-open). It is local-only: it reads this project's `.deeppairing/` and
-  writes nothing else. So it is a backstop for a *misclassified* edit, not a
-  substitute for classifying correctly, and definitely not a security boundary.
+  writes one small state file there. So it is a backstop for a *misclassified*
+  edit, not a substitute for classifying correctly, and definitely not a
+  security boundary. Your pair can switch it off entirely with
+  `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` (the rejected-approach gate is separate
+  and stays on).
 
 A superseded/retracted/obsolete/**rejected** spec doesn't count as live — if
 your pair turned the proposal down, the backstop will still ask.

@@ -376,6 +376,19 @@ function sessionHasLivePreWorkCeremony(artifacts, isRecent = () => true) {
   );
 }
 
+// src/cli/guardrail-prefilter.ts
+var GUARDRAIL_PATH_PREFILTER = /(^|\/)(\.github\/workflows|\.circleci|\.gitlab-ci|Jenkinsfile|migrations|db\/migrate|prisma\/migrations|supabase\/migrations|alembic\/versions|Dockerfile|docker-compose|compose|infrastructure|terraform|k8s|kubernetes|helm|\.env|config\/secrets|config\/credentials|config\/master\.key)(\/|\.|$)|\.tfvars$/;
+function looksLikeGuardrailPath(toolInput) {
+  try {
+    const input = toolInput;
+    const fp = input?.file_path ?? input?.filePath;
+    if (typeof fp !== "string" || !fp) return false;
+    return GUARDRAIL_PATH_PREFILTER.test(fp.replace(/\\/g, "/"));
+  } catch {
+    return false;
+  }
+}
+
 // src/cli/preflight-hook-core.ts
 function readRejectedApproaches(projectRoot) {
   const p = path.join(projectRoot, ".deeppairing", "preferences.json");
@@ -436,49 +449,48 @@ function stripArtifactClause(message) {
 function toHookReason(message) {
   return stripArtifactClause(message).replace(" refused \u2014 ", " paused for your review \u2014 ");
 }
+var GUARDRAIL_BACKSTOP_ENV = "DEEPPAIRING_GUARDRAIL_BACKSTOP";
+function guardrailBackstopDisabled(env = process.env) {
+  const v = (env[GUARDRAIL_BACKSTOP_ENV] ?? "").trim().toLowerCase();
+  return v === "off" || v === "0" || v === "false";
+}
 var CEREMONY_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
 var GUARDRAIL_ASK_TTL_MS = 30 * 60 * 1e3;
-var GUARDRAIL_MARKERS = [
+var PER_PATH_DEDUP_CLASSES = /* @__PURE__ */ new Set(["migrations", "secrets"]);
+function isRealDotenv(name) {
+  if (!/^\.env(\.[^/]+)?$/.test(name)) return false;
+  return !/\.(example|sample|template|dist)$/i.test(name);
+}
+var GUARDRAIL_RULES = [
   {
     category: "migrations",
-    roots: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations"],
-    rationale: "Migrations are hard to reverse."
+    rationale: "Migrations are hard to reverse \u2014 escalate to supervised for changes here.",
+    note: "hard to reverse",
+    dirs: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations", "alembic/versions"],
+    file: () => false
   },
   {
     category: "workflows",
-    roots: [".github/workflows"],
-    rationale: "CI workflows affect every future deploy."
+    rationale: "CI workflows affect every future deploy \u2014 escalate for changes here.",
+    note: "it affects every future deploy",
+    dirs: [".github/workflows", ".circleci"],
+    file: (rel) => rel === ".gitlab-ci.yml" || rel === ".gitlab-ci.yaml" || rel === "Jenkinsfile"
   },
   {
     category: "infrastructure",
-    roots: [
-      "Dockerfile",
-      "docker-compose.yml",
-      "docker-compose.yaml",
-      "infrastructure",
-      "terraform",
-      "k8s",
-      "kubernetes",
-      "helm"
-    ],
-    rationale: "Infrastructure changes affect production surfaces."
+    rationale: "Infrastructure changes affect production surfaces \u2014 escalate here.",
+    note: "it affects production surfaces",
+    dirs: ["infrastructure", "terraform", "k8s", "kubernetes", "helm"],
+    file: (rel) => /^Dockerfile([.-][^/]*)?$/.test(rel) || /^(docker-)?compose[^/]*\.ya?ml$/.test(rel) || /^[^/]*\.tfvars(\.json)?$/.test(rel)
   },
   {
     category: "secrets",
-    roots: [".env", ".env.local", ".env.production", "config/secrets.yml"],
-    rationale: "Secret files must never leak into the session or a commit."
+    rationale: "Secret files must never leak into the session or a commit \u2014 escalate here.",
+    note: "secrets must never leak into a commit",
+    dirs: [],
+    file: (rel) => isRealDotenv(rel) || /^config\/secrets[^/]*$/.test(rel) || /^config\/credentials[^/]*$/.test(rel) || rel === "config/master.key"
   }
 ];
-var GUARDRAIL_PATH_PREFILTER = /(^|\/)(\.github\/workflows|migrations|db\/migrate|prisma\/migrations|supabase\/migrations|Dockerfile|docker-compose|infrastructure|terraform|k8s|kubernetes|helm|\.env|config\/secrets)(\/|\.|$)/;
-function looksLikeGuardrailPath(toolInput) {
-  try {
-    const fp = toolInput?.file_path ?? toolInput?.filePath;
-    if (typeof fp !== "string" || !fp) return false;
-    return GUARDRAIL_PATH_PREFILTER.test(fp.replace(/\\/g, "/"));
-  } catch {
-    return false;
-  }
-}
 function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
@@ -486,12 +498,9 @@ function matchGuardrailPath(projectRoot, paths) {
       const abs = path.resolve(projectRoot, raw);
       const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
       if (!rel || rel === ".." || rel.startsWith("../")) continue;
-      for (const marker of GUARDRAIL_MARKERS) {
-        for (const root of marker.roots) {
-          if (rel === root || rel.startsWith(root + "/")) {
-            return { category: marker.category, path: rel, root, rationale: marker.rationale };
-          }
-        }
+      for (const rule of GUARDRAIL_RULES) {
+        const hit = rule.dirs.some((d) => rel === d || rel.startsWith(d + "/")) || rule.file(rel);
+        if (hit) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
       }
     }
     return null;
@@ -509,8 +518,8 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
     return { reachable: false, hasLiveCeremony: false };
   }
   const isRecent = (a) => {
-    const t = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
-    return !t || now - t <= CEREMONY_MAX_AGE_MS;
+    const t = Date.parse(a?.createdAt ?? "");
+    return Number.isFinite(t) ? now - t <= CEREMONY_MAX_AGE_MS : false;
   };
   for (const id of ids) {
     try {
@@ -525,20 +534,41 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
   }
   return { reachable: true, hasLiveCeremony: false };
 }
-function guardrailAskSuppressed(projectRoot, category, now = Date.now()) {
+function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now()) {
   try {
     const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const state = JSON.parse(fs.readFileSync(sp, "utf-8"));
-    const at = state?.guardrailAsks?.[category];
+    const entry = state?.guardrailAsks?.[category];
+    const at = PER_PATH_DEDUP_CLASSES.has(category) ? entry && typeof entry === "object" ? entry[matchedPath] : void 0 : entry;
     if (typeof at !== "string") return false;
-    const t = new Date(at).getTime();
+    const t = Date.parse(at);
     if (!Number.isFinite(t)) return false;
     return now - t < GUARDRAIL_ASK_TTL_MS;
   } catch {
     return false;
   }
 }
-function recordGuardrailAsk(projectRoot, category, now = Date.now()) {
+function stampGuardrailAsk(state, match, now) {
+  const asks = state.guardrailAsks && typeof state.guardrailAsks === "object" ? state.guardrailAsks : {};
+  const iso = new Date(now).toISOString();
+  if (PER_PATH_DEDUP_CLASSES.has(match.category)) {
+    const prev = asks[match.category];
+    const byPath = {};
+    if (prev && typeof prev === "object") {
+      for (const [p, at] of Object.entries(prev)) {
+        const t = typeof at === "string" ? Date.parse(at) : NaN;
+        if (Number.isFinite(t) && now - t < GUARDRAIL_ASK_TTL_MS) byPath[p] = at;
+      }
+    }
+    byPath[match.path] = iso;
+    asks[match.category] = byPath;
+  } else {
+    asks[match.category] = iso;
+  }
+  state.guardrailAsks = asks;
+}
+var FIRE_LOG_CAP = 50;
+function recordHookFire(projectRoot, decision, now = Date.now()) {
   try {
     const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     let state = { version: 1 };
@@ -548,30 +578,37 @@ function recordGuardrailAsk(projectRoot, category, now = Date.now()) {
     } catch {
     }
     state.version = 1;
-    if (!state.guardrailAsks || typeof state.guardrailAsks !== "object") state.guardrailAsks = {};
-    state.guardrailAsks[category] = new Date(now).toISOString();
+    const fires = Array.isArray(state.fires) ? state.fires : [];
+    fires.push({
+      at: new Date(now).toISOString(),
+      hook: "preflight",
+      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
+    });
+    state.fires = fires.slice(-FIRE_LOG_CAP);
+    if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
     fs.mkdirSync(path.dirname(sp), { recursive: true });
     fs.writeFileSync(sp, JSON.stringify(state));
   } catch {
   }
 }
 function guardrailReason(match) {
-  return `GUARDRAIL_ESCALATION \u2014 this touches a guardrail path (${match.category}: ${match.path}). ${match.rationale} That makes this ESCALATED work: present findings/options/a spec or plan for review before it lands, or confirm here to proceed. (No findings, options, spec, or plan is live in this session \u2014 that's why you're being asked.)`;
+  return `GUARDRAIL_ESCALATION \u2014 Allow this edit to ${match.path}? It's a guardrail path (${match.category} \u2014 ${match.note}), and no findings, options, spec, or plan is live in this project's recent sessions. Decline to have your pair present it for review first. (Agent: this is ESCALATED work \u2014 on a decline, present findings/options/a spec or plan before landing it.)`;
 }
 function evaluateGuardrailBackstop(args) {
-  const { toolInput, projectRoot } = args;
+  const { projectRoot } = args;
   const now = args.now ?? Date.now();
   try {
-    const fp = toolInput?.file_path ?? toolInput?.filePath;
+    if (guardrailBackstopDisabled(args.env ?? process.env)) return null;
+    const input = args.toolInput;
+    const fp = input?.file_path ?? input?.filePath;
     if (typeof fp !== "string" || !fp) return null;
     const match = matchGuardrailPath(projectRoot, [fp]);
     if (!match) return null;
+    if (guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
     const ceremony = readSessionCeremony(projectRoot, now);
     if (!ceremony.reachable) return null;
     if (ceremony.hasLiveCeremony) return null;
-    if (guardrailAskSuppressed(projectRoot, match.category, now)) return null;
-    recordGuardrailAsk(projectRoot, match.category, now);
-    return { deny: true, reason: guardrailReason(match), source: "guardrail" };
+    return { fire: true, reason: guardrailReason(match), source: "guardrail", guardrail: match };
   } catch {
     return null;
   }
@@ -579,7 +616,7 @@ function evaluateGuardrailBackstop(args) {
 function evaluatePreflightHook(args) {
   const { toolName, toolInput, projectRoot } = args;
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return { deny: false };
+  if (strings.length === 0) return { fire: false };
   const result = runPreflight({
     toolName,
     proposalStrings: strings,
@@ -588,26 +625,29 @@ function evaluatePreflightHook(args) {
     teamPreferences: readTeamPreferences(projectRoot)
   });
   if (result.blocked) {
-    return { deny: true, reason: toHookReason(result.block.message), source: result.block.source };
+    return { fire: true, reason: toHookReason(result.block.message), source: result.block.source };
   }
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now }) ?? { deny: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env }) ?? { fire: false };
 }
 export {
   CEREMONY_MAX_AGE_MS,
   GUARDRAIL_ASK_TTL_MS,
-  GUARDRAIL_MARKERS,
+  GUARDRAIL_BACKSTOP_ENV,
   GUARDRAIL_PATH_PREFILTER,
+  GUARDRAIL_RULES,
+  PER_PATH_DEDUP_CLASSES,
   buildProposals,
   evaluateGuardrailBackstop,
   evaluatePreflightHook,
   guardrailAskSuppressed,
+  guardrailBackstopDisabled,
   guardrailReason,
   looksLikeGuardrailPath,
   matchGuardrailPath,
   readRejectedApproaches,
   readSessionCeremony,
   readTeamPreferences,
-  recordGuardrailAsk,
+  recordHookFire,
   stripArtifactClause,
   toHookReason
 };

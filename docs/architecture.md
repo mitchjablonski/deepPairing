@@ -146,7 +146,22 @@ installed into `.claude/settings.local.json` by `src/cli/setup-tasks.ts`)
 now runs the *same* `runPreflight` matcher against the actual tool call
 and surfaces a match for the human's decision — so skipping the protocol
 no longer skips the gate. The hook fails open (a broken hook never blocks
-an edit) and short-circuits cheaply when there are no rejections seeded.
+an edit) and short-circuits cheaply — one regex test on the file path —
+when there are no rejections seeded and the path is not a guardrail path.
+
+That last clause is the hook's **second** prompt class, the *guardrail
+backstop*. Guardrail paths (migrations, CI config, infrastructure, secret
+files) are sensed from the filesystem by `store/project-signals.ts` and
+rendered into the first-call hint; the hook carries a mirror of the same
+rules (`GUARDRAIL_RULES`, kept honest by a parity test that runs both over
+one fixture matrix) and asks when a write lands on one of them while no
+`research`/`decision`/`spec`/`plan` artifact is live in the project's
+recent sessions — i.e. only when the agent skipped the pre-work ceremony
+entirely. A live ceremony, an unreadable session store, or
+`DEEPPAIRING_GUARDRAIL_BACKSTOP=off` all leave it silent. Liveness is
+project-scoped rather than session-scoped on purpose: a PreToolUse hook is
+handed no deepPairing session id, and guessing one would interrupt two
+agents working the same repo.
 
 ## Persistence layout
 
