@@ -1,13 +1,14 @@
 # deepPairing — Claude Code plugin
 
-Catch the wrong approach before Claude Code writes it — not in a 500-line diff
-after. Structured artifacts (findings, specs, decisions, plans), a rejection gate
-that stops a concept you've turned down before the edit lands (hard in the
-project where you rejected it; an advisory flag cross-project), and a companion
-web UI (on a
-deterministic per-project port in `3847-3974`, derived from the project path —
-check `.deeppairing/daemon.json` for the actual one) for inline review and
-commenting.
+Tell Claude Code "no" once and it sticks. Reject an approach with your reason
+and a gate stops the agent from re-proposing that concept before the edit lands
+— the tool call is refused and your reason is quoted back. Around that gate,
+structured artifacts (findings, specs, decisions, plans) and a companion web UI
+(on a deterministic per-project port in `3847-3974`, derived from the project
+path — check `.deeppairing/daemon.json` for the actual one) for inline review and
+commenting. The block is hard in the project where you rejected it; once you
+enable cross-project publishing it is also flagged, advisory, on your other
+projects.
 
 ## Install
 

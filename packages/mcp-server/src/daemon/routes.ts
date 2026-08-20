@@ -726,6 +726,33 @@ export function createDaemonRoutes(
     return c.json({ ok: true });
   });
 
+  /**
+   * Q2 — sink for a REAL pre-flight block, routed from the MCP-server process.
+   *
+   * Structural gap this closes: the MCP server's `broadcast` is a no-op in
+   * standalone (standalone.ts passes `noop`, because the daemon broadcasts on
+   * its own mutations) — so `broadcast(result.block.broadcastEvent)` inside
+   * preflightRejectedApproaches reached NOBODY on the production install path.
+   * The gate's most distinctive moment fired invisibly; only the daemon-side
+   * DEMO ever produced the hero toast. Handing the event here fans it out to
+   * attached tabs and lands it in the durable block log (the create-daemon
+   * broadcast tap owns that write, so there is exactly one persistence site).
+   *
+   * Whitelisted on `type` so this can't be used to inject arbitrary events
+   * into a session's WS stream.
+   */
+  app.post("/api/internal/sessions/:sessionId/preflight-block", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (!body || body.type !== "preflight_blocked") {
+      return c.json({ ok: false, reason: "not_a_preflight_block" }, 400);
+    }
+    broadcast(sessionId, body);
+    return c.json({ ok: true });
+  });
+
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;

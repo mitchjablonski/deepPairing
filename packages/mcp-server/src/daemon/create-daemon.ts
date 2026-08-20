@@ -41,6 +41,7 @@ import { applyTopLevelGuards } from "../http/guards.js";
 import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
+import { recordPreflightBlock } from "../store/preflight-block-log.js";
 import { buildPingPayload, decidePing, sendPing } from "../ping.js";
 import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../version.js";
@@ -243,10 +244,29 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   const demoReplayEvents = new Map<string, any>();
 
   function broadcast(sessionId: string, event: any): void {
-    if (sessionId.startsWith("demo_") && event?.type === "preflight_blocked") {
-      demoReplayEvents.set(sessionId, event);
+    let outgoing = event;
+
+    // Q2: the gate firing must OUTLIVE the toast. Persist FIRST, before the
+    // fan-out, so the durable entry's server-assigned id can ride the wire with
+    // the event. Q2 review item 11 — that id is the whole point: pre-fix the
+    // client deduped on `rejectedAt`, which a real `preflight_blocked` payload
+    // never carries (it isn't in the match shape), so identity silently fell
+    // through to client-vs-server timestamp equality — and a block that arrived
+    // live WHILE hydrate() was in flight appended twice and inflated the unread
+    // count. One server id, generated at the one persistence site, settles it.
+    // Demo sessions are refused inside recordPreflightBlock, so the demo keeps
+    // its id-less event and its replay path is untouched.
+    try {
+      const entry = recordPreflightBlock(projectRoot, sessionId, event);
+      if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
+    } catch {
+      // Losing the record must never break a broadcast.
     }
-    const data = JSON.stringify({ ...event, sessionId });
+
+    if (sessionId.startsWith("demo_") && outgoing?.type === "preflight_blocked") {
+      demoReplayEvents.set(sessionId, outgoing);
+    }
+    const data = JSON.stringify({ ...outgoing, sessionId });
 
     // Send to session-specific clients
     const sessionClients = wsClients.get(sessionId);
@@ -269,6 +289,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     } catch {
       // Telemetry must never break a broadcast.
     }
+
   }
 
   /**

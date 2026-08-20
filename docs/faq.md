@@ -35,18 +35,29 @@ Real concern, and we don't pretend they don't happen. Concept-match
 is fuzzy by design (it has to be, to catch paraphrases). Two
 mitigations:
 
-1. **Every block is one-click overridable** from the companion UI.
-   Override → the agent gets a "user has explicitly allowed this in
-   this case" signal and proceeds.
-2. **The override updates the ledger.** Next time the same concept-
-   match would fire on similar wording, deepPairing knows you've
-   carved an exception and doesn't trip again.
+1. **Every block is one-click overridable** from the companion UI:
+   **Retire this stance** on the block card. The agent proceeds, and
+   the stance is dropped from this project's `rejectedApproaches`,
+   so it never gates here again.
+2. **The override is recorded, not silent.** It lands in the ledger
+   as an approval against that concept, so the history shows you
+   changed your mind rather than quietly losing the stance.
 
-The first week of using deepPairing on a real project is mostly
-calibrating the ledger via overrides. After that the block rate
-drops to ~once or twice a day on a serious refactor — which is
-roughly the rate at which you'd actually want to think about whether
-you're paraphrasing past yourself.
+   To be precise about what that button does *not* do: it retires
+   the stance wholesale — it does not narrow it to "everywhere
+   except this path". Per-path scoping is a real thing we may build;
+   it isn't what this is. If you want the stance back afterwards,
+   reject the concept again.
+
+Expect the early sessions on a real project to involve some
+calibration via overrides, as the concepts you name find their
+level. We don't have a defensible number for how often the gate
+fires after that — it depends entirely on how many stances you've
+recorded and how broadly you worded them — so we're not going to
+quote one. What we can say is what the mechanism does: it fires
+only on a lexical match against a concept *you* named, every fire
+is one click from an override, and each override narrows the next
+match.
 
 ## "Why MCP and not a Cursor / Continue / editor extension?"
 
@@ -134,8 +145,9 @@ surface extends past the plan to the findings, the decisions, and the
 diffs. Two things Plan Mode doesn't do:
 
 - **It remembers your calls.** Reject an approach with a reason and
-  the stance is kept per-repo (and flagged, advisory, cross-project) —
-  so you don't re-litigate it next session.
+  the stance is kept per-repo — so you don't re-litigate it next
+  session. Enable cross-project publishing and it's also flagged,
+  advisory, on your other projects.
 - **An enforced gate acts on the rejection.** Re-propose a concept you
   turned down and a `PreToolUse` prompt stops it *before the edit
   lands*, in the project where you made the call — not a plan you hope
@@ -160,10 +172,16 @@ different semantics:
   rejections (or a committed `team.json` rule) → the tool returns
   `REJECTED_APPROACH_BLOCKED` → the artifact is never created. The
   agent has to revise or escalate; it cannot silently proceed.
-- deepPairing, on your *other* projects: the cross-project Philosophy
+- deepPairing, on your *other* projects — **once you've enabled
+  cross-project publishing** in the project where you made the call
+  (Autonomy → Cross-project memory in the companion UI, the one-time
+  card after your first "Reject & remember", the `init` prompt, or
+  `deeppairing philosophy publish on`): the cross-project Philosophy
   Ledger is **advisory** — a match surfaces as a nudge ("you avoided
   this in `<project>` — still want it here?"), never a hard block.
   Reject the concept locally and it becomes a hard block there too.
+  With publishing off (the default), stances simply stay in the
+  project where you made them.
 
 Both surfaces have a place; deepPairing's bet is that for
 architectural taste decisions you've already made, gating beats
@@ -181,9 +199,23 @@ dependency in one project seeding avoid-stances ("validate untrusted
 input", "use parameterized queries") that every other project then
 cites in preflight. Without opt-in, the project where the malicious
 dep lives could poison the global ledger for every other project on
-your machine. Default off, one prompt at `init`, flip later via
-`deeppairing philosophy publish on|off` (bare `philosophy publish`
-shows the current state).
+your machine. Default off. Turn it on wherever you are: **Autonomy →
+Cross-project memory** in the companion UI, the one-time card offered
+right after your first "Reject & remember" in a project, the prompt at
+`init`, or `deeppairing philosophy publish on|off` (bare `philosophy
+publish` shows the current state).
+
+What publishing actually writes to `~/.deeppairing`, per stance: the
+stance itself, the reason you typed, this project's folder name, and
+the session id. No code and no diffs — and nothing leaves your
+machine either way. One caveat worth stating plainly: a stance is
+*your* wording, so if you name a file in it, that name is part of the
+stance and travels with it. (We do strip a machine-generated path
+prefix from the one key nobody authors by hand — a changeset reject
+falls back to the changeset's title, and agents title those after the
+file they touched.) Turning publishing back off stops future writes;
+it does not withdraw stances already published — use `deeppairing
+philosophy remove <concept>` for that.
 
 The narrative trade-off: cross-project reads are a real advantage,
 but publishing is now opt-in. And to be precise about what's actually

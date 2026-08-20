@@ -23,10 +23,12 @@ import {
   type PhilosophyStance,
 } from "../store/global-store.js";
 import { recordRejectedOptionConcept } from "../store/rejected-option-recorder.js";
+import { stripLeadingPathToken } from "../store/concept-hygiene.js";
 import type { LedgerRejectionBroadcast } from "../store/rejected-option-recorder.js";
 import type { Artifact, DecisionOption } from "@deeppairing/shared";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
+import { readPreflightBlocks } from "../store/preflight-block-log.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
 import {
@@ -958,7 +960,17 @@ export function createHttpRoutes(
         //      NO per-file fan-out, the exact over-block class #195's review
         //      killed; demo isolation is inherited via recordRejectedApproach.
         const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
-        const changesetFallback = artifact.type === "changeset" ? artifact.title : undefined;
+        // Q2 review H2 — the changeset fallback is the ONE key here that no
+        // human ever authored: agents title changesets after the file they
+        // touch, so this used to publish "packages/api/src/auth/
+        // session-store.ts — swap Redis for a Map" verbatim into the shared
+        // ledger, from a UI promising no file paths leave the project. Strip
+        // the machine-generated path prefix (see concept-hygiene.ts for why
+        // this cannot cost recall — a path-laden key could never match another
+        // project's proposal in the first place). Applied ONLY here: a concept
+        // the human typed, or one the agent named via Y5, is kept verbatim.
+        const changesetFallback =
+          artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : undefined;
         const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
         await store.recordRejectedApproach({
           description: artifact.title,
@@ -1617,6 +1629,26 @@ export function createHttpRoutes(
     return c.json(readMetrics(projectRoot));
   });
 
+  /**
+   * Q2 — the durable gate-block log. Pre-Q2 a real block existed only as a 12s
+   * toast plus an in-memory browser store, so the human whose tab wasn't open
+   * (the normal case while the agent works) saw NOTHING when the moat fired.
+   * The companion UI hydrates PreflightBlockLog from here on load, for every
+   * session — not just the demo, whose replay path is separate and unchanged.
+   *
+   * Project-scoped, not session-scoped, deliberately: "has my gate ever fired
+   * here?" is a question about the PROJECT, and a block that fired in a session
+   * you've since closed is exactly the one you most need to still see. Each
+   * entry carries its `sessionId` so the UI can attribute it.
+   */
+  app.get("/api/preflight-blocks", (c) => {
+    // Degraded shape, never a 500 — a missing projectRoot (test fixtures, a
+    // plugin install with a bad cwd) should render "no blocks yet", not break
+    // the page load. Same posture as /api/ledger/digest.
+    if (!projectRoot) return c.json({ blocks: [] });
+    return c.json({ blocks: readPreflightBlocks(projectRoot) });
+  });
+
   // P3: project-scoped team preferences for the companion UI. Reads
   // .deeppairing/team.json via any active session's FileStore (all
   // sessions in a project share the same team.json). Returns both the
@@ -1666,6 +1698,49 @@ export function createHttpRoutes(
     if (parsed.data.detailDensity) {
       await store.setDetailDensity(parsed.data.detailDensity);
       broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
+    }
+    // Q2 — cross-project publish opt-in. Pre-Q2 the ONLY writer was the
+    // interactive `init` prompt (cli/init.ts) plus `philosophy publish on|off`
+    // — neither of which the marketplace install path ever runs. So the
+    // cross-project half of the product was structurally unreachable for the
+    // recommended install, while the README/plugin card claimed it flatly.
+    // `!== undefined` (not truthiness): turning it back OFF is the whole point
+    // of an honest toggle.
+    if (parsed.data.globalLedgerPublish !== undefined) {
+      // Q2 review H3 — a DEMO session must never appear to accept this. A demo
+      // FileStore writes to its in-memory demoPreferences layer, so the flip
+      // returned 200 while preferences.json was never created and the real
+      // session still read false — and the one-time first-reject card had
+      // already burned itself on the "success". The demo is the recommended
+      // first-value path, so that silently spent the single best moment we get
+      // to offer cross-project memory. Refuse it loudly instead; the client
+      // also declines to offer the card in a demo (stores/crossProject.ts).
+      if (sid?.startsWith("demo_")) {
+        return c.json(
+          {
+            error: "publish_toggle_unsupported",
+            code: ERROR_CODES.publish_toggle_unsupported,
+            message:
+              "This is a demo session — it never writes to your real project or your cross-project ledger. Open a real session to turn cross-project memory on.",
+          },
+          409,
+        );
+      }
+      if (!store.setGlobalLedgerPublish) {
+        return c.json(
+          {
+            error: "publish_toggle_unsupported",
+            code: ERROR_CODES.publish_toggle_unsupported,
+            message: "This session's store has no project preferences file to write.",
+          },
+          409,
+        );
+      }
+      await store.setGlobalLedgerPublish(parsed.data.globalLedgerPublish);
+      broadcast(
+        { type: "preference_changed", globalLedgerPublish: parsed.data.globalLedgerPublish },
+        sid,
+      );
     }
     return c.json({ status: "updated" });
   });

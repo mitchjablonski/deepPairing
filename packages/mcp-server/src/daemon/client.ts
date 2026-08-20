@@ -510,6 +510,22 @@ export class DaemonClient implements IStore {
     try { await this.post(`/metrics`, event); } catch { /* telemetry — never break a tool call */ }
   }
 
+  /**
+   * Q2 — hand a REAL pre-flight block to the daemon. Same structural reason as
+   * recordMetric above: the MCP server's `broadcast` is a no-op in standalone
+   * (standalone.ts passes `noop`), so pre-Q2 a production block reached NO
+   * WebSocket client at all — the hero toast the demo teaches you to expect
+   * only ever fired for the demo. Routing it here makes the daemon fan the
+   * `preflight_blocked` event out to attached tabs AND persist it to the
+   * project block log, so the moment survives a closed browser and a reload.
+   *
+   * Fire-and-forget: a block is already correctly refused by the time we get
+   * here, and surfacing must never be able to fail the refusal.
+   */
+  async recordPreflightBlock(event: unknown): Promise<void> {
+    try { await this.post(`/preflight-block`, event); } catch { /* surfacing — never break a tool call */ }
+  }
+
   async markCommentHumanResolved(commentId: string, resolvedAt?: string): Promise<void> {
     await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
   }

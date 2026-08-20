@@ -139,7 +139,11 @@ describe("ToastLayer", () => {
       expect(screen.queryByText(/proposed:/i)).not.toBeInTheDocument();
     });
 
-    it("offers 'Not my taste' on a personal block, and clicking it overrides + dismisses", async () => {
+    // Q2 — the label reads "Retire this stance" now. The old "Not my taste"
+    // (and its "scopes the stance down" tooltip) described a feature we don't
+    // have: overrideRejectedApproach DELETES the entry from this project's
+    // rejectedApproaches and records an approval instance. Nothing narrows.
+    it("offers 'Retire this stance' on a personal block, and clicking it overrides + dismisses", async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "overridden", retired: 1 }) });
       vi.stubGlobal("fetch", fetchMock);
       push("preflight-block", {
@@ -147,7 +151,7 @@ describe("ToastLayer", () => {
         hero: heroOf({ source: "session", concept: "pay-per-request hosting", description: "Deploy: Railway", via: "concept" }),
       });
       render(<ToastLayer />);
-      await userEvent.click(screen.getByRole("button", { name: /not my taste/i }));
+      await userEvent.click(screen.getByRole("button", { name: /retire this stance/i }));
       // POSTs the override with the stance identity (description + concept).
       const call = fetchMock.mock.calls.find((c: any) => String(c[0]).includes("/api/philosophy/override"));
       expect(call).toBeTruthy();
@@ -161,7 +165,7 @@ describe("ToastLayer", () => {
     it("does NOT offer override on a team block — points to team.json instead", () => {
       push("preflight-block", { title: "x", hero: heroOf({ source: "team", via: "avoid" }) });
       render(<ToastLayer />);
-      expect(screen.queryByRole("button", { name: /not my taste/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /retire this stance/i })).not.toBeInTheDocument();
       expect(screen.getByText(/edit team\.json/i)).toBeInTheDocument();
     });
   });

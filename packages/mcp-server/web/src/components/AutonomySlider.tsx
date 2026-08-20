@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { apiBase, sessionHeaders, apiGet } from "../lib/api";
 import { useToastStore } from "../stores/toast";
+import { useCrossProjectStore } from "../stores/crossProject";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
 type DetailDensity = "rich" | "terse";
@@ -17,7 +18,11 @@ type DetailDensity = "rich" | "terse";
 const levels: { id: AutonomyLevel; label: string; description: string }[] = [
   { id: "supervised", label: "Full",    description: "Every finding, option, plan, and change gets structured review" },
   { id: "balanced",   label: "Light",   description: "Skip findings for simple tasks; options only on genuine tradeoffs" },
-  { id: "autonomous", label: "Minimal", description: "Agent proceeds with its recommendations; you review after" },
+  // Q2 — the blurb used to read "Agent proceeds with its recommendations; you
+  // review after", which (with the matching policy string) contradicted the
+  // README's "even Minimal stops at the architectural decisions". The floor is
+  // real; the dial controls ceremony, not whether the human owns the forks.
+  { id: "autonomous", label: "Minimal", description: "Agent proceeds on ordinary work; still stops at architectural forks" },
 ];
 
 /**
@@ -38,6 +43,21 @@ export function AutonomySlider() {
   // #139 — default "rich" mirrors the store default so an old preferences.json
   // (no detailDensity field) reads as Rich.
   const [density, setDensity] = useState<DetailDensity>("rich");
+  /**
+   * Q2 — cross-project publish opt-in, made REACHABLE.
+   *
+   * Round 12: `globalLedgerPublish` defaults false and the ONLY thing that
+   * ever set it was the interactive `init` prompt (or the `philosophy publish`
+   * CLI) — neither of which the recommended marketplace install path runs. So
+   * on the install we tell people to use, the cross-project half of the
+   * product was unreachable, while the README, the plugin card and the About
+   * text claimed it flatly. `null` = not yet known (don't render a state we
+   * haven't loaded).
+   */
+  const publish = useCrossProjectStore((s) => s.publish);
+  const publishSaving = useCrossProjectStore((s) => s.saving);
+  const setPublish = useCrossProjectStore((s) => s.setPublish);
+  const hydratePublish = useCrossProjectStore((s) => s.hydratePublish);
   const [showTooltip, setShowTooltip] = useState(false);
   // #139 — refs for the detail-density radios so arrow-key navigation can move
   // focus (the WAI-ARIA radiogroup pattern: one tab stop, arrows move+select).
@@ -52,9 +72,15 @@ export function AutonomySlider() {
         if (state.detailDensity === "rich" || state.detailDensity === "terse") {
           setDensity(state.detailDensity);
         }
+        // Q2 — the publish opt-in rides full-state hydration. Shared through
+        // the crossProject store so this popover and the first-reject card
+        // (which flips the same preference) can never disagree on screen.
+        if (typeof state.globalLedgerPublish === "boolean") {
+          hydratePublish(state.globalLedgerPublish);
+        }
       })
       .catch(() => {});
-  }, []);
+  }, [hydratePublish]);
 
   const handleChange = async (newLevel: AutonomyLevel) => {
     const prev = level;
@@ -196,6 +222,50 @@ export function AutonomySlider() {
                 ))}
               </div>
             </div>
+
+            {/* Q2 — CROSS-PROJECT MEMORY. The permanent home for the publish
+                opt-in, so it stays findable after someone answers "Not now" to
+                the first-reject card. Pre-Q2 no web control existed at all and
+                the only writer was the interactive `init` prompt — which the
+                marketplace install path never runs, making the cross-project
+                claim on the plugin card unreachable for those users.
+                Rendered only once loaded: an unknown state must not be drawn
+                as "off" on a project that is in fact publishing. */}
+            {publish !== null && (
+              <div className="px-3 py-2 border-t border-border-subtle">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={publish}
+                  disabled={publishSaving}
+                  onClick={() => void setPublish(!publish)}
+                  className="w-full flex items-center justify-between gap-2 text-left disabled:opacity-60"
+                >
+                  <span className="text-2xs font-medium text-text-primary">
+                    Cross-project memory
+                  </span>
+                  <span
+                    className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                      publish
+                        ? "bg-accent-blue-dim/40 text-accent-blue border-accent-blue/40"
+                        : "border-border-default text-text-muted"
+                    }`}
+                  >
+                    {publish ? "On" : "Off"}
+                  </span>
+                </button>
+                {/* Q2 review H2/13 — same disclosure discipline as the
+                    first-reject card: name the real payload (a stance is the
+                    human's own wording, so a path they typed travels with it),
+                    and say plainly that switching OFF stops future writes
+                    rather than withdrawing past ones. */}
+                <div className="text-[10px] text-text-muted mt-1 leading-relaxed">
+                  {publish
+                    ? "On — new stances go to ~/.deeppairing (the stance, your reason, this project’s folder name), so your other projects flag the concept as an advisory nudge, never a block. Turning this off stops future writes; it doesn’t withdraw what’s already there."
+                    : "Off — stances stay in this project. Turn on to write the stance, your reason, and this project’s folder name to ~/.deeppairing, where your other projects can read them. No code or diffs; a stance is your wording, so a file name you type into one travels with it."}
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

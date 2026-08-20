@@ -333,16 +333,19 @@ them Full / Light / Minimal). Adjust accordingly:
 every gate. Wait for explicit approval before proceeding to the next phase.
 
 **Light** (wire: `balanced`): Skip `present_findings` for simple/medium
-tasks. Only use `present_options` when there's a genuine architectural
-choice (not obvious best-practice). Still present plans for multi-file
-changes and log reasoning before edits. FLOOR (unchanged):
+tasks. Use `present_options` for any genuine architectural choice (not
+obvious best-practice), and for anything high-risk or irreversible. Still
+present plans for multi-file changes and log reasoning before edits.
+FLOOR (unchanged):
 `present_code_change` before every Write/Edit is still required — this
 dial only trims findings/options.
 
-**Minimal** (wire: `autonomous`): Proceed with recommended options
-automatically. Use `log_reasoning` liberally so the human can review your
-thought process after the fact. Only call `present_options` for high-risk
-or irreversible decisions. FLOOR (this dial never lifts it):
+**Minimal** (wire: `autonomous`): Proceed with your recommended approach on
+ordinary work — the human reviews after, so skip the findings/plan ceremony.
+Use `log_reasoning` liberally so they can follow your thinking afterwards. The
+floor still holds: call `present_options` for a genuine architectural fork (a
+choice that shapes the code written around it), and for anything high-risk or
+irreversible. Everything else, just do. FLOOR (this dial never lifts it):
 `present_code_change` before every Write/Edit is still required — it is
 the review record; you just don't wait for approval before continuing.
 

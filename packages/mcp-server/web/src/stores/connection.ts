@@ -363,6 +363,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           if (data.autonomyLevel) {
             set({ autonomyLevel: data.autonomyLevel });
           }
+          // Q2 — the cross-project publish opt-in can now be flipped from two
+          // surfaces (the Autonomy popover and the first-reject card) and from
+          // another tab. Mirror it so no surface shows a stale On/Off.
+          if (typeof data.globalLedgerPublish === "boolean") {
+            const value = data.globalLedgerPublish;
+            import("./crossProject").then(({ useCrossProjectStore }) => {
+              useCrossProjectStore.getState().hydratePublish(value);
+            });
+          }
           break;
 
         case "decision_resolved":
@@ -462,6 +471,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               addedBy: match.addedBy,
               rejectedAt: match.rejectedAt,
               projectCount: match.projectCount,
+              // Q2 review item 11 — the daemon stamps the durable log entry's
+              // id (and its server clock) onto the wire event before fanning
+              // out, so the SAME firing arriving live and via hydrate() is one
+              // record, not two. Absent on a demo replay (never persisted) and
+              // on any pre-Q2 daemon, where the store falls back to its
+              // content key.
+              serverId: data.blockId,
+              at: data.at,
             });
           });
           break;

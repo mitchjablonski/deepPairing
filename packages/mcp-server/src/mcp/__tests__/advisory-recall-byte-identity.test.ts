@@ -39,7 +39,31 @@ import { runPreflight, meaningfulTokens } from "../preflight-validator.js";
 // Captured against the pre-refactor inline implementation (commit before the
 // AdvisoryRecall adapter landed). Do NOT update this without re-deriving it
 // from the legacy path — a changed hash means the advisory output changed.
-const GOLDEN_SHA256 = "3d6ac24d97b36237bec685469b516166980ee68bedb2042129d3aab4ad805a1a";
+//
+// Q2 — DELIBERATELY RE-CAPTURED ONCE. The payload's `trace` half is byte-for-
+// byte what it was (the recall, the ordering, the dedup, the two why-branches
+// are all untouched — see the sanity test above, which still asserts every one
+// of them literally). What moved is the `summary` half: pre-Q2 the cross-
+// project advisory was computed into the trace and then dropped on the floor
+// by formatPreflightTraceSummary's `consideredCount === 0` guard, so the nudge
+// never reached the agent in the fresh-project case the feature exists for.
+// Delivering it necessarily changes the emitted summary string. Both proofs
+// this file owns still hold at full strength: the both-paths test compares
+// production against the verbatim legacy recall (unchanged), and this hash now
+// pins the post-fix output against future accidental drift.
+// Q2 REVIEW (H1) — re-captured a second time, same discipline. The adversarial
+// review found the advisory clause hardcoded "and you have no local stance on
+// this here", which is FALSE whenever the summary rides a BLOCK message (it is
+// appended there too) or an admit that considered local stances — this fixture
+// considers one. The qualifier is derived now, so this scenario correctly reads
+// "(not a block)" and drops the false reassurance. `trace` is STILL byte-for-
+// byte what it has always been; only the summary half moved, twice, both times
+// to deliver or to stop mis-stating the advisory.
+//
+// Prior values, for the record:
+//   pre-Q2:        3d6ac24d97b36237bec685469b516166980ee68bedb2042129d3aab4ad805a1a
+//   Q2 (pre-H1):   e9f556a44a7f34434178515807f8951c7b8a21b8313122aa7cb593e5cddbab88
+const GOLDEN_SHA256 = "3ee17dd4d83dfde0915140b6a6e06e84ea28b0861b1ee3234435bb45a708115b";
 
 /** Fixed-timestamp ledger fixture. Ordering matters: query() sorts by
  *  lastSeenAt desc, so hits emit as [pay-per-request hosting (Jan 2),

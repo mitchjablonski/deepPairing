@@ -824,6 +824,60 @@ describe("#184 — truncated tool-call detection", () => {
     expect(text).not.toContain("TOOL_CALL_TRUNCATED");
     expect(store.getArtifacts()).toHaveLength(0);
   });
+
+  // -------------------------------------------------------------------------
+  // Q2 — LENGTH-AWARE DIAGNOSIS.
+  //
+  // Round 12 saw this error on 2 of 3 artifact-creating calls in a cold journey
+  // and asked whether the detector misfires. It doesn't: the server parses a
+  // COMPLETE JSON-RPC request before dispatch (there is no partial stream at
+  // this boundary) and hands `args` to the validator untouched, so the required
+  // array really was absent. What was wrong was the ADVICE — the message
+  // asserted "truncated in transit" and told the agent to shorten a field that
+  // might be sixty characters long, which cannot fix anything. These pin that
+  // the guidance now follows the evidence, and that the #184 no-example
+  // invariant survives on BOTH branches.
+  // -------------------------------------------------------------------------
+  it("LONG present field → LEADS with the truncation story, names the size, and says shorten/split", async () => {
+    // Genuinely large — the only case where "your call was cut off, shorten it"
+    // is a claim the evidence supports. (LONG_CONTEXT above is ~296 chars, which
+    // the threshold deliberately treats as short; see the asymmetry note on
+    // TRUNCATION_PLAUSIBLE_CHARS.)
+    const hugeContext = LONG_CONTEXT.repeat(3);
+    const { text } = await call("present_options", { context: hugeContext });
+    expect(text).toContain("TOOL_CALL_TRUNCATED");
+    expect(text).toMatch(/appears to have been TRUNCATED in transit/);
+    expect(text).toContain(`${hugeContext.length} characters`);
+    expect(text).toMatch(/Retry with a shorter `context`/);
+    // The short branch's wording must NOT appear here.
+    expect(text).not.toMatch(/cutoff is unlikely/);
+    // #184 invariant: no echo-able example on this lane.
+    expect(text).not.toContain("Which cache layer?");
+  });
+
+  it("SHORT present field → refuses the truncation story and says RESEND WITH the missing array", async () => {
+    const shortContext = "Which cache?";
+    const { text } = await call("present_options", { context: shortContext });
+    // Same machine code (pinned + retryable) and same shape clause...
+    expect(text).toContain("TOOL_CALL_TRUNCATED");
+    expect(text).toMatch(/`options` is missing while `context` is present/);
+    // ...but the prose no longer claims a cutoff happened.
+    expect(text).toMatch(/mid-message cutoff is\s+unlikely/);
+    expect(text).toContain(`${shortContext.length} characters`);
+    expect(text).toMatch(/Resend the same call WITH `options`/);
+    // The escape hatch is still offered, second, for the case where it IS truncation.
+    expect(text).toMatch(/truncated in transit/i);
+    // #184 invariant holds here too.
+    expect(text).not.toContain("Which cache layer?");
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("the short branch still carries _meta.code = TOOL_CALL_TRUNCATED (retryable) — the machine contract is length-independent", async () => {
+    const res = await client.callTool({ name: "present_findings", arguments: { summary: "x y" } });
+    const meta = (res as { _meta?: { code?: string; retryable?: boolean } })._meta;
+    expect(meta?.code).toBe("TOOL_CALL_TRUNCATED");
+    expect(meta?.retryable).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

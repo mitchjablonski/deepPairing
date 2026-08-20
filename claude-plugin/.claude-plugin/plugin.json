@@ -2,7 +2,7 @@
   "name": "deeppairing",
   "displayName": "deepPairing",
   "version": "0.1.34",
-  "description": "Review what Claude Code is about to change on a rich visual surface — inline comments, evidence, and a gate that remembers the approaches you rejected.",
+  "description": "Block Claude Code from re-proposing an approach you rejected — it refuses and quotes your reason back — then pair on findings, options, and plans in a rich local review UI.",
   "author": {
     "name": "deepPairing"
   },

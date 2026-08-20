@@ -261,6 +261,16 @@ export interface IStore {
     // preflight_block: the MCP-server broadcast is a no-op in standalone.
     | { kind: "preflight_near_miss"; source: "session" | "team" }
   ): MaybePromise<void>;
+  /**
+   * Q2 — hand a REAL pre-flight block to the daemon so it can (a) broadcast
+   * `preflight_blocked` to attached tabs and (b) persist it to the project
+   * block log. Same structural reason as recordMetric above: the MCP server's
+   * broadcast is a no-op in standalone, so pre-Q2 a production block reached
+   * no client at all. Implemented by DaemonClient; FileStore omits it (a
+   * non-daemon deployment's broadcast tap already runs in-process).
+   * Fire-and-forget — must never throw into the caller.
+   */
+  recordPreflightBlock?(event: unknown): MaybePromise<void>;
   listPastSessions?(): MaybePromise<Array<{
     id: string;
     createdAt: string;
@@ -288,6 +298,9 @@ export interface IStore {
     planReviews: PlanReviewRecord[];
     autonomyLevel: string;
     detailDensity: string;
+    /** Q2 — cross-project publish opt-in, so the companion UI can render (and
+     *  flip) it without a second round trip. Optional: read-only stores omit it. */
+    globalLedgerPublish?: boolean;
     // G1 (#198b) — human-initiated requests. Optional in the return type so a
     // read-only replay store that omits it still satisfies the interface; the
     // real stores (FileStore + DaemonClient's /api/state) always include it.
@@ -599,6 +612,15 @@ export interface IStore {
   // shape; absent means "rich" (today's behavior).
   setDetailDensity(density: "rich" | "terse"): MaybePromise<void>;
   getDetailDensity(): MaybePromise<"rich" | "terse">;
+
+  /**
+   * Q2 — cross-project publish opt-in. Optional on the interface because only
+   * the project-backed FileStore owns preferences.json; a replay/read-only
+   * store has no such notion. Reads from the global ledger are ALWAYS on —
+   * this gates WRITES only (see FileStore.globalLedgerPublishEnabled).
+   */
+  setGlobalLedgerPublish?(enabled: boolean): MaybePromise<void>;
+  getGlobalLedgerPublish?(): MaybePromise<boolean>;
 
   // Feedback polling
   waitForFeedback(timeoutMs?: number): Promise<void>;

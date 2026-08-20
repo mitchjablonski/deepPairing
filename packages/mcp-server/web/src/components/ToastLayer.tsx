@@ -116,16 +116,33 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
           <span> · {matchDetail}</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {/* Scope-down a false positive. The gate is fuzzy by design, so this
-              is the safety valve — personal stances only. Team rules live in a
-              committed file, so we point the user there instead of mutating it. */}
+          {/* The escape hatch for a false positive. The gate is fuzzy by
+              design, so this is the safety valve — personal stances only. Team
+              rules live in a committed file, so we point the user there instead
+              of mutating it.
+
+              Q2 — RENAMED from "Not my taste", which described a feature we
+              don't have. That label (and its tooltip) said the stance was
+              "scoped down"; overrideRejectedApproach actually DELETES the
+              entry from this project's rejectedApproaches and records an
+              approval instance against the concept. Nothing narrows — the
+              stance stops existing here. Round 12 flagged it; rather than
+              build scoping under a shipped label, the label now says what the
+              button does. (True scoping — "allow this concept under
+              packages/x/**" — is a real future feature, not this one.)
+
+              Q2 review item 5 — the tooltip then over-corrected by promising it
+              "stays in your ledger history as an override". That write is gated
+              on cross-project publishing, which is OFF by default: on a default
+              install the entry is simply deleted and no history is kept. The
+              tooltip now claims only what is true in every install. */}
           {hero.source === "session" && onOverride && (
             <button
               onClick={() => { onOverride(); onDismiss(); }}
-              title="False positive? Scope this stance down so it stops blocking — and the ledger learns the correction."
+              title="False positive? Delete this stance from the project so it stops blocking here. It's a delete, not a narrowing — reject the concept again if you want it back."
               className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
             >
-              Not my taste
+              Retire this stance
             </button>
           )}
           {hero.source === "team" && (

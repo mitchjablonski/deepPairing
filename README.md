@@ -1,19 +1,19 @@
 # deepPairing
 
-**Catch the wrong approach before Claude Code writes it — not in a 500-line diff
-after.**
+**Tell Claude Code "no" once and it sticks — the agent refuses to re-propose
+the approach, and quotes your reason back.**
 
-You pair with Claude Code instead of reviewing its output after the fact: before
-it writes code, deepPairing shows you what it found, the options it weighed, and
-the plan it'll follow — as structured artifacts you approve or redirect in a
-local UI, not a wall of terminal text. Reject an approach once, with your reason,
-and a gate stops the agent from re-proposing that concept — before the edit
-lands, in the project where you rejected it — and flags it, advisory, on every
-other project.
+Reject an approach with your reason and deepPairing turns it into a gate: the
+next time the agent reaches for that concept — even paraphrased — the tool call
+is *refused* before the edit lands, and it tells you why, in your words. Around
+that gate is the pairing surface it exists to protect: before it writes code,
+Claude Code shows you what it found, the options it weighed, and the plan it'll
+follow, as structured artifacts you approve or redirect in a local UI instead of
+a wall of terminal text.
 
 *MIT · no account · no telemetry · 3,000+ tests · everything stays on your disk.*
 
-![Select a region of a plan's Mermaid diagram and comment on it — the comment anchors to the nodes it covers (here, the AuthGate node) and survives the agent redrawing the diagram.](docs/assets/region-comment.png)
+![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click override.](docs/assets/enforcement.png)
 
 **Who it's for:** engineers who don't trust an autonomous agent with the
 architecture, and want to stay in the loop at the *decision* level — not the
@@ -38,6 +38,12 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
 
 ## What you get
 
+- **The rejection gate — the thing nothing else does.** Reject an approach with
+  a reason and a pre-flight gate stops the agent from re-proposing that concept
+  here, before the edit lands: the tool call is refused and your reason is
+  quoted back. A `PreToolUse` hook catches a direct edit that tries to skip the
+  protocol. And once you enable cross-project publishing, the same stance is
+  flagged — advisory, never a block — on your other projects too.
 - **Decision cards.** Options arrive as cards you pick in the UI — pros, cons,
   effort, and risk laid out side by side. Hard-to-reverse calls are flagged
   "high stakes" so you see at a glance which choices are load-bearing.
@@ -46,15 +52,13 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
   without you, what still needs your eyes, and an ask-anything thread — so you
   understand the change, not just approve it. For code archaeology ("how does
   auth work here?") the agent narrates a read-only explainer walk-through.
-- **The rejection gate.** Reject an approach with a reason and a pre-flight
-  gate stops the agent from re-proposing that concept here — before the edit
-  lands. On your other projects it's flagged, not stopped (advisory), backed by
-  a cross-project ledger you can inspect and export.
 - **Live plan checklists.** Plans render as checklists that tick off as the
   work lands, so "what's left" never lies.
 - **Comment on the diagram itself.** Drag a rectangle on a plan or spec's
   Mermaid diagram and your comment anchors to the nodes it covers — and
   survives the agent redrawing the diagram.
+
+![Select a region of a plan's Mermaid diagram and comment on it — the comment anchors to the nodes it covers (here, the AuthGate node) and survives the agent redrawing the diagram.](docs/assets/region-comment.png)
 - **Every decision, one place.** A project-wide decisions view lists what was
   chosen and why across all your sessions, searchable, with a jump back into
   the session where you made the call.
@@ -72,7 +76,7 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
 
 ![The project-wide decisions view — every choice made across every session of this project, what was chosen and why, searchable, with a jump back into the session where you made the call.](docs/assets/decisions-view.png)
 
-![The Autonomy dial with the Detail (Rich / Terse) toggle — how much prose rides inside each artifact, orthogonal to how much structured review the pair does.](docs/assets/detail-density.png)
+![The Autonomy dial with the Detail (Rich / Terse) toggle and the Cross-project memory switch — how much prose rides inside each artifact, orthogonal to how much structured review the pair does, plus whether stances you record here are published to your other projects (off by default).](docs/assets/detail-density.png)
 
 ![The end-of-run debrief — the narrative of what changed, the calls the agent made on its own (with the alternative it weighed), what needs your eyes, what was deferred, and an ask-anything thread.](docs/assets/debrief.png)
 
@@ -137,24 +141,22 @@ separate orchestrator) and serves the UI on a deterministic per-project port in
 
 ## Your taste compounds
 
-So you never have to make the same call twice. This is the safety net *under*
-the collaboration, not the headline:
-
-![The enforcement moment — the agent re-proposes a concept you rejected on another project ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click "Not my taste" override.](docs/assets/enforcement.png)
+So you never have to make the same call twice:
 
 - **You're not silently re-proposed past.** In the project where you rejected a
   concept, re-proposing it is **stopped**: the `present_*` tool refuses
   (`REJECTED_APPROACH_BLOCKED`) and a **PreToolUse hook** catches a *direct*
   edit that tries to skip the protocol. The match is on the concept's *words*:
   reject *"global mutable state for config"* and *"add a global mutable state
-  singleton to hold config"* gets caught. Reach for that same concept **in
-  another project** and it's **flagged, not stopped** — an advisory nudge ("you
-  avoided this in `<project>` — still want it here?") that you can promote to a
-  hard block by rejecting it locally. It's literal, not semantic — a true
-  synonym that shares no words won't trip it — so name the concept for what it
-  is and it generalizes across the instances that reuse it. **False positives
-  are one click away:** "Not my taste" in the UI scopes the stance down and
-  records the correction. (Blocks from a committed **team rule** point you to
+  singleton to hold config"* gets caught. Turn on **cross-project publishing**
+  (off by default — see below) and reaching for that same concept **in another
+  project** is **flagged, not stopped** — an advisory nudge ("you avoided this
+  in `<project>` — still want it here?") that you can promote to a hard block by
+  rejecting it locally. It's literal, not semantic — a true synonym that shares
+  no words won't trip it — so name the concept for what it is and it generalizes
+  across the instances that reuse it. **False positives are one click away:**
+  "Retire this stance" in the block card deletes it from this project's stances
+  and lets the proposal through. (Blocks from a committed **team rule** point you to
   `.deeppairing/team.json` instead.)
 - **A backstop on the paths you can't undo.** The same PreToolUse hook also
   watches your guardrail paths — migrations, CI config, infrastructure, `.env`
@@ -163,11 +165,15 @@ the collaboration, not the headline:
   prompt naming the path and the class before the edit lands. Do the pairing and
   it never fires; it never hard-blocks, it fails open, and
   `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` turns it off.
-- **The ledger underneath.** Reject something with a reason and the
-  stance is remembered — across every project, at
-  `~/.deeppairing/philosophy/v1.json`. Reads are global (every repo sees your
-  ledger); writes are **opt-in** per project (one prompt at `init`, default
-  off), so a dependency in one project can't poison the others. Portable via
+- **The ledger underneath.** Reject something with a reason and the stance is
+  remembered. It's remembered **in this project** always; it reaches your
+  *other* projects — `~/.deeppairing/philosophy/v1.json` — only once you enable
+  cross-project publishing. Reads are global (every repo sees whatever ledger
+  you've accumulated); writes are **opt-in per project**, default off, so a
+  dependency in one project can't poison the others. Turn it on from
+  **Autonomy → Cross-project memory** in the companion UI (you're also offered
+  it once, right after your first "Reject & remember"), at `init`, or with
+  `deeppairing philosophy publish on`. Portable via
   `deeppairing philosophy export | import --merge`; drop a stance you no
   longer hold (whole entry, ledger backed up first) with
   `deeppairing philosophy remove <concept>` or the ✕ in the Ledger drawer.
@@ -185,10 +191,10 @@ the collaboration, not the headline:
   and even Minimal stops at the architectural decisions.
 - **Not another cross-session memory feature.** Copilot/Cursor memory *recalls*
   your preferences as passive context the model may or may not consult;
-  deepPairing turns a past decision into **a gate here, a flag on the next
-  project** — a hard block in the repo where you rejected it, and an active
-  cross-project nudge everywhere else (which you can promote to a hard block by
-  rejecting it locally). Still stronger than passive recall: we *surface* it
+  deepPairing turns a past decision into **a gate** — a hard block in the repo
+  where you rejected it, and (once you enable cross-project publishing) an
+  active nudge on your other projects, which you can promote to a hard block by
+  rejecting it locally. Still stronger than passive recall: we *surface* it
   every time, you don't hope the model remembers.
 - **Not a skin over MCP elicitation.** The async review loop is standard
   protocol now — server-initiated requests went non-blocking in the
@@ -254,8 +260,9 @@ node packages/mcp-server/dist/cli/init.js init
 
 Then just work normally — *"Let's analyze the auth module"* — and Claude routes
 findings, decisions, plans, and changes through the companion UI with structured
-evidence. You comment, pick, ask "why", request revisions; every rejection (if
-you publish) joins your cross-project ledger.
+evidence. You comment, pick, ask "why", request revisions; every rejection
+becomes a gate in this project, and — once you enable cross-project publishing —
+joins the ledger your other projects read.
 
 ## How it fits together
 
@@ -312,8 +319,9 @@ Cursor's canvases and Claude Code's auto-memory look similar on the surface, but
 neither turns a past decision into a *gate*: canvases are a presentation surface
 with no constraint on the tool call, and auto-memory is context the model is
 *encouraged* to consult, not a rule it's stopped by. deepPairing is the one
-where a decision you already made becomes a hard, cross-project constraint — and
-where the collaboration is the point, not a bolt-on. (More detail, including the
+where a decision you already made becomes a hard constraint the agent is refused
+by — and, once you enable cross-project publishing, an active flag on your other
+projects — and where the collaboration is the point, not a bolt-on. (More detail, including the
 honest limits of the concept match, in [docs/faq.md](docs/faq.md).)
 
 ## Status

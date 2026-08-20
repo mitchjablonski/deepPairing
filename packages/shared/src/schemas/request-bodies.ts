@@ -167,6 +167,17 @@ export type DetailDensity = z.infer<typeof DetailDensitySchema>;
 export const PreferenceBodySchema = z.object({
   autonomyLevel: AutonomyLevelSchema.optional(),
   detailDensity: DetailDensitySchema.optional(),
+  /**
+   * Q2 — cross-project publish opt-in (`globalLedgerPublish` in
+   * preferences.json). Pre-Q2 the ONLY way to flip this was the interactive
+   * `init` prompt or `philosophy publish on|off` — neither of which the
+   * recommended marketplace install path ever runs, so the cross-project
+   * half of the product was structurally unreachable for those users while
+   * the README/plugin card claimed it unconditionally. Default stays FALSE
+   * (opt-in is the privacy posture: a malicious dep in one project must not
+   * be able to poison the global ledger for every other project).
+   */
+  globalLedgerPublish: z.boolean().optional(),
 });
 export type PreferenceBody = z.infer<typeof PreferenceBodySchema>;
 
